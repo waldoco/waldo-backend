@@ -126,3 +126,15 @@ describe('reads mode, the flag-off rule', () => {
     expect(barrier.text('Tea is popular.', tally())).toBeUndefined();
   });
 });
+
+// Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directive.
+// @ts-expect-error vite-only API
+const ownerTurnSources: Record<string, string> = import.meta.glob('../src/channels/owner-turn.ts', { query: '?raw', import: 'default', eager: true });
+const ownerTurnSource = Object.values(ownerTurnSources)[0]!;
+
+describe('one owner of the forget rules', () => {
+  it('leaves the owner turn no forget matching of its own: every cut goes through the barrier module', () => {
+    for (const name of ['carriesTopic', 'hidesTopic', 'holdsIn', 'literalTextPattern', 'HELD_TURN_OUTPUT']) expect(ownerTurnSource, name).not.toMatch(new RegExp(`\\b${name}\\b`));
+    expect(ownerTurnSource.match(/applyForgetBarrier\(/g)).toHaveLength(1);
+  });
+});

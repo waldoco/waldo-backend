@@ -1,4 +1,5 @@
 import { literalTextRedactor, type ConversationModelMessage, type LLMToolTurn } from '@waldo/contracts';
+import type { Claim, ClaimStore } from '../memory/claims';
 import { carriesTopic, holdsIn } from '../memory/forget-guard';
 
 // The one place the model's view is cut for topics the owner asked to forget whose purge has not finished. A forget is a
@@ -173,4 +174,40 @@ export const applyForgetBarrier = <V extends Record<string, ViewFragment>>(view:
     else out[key] = cut.active ? cut.turns(fragment.turns) : [...fragment.turns];
   }
   return out as { [K in keyof V]: CutFragment<V[K]> };
+};
+
+// The owner's memory as the model may see it while a forget finishes: claims and recall without the items that carry a held
+// topic, and interpretations built on them withheld with them. It is cut at the store, not as rendered lines, because the
+// cascade from a claim to the nodes and edges that rest on it needs the store's structure, and the room budget is then spent
+// on what survives. held is read on each call, so a forget made mid-turn applies at once.
+export const barrierMemory = (store: ClaimStore, held: () => readonly string[]): ClaimStore => {
+  const claimHolds = (holds: (...values: readonly (string | null | undefined)[]) => boolean) => (claim: Claim) =>
+    holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases);
+  const nodes = (topics: readonly string[]) => {
+    const holds = holdsIn(topics);
+    const all = store.allClaims();
+    const known = new Set(all.map((claim) => claim.id));
+    const withheld = new Set(all.filter(claimHolds(holds)).map((claim) => claim.id));
+    // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like
+    // unreadable support.
+    const supportHeld = (raw: string): boolean => {
+      try {
+        const spots: unknown = JSON.parse(raw);
+        return !Array.isArray(spots) || spots.some((id) => typeof id !== 'number' || withheld.has(id) || (topics.length > 0 && !known.has(id)));
+      } catch { return true; }
+    };
+    return store.nodes().filter((node) => !holds(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
+  };
+  return {
+    ...store,
+    nodes: () => nodes(held()),
+    edges: () => {
+      const topics = held();
+      const holds = holdsIn(topics);
+      const kept = new Set(nodes(topics).map((node) => node.id));
+      return store.edges().filter((edge) => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge)));
+    },
+    claims: (status) => store.claims(status).filter((claim) => !claimHolds(holdsIn(held()))(claim)),
+    recall: (query, limit) => store.recall(query, limit).filter((claim) => !claimHolds(holdsIn(held()))(claim)),
+  };
 };

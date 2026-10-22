@@ -1,8 +1,8 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
-import { applyForgetBarrier, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
-import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
+import { applyForgetBarrier, barrierMemory, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
+import { heldTopicsOf } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -229,7 +229,7 @@ export const createOwnerResponder = (
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
@@ -337,27 +337,7 @@ export const createOwnerResponder = (
   // Everything bound for the model that is not owner memory is cut here, by the rule the owner's flag selects.
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
-  const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
-  const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => holdsIn(heldTopics())(...values);
-  // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
-  const promptNodes = (held: readonly string[]) => {
-    const holds = holdsIn(held);
-    const all = memory!.allClaims();
-    const known = new Set(all.map(claim => claim.id));
-    const withheld = new Set(all
-      .filter(claim => holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
-    // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like unreadable support.
-    const holding = held.length > 0;
-    const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
-    return memory!.nodes().filter(node => !holds(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
-  };
-  const promptMemory = (): ClaimStore | undefined => memory && ({
-    ...memory,
-    nodes: () => promptNodes(heldTopics()),
-    edges: () => { const held = heldTopics(); const holds = holdsIn(held); const kept = new Set(promptNodes(held).map(node => node.id)); return memory!.edges().filter(edge => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge))); },
-    claims: status => { const holds = holdsIn(heldTopics()); return memory!.claims(status).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
-    recall: (query, limit) => { const holds = holdsIn(heldTopics()); return memory!.recall(query, limit).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
-  });
+  const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
@@ -369,7 +349,7 @@ export const createOwnerResponder = (
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
     const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
-    const recalled = await recallForTurn({ claims, question: text, room, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const recalled = await recallForTurn({ claims, question: text, room, holds: barrier().holds, ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
@@ -422,7 +402,7 @@ export const createOwnerResponder = (
           if (retainedRead) {
             const tally = { dropped: 0, redacted: 0 };
             // A search hit is a highlighted snippet that can split the topic; judge the stored source row it points at (the tool's own ref read).
-            if (handler.name === 'search_episodes' && holdsAnyHeldTopic()) {
+            if (handler.name === 'search_episodes' && barrier().active) {
               const data = (result as { data?: { hits?: ReadonlyArray<{ ref?: string }> } }).data;
               if (Array.isArray(data?.hits)) {
                 // Fail closed: a hit with no string ref, or whose source row cannot be read back, is dropped.
@@ -435,17 +415,17 @@ export const createOwnerResponder = (
                   } catch { unreadable += 1; return undefined; }
                 }));
                 if (unreadable > 0) log({ trace, hop: 'episode_recheck', ms: 0, ok: false, code: 'episode_read_failed', detail: `count=${unreadable}` });
-                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
+                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !barrier().holds(...structuredStrings(rows[index])));
                 tally.dropped += data.hits.length - hits.length;
                 result = { ...(result as object), data: { ...data, hits } } as typeof result;
               }
             }
             // read_owner_context strips aliases from its claims; a held topic can live only in an alias, so read them back by claim id.
-            if (handler.name === 'read_owner_context' && holdsAnyHeldTopic()) {
+            if (handler.name === 'read_owner_context' && barrier().active) {
               const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
               if (Array.isArray(data?.claims)) {
                 const aliasesById = new Map([...(forgettingState?.claims()??[]), ...(forgettingState?.claims('promoted')??[])].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
-                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !holdsHeldTopic(aliasesById.get(claim.id)));
+                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !barrier().holds(aliasesById.get(claim.id)));
                 tally.dropped += data.claims.length - claims.length;
                 result = { ...(result as object), data: { ...data, claims } } as typeof result;
               }
@@ -944,7 +924,7 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return 'no memory';
-      if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
+      if (barrier().active) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
