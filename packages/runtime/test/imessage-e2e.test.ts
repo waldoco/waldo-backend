@@ -662,8 +662,10 @@ it('an iMessage drain that finds no turn left keeps the reminder\'s alarm', asyn
   });
 });
 
-// A turn the alarm pass runs queues its reply's drain behind the pass, so that drain re-arms after the pass has armed the
-// reminder. The message is admitted straight into the owner's inbox, as the bridge's handoff does, so the pass runs it.
+// A turn the alarm pass runs queues its reply's drain behind the pass, so that drain is the last re-arm, after the pass has
+// ended. This fixture's owner has no app binding, so the pass arms no schedule wake of its own (an owner no surface admits
+// runs no scheduled work); the drain's re-arm is what keeps the reminder's. The message is admitted straight into the
+// owner's inbox, as the bridge's handoff does, so the pass runs it.
 it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes out', async () => {
   const w = await world();
   await afterOneReply(w);
