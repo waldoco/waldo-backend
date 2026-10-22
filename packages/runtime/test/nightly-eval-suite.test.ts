@@ -94,7 +94,8 @@ describe('nightly eval with the tool search menu', () => {
     // Every reply that offered tools offered them through tool search.
     expect(searched.length).toBeGreaterThan(SCENARIOS.length);
     expect(searched.every(Boolean)).toBe(true);
-  });
+    // A whole catalogue run, budgeted like the dry run above rather than as one unit test.
+  }, 60_000);
 
   it('leaves the switch-off menu as it was', () => {
     const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded' });
