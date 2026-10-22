@@ -43,6 +43,19 @@ For the app lane to file in waldo-app. Nothing was posted from the backend lane.
 5. Report a local schema failure as its own reason, not as `unavailable`. The screen should not say the health service could not be reached when nothing was sent.
 6. Check the time zone and clock edge cases the backend refuses per reading. The 5-minute future limits are on revision, window start and point or sleep end. A phone clock that runs fast loses windows and sleep as `invalid_sample`. Count them, so the owner can see it.
 
+7. Read workout energy with `workout.statistics(for: HKQuantityType(.activeEnergyBurned))`. `HKWorkout.totalEnergyBurned` is deprecated from iOS 18 / watchOS 11 (https://developer.apple.com/documentation/healthkit/hkworkout/totalenergyburned), and the app still reads it at `modules/health/ios/HealthKitManager.swift:341`. [inference] New workouts can then arrive without `energy_kcal`.
+8. Name the locked-phone case in the status:
+   - a range that fails with `HKError.errorDatabaseInaccessible` is the HealthKit store encrypted while the phone is locked (https://developer.apple.com/documentation/healthkit/hkerror/code/errordatabaseinaccessible, https://developer.apple.com/documentation/healthkit/protecting-user-privacy);
+   - today it is reported as `read_failed` (`HealthKitManager.swift:346` → `src/agent/healthIngestRunner.ts:238`). A distinct code tells the owner it will catch up after unlock.
+9. Show the background-delivery result. `enableBackgroundDelivery` fails with `errorAuthorizationDenied` when the signed build lacks the `com.apple.developer.healthkit.background-delivery` entitlement (https://developer.apple.com/documentation/healthkit/hkhealthstore/enablebackgrounddelivery(for:frequency:withcompletion:)). `HealthWakes.swift:117-120` records `failed` but nothing shows it. A visible "background updates off" line separates "the Watch only syncs when I open the app" from a stuck upload.
+
+**Apple-documented behaviour checked against this code (no change needed)**
+
+- Observer completion handlers are always called within 20 s (`HealthWakes.swift:19,105,131,139`). Apple stops background delivery after three missed completions.
+- Read authorization is never assumed (`HealthKitManager.swift:55-61`). Apple never reveals a denied read type: the data just looks absent.
+- SpO2 is converted from HealthKit's 0–1 percent unit to 0–100 (`src/health/normalize/points.ts:42`).
+- The hourly background-delivery limit (steps hourly on iOS) bounds freshness to roughly an hour, at best, while the phone is unlocked.
+
 **Acceptance**
 
 - A chunk with one invalid reading sends the other readings. The next day's chunk is sent in the same run.
