@@ -248,6 +248,16 @@ describe('health scores: Form on a day still in progress', () => {
     if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
     expect(afternoon.score).toBe(wholeDay.score);
   });
+  it('leaves out the hour the phone is still filling, on both sides, until it ends', () => {
+    // At 15:20 the 15:00 window holds twenty minutes of an hour the earlier days hold in full.
+    const growing = habitual(TARGET, 'Europe/London', 16);
+    const days = [{ ...growing, hourly: growing.hourly.map((bucket, h) => (h === 15 ? { ...bucket, daylightMinutes: 7, movementMinutes: 3 } : bucket)) },
+      ...Array.from({ length: 21 }, (_, i) => habitual(addDays(TARGET, -(i + 1)), 'Europe/London'))];
+    const midHour = computeDailyScores({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T15:20:00.000Z` }).form;
+    const wholeDay = formOn(TARGET, 'Europe/London', 24);
+    if (midHour.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(midHour.score).toBe(wholeDay.score);
+  });
   it('does not move when only the clock moves and no new hours arrive', () => {
     const days = [habitual(TARGET, 'Europe/London', 15), ...Array.from({ length: 21 }, (_, i) => habitual(addDays(TARGET, -(i + 1)), 'Europe/London'))];
     const at = (iso: string) => computeDailyScores({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: iso }).form;

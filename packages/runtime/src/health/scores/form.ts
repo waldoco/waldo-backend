@@ -52,8 +52,12 @@ export const formScore = (target: DayRecord, prior: readonly DayRecord[], sleepN
   const { end } = localDayWindow(target.day, target.timezone);
   const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
   if (asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS) return { state: 'unavailable', reason: 'stale_inputs' };
-  const cutoff = horizon >= end ? null : wallMinute(horizon, target.timezone);
+  // Only the current hour grows, so the newest hour, while the read falls inside it, is left out on both sides until it ends.
+  const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
+  const settled = filling ? horizon - HOUR_MS : horizon;
+  const cutoff = settled >= end ? null : wallMinute(settled, target.timezone);
   const sameHours = (day: DayRecord) => throughMinute(day, cutoff);
+  const today = sameHours(target);
 
   const scale = FORM_WEIGHTS.recovery;
   const components: Component[] = recovery.components.map(component => ({ ...component, name: `recovery.${component.name}`, weight: component.weight * scale }));
@@ -66,13 +70,13 @@ export const formScore = (target: DayRecord, prior: readonly DayRecord[], sleepN
     const z = circularZScore(target.sleep.midpointMinute, midpoints.map(entry => entry.value));
     if (z !== null) add('sleep_midpoint', nearUsual(z), FORM_WEIGHTS.midpoint, midpoints.map(entry => entry.day));
   }
-  const daylight = dayTotal(target, bucket => bucket.daylightMinutes);
+  const daylight = dayTotal(today, bucket => bucket.daylightMinutes);
   const daylightHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.daylightMinutes));
   if (daylight !== null && daylightHistory.length >= BASELINE_DAYS) add('daylight', nearUsual(zScore(daylight, daylightHistory.map(entry => entry.value))), FORM_WEIGHTS.daylight, daylightHistory.map(entry => entry.day));
-  const movement = dayTotal(target, bucket => bucket.movementMinutes);
+  const movement = dayTotal(today, bucket => bucket.movementMinutes);
   const movementHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.movementMinutes));
   if (movement !== null && movementHistory.length >= BASELINE_DAYS) add('movement', nearUsual(zScore(movement, movementHistory.map(entry => entry.value))), FORM_WEIGHTS.motion, movementHistory.map(entry => entry.day));
-  const stress = stressReading(target);
+  const stress = stressReading(today);
   const stressHistory = history(prior, day => stressReading(sameHours(day)));
   if (stress && stressHistory.length >= BASELINE_DAYS) {
     const parts = [lowerIsBetter(zScore(stress.heartRate, stressHistory.map(entry => entry.value.heartRate)))];
