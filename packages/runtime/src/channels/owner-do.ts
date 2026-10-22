@@ -921,7 +921,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
   }
   private copiedTo(target: ProactiveTarget, deliver: ScheduledAppDelivery): ScheduledAppDelivery {
-    return target === 'whatsapp' ? this.copiedToWhatsApp(deliver) : target === 'imessage' ? this.copiedToIMessage(deliver) : deliver;
+    const copiers: Readonly<Record<ProactiveTarget, (inner: ScheduledAppDelivery) => ScheduledAppDelivery>> = {
+      app: (inner) => inner, whatsapp: (inner) => this.copiedToWhatsApp(inner), imessage: (inner) => this.copiedToIMessage(inner),
+    };
+    return copiers[target](deliver);
   }
   // An iMessage copy of what the app took, as WhatsApp's copy is; a send worth delivering only now is not copied.
   private copiedToIMessage(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
@@ -2036,7 +2039,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           copies = rest;
           whatsappTarget = targets.includes('whatsapp');
           this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
-          if (first === 'imessage') this.scheduledIMessageDelivery = this.iMessageDelivery();
+          if (targets.includes('imessage')) this.scheduledIMessageDelivery = this.iMessageDelivery();
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
         }
         const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
@@ -3165,8 +3168,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
-    // On iMessage, a call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface).
-    const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => channel === 'imessage' ? refusingUnreachableCheckBacks(list, () => this.proactiveReachable()) : list;
+    // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
+    // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
+    const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
     const responder = createTelegramResponder(
       { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, ...(this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
