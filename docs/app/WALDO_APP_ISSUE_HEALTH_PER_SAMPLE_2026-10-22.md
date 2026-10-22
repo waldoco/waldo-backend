@@ -19,6 +19,7 @@ For the app lane to file in waldo-app. Nothing was posted from the backend lane.
 **What the backend offers (waldo-backend, health revision 3, additive to `app.v1`)**
 
 - **Header.** A request carrying `x-waldo-app-contract: health=3` gets per-sample rejection on `POST /app/v1/health/ingest`. Use the header's `name=revision` list grammar, together with any other pairs the app sends.
+- **Revision 3 includes revision 2.** A build that sends `health=3` also gets everything revision 2 turned on: provider consent rows on `GET /app/v1/health/consents` and the providers routes. Handle those first, or the new rows reach a parser that does not expect them.
 - **Receipt.** The same receipt as today, plus `rejected: [{ change: 'sample' | 'deletion', index, signal | null, reason }]`.
   - `reason` is one of `invalid_sample`, `unsupported_signal` or `revision_conflict`.
   - `index` is the change's position in its own array.

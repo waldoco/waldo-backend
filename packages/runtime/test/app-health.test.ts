@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appHealthRoutesV1, healthApiErrorV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -243,6 +243,25 @@ describe('app health ingest: per-sample rejection at health revision 3', () => {
     expect((await post('/app/v1/health/ingest', '{"samples":[', v3)).status).toBe(400);
     expect((await post('/app/v1/health/ingest', mixed, { ...v3, 'content-length': '98305' })).status).toBe(413);
     expect((await post('/app/v1/health/ingest', mixed, { ...v3, 'idempotency-key': 'another-key-0001' })).status).toBe(400);
+    expect(rpcs).toEqual([]);
+  });
+  it('answers 413, calling nothing, when a body at the cap would pass it once the bad changes are stood in for', async () => {
+    // Real sleep readings can be long: a session lists every contributing record. Six valid sessions, each grown until the
+    // client body sits just under the cap, and 122 bad changes whose stand-ins are longer than the changes themselves.
+    const night = (n: number, contributors: number) => ({
+      ...sample, sample_id: `sleep-2026-10-0${n}`, signal: 'sleep_duration', unit: 'minutes', value: 420,
+      start_at: `2026-10-0${n}T22:00:00Z`, end_at: `2026-10-0${n}T23:00:00Z`, day: `2026-10-0${n}`,
+      sleep_context: { source_ref: 'watch', session_ref: `session-${n}`, waking_day: `2026-10-0${n}`, reducer_version: 'asleep-interval-union.v1',
+        contributor_ids: Array.from({ length: contributors }, (_, i) => `c${n}-${String(i).padStart(3, '0')}-${'x'.repeat(115)}`), intervals: [] },
+    });
+    const body = (contributors: number) => ({ ...batch, request_id: 'health-upload-v3-big', anchor_after: 'a'.repeat(2048), samples: [...[1, 2, 3, 4, 5, 6].map((n) => night(n, contributors)), ...Array.from({ length: 122 }, () => 0)] });
+    let contributors = 1;
+    while (JSON.stringify(body(contributors + 1)).length <= HEALTH_INGEST_MAX_REQUEST_BYTES_V1) contributors += 1;
+    const big = body(contributors);
+    expect(healthIngestV1Schema.shape.samples.element.safeParse(big.samples[0]).success).toBe(true);
+    expect(HEALTH_INGEST_MAX_REQUEST_BYTES_V1 - JSON.stringify(big).length).toBeLessThan(122 * 40);
+    const response = await post('/app/v1/health/ingest', big, { ...v3, 'idempotency-key': big.request_id });
+    expect([response.status, await response.json()]).toEqual([413, { error: 'invalid_request' }]);
     expect(rpcs).toEqual([]);
   });
   it('maps a database refusal of the whole request as before', async () => {

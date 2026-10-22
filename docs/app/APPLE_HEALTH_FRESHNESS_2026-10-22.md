@@ -11,7 +11,7 @@ Sources read: waldo-backend `beta-mvp` `6d70e46b`, plus this branch; waldo-app `
   - the backend refuses the batch: `invalid_request` or `sample_conflict`, all or nothing until this PR;
   - the app's own strict parse throws: `ingestHealth` calls `healthIngestV1Schema.parse(batch)`.
 - **[inference]** So one bad reading in one day stops every newer day, on every run, until that day falls outside the 30-day backfill. That matches a newest reading stuck on one date while the Watch keeps recording. It is the leading hypothesis, not a finding: the diagnostic decides it.
-- **[verified]** Until this PR, a refused upload left no trace on the backend: no row and no log. This PR logs every refused upload by code and status only (`app health ingest refused`). It also adds per-sample rejection at health revision 3, so a bad reading costs only itself, with a receipt that names it.
+- **[verified]** Until this PR, a refused upload left no trace on the backend: no row and no log. This PR logs a refused upload by code and status only (`app health ingest refused`), once it passed authentication and the rate limit: a 401, a 429 or the limiter's or session lookup's 503 is answered before the health route runs and is not logged here. It also adds per-sample rejection at health revision 3, so a bad reading costs only itself, with a receipt that names it.
 - **[inference]** A second hypothesis needs no bug. The legacy `health-sync` function was deleted from staging on 10 October (see `HEALTH_INGEST_DESIGN_2026-10-10.md`). If the owner's installed build still uploads the old way, or never reached the new ingest route, then the newest derived row is the last one that function wrote, on 10 October. Sections 5, 6 and 10 of the diagnostic separate the two hypotheses.
 
 ## Every way an Apple Health upload can be dropped or refused
@@ -102,7 +102,7 @@ There is no secret in this runbook. Each command reads its credential from the o
 
 1. **Before.** Run the diagnostic and keep its output.
 2. **Sync.** Wear the Watch, open the Waldo app, keep it in front for a minute, and read the line under Apple Health. A build at health revision 3 is needed to see per-sample rejections. waldo-app `8e8c73e7` sends no `x-waldo-app-contract` header, so it reads revision 1 and keeps the all-or-nothing batch.
-3. **Refusals.** Run `npx wrangler tail --env staging --format pretty` from `packages/runtime` during the sync. Each refused upload prints `app health ingest refused { status, error }`. Count them by code; there is no value or owner id in the line.
+3. **Refusals.** Run `npx wrangler tail --env staging --format pretty` from `packages/runtime` during the sync. Each upload the health route refuses prints `app health ingest refused { status, error }`. Count them by code; there is no value or owner id in the line. A 401, a 429 or the limiter's or session lookup's 503 is answered before the health route and does not print this line; the app's own status shows those.
 4. **After.** Run the diagnostic again:
    - §6 newest upload should be minutes old;
    - §8 newest_end should be today for steps or heart-rate windows;
@@ -126,7 +126,14 @@ There is no secret in this runbook. Each command reads its credential from the o
    ```
 
    - This moves the stored anchor to `e2e-per-sample-0001`. The phone's next chunk then gets `anchor_conflict` once, restarts from `null` and carries on (row 18), which is safe.
-   - The synthetic step hour stays stored until it ages out, or until the app re-sends that hour under its own id.
+   - Delete the synthetic step hour at once, so the owner's real health plane keeps no test reading and that day's steps are not inflated. Expect `200` with `deleted: 1`:
+
+   ```sh
+   curl -sS -X POST "$WALDO_STAGING_URL/app/v1/health/ingest" \
+     -H "authorization: Bearer $WALDO_APP_CREDENTIAL" -H 'content-type: application/json' -H 'x-waldo-app-contract: health=3' \
+     --data '{"request_id":"e2e-per-sample-0002","source":"apple","consent_epoch":'"$CONSENT_EPOCH"',"timezone":"UTC","anchor_before":null,"anchor_after":"e2e-per-sample-0002",
+       "samples":[],"deletions":[{"sample_id":"e2e-steps-ok","signal":"steps_window","revision":2}]}'
+   ```
 
 ## Rollback
 

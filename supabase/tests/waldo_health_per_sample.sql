@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(35);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -117,6 +117,14 @@ select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-old-000003','o
 select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-old-000003','old3',jsonb_build_array(pg_temp.steps('old-ok',8,10))))->>'error','idempotency_conflict',
   'the same request id in the other mode is another request');
 select is(pg_temp.anchor(),'old3','an older build''s accepted batch advances the anchor as before');
+
+-- Only an active owner ingests: a suspended one is not linked, in either mode, and nothing is stored or moved.
+update waldo.owners set state='suspended' where do_name='per-sample-owner';
+select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-susp-000001','susp1',jsonb_build_array(pg_temp.steps('susp-ok',9,10))))->>'error',
+  'not_linked','a suspended owner''s per-sample upload is not linked');
+select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-susp-000002','susp2',jsonb_build_array(pg_temp.steps('susp-ok',9,10)),'[]',false))->>'error',
+  'not_linked','a suspended owner''s all-or-nothing upload is not linked');
+select ok(pg_temp.stored('susp-ok') is null and pg_temp.anchor()='old3','and neither stores a reading or moves the anchor');
 
 select * from finish();
 rollback;

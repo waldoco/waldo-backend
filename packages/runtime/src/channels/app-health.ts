@@ -200,7 +200,11 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   if (!knownZone(body.data.timezone)) return logRefusal(refuse('invalid_request'));
   // A provider's readings come from Waldo's own sync of that provider, never from an app upload that claims its name.
   if (isHealthProviderSourceV1(body.data.source)) return logRefusal(refuse('invalid_request'));
-  const result = await invokeHealth(rpc, doName, operation, JSON.stringify(perSample ? perSamplePayload(body.data) : body.data));
+  const payload = JSON.stringify(perSample ? perSamplePayload(body.data) : body.data);
+  // The per-sample mode marker and the rejection stand-ins can take a body at the cap just past it, which the database
+  // would refuse whole as invalid; this answers as the oversize body it is.
+  if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(refuse('invalid_request', 413));
+  const result = await invokeHealth(rpc, doName, operation, payload);
   recompute(input, result, body.data.timezone);
   return logRefusal(settle(result, responseSchema));
 };
