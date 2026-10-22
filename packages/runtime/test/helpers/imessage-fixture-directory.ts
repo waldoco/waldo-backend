@@ -129,6 +129,10 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
       for (const p of presences.values()) if (p.active && p.owner === a.p_do_name && (p.provider ?? 'imessage') === a.p_provider) { p.active = false; found = true; }
       return found;
     },
+    assert_channel_presence: (a) => {
+      const o = owner(a.p_do_name);
+      return !!o && o.state === 'active' && [...presences.values()].some((p) => p.active && p.owner === a.p_do_name && (p.provider ?? 'imessage') === a.p_provider && p.subject === a.p_subject);
+    },
     presence_hint: (a) => {
       const o = owner(a.p_do_name), p = [...presences.values()].find((x) => x.active && x.owner === a.p_do_name && (x.provider ?? 'imessage') === a.p_provider);
       return o && o.state === 'active' && p ? p.subject.slice(p.subject.length >= 8 ? -4 : -2) : null;
@@ -162,6 +166,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     if (fn === 'issue_provider_link_code') return `link.${a.p_provider}.${a.p_do_name}.${a.p_code_hash}`;
     if (fn === 'unlink_presence') return `unlink.${a.p_do_name}.${a.p_provider}`;
     if (fn === 'presence_hint') return `presencehint.${a.p_do_name}.${a.p_provider}`;
+    if (fn === 'assert_channel_presence') return `presence.${a.p_do_name}.${a.p_provider}.${a.p_subject}`;
     const op = ({ imessage_throttle: 'throttle', imessage_issue_invitation: 'invite', imessage_redeem_invitation: 'redeem', imessage_bridge_authority: 'authority',
       imessage_set_expected_scope: 'scope', imessage_record_challenge: 'challenge', imessage_activate: 'activate', imessage_revoke: 'revoke', imessage_list: 'list',
       imessage_issue_shared_invitation: 'invite_shared', imessage_sender_authority: 'sender', imessage_onboarding_allowed: 'onboard', imessage_activate_shared: 'activate_shared',
