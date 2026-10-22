@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_DAILY_CALLS, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -25,8 +25,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
       if (model.fail) throw new Error('synthetic provider outage');
       if (model.failOn && said.includes(model.failOn)) throw new Error('synthetic provider outage');
       model.nights.push(said);
+      // Only the day's conversation grounds a claim; the memory the prompt also lists is what is already known.
+      const conversation = said.split('<conversation>')[1]?.split('</conversation>')[0] ?? '';
       const add = [['Swims every Friday before work', 'I swim every Friday before work'], ['Has a sister called Mira', 'my sister is called Mira']]
-        .filter(([, quote]) => said.includes(quote!)).map(([text, quote]) => ({ kind: 'fact', text, source: 'stated', evidence: `"${quote}"`, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }));
+        .filter(([, quote]) => conversation.includes(quote!)).map(([text, quote]) => ({ kind: 'fact', text, source: 'stated', evidence: `"${quote}"`, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }));
       return done(JSON.stringify({ add, corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null }));
     }
     if (format === 'promotion') return done('{"nodes":[],"edges":[],"promoted":[]}');
@@ -52,7 +54,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string) => Promise<void>; wake: (at: number) => Promise<void> }>;
+type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string, at?: number) => Promise<void>; wake: (at: number) => Promise<void> }>;
 const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
@@ -66,7 +68,8 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-      const fire = async (id: string) => {
+      const fire = async (id: string, at = now) => {
+        now = at;
         await scheduler.schedule({ id, kind: 'dreaming', payloadRefs: { id }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
         state.storage.kv.put('owner_alarm_last_v1', 1);
         await owner.alarm();
@@ -180,6 +183,71 @@ it('a ten-day backlog is consolidated in full, oldest first, a bounded chunk cou
       expect(firstNight).toEqual([...firstNight].sort((a, b) => a - b));
       expect(days.map(day => model.nights.filter(night => night.includes(`${day} journal`)).length)).toEqual(days.map(() => 1));
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - DAY - HOUR);
+    } finally { lines.mockRestore(); }
+  });
+});
+
+type Line = { ok: boolean; code?: string; detail?: string };
+const nightlyLines = (lines: { mock: { calls: unknown[][] } }) => lines.mock.calls.map(call => String(call[0]))
+  .filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as Line);
+
+it('a turn that always fails is narrowed to its own group and skipped with a Patrol line once its failures span a day; every other turn is learned', async () => {
+  await withOwner('nightly-catch-up-poison', async ({ scheduler, state, fire, wake }) => {
+    const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 3 * DAY);
+      const episodes = episodeIndex(state.storage.sql);
+      episodes.add('app-3000001', OWNER_SAID, 'Alpha note before', NOW - 2 * DAY - 2 * HOUR);
+      episodes.add('app-3000002', OWNER_SAID, 'POISON turn', NOW - 2 * DAY - HOUR);
+      episodes.add('app-3000003', OWNER_SAID, 'Bravo note after', NOW - 2 * DAY);
+      model.failOn = 'POISON';
+      const drain = async () => {
+        for (let more = 0; more < 12 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) await wake(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at);
+      };
+      await fire(NIGHTLY_ID);
+      await drain();
+      // Within a day the failures only narrow the chunk: the turn before is learned, nothing is skipped, the mark waits.
+      expect(model.nights.filter(night => night.includes('Alpha note before'))).toHaveLength(1);
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * DAY - 2 * HOUR);
+      expect(nightlyLines(lines).map(line => line.code)).not.toContain('chunk_quarantined');
+      await fire(NIGHTLY_ID, NOW + DAY);
+      await drain();
+      const quarantined = nightlyLines(lines).filter(line => line.code === 'chunk_quarantined');
+      expect(quarantined).toHaveLength(1);
+      expect(quarantined[0]).toMatchObject({ ok: false, detail: expect.stringMatching(/^1 turn skipped after \d+ failed attempts$/) });
+      expect(model.nights.filter(night => night.includes('Bravo note after'))).toHaveLength(1);
+      expect(model.nights.filter(night => night.includes('POISON'))).toEqual([]);
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * DAY);
+      expect(model.asked.filter(format => format === 'claim_ops').length).toBeLessThanOrEqual(15);
+    } finally { lines.mockRestore(); }
+  });
+});
+
+it('a backlog bigger than the daily call cap stops at the cap, says so, and the next night resumes without skipping a turn', async () => {
+  await withOwner('nightly-catch-up-cap', async ({ scheduler, state, fire, wake }) => {
+    const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const turns = NIGHTLY_DAILY_CALLS + 10;
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - (turns + 1) * HOUR);
+      const episodes = episodeIndex(state.storage.sql);
+      for (let index = 0; index < turns; index += 1) episodes.add(`app-${4000000 + index}`, OWNER_SAID, `Entry ${index} journal: ${'quiet steady notes '.repeat(1300)}`, NOW - (turns - index) * HOUR);
+      const calls = () => model.asked.filter(format => format === 'claim_ops').length;
+      const drain = async () => {
+        for (let more = 0; more < 20 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) await wake(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at);
+      };
+      await fire(NIGHTLY_ID);
+      await drain();
+      expect(calls()).toBe(NIGHTLY_DAILY_CALLS);
+      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+      expect(nightlyLines(lines).filter(line => line.code === 'call_cap')).toHaveLength(1);
+      // A night run again the same day (a scheduler retry) does not refill the budget.
+      await fire(NIGHTLY_ID);
+      expect(calls()).toBe(NIGHTLY_DAILY_CALLS);
+      await fire(NIGHTLY_ID, NOW + DAY);
+      await drain();
+      expect(calls()).toBe(turns);
+      const counts = Array.from({ length: turns }, (_, index) => model.nights.filter(night => night.includes(`Entry ${index} journal`)).length);
+      expect(counts).toEqual(counts.map(() => 1));
     } finally { lines.mockRestore(); }
   });
 });
