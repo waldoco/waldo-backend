@@ -137,7 +137,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
-        const cleaning = await deps.hideHistory([...texts], ctx); await ready(ctx);
+        // The commit above already deleted the claims and took custody of every text, so the forget holds even if cleaning
+        // fails here: the barrier keeps the texts out of the model's view, and the purge job and each turn retry the cleaning.
+        const cleaning = await deps.hideHistory([...texts], ctx).catch(() => undefined); await ready(ctx);
         const cleaned = cleaning?.pending === 0;
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');

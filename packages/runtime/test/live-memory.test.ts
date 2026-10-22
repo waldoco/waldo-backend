@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
+import { forgetPurge } from '../src/memory/forget-purge';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { holdTopic } from './helpers/pending-topic';
 const OWNER = 'owner:1';
@@ -107,13 +108,14 @@ describe('live owner memory', () => {
     expect(await s.call('forget_memory', { source: { message_ref: 'tg-8', start: 16, end: 19 }, scope_note: 'quoted tea' }, context)).toMatchObject({ ok: false });
     expect(s.history).toHaveLength(0);
   });
-  it('reports history cleanup failure without deleting claims or claiming completion', async () => {
+  it('a cleanup that fails after the commit still reports the forget, with cleanup running, and never claims completion', async () => {
     const s = setup();
     await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'tea' }, s.ctx('tea'));
     const handlers = memoryHandlers({ sql: s.sql, store: s.store, conversationRef: CHAT, hideHistory: async () => { throw new Error('history unavailable'); } });
     const handler = handlers.find(h => h.name === 'forget_memory')!;
-    await expect(handler.handle(handler.schema.parse({ claim_ids: [1], scope_note: 'tea' }), s.ctx('forget tea'))).rejects.toThrow('history unavailable');
-    expect(s.store.claims()).toHaveLength(1);
+    expect(await handler.handle(handler.schema.parse({ claim_ids: [1], scope_note: 'tea' }), s.ctx('forget tea'))).toMatchObject({ ok: true, data: { removed_ids: [1], cleanup: 'running' } });
+    expect(s.store.claims()).toHaveLength(0);
+    expect(s.store.pendingTopics()).toContain('Tea');
   });
   it('filters pending topics only, preserving unrelated read results', async () => {
     const s = setup();
@@ -135,12 +137,16 @@ describe('live owner memory', () => {
   });
   it('keeps an unsettled forget out of recall, and a later forget_memory on the topic finishes it', async () => {
     const s = setup();
+    // As in the owner object: the forget's cleaning pass is the purge job's.
+    const purge = forgetPurge({ sql: s.sql, store: s.store, stores: [], now: () => Date.parse('2026-10-08T09:00:00Z'), arm: async () => undefined });
+    const handlers = memoryHandlers({ sql: s.sql, store: s.store, conversationRef: CHAT, now: () => new Date('2026-10-08T09:00:00Z'), hideHistory: texts => purge.track(texts) });
+    const forget = handlers.find(h => h.name === 'forget_memory')!;
     s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
     holdTopic(s.sql, 'oolong', '2026-10-07T08:00:00Z');
     expect(s.store.pendingTopics()).toEqual(['oolong']);
     const read = await s.call('read_memory', { query: 'tea' }, s.ctx('what tea do I like'));
     expect(JSON.stringify(read)).not.toContain('oolong');
-    expect(await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'))).toMatchObject({ ok: true });
+    expect(await forget.handle(forget.schema.parse({ topic: 'oolong', scope_note: 'oolong' }), s.ctx('forget oolong'))).toMatchObject({ ok: true, data: { cleanup: 'done' } });
     expect(s.store.pendingTopics()).toEqual([]);
   });
 });
