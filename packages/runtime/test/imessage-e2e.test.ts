@@ -29,6 +29,7 @@ const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
+let addresses = 0;
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
 
@@ -57,7 +58,12 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const cookie = `waldo_console=${session}; waldo_owner=${ownerName}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${ownerName}.session_fixture`)}`;
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => undefined } as unknown as ExecutionContext;
-  const call = (request: Request) => worker.fetch(request, env, ctx);
+  // Each world's host has its own address, as each paired Mac does, so the edge limit counts this test's requests only.
+  const address = `2001:db8::${(++addresses).toString(16)}`;
+  const call = (request: Request) => {
+    if (!request.headers.has('cf-connecting-ip')) request.headers.set('cf-connecting-ip', address);
+    return worker.fetch(request, env, ctx);
+  };
   const action = (name: string, fields: Record<string, string> = {}, token = csrf) => {
     const form = new FormData(); form.set('action', name); form.set('csrf', token);
     for (const [k, v] of Object.entries(fields)) form.set(k, v);
