@@ -107,6 +107,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'read_document',
   'call_mcp_tool',
   'read_mcp_tool',
+  // search_mcp_tools: tool names, titles and descriptions are the connected server's own text.
+  'search_mcp_tools',
   'read_drive',
   'search_connector',
   'read_tool_output',

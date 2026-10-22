@@ -70,13 +70,16 @@ describe('nightly eval suite', () => {
       expect(text).not.toContain(scenario.rubric.outcome);
     }
     expect(text).not.toContain('example.com');
+    // Runs every scenario through a whole owner turn, so its time grows with the catalogue and with machine load;
+    // the default 5 s budget is per unit test, not per catalogue.
   }, 60_000);
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures and the look-up, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(26);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(26);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the look-up, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(27);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
