@@ -9,6 +9,7 @@ import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingre
 import { handleGoogleCallback } from './channels/google-oauth';
 import { handleWhoopCallback, handleWhoopStart, WHOOP_CALLBACK_PATH, WHOOP_START_PATH } from './health/providers/whoop-routes';
 import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
+import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
@@ -62,6 +63,7 @@ declare global {
       WALDO_ENVIRONMENT?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
+      WALDO_OAUTH_STATE_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
       GOOGLE_CLIENT_SECRET?: string;
       WHOOP_CLIENT_ID?: string;
@@ -117,6 +119,8 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
+    oauthStateSecret(env);
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));

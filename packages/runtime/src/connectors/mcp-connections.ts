@@ -2,6 +2,7 @@
 // the sign-in attempts in flight, each server's tool definitions with their digests, and which tools the
 // owner lets run without asking. Tokens are never here: OAuth servers are called through the oauth-proxy
 // Edge Function by connection id. Servers that need no sign-in are called directly, on the same rail.
+import { constantTimeEqual } from './constant-time';
 import { egressTarget, EgressError } from './egress';
 import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorizationServer, discoverProtectedResource, McpOAuthError, pkceChallenge, pkceVerifier, readCallback, registrationMode, requestedScope, type ClientPins, type McpPins, type RegistrationMode } from './mcp-oauth';
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
@@ -138,7 +139,7 @@ export const readMcpState = async (secret: string, state: string): Promise<Reado
   if (parts.length < 3) return null;
   const mac = parts.at(-1)!, nonce = parts.at(-2)!, owner = parts.slice(0, -2).join('.');
   if (!owner || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) return null;
-  return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
+  return constantTimeEqual(await sign(secret, `${owner}.${nonce}`), mac) ? { owner, nonce } : null;
 };
 
 // A short name the model uses for the server, from its host: mcp.notion.com becomes notion.

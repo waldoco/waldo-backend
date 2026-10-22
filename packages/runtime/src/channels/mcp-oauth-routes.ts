@@ -1,6 +1,7 @@
 import { clientMetadataDocument, MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
 import { MCP_ATTEMPT_TTL_MS, MCP_FINISH_PATH, readMcpState, type ConnectOutcome } from '../connectors/mcp-connections';
 import { bindBrowser, checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { callbackPage } from './google-oauth';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -32,8 +33,8 @@ export const mcpStartRedirect = async (nonce: string, target: string): Promise<R
 
 // The provider redirects the owner here after consent. The signed state names the owner object and a
 // single-use attempt; that object settles the attempt, so a reloaded callback never redeems the code twice.
-export const handleMcpCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv): Promise<Response> => {
-  const { TELEGRAM_WEBHOOK_SECRET: secret, OWNER_DO: owners } = env;
+export const handleMcpCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv & OAuthStateEnv): Promise<Response> => {
+  const secret = oauthStateSecret(env), owners = env.OWNER_DO;
   if (!secret || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const url = new URL(request.url);
   const state = await readMcpState(secret, url.searchParams.get('state') ?? '');

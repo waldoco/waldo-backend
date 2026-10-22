@@ -214,7 +214,7 @@ describe('google callback in the Worker', () => {
       },
     };
   };
-  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: ns }) as never;
+  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: ns }) as never;
   const callback = (query: string, cookie?: string) => new Request(`https://w.example/oauth/google/callback?${query}`, cookie ? { headers: { cookie } } : {});
   // The cookie the /c/ hop left in the browser that started the attempt.
   const bound = async (nonce: string, at = Date.now()) => (await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, at)).split(';')[0]!;
@@ -228,6 +228,15 @@ describe('google callback in the Worker', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('https://t.me/waldo_bot');
     expect(owner.calls).toEqual([{ name: 'owner.with.dots', url: `https://telegram-owner${GOOGLE_FINISH_PATH}`, body: { nonce, code: 'c1', error: null } }]);
+  });
+
+  it('verifies state only with its own key: the Telegram webhook secret alone signs nothing and the callback is absent', async () => {
+    const { deps } = setup();
+    const { url, nonce } = await begin(deps);
+    const owner = ownerNamespace(async () => Response.json({ outcome: { kind: 'linked', email: null, scopes: [] }, bot: null }));
+    const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, await bound(nonce)), { GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: owner.ns } as never);
+    expect(response.status).toBe(404);
+    expect(owner.calls).toEqual([]);
   });
 
   it('drops a tampered or missing state without waking any Durable Object', async () => {

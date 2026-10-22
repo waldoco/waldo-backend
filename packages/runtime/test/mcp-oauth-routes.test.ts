@@ -10,12 +10,20 @@ import { bindBrowser } from '../src/connectors/oauth-browser-binding';
 import { cookieJar, setCookies } from './support/cookie-jar';
 
 const SECRET = 'fixture-webhook-secret';
-const routeEnv = () => ({ TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: env.OWNER_DO }) as unknown as Parameters<typeof handleMcpCallback>[1];
+const routeEnv = () => ({ WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: env.OWNER_DO }) as unknown as Parameters<typeof handleMcpCallback>[1];
 
 describe('MCP OAuth routes', () => {
   it('serves a client metadata document whose client_id is its own URL', async () => {
     const response = handleMcpClientMetadata(new Request('https://waldo.example/oauth/mcp/client.json'));
     expect(await response.json()).toMatchObject({ client_id: 'https://waldo.example/oauth/mcp/client.json', redirect_uris: ['https://waldo.example/oauth/mcp/callback'], token_endpoint_auth_method: 'none', application_type: 'web' });
+  });
+
+  it('verifies state only with its own key: the Telegram webhook secret alone signs nothing and the callback is absent', async () => {
+    const owner = { idFromName: (name: string) => name, get: () => ({ fetch: async () => { throw new Error('must not wake'); } }) };
+    const state = await mcpState(SECRET, 'mcp-route-owner', 'A'.repeat(43));
+    const cookie = (await bindBrowser('mcp', 'A'.repeat(43), MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now())).split(';')[0]!;
+    const response = await handleMcpCallback(new Request(`https://waldo.example/oauth/mcp/callback?code=c&state=${encodeURIComponent(state)}`, { headers: { cookie } }), { TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: owner } as unknown as Parameters<typeof handleMcpCallback>[1]);
+    expect(response.status).toBe(404);
   });
 
   it('drops a forged state before any owner object wakes, and shows an unknown attempt as invalid', async () => {
@@ -44,7 +52,7 @@ describe('the MCP callback is bound to the browser that started the connect', ()
   const callbackFor = (query: string, cookie?: string) => new Request(`https://waldo.example${MCP_CALLBACK_PATH}?${query}`, cookie ? { headers: { cookie } } : {});
   const fakeOwner = () => {
     const calls: unknown[] = [];
-    return { calls, env: { TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json({ kind: 'linked', id: 'c1', name: 'notion' }); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
+    return { calls, env: { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json({ kind: 'linked', id: 'c1', name: 'notion' }); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
   };
   const bound = async (nonce: string, at = Date.now()) => (await bindBrowser('mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
 
@@ -69,7 +77,7 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     const nonce = 'B'.repeat(43);
     const settled = () => runInDurableObject(stub, (_instance, state) => state.storage.sql.exec<{ settled: string | null }>('SELECT settled FROM mcp_attempts WHERE nonce = ?', nonce).toArray()[0]?.settled ?? null);
     const token = await runInDurableObject(stub, (instance, state) => {
-      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_WEBHOOK_SECRET: SECRET, TELEGRAM_BOT_TOKEN: 'synthetic', OPENAI_API_KEY: 'synthetic' });
+      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { WALDO_OAUTH_STATE_SECRET: SECRET, TELEGRAM_BOT_TOKEN: 'synthetic', OPENAI_API_KEY: 'synthetic' });
       state.storage.kv.put('do_name', OWNER);
       (instance as unknown as { mcp(): unknown }).mcp();
       const attempt = { origin: 'https://waldo.example', server_url: 'https://mcp.example.com/mcp', verifier: 'v'.repeat(43), resource: 'https://mcp.example.com/mcp', issuer: 'https://auth.example.com', iss_supported: false,
@@ -82,7 +90,7 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     expect(start.status).toBe(303);
     expect(setCookies(start)[0]).toContain(`Path=${MCP_CALLBACK_PATH}`);
     const query = `code=c&state=${encodeURIComponent(new URL(start.headers.get('location')!).searchParams.get('state')!)}`;
-    const routeEnvFor = { TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: env.OWNER_DO } as unknown as Parameters<typeof handleMcpCallback>[1];
+    const routeEnvFor = { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: env.OWNER_DO } as unknown as Parameters<typeof handleMcpCallback>[1];
 
     expect((await handleMcpCallback(callbackFor(query), routeEnvFor)).status).toBe(403);
     expect(await settled()).toBeNull();

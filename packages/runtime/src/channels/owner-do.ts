@@ -140,6 +140,7 @@ import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256H
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
+import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
@@ -340,10 +341,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private mcpRegistry?: McpConnections;
   // The owner's MCP connections: one registry per owner object, shared by every channel's runtime.
   private mcp(): McpConnections {
+    const stateSecret = oauthStateSecret(this.env);
     return this.mcpRegistry ??= mcpConnections({
       sql: this.ctx.storage.sql, transaction: (work) => this.ctx.storage.transactionSync(work),
       proxy: oauthProxy(this.env), doName: () => this.ctx.storage.kv.get<string>('do_name') ?? null,
-      ...(this.env.TELEGRAM_WEBHOOK_SECRET ? { stateSecret: this.env.TELEGRAM_WEBHOOK_SECRET } : {}),
+      ...(stateSecret ? { stateSecret } : {}),
       fetcher: (input, init) => fetch(input, init), now: () => Date.now(),
       reserved: () => mcpServers(this.env.WALDO_MCP_SERVERS).map((server) => server.name),
       log: (entry) => console.log(JSON.stringify({ trace: 'mcp', ...entry })),
@@ -2692,7 +2694,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (ok) await storage.put('connect:offers', { ...sent, [key]: Date.now() });
       return ok;
     };
-    const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
+    const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret } = this.env, stateSecret = oauthStateSecret(this.env);
     const googleApp = async () => {
       const origin = await storage.get<string>('origin');
       return clientId && clientSecret && origin ? { clientId, clientSecret, redirectUri: `${origin}${GOOGLE_CALLBACK_PATH}` } : null;

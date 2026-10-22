@@ -1,4 +1,5 @@
 import { Parser } from 'htmlparser2';
+import { constantTimeEqual } from './constant-time';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -77,13 +78,13 @@ export async function readConsentState(secret: string, state: string): Promise<R
     const owner = parts.slice(0, -3).join('.');
     if (owner && nonce && (CONSENT_SURFACES as readonly string[]).includes(surface)) {
       const body = `${owner}.${nonce}.${surface}`;
-      if ((await sign(secret, body)) === mac) return { owner, nonce, surface: surface as ConsentSurface };
+      if (constantTimeEqual(await sign(secret, body), mac)) return { owner, nonce, surface: surface as ConsentSurface };
     }
   }
   const nonce = parts[parts.length - 2] ?? '';
   const owner = parts.slice(0, -2).join('.');
   if (!owner || !nonce) return null;
-  return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
+  return constantTimeEqual(await sign(secret, `${owner}.${nonce}`), mac) ? { owner, nonce } : null;
 }
 
 // The account's name (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a

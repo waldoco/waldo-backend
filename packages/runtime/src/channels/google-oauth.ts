@@ -1,5 +1,6 @@
 import { readConsentState, GOOGLE_CALLBACK_PATH, type ConsentSurface } from '../connectors/google';
 import { checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import { CONSOLE_PATH } from './console';
 import { CONSENT_TTL_MS, type ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -75,8 +76,8 @@ const UNBOUND = { status: 403, title: 'Start the connection again', body: 'This 
 
 // Google redirects the owner here after consent. The signed state names the owner's Durable Object and
 // a one-time attempt; that Durable Object settles the attempt, so a reloaded callback never exchanges twice.
-export const handleGoogleCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv): Promise<Response> => {
-  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: secret, OWNER_DO: owners } = env;
+export const handleGoogleCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv & OAuthStateEnv): Promise<Response> => {
+  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, OWNER_DO: owners } = env, secret = oauthStateSecret(env);
   if (!clientId || !clientSecret || !secret || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const params = new URL(request.url).searchParams;
   const error = params.get('error');
