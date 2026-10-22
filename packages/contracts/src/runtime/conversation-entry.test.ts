@@ -57,6 +57,7 @@ describe('forget matches whole words', () => {
     expect(forget(['tom'], String.raw`saved to C:\Users\tom\Docs`)).toBe(String.raw`saved to C:\Users\[forgotten]\Docs`);
     expect(forget(['tea'], String.raw`C:\Tea and C:\Users\Nina\tea`)).toBe(String.raw`C:\[forgotten] and C:\Users\Nina\[forgotten]`);
     expect(forget(['tom'], String.raw`"Quote" from C:\Users\tom`)).toBe(String.raw`"Quote" from C:\Users\[forgotten]`);
+    expect(forget(['tea'], String.raw`C:\Ntea`)).toBe(String.raw`C:\Ntea`);
     expect(forget(['tom'], String.raw`{"p":"x\tom"}`)).toBe(String.raw`{"p":"x\tom"}`);
     expect(forget(['tom'], String.raw`{"p":"C:\\Users\\tom"}`)).toBe(String.raw`{"p":"C:\\Users\\[forgotten]"}`);
   });

@@ -54,8 +54,8 @@ export type ConversationReceipt = Readonly<{
 // a digit or symbol (a number inside +91..., "sarah2024", "C++17"). Under-forgetting is the worse failure, so the boundary
 // applies only where its absence is known to break words. A combining mark continues the letter before it.
 // Stored text can be raw JSON: a real escape (\n, \t, \u00a0) before the literal separates it like the character it decodes
-// to. In text that parses as JSON a match never starts on the continuation of a real escape, which would leave a broken
-// escape behind; escapes are read case-sensitively there. Everywhere else a backslash is a character (C:\Users\tom), since
+// to (read case-sensitively, so C:\Ntea is one word). In text that parses as JSON a match never starts on the continuation of
+// an escape, which would leave a broken escape behind. Everywhere else a backslash is a character (C:\Users\tom), since
 // keeping a prose escape whole would leave the topic behind and report it gone. `openEnd` drops the end boundary,
 // for a literal cut short of its end. Case folds as Unicode simple folding, and dotted capital I also matches the i plus
 // combining dot it lowercases to, the one letter whose lowercase is longer, so the fold is a superset of toLowerCase.
@@ -64,7 +64,8 @@ const ESCAPING_BACKSLASH = String.raw`(?<!\\)(?:\\\\)*\\`;
 const alphabeticEdge = new RegExp(`^${ALPHABETIC}$`, 'u');
 const afterLetter = new RegExp(`(?<=${ALPHABETIC}\\p{M}*)`, 'uy');
 const afterEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH}(?:[bfnrt]|u[0-9A-Fa-f]{4}))`, 'uy');
-const insideEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH})(?:["\\\\/bfnrt]|u[0-9A-Fa-f]{4})`, 'uy');
+// In text that parses as JSON every escaping backslash starts a valid escape, so nothing may start right after one.
+const insideEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH})`, 'uy');
 const beforeLetter = new RegExp(`\\p{M}|${ALPHABETIC}`, 'uy');
 const at = (pattern: RegExp, value: string, index: number) => { pattern.lastIndex = index; return pattern.test(value); };
 const parsesAsJson = (value: string) => { try { JSON.parse(value); return true; } catch { return false; } };
