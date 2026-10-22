@@ -7,17 +7,17 @@ const LEAKS = ['47.318', '430', '93.5'];
 const signals = (plane: { samples: Map<string, { payload: Record<string, unknown> }> }) => [...plane.samples.values()].map(s => s.payload.signal as string);
 
 describe('WHOOP connect and callback', () => {
-  it('starts with both of the owner\'s WHOOP grants live, and sends an eight-character state, hashed', async () => {
+  it('starts with both of the owner\'s WHOOP grants live, and hands the app a first-party start link carrying an eight-character state, hashed', async () => {
     const h = harness();
-    const url = (await h.owner.connect() as { authorize_url: string }).authorize_url;
-    const query = new URL(url).searchParams;
-    expect([new URL(url).origin + new URL(url).pathname, query.get('client_id'), query.get('response_type'), query.get('redirect_uri')]).toEqual(['https://api.prod.whoop.com/oauth/oauth2/auth', 'client-id-fixture', 'code', 'https://worker.example.invalid/oauth/whoop/callback']);
-    expect(query.get('scope')).toBe('offline read:profile read:sleep read:recovery read:workout');
-    expect(query.get('state')).toMatch(/^[A-Za-z0-9]{8}$/);
+    const url = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
+    expect(url.origin).toBe('https://worker.example.invalid');
+    expect(url.pathname).toMatch(/^\/oauth\/whoop\/start\/[A-Za-z0-9]{8}$/);
+    expect(url.search).toBe('');
+    const state = url.pathname.split('/').at(-1)!;
     expect(h.plane.sessions).toHaveLength(1);
     expect(h.plane.sessions[0]).toMatch(/^[0-9a-f]{64}$/);
-    expect(h.plane.sessions[0]).not.toContain(query.get('state')!);
-    expect(url).not.toContain('client-secret-fixture');
+    expect(h.plane.sessions[0]).not.toContain(state);
+    expect(url.toString()).not.toContain('client-secret-fixture');
   });
 
   // WHOOP's express authorization is the two grants for the whoop source. The answer names the missing one so the app can send

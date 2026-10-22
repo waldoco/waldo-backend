@@ -1,4 +1,5 @@
 import {
+  RUNG_BLOCKED_FIX,
   TOOL_ERRORS,
   TOOL_PERMISSIONS,
   buildSessionState,
@@ -579,6 +580,24 @@ describe('ToolDispatcher', () => {
       reason: 'tool_result_error',
       source_taint: 'external',
     });
+  });
+
+  it('carries a page\'s structured block to the model, with the fix that names the next rung', async () => {
+    const blockedBy = (blocked: unknown): ToolHandler<QueryCalendarArgs, { events: string[] }, ToolDispatcherContext> => ({
+      name: 'query_calendar', description: 'Read external calendar events.', schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'), autonomy_gated: false,
+      async handle() { return { ok: false, error: 'The site answered with a bot check.', code: 'rejected', source_taint: 'external', blocked } as never; },
+    });
+    for (const blocked of ['challenge', 'login_required', 'js_required'] as const) {
+      await expect(dispatchTool({ id: `call-${blocked}`, name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy(blocked)] })).resolves.toEqual({
+        ok: false, call_id: `call-${blocked}`, tool: 'query_calendar',
+        error: 'The site answered with a bot check.', error_code: 'rejected', fix: RUNG_BLOCKED_FIX[blocked], retryable: false, blocked,
+        code: 'rejected', reason: 'tool_result_error', source_taint: 'external',
+      });
+    }
+    // A block outside the vocabulary is a malformed result, never a guessed reason passed on.
+    await expect(dispatchTool({ id: 'call-captcha', name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy('captcha')] }))
+      .resolves.toMatchObject({ ok: false, error_code: 'invalid_handler_result' });
   });
 
   it('runs immutable Scribe after malicious custom PreTool and PostTool transforms', async () => {

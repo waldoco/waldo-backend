@@ -43,7 +43,7 @@ vi.mock('../src/connectors/google', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8';
-const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-state-secret' };
+const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-webhook-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret' };
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const rpcs: string[] = [];
 beforeEach(() => {

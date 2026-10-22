@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(44);
+select plan(57);
 insert into waldo.owners (do_name, email) values ('do-a', 'a@test.invalid'), ('do-b', 'b@test.invalid');
 
 select is(has_function_privilege('anon', 'waldo.oauth_access(text, uuid)', 'execute'), false, 'the runtime key cannot read an edge-held token');
@@ -63,6 +63,25 @@ select is((select client_id from waldo.oauth_client_get('https://auth.example.co
 select is((waldo.proxy_idem_claim('do-a', (select id from m), 'approval:1:apply', 'd1'))->>'state', 'new', 'an MCP write claims its intent');
 select is(waldo.oauth_idem_release('do-b', (select id from m), 'approval:1:apply'), false, 'another owner cannot release it');
 select is(waldo.oauth_idem_release('do-a', (select id from m), 'approval:1:apply') and (waldo.proxy_idem_claim('do-a', (select id from m), 'approval:1:apply', 'd1'))->>'state' = 'new', true, 'a provably refused write releases its claim and can claim it again');
+-- No client key reaches the oauth-proxy's revoke, client registration or intent release.
+select is(has_function_privilege('anon', 'waldo.oauth_revoke(text, uuid)', 'execute'), false, 'the runtime key cannot revoke an edge-held grant');
+select is(has_function_privilege('authenticated', 'waldo.oauth_revoke(text, uuid)', 'execute'), false, 'a signed-in user cannot revoke an edge-held grant');
+select is(has_function_privilege('anon', 'waldo.oauth_client_put(text, text, text, text, text)', 'execute'), false, 'the runtime key cannot register a client');
+select is(has_function_privilege('authenticated', 'waldo.oauth_client_put(text, text, text, text, text)', 'execute'), false, 'a signed-in user cannot register a client');
+select is(has_function_privilege('anon', 'waldo.oauth_idem_release(text, uuid, text)', 'execute'), false, 'the runtime key cannot release a write intent');
+select is(has_function_privilege('authenticated', 'waldo.oauth_idem_release(text, uuid, text)', 'execute'), false, 'a signed-in user cannot release a write intent');
+
+-- The release joins custody: the oauth-proxy cannot clear a connector-proxy write's claim.
+select is((waldo.proxy_idem_claim('do-a', (select id from g), 'approval:2:apply', 'd2'))->>'state', 'new', 'a Google write claims its intent');
+select is(waldo.oauth_idem_release('do-a', (select id from g), 'approval:2:apply'), false, 'the oauth-proxy cannot release a Google write''s claim');
+select is((waldo.proxy_idem_claim('do-a', (select id from g), 'approval:2:apply', 'd2'))->>'state', 'pending', 'so the Google claim stays pending');
+
+-- Revoke is owner- and custody-scoped.
+select is(waldo.oauth_revoke('do-b', (select id from m)), false, 'another owner cannot revoke the MCP grant');
+select is((select status <> 'revoked' from waldo.connections where id = (select id from m)), true, 'which stays live');
+select is(waldo.oauth_revoke('do-a', (select id from g)), false, 'the oauth-proxy cannot revoke a Google grant');
+select is((select count(*)::int from waldo.connections c join vault.secrets s on s.id = c.secret_id where c.id = (select id from g) and c.status <> 'revoked'), 1, 'which keeps its status and its Vault secret');
+
 select is(waldo.oauth_revoke('do-a', (select id from m)), true, 'disconnect revokes the MCP grant');
 select is((select count(*)::int from vault.secrets s join waldo.connections c on c.secret_id = s.id where c.id = (select id from m)), 0, 'and deletes its Vault secret');
 select * from finish();
