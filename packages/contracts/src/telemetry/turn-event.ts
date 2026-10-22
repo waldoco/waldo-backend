@@ -5,7 +5,9 @@ import { providerSchema } from '../model/roster';
 // Bump when a field below changes meaning, so dashboards can filter by it.
 // v10: per-turn facts ride the owner's message, so `current_bytes` includes the turn context and memory, health,
 // clock and the other per-turn sections are counted in `context_sections`, no longer in `system_sections`.
-export const TURN_EVENT_SCHEMA_VERSION = '10';
+// v11: `rung_blocked` can name a page's own block (`challenge`, `login_required`, `js_required`), and
+// `shape.voice_version` is set on calls whose system prompt carries the voice block.
+export const TURN_EVENT_SCHEMA_VERSION = '11';
 
 // Every v9 addition is a number, a boolean or a member of a closed vocabulary. Free text lives only in the
 // fields named by TURN_EVENT_TEXT_FIELDS, which the privacy gate strips whenever text capture is off.
