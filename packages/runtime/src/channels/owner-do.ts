@@ -11,6 +11,14 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
+import { HEALTH_ZONE_CHANGE_PATH, verifiedZoneChange } from '../health/zone-change-route';
+import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
+import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
+import { whoopConfig } from '../health/providers/whoop-routes';
+import { produceHealthScores } from '../health/producer';
+import { computeDailyScores } from '../health/scores';
+import { invokeHealth } from './app-health';
+import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, HEALTH_TRIGGER_FORMAT, HEALTH_TRIGGER_ID } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -27,7 +35,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
@@ -158,7 +166,9 @@ import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
-import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
+import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
+import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
+import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -215,6 +225,9 @@ type OwnerRuntime = Readonly<{
   noticeFailures(): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
+  // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
+  healthChanged(day: string): Promise<void>;
+  healthTrigger(entry: ScheduleEntry): Promise<void>;
   watches(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
@@ -323,6 +336,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       .catch(() => { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); });
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
+  private mcpRegistry?: McpConnections;
+  // The owner's MCP connections: one registry per owner object, shared by every channel's runtime.
+  private mcp(): McpConnections {
+    return this.mcpRegistry ??= mcpConnections({
+      sql: this.ctx.storage.sql, transaction: (work) => this.ctx.storage.transactionSync(work),
+      proxy: oauthProxy(this.env), doName: () => this.ctx.storage.kv.get<string>('do_name') ?? null,
+      ...(this.env.TELEGRAM_WEBHOOK_SECRET ? { stateSecret: this.env.TELEGRAM_WEBHOOK_SECRET } : {}),
+      fetcher: (input, init) => fetch(input, init), now: () => Date.now(),
+      reserved: () => mcpServers(this.env.WALDO_MCP_SERVERS).map((server) => server.name),
+      log: (entry) => console.log(JSON.stringify({ trace: 'mcp', ...entry })),
+    });
+  }
   // Model provider health for every channel and turn of this owner, so provider misses add up across turns.
   private readonly providerHealth = new InMemoryCircuitBreaker();
   // The owner id each cached runtime was built for. The binding can change under a live cache (console-first signup builds owner 0, the Telegram link binds later).
@@ -944,6 +969,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // app's contract does not carry.
   private consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
+    if (view === 'connections') {
+      const mcp = this.mcp();
+      return { ...projection, data: { ...projection.data, mcp: mcp.list().map((connection) => ({ ...connection, tool_list: mcp.toolsOf(connection.id).map((tool) => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.server_text.title ? { title: tool.server_text.title } : {}) })) })) } };
+    }
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv;
     return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), telegram_linked: telegramLinked(kv) } } };
@@ -987,6 +1016,36 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:answer.state==='available',code:demandCode(answer)});
       return Response.json(answer,{headers});
     }catch{runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:false,code:'read_failed'});return Response.json({error:'unavailable'},{status:503,headers});}
+  }
+  // Worker-to-DO only: today's derived health row moved zone. It carries the day and nothing else, and arms the trigger.
+  private async healthZoneChange(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const day=await verifiedZoneChange(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!day)return Response.json({error:'unavailable'},{status:403,headers});
+    await this.setup('app').healthChanged(day);
+    return Response.json({ok:true},{headers});
+  }
+  // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
+  private async healthProvider(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const call=await verifiedProviderCall(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!call)return Response.json({error:'unavailable'},{status:403,headers});
+    try{const answer=await dispatchProviderCall(this.providerOwner(),call.op,call.body);return Response.json(answer.json,{status:answer.status,headers});}
+    catch{return Response.json({error:'unavailable'},{status:503,headers});}
+  }
+  // One WHOOP owner per object, so its refresh of the edge's token stays single-file across every runtime the object builds.
+  private whoop?: WhoopOwner;
+  private providerOwner(): WhoopOwner {
+    const config=whoopConfig(this.env);
+    return this.whoop??=whoopOwner({
+      doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
+      timezone:()=>this.setup('app').timezone,
+      produce:()=>{const app=this.setup('app'),rpc=signedRpc(this.env),doName=this.ctx.storage.kv.get<string>('do_name')??'';
+        return produceHealthScores({readSeries:range=>invokeHealth(rpc,doName,'series_read',JSON.stringify(range)),writeContext:payload=>invokeHealth(rpc,doName,'context_write',payload),compute:computeDailyScores,readDemand:range=>app.calendarDemand(range),onZoneChange:app.healthChanged},{now:Date.now(),timezone:app.timezone});},
+      arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
+      disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
+      log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
+    });
   }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
@@ -1120,6 +1179,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const path=new URL(request.url).pathname;
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
+    if(path===HEALTH_ZONE_CHANGE_PATH)return this.healthZoneChange(request);
+    if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
@@ -1140,6 +1201,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
       const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
       return Response.json(reply);
+    }
+    if (new URL(request.url).pathname === MCP_FINISH_PATH && request.method === 'POST') {
+      const { nonce, query } = JSON.parse(body) as { nonce: string; query: string };
+      return Response.json(await this.serial(() => this.mcp().finish(nonce, new URLSearchParams(query))));
     }
     if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
       const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
@@ -1742,6 +1807,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             act:async(action)=>{
               if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null,url.origin);
+              if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin));
+              if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
+              if(action.action==='mcp.runs'){const [tool,choice]=action.value.split('|');return !!tool&&(choice==='on'||choice==='off')&&await this.mcp().setRuns(action.id,tool,choice==='on');}
               if(action.action==='telegram.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
@@ -1808,6 +1876,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const resultPage = (message: string, ok: boolean) => new Response(message, { status: ok ? 200 : 400, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
     const noticePage = (key: string) => { const receipt = dashboardReceipt(key); return resultPage(receipt.message, receipt.outcome !== 'failed'); };
     if (url.pathname === CONSOLE_GOOGLE_PATH) return new Response(null, { status: 303, headers: { location: CONSOLE_PATH } });
+    if (url.pathname.startsWith(MCP_START_PATH) && request.method === 'GET') {
+      // Behind the console session: only the signed-in owner can turn a connect attempt into a provider redirect.
+      const target = await this.serial(() => this.mcp().start(url.pathname.slice(MCP_START_PATH.length)));
+      return target ? new Response(null, { status: 303, headers: { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
+    }
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');
     if (url.pathname === CONSOLE_INVITES_PATH) {
@@ -2007,7 +2080,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal } = this.setup(channel);
+      const { scheduler, fire, beat, nightly, briefs, healthTrigger, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
@@ -2068,7 +2141,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
         // revoked account runs nothing, and an outage asks again without spending attempts.
-        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
+        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, patrol: healthTrigger };
         // A paused job's notice goes out from the runtime that ran the jobs, so it lands where their messages do.
         let notices = noticeFailures;
         if (consoleAuth(this.env)) {
@@ -2082,13 +2155,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
             const app = this.setup('app');
             await app.ready;
-            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder, patrol: app.healthTrigger };
             notices = app.noticeFailures;
           }
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async () => { await this.providerOwner().sync(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
@@ -2901,6 +2974,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
       // the owner gets a bounded line, and it never re-enters model context.
       mcpCall: async (proposal,intent) => {
+        if (proposal.connection) {
+          if (!proposal.tool_digest) throw new McpRefusal('rejected', 'The approved call has no frozen tool definition, so nothing ran.', true);
+          const out = await this.mcp().invoke({ mode: 'approved', connection: proposal.connection, tool: proposal.tool, args: proposal.args, digest: proposal.tool_digest, intentId: intent.id, ...(proposal.answers ? { answers: proposal.answers } : {}) });
+          if ('input_required' in out) throw new McpRefusal('rejected', `${out.server} asked before running ${proposal.tool}: ${out.input_required.questions.map((question) => `"${question.message}"`).join(' ')} Reply in chat with your answer and Waldo will prepare the call again.`, true);
+          return { provider_id: intent.id, result: `Result (external content, bounded): ${JSON.stringify(out.result).slice(0, 300)}` };
+        }
         const found = mcpServers(this.env.WALDO_MCP_SERVERS).find((s) => s.name === proposal.server);
         if (!found) throw new Error(`MCP server "${proposal.server}" is no longer configured`);
         const { content, protocolVersion } = await executeMcp(found, proposal.tool, proposal.args, mcpGoogleAuth, fetch, intent);
@@ -2933,8 +3012,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A job prompt is stored with the conversation and indexed for search, so it carries the ledger without the health logs;
     // those reach the model as the turn's context, which is never stored.
     const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
+    // Only the server's name: its questions are server text, so they reach the model through search_mcp_tools, stamped external.
+    const mcpWaiting = () => { const servers = this.mcp().waitingServers(); return servers.length ? `MCP questions\n- ${servers.join(', ')} asked the owner a question before running a tool; search_mcp_tools shows it.` : ''; };
     const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -3122,6 +3203,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The month total lives beside the cost ledger's deltas, so there is no ceiling while the ledger is off.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: MONTHLY_SPEND_CEILING_USD }) : undefined;
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
+    const connectors = () => connectorsLine(this.mcp().list());
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const responder = createTelegramResponder(
@@ -3165,7 +3247,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true) }), useMacHandler({ request: async (input, context) => {
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true) }), useMacHandler({ request: async (input, context) => {
         // A Mac is reached only from an owner-initiated turn of this exact owner DO, through that
         // owner's single paired device that declared the requested class. Identity is re-read after
         // every await so an unlink or rebind mid-turn cannot redirect the request.
@@ -3194,11 +3276,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined),episodes,()=>Date.now()),
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})},
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
@@ -3511,6 +3593,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const calendarGate = new DeliveryGateStore(storage.sql);
+    // The health trigger. A zone change marks the day and arms one evaluation no sooner than an hour after the last; the
+    // evaluation reads zone words through the consented derived-row read and proposes at most one calendar change.
+    const healthBook = healthTriggerBook(storage.sql);
+    const healthChanged = async (day: string) => {
+      healthBook.mark(day, Date.now());
+      if (!schedPrefs.enabled('health_proposals') || scheduler.lookup(HEALTH_TRIGGER_ID).state !== 'absent') return;
+      const due = healthTriggerDueAt(Date.now(), healthBook.lastRunAt());
+      await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: due, dueAt: due, payloadRefs: { id: HEALTH_TRIGGER_ID } });
+    };
+    const healthTrigger = async (entry: ScheduleEntry) => {
+      const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
+      const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
+      const budget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
+      await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
+        enabled: () => schedPrefs.enabled('health_proposals'), modeSetting: () => schedPrefs.healthMode(), proactivity: () => loops.proactivity(),
+        readHealth: async () => (rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null),
+        comingItems: async (from, to) => {
+          const client = await google.client('calendar');
+          const tasks = await google.client('tasks').catch(() => null);
+          return comingItemsFrom({ events: client ? async () => (client.calendarPage ? (await client.calendarPage('primary', new Date(from).toISOString(), new Date(to).toISOString(), 20, false)).events : client.events(new Date(from).toISOString(), new Date(to).toISOString(), 20, false)) : null,
+            tasks: tasks ? () => tasks.tasks('todo', 50) : null, loops: () => loops.list() }, from, to, timezone);
+        },
+        admit: budget.admit, charge: budget.charge,
+        decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, HEALTH_TRIGGER_FORMAT),
+        propose: (args, operationRef) => desk.propose(args, undefined, operationRef),
+        reschedule: async at => { await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: at, dueAt: at, payloadRefs: { id: HEALTH_TRIGGER_ID } }); },
+        log: line => log({ trace, hop: line.hop, ms: 0, ok: line.ok, code: line.code, ...(line.mode ? { detail: line.mode } : {}) }) });
+    };
     // Legacy owner counters used UTC. Adopt a new zone only once both civil days
     // have advanced past every retained daily row and send; never reset aggregates.
     const calendarCounterHold = (): string | null => storage.transactionSync(() => {
@@ -3850,7 +3960,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);

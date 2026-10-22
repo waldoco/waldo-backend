@@ -88,6 +88,21 @@ describe('schedule preferences', () => {
     });
   });
 
+  it('keeps the health proposal mode as the owner set it, shows it in the ledger line, and reset returns it to auto', async () => {
+    await withOwner(async ({ prefs, call }) => {
+      expect(prefs.healthMode()).toBe('auto');
+      expect(schedulePreferencesLine(prefs.all(), prefs.healthMode())).toContain('health_proposals (one proposed plan change when a health zone change meets a coming decision) on, auto');
+      await call({ action: 'on', kind: 'health_proposals', mode: 'shadow' });
+      expect([prefs.healthMode(), prefs.enabled('health_proposals')]).toEqual(['shadow', true]);
+      expect(schedulePreferencesLine(prefs.all(), prefs.healthMode())).toContain('on, shadow');
+      await call({ action: 'off', kind: 'health_proposals' });
+      expect([prefs.healthMode(), prefs.enabled('health_proposals')]).toEqual(['shadow', false]);
+      expect(schedulePreferencesLine(prefs.all(), prefs.healthMode())).toContain('health_proposals (one proposed plan change when a health zone change meets a coming decision) off');
+      await call({ action: 'reset' });
+      expect([prefs.healthMode(), prefs.enabled('health_proposals')]).toEqual(['auto', true]);
+    });
+  });
+
   it('on and off need a kind', async () => {
     await withOwner(async ({ call }) => {
       expect(await call({ action: 'off' })).toMatchObject({ ok: false, code: 'invalid_args' });
