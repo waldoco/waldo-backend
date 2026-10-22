@@ -3326,7 +3326,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true) }), useMacHandler({ request: async (input, context) => {
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true), claims: () => memory.allClaims() }), useMacHandler({ request: async (input, context) => {
         // A Mac is reached only from an owner-initiated turn of this exact owner DO, through that
         // owner's single paired device that declared the requested class. Identity is re-read after
         // every await so an unlink or rebind mid-turn cannot redirect the request.
@@ -3362,8 +3362,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
+    // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it
+    // wants goes to the owner's card, as in an owner turn that read the same text.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
-      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines());
+      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines(), 'external');
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;
@@ -3848,7 +3850,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
           const at = Date.now();
-          const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
+          const text = (await responder.prompt(id, owner, said, async (hop, work) => work(), undefined, undefined, undefined, undefined, 'external')).trim();
           if (text) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
           log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
         });
