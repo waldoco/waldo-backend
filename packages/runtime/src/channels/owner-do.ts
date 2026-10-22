@@ -98,6 +98,8 @@ import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import type { ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
+import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
+import { forgetWaitingCards } from './approvals';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
@@ -1040,6 +1042,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // One WHOOP owner per object, so its refresh of the edge's token stays single-file across every runtime the object builds.
   private whoop?: WhoopOwner;
+  // Every durable store outside the claims table that holds the owner's text, in one list. The forget purge job cleans these
+  // and nothing else does, so the forget tool, the console and the job cannot disagree on what a forget covers.
+  private forgetStores(): ForgetStore[] {
+    const storage = this.ctx.storage, kv = storage.kv;
+    return [
+      { name: 'conversation', run: async (texts) => (await redactConversationEntries(storage, texts, FORGOTTEN)).remaining },
+      { name: 'tool_ledger', run: async (texts) => { await redactToolOutputLedger(storage, texts, FORGOTTEN); return toolOutputLedger(storage).remaining(texts); } },
+      { name: 'mail_followups', run: (texts) => redactMailFollowupEntries(kv, texts, FORGOTTEN).remaining },
+      { name: 'calendar_prep', run: (texts) => redactCalendarPrepEntries(kv, texts, FORGOTTEN).remaining },
+      { name: 'job_reports', run: (texts) => redactJobReportEntries(kv, texts, FORGOTTEN).remaining },
+      { name: 'whatsapp_held', run: (texts) => forgetHeldWhatsApp(kv, texts).remaining },
+      { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
+      { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
+      { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
+      { name: 'episodes', run: (texts) => { scrubEpisodeTexts(storage.sql, texts, FORGOTTEN); return 0; } },
+    ];
+  }
+
+  private forgetPurgeJob(): ForgetPurge {
+    const storage = this.ctx.storage;
+    const scheduler = new Scheduler(storage.sql, storage, productionDeps());
+    return forgetPurge({
+      sql: storage.sql, store: claimStore(storage.sql, (work) => storage.transactionSync(work)), stores: this.forgetStores(), now: Date.now,
+      arm: async (at) => { await scheduler.schedule({ id: FORGET_PURGE_ID, kind: 'forget_purge', payloadRefs: { id: FORGET_PURGE_ID }, occurrenceAt: at, dueAt: at }); },
+      log: (event) => console.log(JSON.stringify({ trace: `forget:${Date.now()}`, hop: event.hop, ms: 0, ok: event.hop === 'forget_settled', detail: event.detail })),
+    });
+  }
+
   private providerOwner(): WhoopOwner {
     const config=whoopConfig(this.env);
     return this.whoop??=whoopOwner({
@@ -2166,7 +2196,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async () => { await this.providerOwner().sync(); } };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async () => { await this.providerOwner().sync(); }, forget_purge: async () => { await this.forgetPurgeJob().run(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
@@ -3226,20 +3256,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
+        // The tool has already deleted the claims and taken custody of the texts; the stores outside the claims table are the
+        // forget purge job's, so a slow store never fails or delays the forget.
         hideHistory: async (texts, context) => {
-          const scope = context.runScope;
-          scope?.admit();
-          const result = await redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
-          const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          forgetHeldWhatsApp(this.ctx.storage.kv, texts);
-          const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
-          const scrubEpisodes = () => scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
-          if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
+          context.runScope?.admit();
+          await this.forgetPurgeJob().track(texts);
         },
       }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');

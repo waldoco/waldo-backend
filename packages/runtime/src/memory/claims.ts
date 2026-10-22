@@ -1254,19 +1254,11 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
-  // A topic still pending from an earlier turn is retried here with no new intent needed: its owner evidence was
-  // checked when it was first recorded.
-  const purgeTopics = [...new Set([...(topic ? [topic] : []), ...store.pendingTopics()])];
+  // A forget here leaves its claims purging and its topic in custody; the forget purge job cleans the stores outside the
+  // claims table and settles both, so a topic still pending from an earlier turn is not retried here.
+  const purgeTopics = topic ? [topic] : [];
   const purge = forgetIds.length || purgeTopics.length ? store.purge(forgetIds, at, purgeTopics) : null;
-  if (purge && purge.texts.length > 0) {
-    if (onPurged === undefined) {
-      // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
-      // WITH a KV store settles itself once its redaction verifies (see telegram-turn).
-      if (purge.ready) store.settle(forgetIds, purgeTopics);
-    } else {
-      onPurged(purge.texts, purge.ready ? forgetIds : [], purge.ready ? purgeTopics : []);
-    }
-  }
+  if (purge && purge.texts.length > 0) onPurged?.(purge.texts, purge.ready ? forgetIds : [], purge.ready ? purgeTopics : []);
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
   // Curation of the pinned blocks, after this reply's dismissals and forgets so a retired claim is never pinned. Unpins land
   // first, so an unpin and a pin of the same claim is a move. Only a caller that curates the blocks (the nightly pass) applies

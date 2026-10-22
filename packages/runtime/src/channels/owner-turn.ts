@@ -172,7 +172,6 @@ export const createOwnerResponder = (
   })();
   // Cleanup custody does not admit legacy profile or claim content.
   const forgettingState = memory;
-  const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
@@ -696,19 +695,6 @@ export const createOwnerResponder = (
       for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); if (entry.role !== 'compaction') conversationLeaves.set(entry.chatId, entry.id); }
     };
     await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
-    const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
-    const topics = forgettingState?.pendingTopics() ?? [];
-    if (forgettingState && (ids.length || topics.length)) {
-      const purge = forgettingState.purge(ids, new Date().toISOString(), topics);
-      try {
-        const cleanup = redactConversation ? await redactConversation(purge.texts, privateRunScope) : { remaining: store ? 1 : 0 };
-        const remaining = cleanupLedger ? await cleanupLedger.remaining(purge.texts) : 0;
-        if (purge.ready && cleanup.remaining === 0 && remaining === 0) forgettingState.settle(ids, topics);
-      } catch (error) {
-        if (error instanceof ClosedRunError) throw error;
-        log({ trace: traceId, hop: 'memory_cleanup', ms: 0, ok: false, code: 'retained_cleanup_incomplete' });
-      }
-    }
   };
   // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
   // composed context and tools' authenticated owner are that owner's. A job that converses passes its surface's chain, and

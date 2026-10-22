@@ -105,26 +105,19 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         }
         for (const claim of selected.values()) { texts.add(claim.text); if (claim.origin === 'owner') texts.add(claim.evidence); }
         await ready(ctx);
-        // Hide retained history before deleting the only claim-to-source link. A failed
-        // cleanup is a failed tool, not an invented completion receipt.
-        await deps.hideHistory([...texts], ctx); await ready(ctx);
-        let incomplete = false, touched = false;
+        let touched = false;
+        // Custody before destruction: the purge records every text in custody, then deletes the claims and cleans the claims
+        // table and its derived rows, all in one commit. The stores outside it are cleaned by the forget purge job, handed the
+        // same texts after the commit; until it settles, the forget barrier keeps them out of the model's view.
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
-          // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
-          // A purge that cannot verify clean leaves the pending row in place and this call reports incomplete; a topic row is closed only by a verified purge.
-          const topics = args.topic ? [args.topic] : [], ids = [...selected.keys()];
-          if (ids.length || topics.length) {
-            const purge = store.purge(ids, now(), topics);
-            const counts = purge.receipt; touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
-            if (purge.ready) store.settle(ids, topics); else incomplete = true;
-          }
-          if (args.topic && !incomplete) for (const held of store.pendingTopics()) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
+          const counts = store.purge([...selected.keys()], now(), [...texts]).receipt;
+          touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
-        if (incomplete) return fail('Memory cleanup could not be verified. The topic stays recorded and hidden from recall until a forget completes with verified cleanup.');
+        await deps.hideHistory([...texts], ctx); await ready(ctx);
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
@@ -132,7 +125,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const history = swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: 'running', scope: `removed from memory and recall now; ${history} in the background, and hidden from Waldo until that finishes; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
       } },
   ];
 };
