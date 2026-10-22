@@ -1,6 +1,6 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { browsePageArgsSchema, buildSessionState, createArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolTurn, type ToolName } from '@waldo/contracts';
+import { browsePageArgsSchema, buildSessionState, createArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMToolTurn, type ModelName, type ToolName } from '@waldo/contracts';
 import { runToolLoop, TOOL_OUTPUT_LIMIT, TOOL_RESULTS_KEEP_CHARS } from '../src/conversation/tool-loop';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
@@ -144,6 +144,63 @@ it('a cleared write keeps its outcome and receipt link in the note, and is not o
   expect(first.output).toContain('(it succeeded)');
   expect(first.output).toContain(`Its link: ${url}.`);
   expect(first.output).toContain('Do not repeat the call');
+});
+
+// Once the provider's prompt cache has expired since the chain's last call, the next request re-bills its whole prefix
+// anyway, so results older than the latest rounds are cleared then (context editing's tool result clearing, in memory):
+// a smaller prefix to re-bill and to cache again. Never before: clearing a warm prefix would re-bill everything after it.
+describe('clearing once the prompt cache is cold', () => {
+  const small = { ...bigRead, handle: async (args: unknown) => ({ ok: true, data: { query: (args as { query: string }).query }, source_taint: null }) };
+  // Six rounds; the model that served each call, and the wait before the sixth.
+  const coldRun = async (servedBy: (step: number) => ModelName | undefined, idleMs: number) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-11-04T09:00:00Z') });
+    try {
+      const sent: (readonly LLMToolTurn[])[] = [];
+      const recorded: string[] = [];
+      let step = 0;
+      await runToolLoop({
+        handlers: [small] as never, ctx: ctx(), maxSteps: 10, budget: { remaining: 10, deadline: Date.now() + 3 * 60 * 60_000 },
+        step: async (_tools, turns) => {
+          sent.push(turns.map((turn) => ({ ...turn })));
+          step += 1;
+          const model = servedBy(step);
+          const served = model === undefined ? {} : { model };
+          return step <= 6 ? { text: '', tool_calls: [{ call_id: `c${step}`, name: 'read_memory', arguments: JSON.stringify({ query: `topic ${step}` }) }], ...served } : { text: 'Done.', ...served };
+        },
+        onTool: (event) => { recorded.push(event.output); if (step === 5) vi.setSystemTime(Date.now() + idleMs); },
+      });
+      return Object.assign(sent, { recorded });
+    } finally { vi.useRealTimers(); }
+  };
+  const cleared = (turns: readonly LLMToolTurn[]) => turns.map((turn) => isCleared(turn.output));
+
+  it('after the Anthropic cache lifetime, clears all but the latest three rounds, and holds that prefix while it is warm', async () => {
+    const sent = await coldRun(() => WALDO_CHAT_FALLBACK_MODEL, 5 * 60_000);
+    expect(sent).toHaveLength(7);
+    for (const turns of sent.slice(0, 5)) expect(cleared(turns).some(Boolean)).toBe(false);
+    expect(cleared(sent[5]!)).toEqual([true, true, false, false, false]);
+    expect(sent[5]![0]!.output).toContain('read memory result from earlier in this turn (it succeeded)');
+    // The next round is warm: what was cleared stays cleared, and nothing more is.
+    expect(cleared(sent[6]!)).toEqual([true, true, false, false, false, false]);
+    expect(sent[6]!.slice(0, 5)).toEqual(sent[5]);
+    // Only what is sent changes: the results the turn records for its ledger are whole.
+    expect(sent.recorded).toHaveLength(6);
+    expect(sent.recorded.some(isCleared)).toBe(false);
+  });
+
+  it('a wait shorter than the cache lifetime clears nothing', async () => {
+    const sent = await coldRun(() => WALDO_CHAT_FALLBACK_MODEL, 5 * 60_000 - 1_000);
+    expect(sent).toHaveLength(7);
+    for (const turns of sent) expect(cleared(turns).some(Boolean)).toBe(false);
+  });
+
+  it('a chain an OpenAI model served, wholly or in part, or one with no served model, is never cleared for time', async () => {
+    for (const servedBy of [() => WALDO_CHAT_MODEL, (step: number) => step === 5 ? WALDO_CHAT_MODEL : WALDO_CHAT_FALLBACK_MODEL, () => undefined]) {
+      const sent = await coldRun(servedBy, 60 * 60_000);
+      expect(sent).toHaveLength(7);
+      for (const turns of sent) expect(cleared(turns).some(Boolean)).toBe(false);
+    }
+  });
 });
 
 it('a cleared read that can repeat dispatches again when called again', async () => {

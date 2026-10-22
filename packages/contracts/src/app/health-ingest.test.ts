@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
-  healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  healthApiErrorV1Schema, healthChangeRejectionReasonV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
+  healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
 } from './health-ingest';
 
@@ -130,6 +131,49 @@ describe('health ingest batch', () => {
     const receipt = { request_id: batch.request_id, source: 'apple', consent_epoch: 1, accepted: 1, deleted: 0, ignored: 0, anchor_after: 'opaque-anchor-1', replayed: false };
     expect(healthIngestReceiptV1Schema.safeParse(receipt).success).toBe(true);
     rejected(healthIngestReceiptV1Schema, [{ ...receipt, accepted: -1 }, { ...receipt, replayed: 'no' }, { ...receipt, extra: 1 }]);
+  });
+});
+
+// Health revision 3: each change in a batch is checked on its own. A client that names it gets the good changes stored and
+// the bad ones listed by position, kind of reading and a closed reason, never by value.
+describe('per-sample rejection', () => {
+  const receipt = { request_id: batch.request_id, source: 'apple', consent_epoch: 1, accepted: 1, deleted: 0, ignored: 0, anchor_after: 'opaque-anchor-1', replayed: false };
+  it('is health revision 3, after the provider rows of revision 2', () => {
+    expect([HEALTH_PROVIDER_REVISION_V1, HEALTH_PER_SAMPLE_REVISION_V1]).toEqual([2, 3]);
+  });
+  it('reads the envelope strictly and leaves each change to be checked on its own', () => {
+    const changes = [sleep, { signal: 'wrist_temperature', value: 'x' }, 7, null];
+    expect(healthIngestEnvelopeV1Schema.safeParse({ ...batch, samples: changes, deletions: [{ nonsense: true }] }).success).toBe(true);
+    // The server sets the per-sample mode itself; a client cannot name it, or any other key.
+    rejected(healthIngestEnvelopeV1Schema, [
+      { ...batch, rejection: 'per_sample' }, { ...batch, user_id: 'forged' }, { ...batch, request_id: 'short' }, { ...batch, source: 'garmin' },
+      { ...batch, timezone: 'not a zone!' }, { ...batch, samples: {} }, { ...batch, samples: Array.from({ length: 128 }, () => sleep), deletions: [{}] },
+    ]);
+  });
+  it('passes a valid change through and names a bad one by position, kind of reading and reason only', () => {
+    expect(checkHealthChangeV1('sample', 0, sleep)).toEqual({ ok: true, change: sleep });
+    const deletion = { sample_id: 'HK:gone', signal: 'spo2', revision: 3 };
+    expect(checkHealthChangeV1('deletion', 0, deletion)).toEqual({ ok: true, change: deletion });
+    expect(checkHealthChangeV1('sample', 4, { ...sleep, value: 1441 })).toEqual({ ok: false, rejection: { change: 'sample', index: 4, signal: 'sleep_duration', reason: 'invalid_sample' } });
+    expect(checkHealthChangeV1('sample', 5, { ...sleep, signal: 'wrist_temperature', unit: 'celsius' })).toEqual({ ok: false, rejection: { change: 'sample', index: 5, signal: null, reason: 'unsupported_signal' } });
+    expect(checkHealthChangeV1('deletion', 1, { ...deletion, signal: 'vo2_max' })).toEqual({ ok: false, rejection: { change: 'deletion', index: 1, signal: null, reason: 'unsupported_signal' } });
+    expect(checkHealthChangeV1('deletion', 2, { ...deletion, revision: -1 })).toEqual({ ok: false, rejection: { change: 'deletion', index: 2, signal: 'spo2', reason: 'invalid_sample' } });
+    for (const hostile of [null, 7, 'sleep', [], { signal: 42 }, { signal: '__proto__' }, { ...sleep, extra: 'x' }, { ...sleep, unit: 'hours' }]) {
+      const verdict = checkHealthChangeV1('sample', 0, hostile);
+      expect(verdict.ok, JSON.stringify(hostile)).toBe(false);
+      if (!verdict.ok) expect(Object.keys(verdict.rejection).sort()).toEqual(['change', 'index', 'reason', 'signal']);
+    }
+  });
+  it('carries a rejection list on the receipt only as positions, kinds and closed reasons', () => {
+    const rejection = { change: 'sample', index: 3, signal: 'spo2', reason: 'invalid_sample' };
+    expect(healthIngestReceiptV1Schema.safeParse({ ...receipt, rejected: [] }).success).toBe(true);
+    expect(healthIngestReceiptV1Schema.safeParse({ ...receipt, rejected: [rejection, { ...rejection, change: 'deletion', index: 0, signal: null, reason: 'unsupported_signal' }, { ...rejection, reason: 'revision_conflict' }] }).success).toBe(true);
+    rejected(healthIngestReceiptV1Schema, [
+      { ...receipt, rejected: [{ ...rejection, value: 97 }] }, { ...receipt, rejected: [{ ...rejection, index: 128 }] }, { ...receipt, rejected: [{ ...rejection, index: -1 }] },
+      { ...receipt, rejected: [{ ...rejection, reason: 'too_high' }] }, { ...receipt, rejected: [{ ...rejection, signal: 'wrist_temperature' }] },
+      { ...receipt, rejected: Array.from({ length: 129 }, () => rejection) },
+    ]);
+    expect(healthChangeRejectionReasonV1Schema.options).toEqual(['invalid_sample', 'unsupported_signal', 'revision_conflict']);
   });
 });
 
