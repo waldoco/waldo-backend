@@ -177,14 +177,23 @@ const appChat = async (owner: Owner, ctx: Ctx) => {
 };
 const said = async (owner: Owner, ctx: Ctx) => (await appChat(owner, ctx)).map(({ role, text }) => ({ role, text }));
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+// Meta reports that every WhatsApp message it accepted arrived on the phone: only then is a WhatsApp record delivered.
+const arrived = async (owner: Owner, state: DurableObjectState) => {
+  const ids = outbox(state).filter(record => record.status === 'accepted').flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+  const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+    method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+  expect(response.status).toBe(200);
+  await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+};
 const copies = (state: DurableObjectState) => outbox(state).filter(record => record.id.startsWith(WHATSAPP_COPY_PREFIX));
 const copyFailures = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'whatsapp_copy'").one().n;
 const reminderRuns = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', id).toArray();
 const reminderNotes = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reminder_notes').one().n;
 // What the console's WhatsApp unlink and a confirmed relink do: bindWhatsAppNumber, the one writer of the bound number, clears
-// what belonged to the old one, and the runtimes are rebuilt.
+// what belonged to the old one (keeping what the app will take for an owner with the app), and the runtimes are rebuilt.
 const rebindWhatsApp = (owner: Owner, state: DurableObjectState, subject: string | null) => {
-  state.storage.transactionSync(() => bindWhatsAppNumber(state.storage.kv, subject)); (owner as unknown as { runtimes: object }).runtimes = {};
+  const appBound = (owner as unknown as { appBound(): boolean }).appBound();
+  state.storage.transactionSync(() => bindWhatsAppNumber(state.storage.kv, subject, appBound)); (owner as unknown as { runtimes: object }).runtimes = {};
 };
 const unlinkWhatsApp = (owner: Owner, state: DurableObjectState) => rebindWhatsApp(owner, state, null);
 
@@ -251,6 +260,10 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
       expect(outbox(state).map(record => [record.payload.chat_id, record.status])).toEqual([[Number(SUBJECT), 'pending']]);
       await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${REMINDER_TEXT}`]);
+      // Meta took it; the reminder counts as sent only once Meta reports it arrived.
+      expect(outbox(state).map(record => record.status)).toEqual(['accepted']);
+      expect(reminderRuns(state, reminder.id)).toEqual([{ outcome: 'running', delivery: 'pending' }]);
+      await arrived(owner, state);
       expect(reminderRuns(state, reminder.id)).toEqual([{ outcome: 'ok', delivery: 'sent' }]);
       expect(await said(owner, ctx)).toEqual([]);
     }, { surface: 'whatsapp' });
@@ -295,6 +308,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(copies(state).map(record => [record.id, record.payload.chat_id, record.status])).toEqual([[`${WHATSAPP_COPY_PREFIX}${row!.id}`, Number(SUBJECT), 'pending']]);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CARD_TEXT}`]);
+      expect(copies(state).map(record => record.status)).toEqual(['accepted']);
+      await arrived(owner, state);
       expect(copies(state).map(record => record.status)).toEqual(['delivered']);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
     }, { surface: 'both' });
@@ -316,6 +331,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       state.storage.kv.put(FINAL_OUTBOX_KEY, rows);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CHECK_BACK_TEXT}`]);
+      expect(copies(state).map(record => record.status)).toEqual(['accepted']);
+      await arrived(owner, state);
       expect(copies(state).map(record => record.status)).toEqual(['delivered']);
       expect(copyFailures(state)).toBe(0);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);

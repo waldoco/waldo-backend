@@ -21,3 +21,7 @@ enabled = false
 [functions.mint-agent-jwt]
 verify_jwt = false
 
+# Router-HMAC signed by the Worker; the function rejects unsigned calls itself.
+[functions.oauth-proxy]
+verify_jwt = false
+

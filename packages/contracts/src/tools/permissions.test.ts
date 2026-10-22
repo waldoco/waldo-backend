@@ -61,6 +61,7 @@ describe('toolName', () => {
       'read_artifact',
       'call_mcp_tool',
       'read_mcp_tool',
+      'search_mcp_tools',
       'read_drive',
       'write_task',
       'update_task',
@@ -269,6 +270,7 @@ describe('TOOL_PERMISSIONS', () => {
         'read_artifact',
         'call_mcp_tool',
         'read_mcp_tool',
+        'search_mcp_tools',
         'read_drive',
         'write_task',
         'update_task',
@@ -347,6 +349,10 @@ describe('TOOL_PERMISSIONS', () => {
 
   it("grants 'read_mcp_tool' only in user_message, a read-only allowlisted bridge that is not privileged", () => {
     expect(triggersGranting('read_mcp_tool')).toEqual(['user_message']);
+  });
+
+  it("grants 'search_mcp_tools' only in user_message, a read of the owner's connected servers' tool definitions", () => {
+    expect(triggersGranting('search_mcp_tools')).toEqual(['user_message']);
   });
 
   it("grants 'call_mcp_tool' only in user_message — MCP is a gated bridge, not a bypass (ADR-0049)", () => {
