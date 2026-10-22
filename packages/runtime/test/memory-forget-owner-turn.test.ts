@@ -143,7 +143,9 @@ it('a failed asynchronous purge does not block unrelated owner work', async () =
     await responder.respond(ownerTyped({ traceId: 'tg-calendar', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?' }), timer);
     expect(seen.inputs.at(-1)).toContain('Works in AI');
     expect(seen.inputs.at(-1)).not.toContain('Private coffee');
-    expect(logs).toContain('retained_cleanup_incomplete');
+    // The owner's turn is not the purge's retry owner: the claim waits, held, for the forget purge job.
+    expect(logs).not.toContain('retained_cleanup_incomplete');
+    expect(memory.claims('purging').map(claim => claim.text)).toEqual(['Private coffee']);
   });
 });
 it('duplicate remember is not receipted as a new save', async () => {
