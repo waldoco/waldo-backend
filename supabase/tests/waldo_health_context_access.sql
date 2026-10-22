@@ -130,7 +130,7 @@ select is((select array_agg(key order by key) from jsonb_object_keys(waldo.healt
   'health-access-a',extract(epoch from now())::bigint,
   encode(extensions.hmac(extract(epoch from now())::bigint::text || '.healthctx.read.health-access-a','health-access-fixture','sha256'),'hex'))
   ->'context') as keys(key)),
-  array['compiled_at','confidence','day','drivers','form','freshness','id','recovery','tags','weight']::text[],
+  array['basis','compiled_at','confidence','day','drivers','form','freshness','id','recovery','tags','weight']::text[],
   'signed read exposes the exact derived context fields, excluding tier2 and evidence');
 select is((select array_agg(key order by key) from jsonb_object_keys(waldo.health_context_read(
   'health-access-a',extract(epoch from now())::bigint,
