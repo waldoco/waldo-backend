@@ -51,10 +51,35 @@ paused by an uncertain send. It never shows keys, invitations, challenges, bodie
 - One outstanding reply per bridge/account. A reply the host does not pull within the delivery deadline
   is `not_started` (`host_not_pulled`). A pulled reply without a terminal result within the mutation
   deadline becomes `unknown/still_in_flight` and **permanently** pauses sending for that account.
+- A reply that finds the slot busy is retried in 1 s; any other reply that could not be handed over is retried in 5 s.
 - There is no reconciliation or quarantine-clear API. Recovery requires a reviewed design (history/GUID
   reconciliation on the host); until then revoke and re-pair.
 - An owner turn interrupted by restart is closed as `interrupted` with effects unconfirmed and is not
   rerun.
+
+## Progress notes on long turns
+
+iMessage shows no typing dots, so a long owner turn sends at most two short notes
+(`src/channels/progress-pacer.ts`).
+
+- **When.** The wait counts from the later of two moments: the owner's message, or Waldo's last message on that chat.
+  Note 1 goes once the wait passes 20 s and note 2 once it passes 75 s. A turn that answers sooner sends none and makes no
+  extra model call.
+- **What.** The auxiliary model writes each line from the owner's message and the names of the tools the turn has
+  finished. It never sees tool outputs or arguments, and it never states an outcome. If the model cannot write note 1, a
+  fixed line goes instead; note 2 is skipped, or declined by the model when it has nothing new to say.
+- **Delivery.** A note uses the reply outbox under `progress:<turn>:<n>` and is handed to the bridge once, from inside the
+  turn:
+  - It is never retried and wakes nothing, and anything but `queued` settles it `not_started` (`progress_unsent`).
+  - The reply closes the pacer before it freezes, so a note still being written is dropped.
+  - The bridge refuses a note once its reply is in the mailbox (`progress_superseded`), and the reply withdraws a note
+    the host has not pulled.
+  - A note never waits for the busy slot (`progress_busy`).
+- **Messages during a long turn.** iMessage has no steer or stop path. A message the owner sends meanwhile waits and runs
+  as the next turn, after the current reply.
+- **Off switch:** `WALDO_IMESSAGE_PROGRESS=0`.
+- **Typing dots** are a host change, proposed in `waldoco/waldo-imessage-host`: the host types from an owner message
+  until its next send to that chat. The backend sends no typing commands, since they would take the single mailbox slot.
 
 ## Local proof commands
 

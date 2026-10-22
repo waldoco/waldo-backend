@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
+import { IMESSAGE_BUSY_RETRY_MS, IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
@@ -134,3 +134,49 @@ it('during an app-lane streak of 10, an iMessage reply reaches the bridge at the
     expect(left).toBeNull();
   }
 }, 20_000);
+
+it('a progress note wakes nothing: drains skip it, and dropping it settles only that turn\'s unsent notes as not_started', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = 5_000;
+    const outbox = new IMessageFinalOutbox(state.storage, () => now);
+    const note = outbox.freezeProgress(turn('a', 'hello', 'running'), 1, 'Checking your calendar now.');
+    expect(note).toMatchObject({ replyRef: 'progress:a:1', commandId: 'wpn1_cmd-a', state: 'frozen', text: 'Checking your calendar now.' });
+    outbox.freezeProgress(turn('b', 'hello', 'running'), 1, 'Looking at places near you.');
+    expect(outbox.due()).toEqual([]);
+    expect(outbox.dueAt()).toBeNull();
+    expect(state.storage.kv.get('imessage_final_outbox_due_v1')).toBeNull();
+    outbox.freeze(turn('a'), 'the reply');
+    expect(outbox.due().map(r => r.replyRef)).toEqual(['reply:a']);
+    outbox.dropProgress('progress_superseded', 'a');
+    expect(outbox.get('progress:a:1')).toMatchObject({ state: 'settled', text: '', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
+    expect(outbox.get('progress:b:1')?.state).toBe('frozen');
+    outbox.dropProgress('progress_stale');
+    expect(outbox.get('progress:b:1')?.result).toMatchObject({ reason: 'progress_stale' });
+    expect(outbox.get('reply:a')?.state).toBe('frozen');
+  });
+});
+
+it('the last message sent on the chat is the newest record not proved unsent', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = 1_000;
+    const outbox = new IMessageFinalOutbox(state.storage, () => now);
+    expect(outbox.lastSentAt()).toBeNull();
+    outbox.freeze(turn('a'), 'the reply');
+    now = 2_000; outbox.freezeProgress(turn('b', 'hello', 'running'), 1, 'Checking your calendar now.');
+    expect(outbox.lastSentAt()).toBe(2_000);
+    outbox.dropProgress('progress_unsent', 'b');
+    expect(outbox.lastSentAt()).toBe(1_000);
+  });
+});
+
+it('a reply the bridge found busy tries again in a second, not five', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const now = 10_000;
+    const outbox = new IMessageFinalOutbox(state.storage, () => now);
+    outbox.freeze(turn('a'), 'the reply');
+    outbox.retryLater('reply:a', 600_000, IMESSAGE_BUSY_RETRY_MS);
+    expect(outbox.get('reply:a')).toMatchObject({ state: 'frozen', attempts: 1, nextAttemptAt: now + 1_000 });
+    outbox.retryLater('reply:a', 600_000);
+    expect(outbox.get('reply:a')?.nextAttemptAt).toBe(now + 5_000);
+  });
+});

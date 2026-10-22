@@ -61,7 +61,7 @@ export class IMessageFinalOutbox {
    * index, so freezing it again freezes the same record. Synchronous: it runs inside the turn's run-scope commit.
    */
   freezeProgress(record: IMessageInboxRecord, index: 1 | 2, text: string): IMessageOutboxRecord {
-    return this.put(`${PROGRESS}${record.id}:${index}`, { ...targetOf(record), commandId: `wpn${index}_${record.commandId.slice(4)}` }, text);
+    return this.put(`${PROGRESS}${record.id}:${index}`, { ...targetOf(record), commandId: `wpn${index}_${record.commandId}` }, text);
   }
   /** When Waldo last put a message on this chat's way: the newest record not proved unsent. */
   lastSentAt(): number | null {
