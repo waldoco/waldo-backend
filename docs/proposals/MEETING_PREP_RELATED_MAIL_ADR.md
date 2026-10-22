@@ -1,6 +1,6 @@
-# Proposed ADR: meeting prep reads the owner's mail tied to the meeting
+# ADR: meeting prep reads the owner's mail tied to the meeting
 
-Status: proposed for the orchestrator's review, with the change that implements it. The owner ruled it on 12 Oct 2026, about 21:06Z, in the orchestrator session (`docs/planning/lanes-2026-10-13/README.md`, ruling 3). It should be published in waldo-brain and given a number there; until then, no code cites it by number.
+Status: accepted by the owner on 22 Oct 2026, with three points: ordinary links may reach the prep model, only verification links stay quarantined, and the prep note is stored like any message to the owner. The first ruling was on 12 Oct 2026, about 21:06Z, in the orchestrator session (`docs/planning/lanes-2026-10-13/README.md`, ruling 3: bounded email prep, codes and links quarantined, nothing stored or logged). The 22 Oct acceptance settles what that ruling's "links" and "nothing stored" mean here. It should be published in waldo-brain and given a number there; until then, no code cites it by number.
 
 ## Problem and decision
 
@@ -33,11 +33,12 @@ Scheduled meeting prep (`channels/event-briefs.ts`, the grounded sweep) sees onl
 5. **The mail itself is not stored or logged.**
    - The mail text exists only in the decision's prompt. `event_briefs` stores the event key, start and calendar digest, as before.
    - No log line carries mail content.
-   - The prep note may restate what the mail said. The note is the one output, and it's stored like any message Waldo sends the owner: the final outbox, the app transcript and episodes. Under E15 it also goes out as the plain Telegram copy.
+   - The prep note may restate what the mail said. The owner accepted on 22 Oct that the note is stored. It is the one output, and it's stored like any message Waldo sends the owner: the final outbox, the app transcript and episodes. Under E15 it also goes out as the plain Telegram copy.
    - The existing forget path covers retained prep copies (`test/calendar-prep-review-cancelled-history-proof.test.ts`).
    - Staging traces follow the existing alpha/beta exception: the staging Langfuse project captures model text for opted-in testers. Production never captures text. Prep is no different from a `read_thread` result here.
 6. **Verification codes and links stay quarantined; other links don't.**
-   - The owner's ruling said codes and links. This narrows "links" to verification links (magic links, reset links), as chat's quarantine already does. Ordinary URLs, a join link included, reach the prompt. **This narrowing needs the owner's sign-off.**
+   - The first ruling said codes and links. The owner accepted on 22 Oct that "links" means verification links (magic links, reset links), as chat's quarantine already does. Ordinary URLs, a join link included, reach the prompt.
+   - A listed link target the scribe would refuse (a token or key in a hidden address) is left out before the scribe runs, as `read_thread` does, so it cannot make the scribe refuse the whole mail.
    - Verification artifacts (OTPs, magic links, reset links) are replaced by the source-app marker before anything else touches the text. That includes codes an HTML mail lays out in table cells, glued to their label or one digit per cell.
    - Extraction runs on the full body before the 1,500-character cut, so no artifact can straddle the cut. Prep never relays artifacts.
 7. **The health scan applies.**
@@ -57,7 +58,7 @@ Scheduled meeting prep (`channels/event-briefs.ts`, the grounded sweep) sees onl
 - This is the same class as invite descriptions, which prep already reads.
 - The decision has no tools and no effects. Its prompt marks the mail as external data, never instructions. Its output is only a note to the owner.
 - Only a meeting the owner organized or accepted chooses which mail is read (limit 2).
-- **Open, in another lane:** prep notes go to Telegram with link previews on, so a URL in the note could be fetched by Telegram's previewer without a click. Turning previews off for prep sends is in the owner DO; it's asked on #1103.
+- Telegram link previews are off for these sends (`egress-guard.ts`), so a URL in the note is not fetched without a click. If prep later goes to WhatsApp, previews default on there (`whatsapp-api.ts`) and the same question returns.
 
 **Observability.** Every read failure maps to "unavailable", and nothing is logged. A broken query would therefore not show up in hop logs. A content-free `prep_related_mail` code hop (status and counts only) belongs in the owner DO, which is another lane's file; it's requested on #1103.
 

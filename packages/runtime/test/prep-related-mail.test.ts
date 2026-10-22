@@ -87,6 +87,27 @@ describe('reading the mail tied to a meeting', () => {
     expect(read.status === 'read' && read.messages[1]!.body.length).toBeLessThanOrEqual(1_500);
   });
 
+  // The owner's ruling: an ordinary link may reach the prep model; only verification links stay quarantined.
+  it('lets an ordinary link reach the prompt while a verification link in the same mail is quarantined', async () => {
+    const body = 'Agenda: budget.\nSign in: https://x.example/auth/v1/verify?token_hash=abc123&type=magiclink\n\nLinks:\n- Join the meeting: https://meet.example.test/abc-defg\n- Agenda doc: https://docs.example.test/d/agenda';
+    const read = await relatedMail(mailClient({ t1: [message('m1', body)] }, [item('a', 't1')]), event);
+    expect(read.status).toBe('read');
+    const text = JSON.stringify(read);
+    expect(text).toContain('https://meet.example.test/abc-defg');
+    expect(text).toContain('https://docs.example.test/d/agenda');
+    expect(text).toContain('[quarantined: magic_link artifact - view in the source app]');
+    expect(text).not.toContain('abc123');
+  });
+
+  it('leaves out a listed link target the scribe would refuse, so one hidden token does not cost the owner all the mail', async () => {
+    const body = 'Agenda: budget.\n\nLinks:\n- Join the meeting: https://meet.example.test/abc-defg\n- Invoice: https://billing.example.test/view?k=AKIAABCDEFGHIJKLMNOP';
+    const read = await relatedMail(mailClient({ t1: [message('m1', body)] }, [item('a', 't1')]), event);
+    expect(read.status).toBe('read');
+    const text = JSON.stringify(read);
+    expect(text).toContain('https://meet.example.test/abc-defg');
+    expect(text).not.toContain('AKIAABCDEFGHIJKLMNOP');
+  });
+
   it('says the mail was unavailable when Google refuses or the read fails, so prep still runs on the calendar', async () => {
     const refusing = { ...mailClient({}, []), searchMail: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
     expect(await relatedMail(refusing, event)).toEqual({ status: 'unavailable' });

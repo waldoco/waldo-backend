@@ -1,6 +1,7 @@
 import { calendarPromptProjection, GoogleError, sha256Hex, type CalendarItem, type GoogleClient, type ThreadMessage } from '../connectors/google';
 import { sanitise } from '../scribe/sanitiser';
 import { extractArtifacts } from '../security/artifact-hygiene';
+import { withoutFlaggedLinks } from '../tools/live/google';
 import type { CalendarPrepReceipt } from './telegram-final-outbox';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from './reminders';
@@ -87,8 +88,9 @@ const readRelated = async (client: GoogleClient, query: string): Promise<readonl
   const found = await client.searchMail(query, RELATED_SEARCH);
   const threads = [...new Set(found.map(item => item.thread_id).filter(Boolean))].slice(0, RELATED_THREADS);
   return (await Promise.all(threads.map(id => latestMessages(client, id)))).flat()
-    // Artifacts are extracted from the whole body before the cut, so none can straddle it.
-    .map(message => ({ from: message.from, subject: extractArtifacts(message.subject).text, at: message.at, body: extractArtifacts(message.body).text.slice(0, RELATED_BODY_CHARS) }));
+    // Artifacts are extracted from the whole body before the cut, so none can straddle it. A listed link target the scribe
+    // would refuse is left out first, so one hidden token cannot cost the owner all the mail.
+    .map(message => ({ from: message.from, subject: extractArtifacts(message.subject).text, at: message.at, body: extractArtifacts(withoutFlaggedLinks(message.body)).text.slice(0, RELATED_BODY_CHARS) }));
 };
 
 export const relatedMail = async (client: GoogleClient, event: CalendarItem, deadlineMs = RELATED_DEADLINE_MS): Promise<RelatedMail> => {
