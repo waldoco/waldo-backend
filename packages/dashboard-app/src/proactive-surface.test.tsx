@@ -24,6 +24,12 @@ describe('reading where Waldo writes', () => {
     for (const bad of [surface({ value: 'telegram' as never }), { ...surface(), whatsapp_linked: 'yes' }, { value: 'app' }, 'app', null]) expect(() => read(bad)).toThrow('Refresh the records');
   });
 
+  it('keeps an iMessage choice and its link state, and refuses a link state that is not a yes or no', () => {
+    expect(read(surface({ value: 'app_imessage', imessage_linked: true })).data.proactive_surface).toEqual(surface({ value: 'app_imessage', imessage_linked: true }));
+    expect(() => read({ ...surface({ value: 'app_imessage' }), imessage_linked: 'yes' })).toThrow('Refresh the records');
+    expect(() => read(surface({ value: 'imessage' as never }))).toThrow('Refresh the records');
+  });
+
   it('reads a Worker that does not say as having no setting', () => {
     expect(readControls(day(), 'day').data).not.toHaveProperty('proactive_surface');
   });
@@ -49,6 +55,15 @@ describe('the where Waldo writes control', () => {
     expect(shown).toMatch(/<option value="whatsapp" selected="">WhatsApp only<\/option>/);
     expect(shown).toContain('Replies always come where you wrote.');
     expect(setting(html(surface(), true))).toMatch(/<select disabled="">.*<button class="primary" disabled="">Save where Waldo writes/);
+  });
+
+  it('offers iMessage only with the app, and says what it does today', () => {
+    const shown = html(surface({ value: 'app_imessage', imessage_linked: true }));
+    expect(shown).toMatch(/<option value="app_imessage" selected="">The app and iMessage<\/option>/);
+    expect(shown).not.toContain('iMessage only');
+    expect(setting(shown)).toContain('The app keeps each one, and iMessage gets a copy.');
+    expect(setting(shown)).toContain('If the Mac that sends your iMessages can’t take a copy within 10 minutes, because it is asleep or offline, that copy isn’t sent; the app still has the message.');
+    expect(setting(html(surface({ value: 'app_imessage', imessage_linked: false })))).toContain('Write to Waldo on iMessage first');
   });
 
   it('is not shown when the Worker does not say where Waldo writes', () => {
