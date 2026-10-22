@@ -44,6 +44,8 @@ it.each([
   ['routine', 'Laundry load at 6'],
   ['goal', 'Recovery week 2 of marathon plan'],
   ['routine', 'Kids go to sleep after 30 minutes of reading'],
+  ['event', 'Flight 6E 204 leaves at 06:40'],
+  ['routine', 'Meeting with HR at 10:30'],
 ])('a remember of an ordinary %s with a number saves: %s', async (kind, text) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-floor-${crypto.randomUUID()}`)), async (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));

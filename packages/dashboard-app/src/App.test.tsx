@@ -129,7 +129,9 @@ describe('dashboard routing and overview boundaries', () => {
     const record: OverviewV1 = { ...empty, brief: { status: 'sent_unconfirmed', at: null } };
     const html = renderToStaticMarkup(<Dashboard data={record} route="today"/>);
     expect(html).toContain('Sent, waiting for your phone.');
-    expect(html).not.toMatch(/Not sent yet|Sent, as recorded/);
+    // The body agrees with the title: it is already sent, and what it waits for is the report that it arrived.
+    expect(html).toContain('records it as arrived once it does');
+    expect(html).not.toMatch(/Not sent yet|Sent, as recorded|counts as sent/);
   });
   it('does not mistake a completed heartbeat for owner-facing activity while preserving failed attempts', () => {
     const heartbeat: OverviewV1 = { ...empty, latest_activity: { kind: 'heartbeat', status: 'completed', at: empty.as_of, summary: 'tick completed' } };
