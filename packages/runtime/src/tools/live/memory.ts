@@ -31,6 +31,16 @@ const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {
   for (const range of ranges) { if (range.start > end) parts.push(turn.text.slice(end, range.start)); end = Math.max(end, range.end); }
   parts.push(turn.text.slice(end)); return parts;
 };
+// Evidence is the owner's words, not any characters in them: the quote starts and ends on word edges and holds more than one
+// letter or digit, unless it is the whole of an owner-written part. Marks count as word characters so a quote cannot end
+// inside an Indic word; a script written without spaces quotes to a punctuation edge.
+const WORD_END = /[\p{L}\p{M}\p{N}]$/u, WORD_START = /^[\p{L}\p{M}\p{N}]/u;
+const quotesWords = (part: string, quote: string): boolean => {
+  if ((quote.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 2 && normalizeForGrounding(quote) !== normalizeForGrounding(part)) return false;
+  for (let at = part.indexOf(quote); at !== -1; at = part.indexOf(quote, at + 1))
+    if (!(WORD_END.test(part.slice(0, at)) && WORD_START.test(quote)) && !(WORD_START.test(part.slice(at + quote.length)) && WORD_END.test(quote))) return true;
+  return false;
+};
 const hallKinds = { facts: ['fact', 'health'], events: ['event', 'followup'], discoveries: ['observation', 'pattern'], preferences: ['preference', 'routine'], advice: ['goal'] } as const;
 const overlapsEvidence = (text: string, evidence: string, start: number, end: number): boolean => {
   for (let at = text.indexOf(evidence); at !== -1; at = text.indexOf(evidence, at + 1)) if (at < end && at + evidence.length > start) return true;
@@ -53,8 +63,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
-        const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => part.includes(args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
-        if (!source) return fail('Evidence quote is not grounded in an owner-authored message.');
+        const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
+        if (!source) return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
         // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected
         // tool), a reading may have come from there, so none is stored from this turn: neither one the scribe left in these
@@ -63,6 +73,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const claims = store.claims();
         const previous = args.replaces_id === undefined ? undefined : claims.find(claim => claim.id === args.replaces_id);
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');
+        // Outside content can steer the model but never speaks for the owner, so a turn that read it leaves what the owner told
+        // Waldo as it is. A row from before origin was recorded reads as the owner's; only a writer-stated or untrusted one may change.
+        if (previous && ctx.toolArgSourceTaint === 'external' && previous.origin !== 'agent' && previous.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change what the owner told Waldo. Ask the owner; their own reply can correct it.');
         const duplicate = claims.find(claim => claim.kind === args.kind && normalizeForGrounding(claim.text) === normalizeForGrounding(args.text));
         if (duplicate && (duplicate.origin !== 'owner' || duplicate.source !== 'stated')) return fail('Matching memory has different provenance.');
         const claim = { kind: args.kind, text: args.text, evidence: args.evidence_quote, source: 'stated', origin: 'owner', source_ref: `owner, ${source.message_ref}`, aliases: args.aliases };
