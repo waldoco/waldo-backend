@@ -29,7 +29,7 @@ export type TaskToolDeps = Readonly<{
 export const taskToolHandlers = (deps: TaskToolDeps) => [
   {
     name: 'start_task',
-    description: 'Hand long work to a background worker and keep talking: a mail backlog, many sources, a multi-step web errand. It sees only your brief, cannot message, change or approve, and reports once. Use delegate_task when this reply needs the answer.',
+    description: 'Hand long work to a background worker and keep talking: a mail backlog, many sources, a multi-step web errand. It sees only your brief, never this conversation; it cannot act for the owner, and reports once. Use delegate_task when this reply needs the answer.',
     schema: startTaskArgsSchema,
     trigger_allowlist: allowlist('start_task'),
     autonomy_gated: false,
