@@ -265,7 +265,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '11', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '12', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -379,7 +379,7 @@ describe('otlpTurnExporter', () => {
     await log({ trace: 'tg-v9', hop: 'turn', ms: 100, ok: true, outcome: 'answered', job_id: 'job_01', job_profile: 'reader', sandbox_ms: 0 });
     const [root, first, searched, drafted] = spans(0);
     expect(attrs(root!)).toMatchObject({
-      'langfuse.trace.metadata.schema_version': '11',
+      'langfuse.trace.metadata.schema_version': '12',
       'langfuse.trace.metadata.outcome': 'answered',
       'langfuse.trace.metadata.tools_offered': '12', 'langfuse.trace.metadata.tools_bytes': '8000', 'langfuse.trace.metadata.tools_tokens_est': '2000',
       'langfuse.trace.metadata.tools_called': '2', 'langfuse.trace.metadata.tools_failed': '1', 'langfuse.trace.metadata.tools_called_names': ['draft_email', 'search_mail'],
@@ -401,6 +401,22 @@ describe('otlpTurnExporter', () => {
     expect(attrs(searched!)['langfuse.observation.metadata.rung']).toBe('connector');
     expect(attrs(drafted!)).toMatchObject({ 'langfuse.observation.metadata.rung': 'email', 'langfuse.observation.metadata.blocked_reason': 'approval_required', 'langfuse.observation.metadata.error_code': 'rate_limited' });
     expect(JSON.stringify(spans(0))).not.toContain('PRIVATE_CANARY');
+  });
+
+  it('names a degraded tool search on the call and on the trace, and leaves both out otherwise', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    const shape = { system_bytes: 1, request_bytes: 2 };
+    await log({ trace: 'tg-degrade', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 10, output: 1, cached: 0 }, shape, tool_search_degraded: true });
+    await log({ trace: 'tg-degrade', hop: 'turn', ms: 10, ok: true });
+    await log({ trace: 'tg-clean', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 10, output: 1, cached: 0 }, shape });
+    await log({ trace: 'tg-clean', hop: 'turn', ms: 10, ok: true });
+    const [root, call] = spans(0);
+    expect(attrs(call!)['langfuse.observation.metadata.tool_search_degraded']).toBe('true');
+    expect(attrs(root!)['langfuse.trace.metadata.tool_search_degraded']).toBe('true');
+    const [cleanRoot, cleanCall] = spans(1);
+    expect(attrs(cleanCall!)['langfuse.observation.metadata.tool_search_degraded']).toBeUndefined();
+    expect(attrs(cleanRoot!)['langfuse.trace.metadata.tool_search_degraded']).toBeUndefined();
   });
 
   it('derives the outcome class when the root carries none and leaves absent v9 fields out', async () => {
