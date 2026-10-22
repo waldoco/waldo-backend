@@ -1061,7 +1061,8 @@ if (legitimateSupabaseFunction.status !== 0 || legitimateSupabaseFunction.stderr
   failures += 1;
 }
 
-// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, or are clean.
+// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, re-arm with a bare
+// null for the schedule, or are clean.
 const WAKE_GUARD = 'scripts/guards/guard-wake-due-keys.mjs';
 const WAKE_SLOT = "export const LANE_DUE_KEY = 'lane_due_v1';\nexport const WAKE_DUE_KEYS = [\n  LANE_DUE_KEY, 'other_due_v1',\n] as const;\n";
 function withWakeFixture(lanes) {
@@ -1079,6 +1080,7 @@ function withWakeFixture(lanes) {
 const WAKE_CASES = [
   { name: 'an unlisted due key', lanes: { 'packages/runtime/src/channels/lane.ts': "kv.put('stray_due_v1', due);\n" }, finds: "'stray_due_v1'" },
   { name: 'an arm without a listed key', lanes: { 'packages/runtime/src/channels/lane.ts': 'await armAlarm(storage, due);\n' }, finds: 'channels/lane.ts: arms the owner alarm' },
+  { name: 'a re-arm with a bare null for the schedule', lanes: { 'packages/runtime/src/channels/lane.ts': 'await rearmSharedAlarm(this.ctx.storage,\n  null, Date.now());\n' }, finds: 'channels/lane.ts: re-arms the owner alarm with a bare null' },
 ];
 for (const { name, lanes, finds } of WAKE_CASES) {
   const result = withWakeFixture(lanes);
@@ -1088,7 +1090,7 @@ for (const { name, lanes, finds } of WAKE_CASES) {
   }
 }
 const wakeClean = withWakeFixture({
-  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\n",
+  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\nawait rearmSharedAlarm(storage, bound, now);\nawait rearmSharedAlarm(storage, held ? retry : NO_SCHEDULE_WAKE, now, 30_000);\n",
   'packages/runtime/src/channels/other.ts': "kv.put('other_due_v1', due);\nawait armAlarm(storage, due);\n",
   'packages/runtime/src/devices/device-bridge-do.ts': "await armAlarm(this.ctx.storage, due);\nkv.put('bridge_due_v1', due);\n",
 });

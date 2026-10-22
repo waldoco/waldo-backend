@@ -82,7 +82,7 @@ it('pairs and activates a Mac host from the new console: each code is shown once
   const opened = await w.call(new Request(`${HOST_ORIGIN}/console/imessage`, { redirect: 'manual', headers: { cookie: w.cookie } }));
   expect({ status: opened.status, location: opened.headers.get('location') }).toEqual({ status: 303, location: '/console#/connections/imessage' });
   const empty = await w.read();
-  expect(empty.data).toEqual({ enabled: true, address: 'waldo@fixture.invalid', linked_hint: null, admin: false, actions: ['imessage.link', 'imessage.pair'], bridges: [] });
+  expect(empty.data).toEqual({ enabled: true, address: 'waldo@fixture.invalid', phone: null, photon: null, linked_hint: null, admin: false, actions: ['imessage.link', 'imessage.pair'], bridges: [] });
 
   const issued = await w.act('imessage.pair', {}, { request_id: 'imsg-pair-once' });
   expect(issued.status).toBe(200); expect(issued.location).toBeNull();
@@ -177,7 +177,7 @@ it('issues an iMessage link code for this owner only, shown once and never put i
   const issued = await w.act('imessage.link');
   const code = /^waldo ([A-HJ-NP-Z2-9]{10})$/.exec(issued.body.reveal?.value ?? '')?.[1];
   expect(code).toBeTruthy();
-  expect(issued.body.reveal).toEqual({ kind: 'link_code', value: `waldo ${code}` });
+  expect(issued.body.reveal).toEqual({ kind: 'link_code', to: 'waldo@fixture.invalid', value: `waldo ${code}` });
   expect([...w.fx.linkCodes.values()]).toEqual([expect.objectContaining({ owner: w.name, provider: 'imessage', used: false })]);
   expect(await w.stored()).not.toContain(code!);
 });

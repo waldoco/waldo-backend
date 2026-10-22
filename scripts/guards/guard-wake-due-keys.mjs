@@ -2,9 +2,12 @@
 // Guard: every wake the owner object keeps is a persisted due key the alarm arbiter reads.
 // The owner object has one alarm slot (ADR-0065). rearmSharedAlarm arms the earliest of the due keys listed in
 // WAKE_DUE_KEYS (packages/runtime/src/scheduler/alarm-slot.ts); a wake armed without a listed key is dropped by the
-// next re-arm, which is how a missed brief after an app message happened before. Two findings:
+// next re-arm, which is how a missed brief after an app message happened before. The schedule's next entry is not a key:
+// each re-arm passes it, and a bare null in its place drops that wake. Three findings:
 //   1. a `*_due_vN` key written in the runtime but missing from WAKE_DUE_KEYS;
-//   2. a runtime file that calls armAlarm but names no listed key, so its wake is not one the arbiter reads.
+//   2. a runtime file that calls armAlarm but names no listed key, so its wake is not one the arbiter reads;
+//   3. a runtime file that calls rearmSharedAlarm with a bare null for the schedule's next entry. A re-arm that must not
+//      wake the schedule names NO_SCHEDULE_WAKE instead.
 // Durable Objects with their own alarm slot are outside the owner object's arbiter and are listed below.
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -20,6 +23,7 @@ const OTHER_ALARM_OWNERS = new Set(['channels/imessage/bridge-do.ts', 'devices/d
 const DUE_KEY = /'([a-z0-9_]+_due_v\d+)'/g;
 const CONST_STRING = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*'([^']*)'/g;
 const ARMS = /\barmAlarm\s*\(/;
+const DROPS_SCHEDULE = /\brearmSharedAlarm\s*\(\s*[^,()]+,\s*null\s*[,)]/;
 
 const root = (() => {
   const i = process.argv.indexOf('--root');
@@ -73,6 +77,7 @@ for (const { rel, text } of files) {
   for (const [, key] of text.matchAll(DUE_KEY)) {
     if (!listed.has(key)) findings.push(`packages/runtime/src/${rel}: due key '${key}' is written but WAKE_DUE_KEYS does not list it, so the arbiter never arms it`);
   }
+  if (DROPS_SCHEDULE.test(text)) findings.push(`packages/runtime/src/${rel}: re-arms the owner alarm with a bare null for the schedule's next entry, so that re-arm drops the schedule's wake`);
   if (rel === ALARM_SLOT || !ARMS.test(text)) continue;
   const names = [...listed].some(key => text.includes(`'${key}'`)) || [...listedNames].some(name => new RegExp(`\\b${name}\\b`).test(text));
   if (!names) findings.push(`packages/runtime/src/${rel}: arms the owner alarm without naming a WAKE_DUE_KEYS key, so the next re-arm drops its wake`);

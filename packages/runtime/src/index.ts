@@ -36,6 +36,9 @@ export { TaskWorkerDO } from './tasks/worker-do';
 import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
+import { photonCallback } from './channels/imessage/photon-routes';
+import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
+import { photonKeepAlive } from './channels/imessage/enrollment';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -131,6 +134,7 @@ export default {
     const devicePath = new URL(request.url).pathname;
     // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
     if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
+    if (devicePath === PHOTON_CALLBACK_PATH) return photonCallback(request, env as never);
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {
@@ -202,6 +206,8 @@ export default {
   },
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
+    if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
 } satisfies ExportedHandler<Env>;
