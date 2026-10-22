@@ -1,4 +1,4 @@
-import { literalTextRedactor, type LLMToolTurn } from '@waldo/contracts';
+import { literalTextRedactor, type ConversationModelMessage, type LLMToolTurn } from '@waldo/contracts';
 import { carriesTopic, holdsIn } from '../memory/forget-guard';
 
 // The one place the model's view is cut for topics the owner asked to forget whose purge has not finished. A forget is a
@@ -6,9 +6,12 @@ import { carriesTopic, holdsIn } from '../memory/forget-guard';
 //   items: owner memory drops the matching item; other text has the words replaced and keeps the rest. Nothing is withheld whole.
 //   reads: the earlier rule, kept as the flag-off path: a held string or key outside a list withholds the whole read.
 export type ForgetBarrierMode = 'items' | 'reads';
-// owner_store: memory Waldo keeps about the owner, where an item is a unit of meaning that is dropped whole.
-// external: everything else a tool returns, where the surrounding text stays useful once the words are gone.
-export type ResultOrigin = 'owner_store' | 'external';
+// code: text this repository wrote, never cut (a forget of "team" must not break the behaviour prompt).
+// owner_record: the owner's own conversation, standing orders and loops; owner_store: memory Waldo keeps about the owner.
+// In both an item (a message, a line, a claim) is a unit of meaning, dropped whole.
+// external: everything from outside the owner, where the surrounding text stays useful once the words are gone.
+export type ViewOrigin = 'code' | 'owner_record' | 'owner_store' | 'external';
+export type ResultOrigin = Extract<ViewOrigin, 'owner_store' | 'external'>;
 export type BarrierTally = { dropped: number; redacted: number };
 
 export const FORGET_MARKER = '[forgotten]';
@@ -130,3 +133,44 @@ export const forgetBarrier = (held: readonly string[], mode: ForgetBarrierMode =
 };
 
 export type ForgetBarrier = ReturnType<typeof forgetBarrier>;
+
+// What one model call is shown, part by part. lines holds one item per line; sized produces lines under a room budget,
+// so the budget is spent before the cut and the cut runs on what is produced; messages is the conversation, whose last
+// entry is the owner's current message and is never cut.
+export type ViewFragment =
+  | Readonly<{ kind: 'text'; origin: ViewOrigin; text: string }>
+  | Readonly<{ kind: 'lines'; origin: ViewOrigin; text: string }>
+  | Readonly<{ kind: 'sized'; origin: ViewOrigin; text: (room: number) => string }>
+  | Readonly<{ kind: 'messages'; messages: readonly ConversationModelMessage[] }>
+  | Readonly<{ kind: 'turns'; turns: readonly LLMToolTurn[] }>;
+export type CutFragment<F extends ViewFragment> =
+  F extends { kind: 'sized' } ? (room: number) => string
+    : F extends { kind: 'messages' } ? ConversationModelMessage[]
+      : F extends { kind: 'turns' } ? LLMToolTurn[]
+        : string;
+
+// The forget barrier over a whole model view, applied once per model call: every part bound for the model crosses it.
+export const applyForgetBarrier = <V extends Record<string, ViewFragment>>(view: V, held: readonly string[], mode: ForgetBarrierMode = 'items'): { [K in keyof V]: CutFragment<V[K]> } => {
+  const cut = forgetBarrier(held, mode);
+  const tally = (): BarrierTally => ({ dropped: 0, redacted: 0 });
+  const piece = (origin: ViewOrigin, text: string): string =>
+    origin === 'code' ? cut.code(text) : origin === 'external' ? cut.text(text, tally()) ?? '' : cut.holds(text) ? '' : text;
+  // A line cut to nothing is dropped; a line that was blank stays, so the layout around the items holds.
+  const lines = (origin: ViewOrigin, text: string): string => {
+    if (!cut.active || origin === 'code') return piece(origin, text);
+    return text.split('\n').flatMap((line) => {
+      if (line === '') return [line];
+      const kept = piece(origin, line);
+      return kept === '' ? [] : [kept];
+    }).join('\n');
+  };
+  const out: Record<string, unknown> = {};
+  for (const [key, fragment] of Object.entries(view)) {
+    if (fragment.kind === 'text') out[key] = cut.active ? piece(fragment.origin, fragment.text) : fragment.text;
+    else if (fragment.kind === 'lines') out[key] = lines(fragment.origin, fragment.text);
+    else if (fragment.kind === 'sized') out[key] = (room: number) => lines(fragment.origin, fragment.text(room));
+    else if (fragment.kind === 'messages') out[key] = fragment.messages.filter((message, index) => index === fragment.messages.length - 1 || !cut.holds(message.content));
+    else out[key] = cut.active ? cut.turns(fragment.turns) : [...fragment.turns];
+  }
+  return out as { [K in keyof V]: CutFragment<V[K]> };
+};

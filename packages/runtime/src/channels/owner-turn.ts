@@ -1,7 +1,7 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
-import { forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
+import { applyForgetBarrier, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -510,7 +510,7 @@ export const createOwnerResponder = (
       // request by its leading bytes, so a remember or open loop mid-turn that rewrote the message re-billed every later round.
       // It is rebuilt when the owner steers (the message changed anyway), when any forget lands (this turn's or the console's,
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
-      type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
+      type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
       return runToolLoop({
         handlers: turnHandlers,
@@ -525,18 +525,9 @@ export const createOwnerResponder = (
           const contextSteering = control.revision();
           const visibleOwnerTexts = new Set(request.messages.filter(message => message.role === 'user').map(message => message.content));
           for (const [id, turn] of recentOwnerTurns) if (!visibleOwnerTexts.has(turn.text)) recentOwnerTurns.delete(id);
-          const entries = request.messages.filter((message, index) => index === request.messages.length - 1 || !holdsHeldTopic(message.content));
-          const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
-          if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
-          if (promptContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + promptContext };
-          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
-          const ordersRaw = standingOrders?.() ?? '';
-          const ordersSection = ordersRaw.split('\n').filter(row => !holdsHeldTopic(row)).join('\n');
-          // Open loops: owner text that may hide a forgotten topic (escapes, NUL), so it is withheld on the same proof the forget coverage uses.
-          const loopsSectionFor = (loopsRoom: number): string => {
-            const raw = standingOrders?.({ loopsRoom }) ?? '';
-            return raw.split('\n').filter(row => !holdsHeldTopic(row)).join('\n');
-          };
+          const held = heldTopics();
+          const heldKey = [...held].sort().join('\u0000');
+          const ownerCurrentText = (request.messages.at(-1)?.content ?? '') + added;
           await assertCurrent();
           const skillPrompt = skills ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
@@ -551,23 +542,14 @@ export const createOwnerResponder = (
           const reasons = composed?.ok ? composed : undefined;
           // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
-          const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
-            skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
-            procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
-          };
           const frozen = turnSuffix;
           const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
           const generation = forgettingState?.forgetGeneration() ?? 0;
           const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
-            && frozen.health === admittedHealth && !holdsHeldTopic(frozen.text);
-          // A rebuild reads recall, earlier results, receipts, memory and loops afresh; a reused round reads none of them.
-          const rebuild = async (): Promise<Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }>> => {
+            && frozen.health === admittedHealth && frozen.held === heldKey;
+          // A rebuild reads recall, earlier results and receipts afresh; a reused round reads none of them.
+          const gather = async () => {
             const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
-            // A committed receipt authenticates identity, not user/provider-authored path text.
-            // Keep the external fragment gate before joining metadata to trusted instructions.
-            // Externally authored path text never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
-            let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
             // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
             const admitsExternal = async (payload: string): Promise<boolean> => {
               const sanitise = adapters.safety.sanitise;
@@ -580,24 +562,48 @@ export const createOwnerResponder = (
             // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
             // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
             const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined) : '';
-            let suffix = recalled ? fenced('memory recalled for this message', recalled) : '';
             // The owner's earlier turns' tool results, newest kept whole within the gate's size, as they stood when this turn
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
             const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
             while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
-            const toolResultsData = earlier.join('\n');
-            const cut = barrier();
-            const toolResultsShown = await admitsExternal(toolResultsData) && cut.text(toolResultsData, { dropped: 0, redacted: 0 }) === toolResultsData;
-            if (toolResultsShown) suffix += fenced('earlier tool results', toolResultsData);
-            else if (earlier.length && !withheldLogged) {
+            const earlierShown = await admitsExternal(earlier.join('\n'));
+            if (!earlierShown && earlier.length && !withheldLogged) {
               withheldLogged = true;
               log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
             }
-            const taskContextData = await admitsExternal(rawTaskContext) ? rawTaskContext : '';
-            const receipts = taskContextData && cut.text(taskContextData, { dropped: 0, redacted: 0 });
-            if (receipts) suffix += fenced('external workspace receipts', receipts);
-            const taskContext = cut.code(guardedTaskContext);
+            return {
+              recalled, earlier: earlierShown ? earlier.join('\n') : '',
+              receipts: await admitsExternal(rawTaskContext) ? rawTaskContext : '',
+              // A committed receipt authenticates identity, not user/provider-authored path text. Externally authored path text
+              // never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
+              taskContext: rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '',
+            };
+          };
+          const raw = reuseSuffix ? undefined : await gather();
+          // Everything this call shows the model crosses the forget barrier here, once.
+          const cut = applyForgetBarrier({
+            history: { kind: 'messages', messages: request.messages },
+            replyQuote: { kind: 'text', origin: 'external', text: turnReplyContext },
+            jobContext: { kind: 'text', origin: 'external', text: promptContext },
+            orders: { kind: 'lines', origin: 'owner_record', text: standingOrders?.() ?? '' },
+            loops: { kind: 'sized', origin: 'owner_record', text: (loopsRoom: number) => standingOrders?.({ loopsRoom }) ?? '' },
+            memory: { kind: 'sized', origin: 'owner_store', text: (room: number) => memory ? turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) : '' },
+            recalled: { kind: 'lines', origin: 'owner_store', text: raw?.recalled ?? '' },
+            earlier: { kind: 'lines', origin: 'external', text: raw?.earlier ?? '' },
+            receipts: { kind: 'text', origin: 'external', text: raw?.receipts ?? '' },
+            taskContext: { kind: 'text', origin: 'code', text: raw?.taskContext ?? '' },
+            turns: { kind: 'turns', turns },
+          }, held, forgetBarrierMode);
+          const instructions = {
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
+            skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
+            procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
+          };
+          const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
+            const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) : '')
+              + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
+              + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
             const turnPrompt = assembleTurnPrompt({
               instructions,
               facts: {
@@ -605,24 +611,26 @@ export const createOwnerResponder = (
                 // The owner's message is the composer's staged input, so only its operations material joins it.
                 reasons: reasons?.operations,
                 // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
-                toolResultsNote: reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
+                toolResultsNote: reasons !== undefined && cut.earlier ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
                 health: healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined,
-                ownerProfile: ownerProfileLine, taskContext, connections,
+                ownerProfile: ownerProfileLine, taskContext: cut.taskContext, connections,
               },
-              ...(memory ? { memory: (room: number) => turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) } : {}),
-              loops: loopsSectionFor,
+              ...(memory ? { memory: cut.memory } : {}),
+              loops: cut.loops,
               room: systemRoom,
             });
-            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
+            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, held: heldKey, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
           };
           const built = reuseSuffix
             ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }), suffix: frozen }
-            : await rebuild();
+            : rebuilt();
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           turnSuffix = built.suffix;
           const turnPrompt = built.prompt;
-          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + built.suffix.text };
+          const entries = cut.history;
+          const current = entries[entries.length - 1]!;
+          entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
@@ -632,7 +640,7 @@ export const createOwnerResponder = (
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          barrier().turns(turns),
+          cut.turns,
           ownerTurnActive ? undefined : auxiliaryModel,
           );
         },
