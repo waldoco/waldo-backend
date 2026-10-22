@@ -16,11 +16,21 @@ export const OWNER_LABELS_NEEDED = 30;
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 
+// Keys sorted, so the same reply always digests the same.
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  return JSON.stringify(value);
+};
+
 // The id each reply wears on the labelling sheet: L01 onward in an order set by a hash of the draft's id, so neither the
-// file order nor the id says anything about the verdict. The suffix fingerprints the whole set: ids from a sheet printed
-// for a different set stop matching, so a label can never attach to another reply.
+// file order nor the id says anything about the verdict. The suffix fingerprints the set as the owner sees it: every id and
+// a digest of each reply's judge input (the moment, transcript, tools and effects). Ids from a sheet printed for a different
+// set, or before a reply was edited under the same id, stop matching, so a label can never attach to text the owner did not
+// see. A draft's verdict or reasons are not part of it: the owner sees neither.
 export const opaqueIds = (drafts: readonly VoiceLabel[]): ReadonlyMap<string, string> => {
-  const fingerprint = digest([...drafts.map((draft) => draft.id)].sort().join('\n')).slice(0, 4);
+  const seen = [...drafts].map((draft) => `${draft.id}:${digest(canonical(labelInput(draft)))}`).sort().join('\n');
+  const fingerprint = digest(seen).slice(0, 4);
   const ordered = [...drafts].sort((a, b) => (digest(`order:${a.id}`) < digest(`order:${b.id}`) ? -1 : 1));
   return new Map(ordered.map((draft, index) => [draft.id, `L${String(index + 1).padStart(2, '0')}-${fingerprint}`]));
 };
@@ -81,6 +91,8 @@ export const labellingSheet = (drafts: readonly VoiceLabel[]): string => {
     '# Voice labelling sheet',
     '',
     'For each reply below, call it pass or fail against the six tests. A reply passes only when it passes all six. Label blind: the draft calls are not shown.',
+    '',
+    'Label from this sheet alone. Do not open `packages/runtime/evals/fixtures/voice-labels-v0.jsonl`: it holds every draft call, its reasons and every reply, and its ids name the verdict.',
     '',
     'The six tests:',
     ...VOICE_TESTS.map((entry) => `- \`${entry.key}\`: ${entry.test}`),
