@@ -171,6 +171,17 @@ describe('the SQL purge', () => {
       expect(sql.exec<{ payload: string }>('SELECT payload FROM outbox').one().payload).not.toMatch(/budget/i);
     });
   });
+  it('a claim whose quoted evidence carries the topic is deleted by the purge', async () => {
+    await inDo('boundary-purge-quoted-evidence', (state) => {
+      const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: 'Keeps the plan in a spreadsheet', source: 'stated', evidence: String.raw`"it is at D:\budget.xlsx"`, origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      store.add({ kind: 'fact', text: 'Keeps notes in a folder', source: 'stated', evidence: String.raw`"notes in C:\tea"`, origin: 'owner', source_ref: 'owner, tg-2' }, AT);
+      expect(store.purge([], AT, ['budget'])).toMatchObject({ ready: true, remaining: {}, failed: [] });
+      expect(store.purge([], AT, ['tea'])).toMatchObject({ ready: true, remaining: {}, failed: [] });
+      // Claims are derived memory: a claim that carries a forgotten text, in its evidence too, is deleted, not redacted.
+      expect(store.allClaims()).toEqual([]);
+    });
+  });
   it('a genuinely remaining copy still holds the forget', async () => {
     await inDo('boundary-purge-holds', (state) => {
       const store = claimStore(state.storage.sql);
@@ -308,6 +319,17 @@ describe('the forget tool', () => {
       expect(await forget!.handle({ topic: 'budget', scope_note: 'budget' }, owner('forget the budget') as never)).toMatchObject({ ok: true });
       expect(store.allClaims()).toEqual([]);
     });
+  });
+  it('forgetting a name in quoted claim evidence removes the claim', async () => {
+    for (const [topic, evidence] of [['budget', String.raw`"it is at D:\budget.xlsx"`], ['tea', String.raw`"notes in C:\tea"`]] as const) {
+      await inDo(`boundary-tool-quoted-${topic}`, async (state) => {
+        const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+        store.add({ kind: 'fact', text: 'Keeps a file', source: 'stated', evidence, origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+        const [, , forget] = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', transaction: work => state.storage.transactionSync(work), hideHistory: async () => undefined });
+        expect(await forget!.handle({ topic, scope_note: topic }, owner(`forget ${topic}`) as never), topic).toMatchObject({ ok: true });
+        expect(store.allClaims(), topic).toEqual([]);
+      });
+    }
   });
   it('forgetting a place written without spaces removes the claim that names it, and says so', async () => {
     await inDo('boundary-tool-cjk', async (state) => {

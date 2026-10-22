@@ -15,6 +15,15 @@ describe('scheduled health retention', () => {
     expect(urls).toEqual(['https://directory.fixture.invalid/rest/v1/rpc/health_retention_sweep true']);
   });
 
+  it('also keeps an idle Photon connection alive, without failing the cron, when Photon is configured', async () => {
+    vi.stubGlobal('fetch', async () => Response.json({ owners: 0, more: false, raw_deleted: 0, requests_deleted: 0, context_deleted: 0 }));
+    const work: Promise<unknown>[] = [];
+    await worker.scheduled!({} as never, env({ PHOTON_PROJECT_ID: 'proj-fixture', PHOTON_OAUTH_CLIENT_ID: 'client-fixture', PHOTON_OAUTH_CLIENT_SECRET: 'fictional-photon-client-secret' }),
+      { waitUntil: (p: Promise<unknown>) => { work.push(p); } } as never);
+    expect(work).toHaveLength(2);
+    await expect(Promise.all(work)).resolves.toHaveLength(2);
+  });
+
   it('does nothing, and does not fail the cron, when the database is not configured or is down', async () => {
     const work: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => { work.push(p); } } as never;

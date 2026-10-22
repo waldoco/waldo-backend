@@ -47,7 +47,7 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapte
 });
 
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -55,7 +55,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   let turn = 0;
   const modelInputs: { turn: number; text: string }[] = [];
   const shown: LLMGatewayAdapter = { complete: (request) => { modelInputs.push({ turn, text: JSON.stringify(request.request) }); return deps.gateway.complete(request); } };
-  const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = createTelegramResponder(deps.toolSearch ? { openaiApiKey: 'eval-key', toolSearch: true } : 'eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items' });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();

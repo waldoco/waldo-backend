@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Anthropic from '@anthropic-ai/sdk';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
@@ -224,6 +225,63 @@ describe('AnthropicMessagesAdapter tool search', () => {
     const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
     expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }] } });
     if (result.ok) expect(result.data.tool_calls).toHaveLength(1);
+  });
+
+  it('continues a response that only searched, with its blocks sent back, and returns the answer after them', async () => {
+    const { bodies, adapter } = recording([reply([search, found], 'pause_turn'), reply([use], 'tool_use')]);
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]!.messages).toEqual([...bodies[0]!.messages as unknown[], { role: 'assistant', content: [search, found] }]);
+    expect(bodies[1]!.tools).toEqual(bodies[0]!.tools);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'query_availability' }], input_tokens: 20, output_tokens: 6 } });
+    // The searched blocks lead the answer's, so the next round replays the whole turn.
+    if (result.ok) expect(result.data.output_items!.map((item) => item.type)).toEqual(['server_tool_use', 'tool_search_tool_result', 'tool_use']);
+  });
+
+  it('stops continuing a response that keeps only searching, and fails it as an empty answer', async () => {
+    const { bodies, adapter } = recording([reply([search, found], 'pause_turn')]);
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(3);
+    expect(result).toMatchObject({ ok: false, code: 'transient' });
+  });
+
+  it('keeps the spend of a search-only response when its continuation fails', async () => {
+    let calls = 0;
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      calls += 1;
+      if (calls === 1) return reply([search, found], 'pause_turn');
+      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
+    } } } as never });
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args', spent: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 0 } });
+  });
+
+  it('reports no spend for a first call that fails', async () => {
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
+    } } } as never });
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(result).not.toHaveProperty('spent');
+  });
+
+  // Each continuation is billed, so only a response whose every block is search work, and that holds a search result,
+  // is continued; anything else is answered or failed on the call that returned it.
+  it.each([
+    ['holds no blocks at all', reply([], 'end_turn')],
+    ['called the search but holds no result', reply([search], 'pause_turn')],
+    ['also answered in text', reply([search, found, { type: 'text', text: 'Free at 3.' }], 'end_turn')],
+    ['stopped at the output limit', reply([search, found], 'max_tokens')],
+  ])('does not continue a response that %s', async (_case, response) => {
+    const { bodies, adapter } = recording([response, reply([use], 'tool_use')]);
+    const base = gatewayRequest();
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(1);
   });
 
   it('sends a deferred tool up front when the history calls it without the search that loaded it', async () => {

@@ -48,9 +48,9 @@ describe('forget matches whole words', () => {
   });
   it('reads raw JSON escapes: an escape ends a word, and a match never starts inside one', () => {
     expect(forget(['tea'], String.raw`{"t":"x\ntea y","u":"\u0020Tea"}`)).toBe(String.raw`{"t":"x\n[forgotten] y","u":"\u0020[forgotten]"}`);
-    expect(forget(['tea'], String.raw`"\tea for two"`)).toBe(String.raw`"\tea for two"`);
-    expect(forget(['tea'], String.raw`"\\tea"`)).toBe(String.raw`"\\[forgotten]"`);
-    expect(forget(['tea'], String.raw`"\\\tea"`)).toBe(String.raw`"\\\tea"`);
+    expect(forget(['tea'], String.raw`{"t":"\tea for two"}`)).toBe(String.raw`{"t":"\tea for two"}`);
+    expect(forget(['tea'], String.raw`{"t":"\\tea"}`)).toBe(String.raw`{"t":"\\[forgotten]"}`);
+    expect(forget(['tea'], String.raw`{"t":"\\\tea"}`)).toBe(String.raw`{"t":"\\\tea"}`);
   });
   it('in prose a backslash is a character: only raw JSON keeps an escape whole', () => {
     expect(forget(['Sarah'], String.raw`C:\Users\Sarah\docs`)).toBe(String.raw`C:\Users\[forgotten]\docs`);
@@ -59,6 +59,9 @@ describe('forget matches whole words', () => {
     expect(forget(['tom'], String.raw`"Quote" from C:\Users\tom`)).toBe(String.raw`"Quote" from C:\Users\[forgotten]`);
     expect(forget(['tea'], String.raw`C:\Ntea`)).toBe(String.raw`C:\Ntea`);
     expect(forget(['tom'], String.raw`{"p":"x\tom"}`)).toBe(String.raw`{"p":"x\tom"}`);
+    // A quoted span is how claim evidence is stored: text in quotes, not a JSON document.
+    expect(forget(['budget'], String.raw`"it is at D:\budget.xlsx"`)).toBe(String.raw`"it is at D:\[forgotten].xlsx"`);
+    expect(forget(['tea'], String.raw`"notes in C:\tea"`)).toBe(String.raw`"notes in C:\[forgotten]"`);
     expect(forget(['tom'], String.raw`{"p":"C:\\Users\\tom"}`)).toBe(String.raw`{"p":"C:\\Users\\[forgotten]"}`);
   });
   it('finds by the same rule the redactor rewrites by, with an open end for a cut prefix', () => {
