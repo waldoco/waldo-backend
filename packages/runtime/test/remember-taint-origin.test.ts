@@ -68,7 +68,8 @@ it('an untainted turn still corrects an owner claim', async () => {
 // A quote is a piece of the owner's words, not any characters in them: one letter, or part of a word, grounds nothing.
 it.each([
   ['one letter', 'Read my billing mail', 'e'],
-  ['a piece of a word', 'Read my billing mail', 'illi'],
+  ['the start of a word', 'Read my billing mail', 'bill'],
+  ['the end of a word', 'Read my billing mail', 'lling'],
   ['a one-letter word', 'Pay a bill today', 'a'],
 ])('a quote of %s does not ground', async (_what, said, quote) => {
   const { reply, claims } = await ownerTurn(said, [remember({ kind: 'preference', text: PLANTED, evidence_quote: quote }), []]);
