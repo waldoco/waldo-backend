@@ -1167,5 +1167,31 @@ if (!reportsClean(surfaceCompareInTest)) {
   failures += 1;
 }
 
+const runEdgeImportGuardWith = (libSpecifier) => {
+  const root = mkdtempSync(join(tmpdir(), 'edge-imports-'));
+  try {
+    mkdirSync(join(root, 'supabase', 'functions', 'f'), { recursive: true });
+    mkdirSync(join(root, 'packages', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'supabase', 'functions', 'f', 'index.ts'), "import { a } from '../../../packages/lib/a.ts';\n");
+    writeFileSync(join(root, 'packages', 'lib', 'a.ts'), `import { b } from '${libSpecifier}';\nexport const a = b;\n`);
+    writeFileSync(join(root, 'packages', 'lib', 'b.ts'), 'export const b = 1;\n');
+    return spawnSync('node', ['scripts/guards/guard-edge-function-imports.mjs', '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+const edgeImportBare = runEdgeImportGuardWith('./b');
+if (edgeImportBare.status === 0 || !edgeImportBare.stderr.includes("imports './b'")) {
+  process.stderr.write('guards-selftest: guard-edge-function-imports MISSED an extensionless import two hops from a function\n');
+  failures += 1;
+}
+
+const edgeImportExplicit = runEdgeImportGuardWith('./b.ts');
+if (edgeImportExplicit.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-edge-function-imports FALSE POSITIVE on an explicit extension:\n${edgeImportExplicit.stderr}`);
+  failures += 1;
+}
+
 if (failures > 0) process.exit(1);
 process.stdout.write('guards-selftest: ok\n');
