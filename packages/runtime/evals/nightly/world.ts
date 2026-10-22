@@ -311,10 +311,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   // marks today; the one card it can raise is recorded as an effect, never applied.
   const healthBook = healthTriggerBook(sql);
   const triggerRow = () => {
-    const today = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
+    const rowDay = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: today, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
-      previous: seed.health_before ? { day: shift(today, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
+      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
   const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
