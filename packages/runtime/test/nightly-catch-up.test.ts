@@ -201,16 +201,23 @@ it('a turn that always fails is narrowed to its own group and skipped with a Pat
       episodes.add('app-3000002', OWNER_SAID, 'POISON turn', NOW - 2 * DAY - HOUR);
       episodes.add('app-3000003', OWNER_SAID, 'Bravo note after', NOW - 2 * DAY);
       model.failOn = 'POISON';
+      let passes = 0;
+      const night = async (at?: number) => { passes += 1; await fire(NIGHTLY_ID, at); };
       const drain = async () => {
-        for (let more = 0; more < 12 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) await wake(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at);
+        for (let more = 0; more < 12 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) { passes += 1; await wake(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at); }
       };
-      await fire(NIGHTLY_ID);
+      await night();
       await drain();
       // Within a day the failures only narrow the chunk: the turn before is learned, nothing is skipped, the mark waits.
       expect(model.nights.filter(night => night.includes('Alpha note before'))).toHaveLength(1);
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * DAY - 2 * HOUR);
       expect(nightlyLines(lines).map(line => line.code)).not.toContain('chunk_quarantined');
-      await fire(NIGHTLY_ID, NOW + DAY);
+      // The same day again (an outage looks like this): the turn fails alone a second time and is still not skipped.
+      await night(NOW + 6 * HOUR);
+      await drain();
+      expect(nightlyLines(lines).map(line => line.code)).not.toContain('chunk_quarantined');
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * DAY - 2 * HOUR);
+      await night(NOW + DAY);
       await drain();
       const quarantined = nightlyLines(lines).filter(line => line.code === 'chunk_quarantined');
       expect(quarantined).toHaveLength(1);
@@ -218,7 +225,8 @@ it('a turn that always fails is narrowed to its own group and skipped with a Pat
       expect(model.nights.filter(night => night.includes('Bravo note after'))).toHaveLength(1);
       expect(model.nights.filter(night => night.includes('POISON'))).toEqual([]);
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * DAY);
-      expect(model.asked.filter(format => format === 'claim_ops').length).toBeLessThanOrEqual(15);
+      // At most one failed call a pass: the provider breaker is shared with the owner's turns.
+      expect(nightlyLines(lines).filter(line => line.code === 'provider_error').length).toBeLessThanOrEqual(passes);
     } finally { lines.mockRestore(); }
   });
 });
