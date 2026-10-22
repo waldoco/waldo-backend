@@ -260,8 +260,8 @@ One PR builds the whole redesign, behind `WALDO_FORGET_BARRIER` (staging `on`; o
 - one nightly failure notice, then quiet;
 - the forget eval, the barrier mutations and the staging E2E.
 
-Two parts cannot ride in it:
-- Dropping `memory_blocks` and `memory_inbox` waits on the owner's read-only hosted check; the PR ships the check script and a drop gated on it.
+Two parts do not ride in it:
+- Dropping `memory_blocks` and `memory_inbox`. The empty check is answered from source, not a hosted read: no live Durable Object can hold either table. Both come only from DO migration v1 (`do-schema.ts`), and `provisionDoSchema` ran only inside the retired `RunLoopDO` (`run-loop/do.ts`, deleted in `211cb87d`). No version of `OwnerDO` (or `TelegramOwnerDO` before the rename) ever called it, and the `RunLoopDO` storage goes with its `deleted_classes` migration. The drop is therefore a retirement of the dead v1/v2 migration chain under `guard-do-migration-lineage`'s retirement policy, with the B-1 inventory that needs. That is a separate runtime-cleanup PR, not part of the forget PR.
 - The ADRs land in `waldo-brain` from the drafts.
 
 M-4 on idle stays with C0, inside #1379.
@@ -273,3 +273,17 @@ M-4 on idle stays with C0, inside #1379.
 - **Residue the barrier cannot reach:** text the model already saw earlier in the same provider cache window is not "unseen"; the barrier governs what is sent from the forget onwards. Provider-side retention is covered by the zero-retention terms (an approval on another clock), not by this design.
 - **Over-redaction:** a held short word redacts that word in external pages for as long as it is held. With word matching and no whole-read drop this costs words, which is the trade the owner accepted.
 - **Inference from the marker:** the note says something was removed, not what; the eval's last probe checks the reply cannot reconstruct it.
+
+## 11. As built
+
+The build PR (#1420) follows this design except where source showed a better or a required shape. Each difference:
+
+- **Owner records versus derived rows.** `goals` is the owner's own record and is redacted by word in place, as are reminders, loops and the transcript. `day_plan.reason`, `update_cards`, `run_candidates`, `held_candidates`, `standing_orders` and `schedule.payload_json` keep today's redaction. Deleting them would drop live plan, card and run state the owner did not ask to lose. Every derived memory row that carries a forgotten text is **deleted**: claims, `memory_backups`, legacy `spots` and `core_file_revisions`, constellation nodes with their edges (and a node left with no supporting claim), `thread_topic_index`, `patrol_log`, and the dead-schema tables where present. `background_runs.summary` is set to NULL.
+- **Episodes are redacted, not regenerated.** The episode index mirrors the owner's transcript, so it follows the transcript's rule: redact by word in place (`scrubEpisodeTexts`).
+- **Custody has a scope.** `topic_purge_pending.scope` is `everywhere` for what the owner named and for a forgotten claim's own sentence: the claims table is purged by it, and settle requires a clean SQL readback. It is `history` for a claim's evidence. Evidence can be a citation other claims share ("owner agreed"), so it is cleared from the stores and never deletes a claim. A text tracked under both scopes keeps `everywhere`.
+- **One job, not one per fingerprint.** A single `forget_purge` schedule row (`forget-purge`, payload `{ id }`, no topic) owns every text in custody. Each pass runs every store once with all the texts it still owes, **longest first**, because redacting a shorter text first cuts a longer one that contains it into a fragment the longer one no longer matches. The forget tool's own episode redaction follows the same order.
+- **Steps table.** `forget_purge_steps` has no `cursor` and no `residue` state. Each store's redactor is already bounded and idempotent, so a crashed pass simply runs again. A store reports how many copies it could not clean (`remaining`, or `failed` when it throws), never error text.
+- **Back-off** is the job's own: 30 seconds, doubling, at most an hour, with no quarantine. The console's Retry resets it.
+- **Console.** Held topics show masked (first letter and length) with each store's state and attempts, and a Retry. There is no tap-to-reveal. The graph and profile show everything except held items. A purging claim hides only its own sentence there, not its evidence.
+- **Migration deferral kept.** The legacy core-file migration still defers while a topic is held. It copies whole files into claims, and there is no per-item view to filter at that point. It runs on the next pass after settle.
+- **Nightly failure notice.** The overnight memory pass (`dreaming`) tells the owner the first time the scheduler pauses it, then stays silent through later pauses until it has run well. The console's "Scheduled behaviors" section lists every paused job with its retry time.
