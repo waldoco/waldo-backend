@@ -19,8 +19,11 @@ type ErrorCode = (typeof healthApiErrorV1Schema.shape.error.options)[number];
 export type AppHealthInput = Readonly<{
   request: Request; url: URL; doName: string; rpc: Rpc | null;
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
-  // After a committed ingest the owner's derived rows are recomputed off the request path. Both must be present to run it.
+  // After a committed ingest the owner's derived rows are recomputed off the request path. The owner's Durable Object does
+  // it, once for a run of uploads, in the owner's own zone; without a way to tell it, or when it cannot take the notice, the
+  // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
+  notifySamples?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
   readDemand?: ProducerDeps['readDemand'];
@@ -127,18 +130,20 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   return refuse('unavailable');
 };
 
-// A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The producer cannot
+// A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
-  if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
-  defer(produceHealthScores({
+  if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
+  const here = async () => compute && produceHealthScores({
     readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
+    readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     compute,
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
-  }, { now: Date.now(), timezone }));
+  }, { now: Date.now(), timezone });
+  defer(notifySamples ? notifySamples().catch(() => { console.error('health samples notice failed'); return here(); }) : here());
 };
 
 export const handleAppHealth = async (input: AppHealthInput): Promise<Response> => {
