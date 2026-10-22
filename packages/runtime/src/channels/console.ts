@@ -3,6 +3,7 @@ import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
+import type { ForgetHold } from '../memory/forget-purge';
 import type { Proactivity } from './loops';
 import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
@@ -104,7 +105,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -140,7 +141,8 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'telegram.unlink': 'Telegram unlinked. Waldo will not message it again until you link an account.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
-  'spot.forget': 'Removed from long-term memory and blocked from relearning. The current chat may still mention it until the conversation moves on.',
+  'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
+  'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
   'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
@@ -184,6 +186,8 @@ export type ConsoleView = Readonly<{
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
+  // Topics a forget is still clearing from storage, masked: Waldo no longer sees them, and the owner can retry.
+  forgettingTopics: readonly ForgetHold[];
   holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];
   nodes: readonly ConstellationNode[];
   edges: readonly ConstellationEdge[];
@@ -353,7 +357,7 @@ const spotProvenance = (spot: Claim): string => {
 };
 
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
+  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory at once; older copies are cleared from storage in the background, listed under Forgetting until they are.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -370,10 +374,12 @@ const held = (view: ConsoleView) => view.holds.length === 0 ? '' : `<details><su
 
 const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'good' : 'muted')}</div>`).join('')}</details>`;
 
-// A claim stuck mid-scrub (status 'purging') must stay visible with a working retry path -
-// the 'spot.forget.incomplete' notice tells the owner to try again, so the row and its Forget
-// action cannot just vanish. act() already selects purging rows for spot.forget.
-const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
+// What a forget is still clearing stays visible with a retry, masked, so the page never repeats the forgotten words.
+const forgetting = (view: ConsoleView) => view.forgettingTopics.length === 0 ? '' : `<div class="forgetting"><h3>Forgetting (${view.forgettingTopics.length})</h3><div class="sub">Waldo no longer sees these. Copies are still being cleared from storage; each leaves this list when every store is clean.</div>${view.forgettingTopics.map((hold) => {
+  const waiting = hold.stores.filter((store) => store.state === 'pending').map((store) => store.name.replace(/_/g, ' '));
+  const progress = hold.stores.length ? `${hold.stores.length - waiting.length} of ${hold.stores.length} stores clear${waiting.length ? ` · waiting on ${waiting.join(', ')}` : ''}` : 'starting';
+  return `<div class="row spot"><div class="main"><div class="line">${esc(hold.label)}</div><div class="sub">Started ${esc(day(hold.started_at))} · ${esc(progress)}</div></div>${chip('Clearing', 'muted')}<div class="act">${form(view.csrf, 'forget.retry', 'Retry now', { id: hold.fingerprint })}</div></div>`;
+}).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Not scheduled today';

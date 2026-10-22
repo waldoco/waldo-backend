@@ -95,7 +95,7 @@ import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
-import type { ForgetBarrierMode } from '../context-composer/forget-barrier';
+import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
@@ -4051,6 +4051,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const today = localIso(now, clock.timezone).slice(0, 10);
         const planned = new Map(plans.read(today).map((row) => [row.card, row]));
         const pins = plans.pins();
+        // The page shows memory as the model may see it: what a forget is still clearing is left out, not the whole page.
+        const shown = barrierMemory(memory, () => heldTopicsOf(memory));
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, timezoneConfirmed: identity.get<boolean>('timezone_confirmed') === true, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, sessions: consoleSessionRows(await consoleAccess(this.ctx.storage).list(), session, clock.timezone), approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
@@ -4067,7 +4069,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const [imessage, whatsapp] = await Promise.all([known('imessage', auth.iMessageHandleHint), known('whatsapp', auth.whatsAppHandleHint)]);
             return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
-          profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
+          profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), forgettingTopics: this.forgetPurgeJob().status(),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
@@ -4091,7 +4093,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await assertCurrent?.();
         const now = Date.now();
         const spotId = Number(id);
-        if (action === 'schedule.set' || action === 'schedule.reset') {
+        if (action === 'forget.retry') {
+          if (!(await this.forgetPurgeJob().retry(id))) return false;
+        } else if (action === 'schedule.set' || action === 'schedule.reset') {
           const kind = SCHEDULE_KINDS.find((candidate) => candidate === id);
           if (action === 'schedule.set') { if (!kind || (value !== 'on' && value !== 'off')) return false; schedPrefs.set(kind, value === 'on'); } else schedPrefs.reset();
           await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now, armable }, action === 'schedule.set' ? kind : undefined);
