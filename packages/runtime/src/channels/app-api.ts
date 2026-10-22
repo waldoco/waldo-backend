@@ -153,9 +153,13 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
   if (linkCode) {
     if (request.method !== 'POST') return fail(405);
-    const address = env.IMESSAGE_WALDO_ADDRESS;
-    if (!address || !auth.issueProviderLinkCode) return fail(503);
+    if (!auth.issueProviderLinkCode) return fail(503);
     try {
+      // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
+      // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
+      const { iMessageNumberView } = await import('./imessage/enrollment');
+      const address = (await iMessageNumberView(env as never, who.doName)).number;
+      if (!address) return fail(503);
       const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
       if (!code) return fail(503);
       return ok(appIMessageLinkCodeV1Schema.parse({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 }));

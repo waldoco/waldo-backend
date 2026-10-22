@@ -72,6 +72,7 @@ const expectedMigrations = [
   '20261021170000_health_consent_copy_version.sql',
   '20261022040000_waldo_connect_session_begin.sql',
   '20261022060000_waldo_connect_session_handoff.sql',
+  '20261022120000_waldo_imessage_photon_enrollment.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

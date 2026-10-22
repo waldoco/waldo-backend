@@ -15,7 +15,7 @@ import { constantTimeEqual } from './constant-time';
 // callback so it rides no other request, which rules out the __Host- prefix (that requires Path=/). It is
 // SameSite=Lax because the provider's redirect back is a cross-site top-level GET, which a Strict cookie does not ride.
 // handoff binds the start hop itself, for a link a session-holding surface opened (channels/connect-confirm.ts).
-export type BoundProvider = 'google' | 'mcp' | 'whoop' | 'handoff';
+export type BoundProvider = 'google' | 'mcp' | 'whoop' | 'handoff' | 'photon';
 export type BrowserCheck = 'bound' | 'missing' | 'expired' | 'mismatch';
 
 const PREFIX = '__Secure-waldo-oauth-';
