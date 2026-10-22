@@ -94,7 +94,7 @@ describe('app health routes: signed database calls', () => {
     expect(call!.body.p_sig).toBe(await routerSignature(SECRET, call!.body.p_at as number, `health.consent_list.owner-1.${md5Hex('{}')}`));
   });
   it('shows a provider\'s consent rows only to a build that names health revision 2', async () => {
-    const whoopRow = { ...consent, source: 'whoop' };
+    const whoopRow = { ...consent, source: 'whoop', version: 3 };
     rpcResult = { consents: [consent, whoopRow] };
     const older = await get('/app/v1/health/consents');
     expect(await older.json()).toEqual({ consents: [consent] });
@@ -107,6 +107,16 @@ describe('app health routes: signed database calls', () => {
     const whoop = { ...batch, request_id: 'health-upload-w1', source: 'whoop' };
     const response = await post('/app/v1/health/ingest', whoop, { 'idempotency-key': whoop.request_id });
     expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
+  });
+  it('takes a WHOOP grant only on the WHOOP notice\'s copy version, and a device grant only on the device copy', async () => {
+    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: 3 };
+    for (const refused of [{ ...whoopGrant, version: 2 }, { ...grant, version: 3 }]) {
+      expect((await post('/app/v1/health/consents', refused, { 'idempotency-key': refused.request_id })).status, JSON.stringify(refused)).toBe(400);
+    }
+    expect(rpcs).toEqual([]);
+    rpcResult = { consent: { ...consent, source: 'whoop', version: 3 }, replayed: false, deletion_routed: false };
+    const accepted = await post('/app/v1/health/consents', whoopGrant, { 'idempotency-key': whoopGrant.request_id });
+    expect([accepted.status, rpcs.map(call => call.fn)]).toEqual([200, ['health_consent_grant']]);
   });
   it('sends the validated body, re-serialized, and never an owner from the client', async () => {
     rpcResult = change;

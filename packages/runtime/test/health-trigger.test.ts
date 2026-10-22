@@ -164,7 +164,7 @@ describe('the health trigger', () => {
       book.mark('2026-10-21', NOW - 60_000);
       let during = false;
       expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); book.mark('2026-10-21', NOW + 5_000); during = true; return noOp; } }))).toBe('no_op');
-      expect([prompts.length, during, book.pending(NOW + 10_000)]).toEqual([1, true, NOW + 5_000]);
+      expect([prompts.length, during, book.pending(NOW + 10_000)]).toEqual([1, true, { at: NOW + 5_000, days: ['2026-10-21'] }]);
     });
   });
 
@@ -285,7 +285,7 @@ describe('the health trigger', () => {
       deps().book.mark('2026-10-21', NOW - 60_000);
       expect(await runHealthTrigger(deps({ decide: async () => { throw new Error('model down'); } }))).toBe('failed');
       expect(reschedules).toEqual([NOW + HEALTH_TRIGGER_FLOOR_MS]);
-      expect(deps().book.pending(NOW)).toBe(NOW - 60_000);
+      expect(deps().book.pending(NOW)).toEqual({ at: NOW - 60_000, days: ['2026-10-21'] });
     });
   });
 
@@ -301,6 +301,70 @@ describe('the health trigger', () => {
     await withTrigger(async ({ deps }) => {
       deps().book.mark('2026-10-20', NOW - 13 * 3_600_000);
       expect(await runHealthTrigger(deps())).toBe('idle');
+    });
+  });
+});
+
+describe('the day a change was marked on', () => {
+  const rowFor = (day: string, previousDay: string, compiledAt: string) => ({ context: { ...ROW.context, day, compiled_at: compiledAt }, previous: { ...ROW.previous, day: previousDay } });
+
+  it('lists every pending day, and takes no health row for a day nothing marked as that change', async () => {
+    await withTrigger(async ({ sql, deps, prompts, proposals, logs }) => {
+      const book = deps().book;
+      book.mark('2026-10-20', NOW - 3 * 3_600_000);
+      book.mark('2026-10-21', NOW - 60_000);
+      expect(book.pending(NOW)).toEqual({ at: NOW - 60_000, days: ['2026-10-21', '2026-10-20'] });
+      // The row the read returns is a day no mark names: no change was marked on it, so nothing is claimed and the model is not asked.
+      const outcome = await runHealthTrigger(deps({ readHealth: async () => rowFor('2026-10-19', '2026-10-18', '2026-10-19T03:00:00Z') }));
+      expect([outcome, prompts.length, proposals.length, book.pending(NOW)]).toEqual(['stale_day', 0, 0, null]);
+      expect(logs.map(line => JSON.parse(line).code)).toEqual(['stale_day']);
+      expect(sql.exec('SELECT * FROM health_trigger_runs').toArray()).toEqual([]);
+      book.mark('2026-10-21', NOW - 30_000);
+      expect(await runHealthTrigger(deps())).toBe('proposed');
+    });
+  });
+
+  it('evaluates when an older mark names the row\'s day and a newer mark names another, since two zones can mark different days', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const book = deps().book;
+      // The owner's phone and the WHOOP sync can name a day in different zones: today's mark is older than tomorrow's.
+      book.mark('2026-10-21', NOW - 3 * 3_600_000);
+      book.mark('2026-10-22', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }))).toBe('no_op');
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('for 2026-10-21');
+      expect(book.pending(NOW)).toBeNull();
+    });
+  });
+
+  it('after a quiet-hours hold past midnight across a DST change, evaluates the marked day and never says it changed today', async () => {
+    await withTrigger(async ({ deps, prompts, reschedules }) => {
+      const zone = 'Europe/Berlin';
+      const night = Date.parse('2026-03-28T22:30:00Z'); // 23:30 CET, the night before clocks spring forward
+      const quiet: Proactivity = { quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' };
+      const row = rowFor('2026-03-28', '2026-03-27', '2026-03-28T22:00:00Z');
+      deps().book.mark('2026-03-28', night - 60_000);
+      expect(await runHealthTrigger(deps({ now: () => night, timezone: zone, proactivity: () => quiet, readHealth: async () => row }))).toBe('held_quiet');
+      expect(reschedules).toEqual([Date.parse('2026-03-29T05:00:00Z')]); // 07:00 CEST
+      const morning = reschedules[0]!;
+      expect(await runHealthTrigger(deps({ now: () => morning, timezone: zone, proactivity: () => quiet, readHealth: async () => row, decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }))).toBe('no_op');
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('for 2026-03-28');
+      expect(prompts[0]).toContain('Now (2026-03-28, stale)');
+      expect(prompts[0]).not.toMatch(/\btoday\b/);
+    });
+  });
+
+  it('compares the marked day with the row\'s own day, so the zone the owner is in now does not change the answer', async () => {
+    await withTrigger(async ({ deps, prompts, proposals }) => {
+      // 12:00Z is already the 22nd in Kiritimati and still the 21st in Kolkata; the row and the mark both say the 21st.
+      const later = Date.parse('2026-10-21T12:00:00Z');
+      const noOpDecide = async (_id: string, prompt: string) => { prompts.push(prompt); return noOp; };
+      deps().book.mark('2026-10-21', later - 60_000);
+      expect(await runHealthTrigger(deps({ now: () => later, timezone: 'Pacific/Kiritimati', decide: noOpDecide }))).toBe('no_op');
+      deps().book.mark('2026-10-22', later - 30_000);
+      expect(await runHealthTrigger(deps({ now: () => later, timezone: 'Pacific/Kiritimati', decide: noOpDecide }))).toBe('stale_day');
+      expect([prompts.length, proposals.length]).toEqual([1, 0]);
     });
   });
 });
