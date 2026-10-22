@@ -732,9 +732,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Whether the owner agreed to beta diagnostic recording, as the directory answered at the start of the latest turn or job.
   // It is never stored here: the directory is the record, and every failure to read it answers no.
   private diagnosticAgreed = false;
+  // Bumped by every read and by the owner's own change: an answer lands only if nothing newer started after its read did, so
+  // a read already under way when the owner turns recording off cannot turn it back on.
+  private diagnosticGeneration = 0;
   private async refreshDiagnosticRecording(): Promise<void> {
+    const generation = ++this.diagnosticGeneration;
     this.diagnosticAgreed = false;
-    this.diagnosticAgreed = await this.ownerAgreedToRecording();
+    const agreed = await this.ownerAgreedToRecording();
+    if (generation === this.diagnosticGeneration) this.diagnosticAgreed = agreed;
   }
   private async ownerAgreedToRecording(doName = this.ctx.storage.kv.get<string>('do_name')): Promise<boolean> {
     return resolveCaptureText(this.env) && readDiagnosticAgreement(diagnosticRecordingDirectory(this.env), doName);
@@ -1008,8 +1013,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (value !== 'on' && value !== 'off') return diagnosticRecordingReceipt(value, 'refused');
     const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
     if (!directory || !doName) return diagnosticRecordingReceipt(value, 'unconfigured');
+    this.diagnosticGeneration++;
     this.diagnosticAgreed = false;
-    try { return diagnosticRecordingReceipt(value, await directory.set(doName, value === 'on', 'console') ? 'done' : 'refused'); }
+    try { return diagnosticRecordingReceipt(value, await directory.set(doName, value === 'on', 'console') ? 'done' : 'refused', resolveCaptureText(this.env)); }
     catch { return diagnosticRecordingReceipt(value, 'unconfirmed'); }
   }
 

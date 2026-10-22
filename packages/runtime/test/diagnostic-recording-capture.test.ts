@@ -14,7 +14,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // Staging exports a Telegram owner's turn to Langfuse. Message text rides that export only while the environment allows
 // capture AND the owner's directory record holds a live agreement to the current wording; the agreement is read at the
 // start of each turn, and anything short of a clear yes exports no text.
-const world = vi.hoisted(() => ({ otlp: [] as string[], reads: 0, agreement: undefined as unknown, hang: false, writes: [] as Record<string, unknown>[], write: 'ok' as 'ok' | 'refused' | 'outage' }));
+const world = vi.hoisted(() => ({ otlp: [] as string[], reads: 0, agreement: undefined as unknown, hang: false, writes: [] as Record<string, unknown>[], write: 'ok' as 'ok' | 'refused' | 'outage', slow: false, release: undefined as (() => void) | undefined }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -32,13 +32,14 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f';
 const MESSAGE = 'My sleep felt short and my head is foggy this morning';
+const EMAIL = 'tester@fixture.invalid';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const langfuse = { LANGFUSE_PUBLIC_KEY: 'pk-fixture', LANGFUSE_SECRET_KEY: 'sk-fixture', LANGFUSE_BASE_URL: 'https://langfuse.fixture.invalid', LANGFUSE_CAPTURE_TEXT: 'true' };
 const agreed = { agreed: true, version: DIAGNOSTIC_RECORDING_WORDING.version, agreed_at: '2026-10-22T09:00:00.000Z' };
 const declined = { agreed: false, version: null, agreed_at: null };
 
 beforeEach(() => {
-  world.otlp = []; world.reads = 0; world.agreement = declined; world.hang = false; world.writes = []; world.write = 'ok';
+  world.otlp = []; world.reads = 0; world.agreement = declined; world.hang = false; world.writes = []; world.write = 'ok'; world.slow = false; world.release = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.startsWith(langfuse.LANGFUSE_BASE_URL)) { world.otlp.push(String(init?.body ?? '')); return new Response('{}', { status: 200 }); }
@@ -47,6 +48,8 @@ beforeEach(() => {
     if (fn === 'diagnostic_recording_state') {
       world.reads++;
       if (world.hang) return new Promise<Response>(() => undefined);
+      // A read that answers only when the test releases it, with the answer the directory held when it was asked.
+      if (world.slow) { const answer = world.agreement; return new Promise<Response>(resolve => { world.release = () => resolve(Response.json(answer)); }); }
       return world.agreement === 'outage' ? Response.json({ code: 'XX000', message: 'down' }, { status: 503 }) : Response.json(world.agreement);
     }
     if (fn === 'set_diagnostic_recording') {
@@ -66,7 +69,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 type Control = Readonly<{ state: string; recorded_here: boolean; version: string; label: string; detail: string }>;
-type Owner = Readonly<{ turn(update: number): Promise<void>; traces(): string; control(): Promise<Control | undefined>; choose(value: string, request: string): Promise<{ status: number; receipt?: { state: string; message: string } }> }>;
+type Owner = Readonly<{ turn(update: number): Promise<void>; capture(): boolean; job(): Promise<boolean>; traces(): string; control(): Promise<Control | undefined>; choose(value: string, request: string): Promise<{ status: number; receipt?: { state: string; message: string } }> }>;
 const telegramOwner = (name: string, environment: string, run: (owner: Owner) => Promise<void>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
@@ -79,6 +82,10 @@ const telegramOwner = (name: string, environment: string, run: (owner: Owner) =>
   try {
     await run({
       control: async () => (await read()).data.diagnostic_recording,
+      capture: () => (owner as unknown as { captureText: boolean }).captureText,
+      // A scheduled job, answering whether its own traces would carry text.
+      job: () => (owner as unknown as { asOwnerJob(job: string, key: string, work: () => Promise<boolean>): Promise<boolean> })
+        .asOwnerJob('brief', `diagnostic-job:${Date.now()}`, async () => (owner as unknown as { captureText: boolean }).captureText),
       choose: async (value, request) => {
         const before = await read();
         const response = await owner.fetch(new Request(`https://telegram-owner${CONTROL_ACTION_PATH}`, { method: 'POST', headers: { cookie: `waldo_console=${token}`, 'content-type': 'application/x-www-form-urlencoded' },
@@ -86,7 +93,7 @@ const telegramOwner = (name: string, environment: string, run: (owner: Owner) =>
         return { status: response.status, ...(await response.json() as { receipt?: { state: string; message: string } }) };
       },
       turn: async update => {
-        await inbox.admit({ bot: '7.fixture', subject: '42', doName: name }, update, JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text: MESSAGE } }));
+        await inbox.admit({ bot: '7.fixture', subject: '42', doName: name, traceIdentity: { owner_id: OWNER_ID, owner_email: EMAIL } }, update, JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text: MESSAGE } }));
         await (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
         // The final reply settles on the alarm, which logs the root hop that exports the turn.
         const now = Date.now();
@@ -113,6 +120,7 @@ describe('diagnostic recording decides whether staging exports a turn\'s text', 
       await owner.turn(960001);
       expect(carriesText(960001)).toBe(true);
       expect(exportedMessage(960001)).toBe(true);
+      expect(JSON.stringify(spansOf(960001))).toContain(EMAIL);
       expect(world.reads).toBeGreaterThan(0);
     });
   });
@@ -125,6 +133,9 @@ describe('diagnostic recording decides whether staging exports a turn\'s text', 
       expect(carriesText(960011)).toBe(false);
       expect(exportedMessage(960011)).toBe(false);
       expect(owner.traces()).not.toContain(MESSAGE);
+      // The verified email stays out too, though the inbox record holds it.
+      expect(JSON.stringify(spansOf(960011))).not.toContain(EMAIL);
+      expect(owner.traces()).not.toContain(EMAIL);
     });
   });
 
@@ -151,6 +162,15 @@ describe('diagnostic recording decides whether staging exports a turn\'s text', 
       world.agreement = { surprise: true };
       await owner.turn(960033);
       expect(carriesText(960033)).toBe(false);
+    });
+  });
+
+  it('reads the agreement again at the start of each scheduled job', async () => {
+    world.agreement = agreed;
+    await telegramOwner('diagnostic-job', 'staging', async owner => {
+      expect(await owner.job()).toBe(true);
+      world.agreement = declined;
+      expect(await owner.job()).toBe(false);
     });
   });
 
@@ -201,6 +221,30 @@ describe('the console control for diagnostic recording', () => {
     });
   });
 
+  it('stops recording in the object as soon as the owner turns it off, before any further turn', async () => {
+    world.agreement = agreed;
+    await telegramOwner('diagnostic-console-immediate', 'staging', async owner => {
+      await owner.turn(960081);
+      expect(owner.capture()).toBe(true);
+      expect(await owner.choose('off', 'diagnostic-request-21')).toMatchObject({ status: 200 });
+      expect(owner.capture()).toBe(false);
+    });
+  });
+
+  it('does not let a read that was already under way undo a withdrawal', async () => {
+    world.agreement = agreed;
+    await telegramOwner('diagnostic-console-race', 'staging', async owner => {
+      world.slow = true;
+      const job = owner.job();
+      await vi.waitFor(() => expect(world.release).toBeDefined());
+      world.slow = false;
+      expect(await owner.choose('off', 'diagnostic-request-31')).toMatchObject({ status: 200 });
+      world.release!();
+      expect(await job).toBe(false);
+      expect(owner.capture()).toBe(false);
+    });
+  });
+
   it('shows unknown, not off, when the directory cannot be read', async () => {
     world.agreement = 'outage';
     await telegramOwner('diagnostic-console-unknown', 'staging', async owner => {
@@ -221,9 +265,13 @@ describe('the console control for diagnostic recording', () => {
     });
   });
 
-  it('says where text is never recorded, whatever the owner chooses', async () => {
+  it('says where text is never recorded, whatever the owner chooses, and never claims recording is on there', async () => {
     await telegramOwner('diagnostic-console-production', 'production', async owner => {
       expect((await owner.control())?.recorded_here).toBe(false);
+      const on = await owner.choose('on', 'diagnostic-request-41');
+      expect(on).toMatchObject({ status: 200, receipt: { state: 'recorded' } });
+      expect(on.receipt?.message).toContain('records no chat text');
+      expect(on.receipt?.message).not.toMatch(/recording is on/i);
     });
   });
 });

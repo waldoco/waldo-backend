@@ -69,9 +69,9 @@ The same decision gates free-form `error` and `detail` text and the owner's emai
 
 The agreement lives in Supabase (`waldo.diagnostic_recording_agreements`, migration `20261022120000`). Each row holds the owner, the wording version, where they agreed (`signup` or `console`), when, and when they withdrew. The two signed functions `set_diagnostic_recording` and `diagnostic_recording_state` are its only writer and reader.
 
-Owners choose at Finish signup (optional, unticked) or later in the console under Settings, Your day. Existing owners start as not agreed.
+Owners choose at Finish signup (optional, unticked, shown only where the environment records text) or later in the console under Settings, Your day. Existing owners start as not agreed.
 
-The owner DO asks the directory at the start of each turn and each scheduled job, and holds the answer until the next one. Anything short of a clear yes for the current wording means no text: no directory, no DO name, an error, a malformed answer, or no answer within 2 s. Turning recording off in the console stops it in the DO at once. A withdrawal made directly in the database takes effect from the owner's next turn or job. Changing the wording means bumping its version, after which every earlier agreement stops counting until the owner agrees again.
+The owner DO asks the directory at the start of each turn and each scheduled job, and holds the answer until the next one. Anything short of a clear yes for the current wording means no text: no directory, no DO name, an error, a malformed answer, or no answer within 2 s. Turning recording off in the console stops it in the DO at once, and a directory read already under way cannot turn it back on. A withdrawal made directly in the database takes effect from the owner's next turn or job. Changing the wording means bumping its version, after which every earlier agreement stops counting until the owner agrees again.
 
 Withdrawing stops new recording only; records already in Langfuse stay until they expire or are deleted on request.
 

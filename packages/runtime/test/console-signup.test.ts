@@ -295,12 +295,14 @@ it('offers email-only signup at entry, OTP and verified completion without a pho
  }
 });
 
-// Beta diagnostic recording is offered on the verified completion step, unticked, and signup works the same either way.
+// Beta diagnostic recording is offered on the verified completion step where the environment records text (staging), unticked,
+// and signup works the same either way.
 describe('the diagnostic recording choice at Finish signup', () => {
-  const finishing = async (set: DiagnosticRecordingDirectory['set'], grantFails = false) => {
+  const staging = { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' };
+  const finishing = async (set: DiagnosticRecordingDirectory['set'], grantFails = false, vars: Record<string, string> = staging) => {
     const s = setup();
     const grant = vi.fn(async () => grantFails ? new Response('down', { status: 503 }) : new Response('console-ticket'));
-    const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
+    const e = { ...env, ...vars, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
     const a = { ...s.a, ownerCookie: vi.fn(async () => 'owner-session') };
     const { cookie, progress } = await start(s);
     const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
@@ -342,6 +344,14 @@ describe('the diagnostic recording choice at Finish signup', () => {
     expect(done.status).toBe(303);
     expect(done.headers.get('set-cookie')).toContain('waldo_owner=owner-session');
     expect(diagnostics.set).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['production', { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'production' }], ['capture off', { LANGFUSE_CAPTURE_TEXT: 'false', WALDO_ENVIRONMENT: 'staging' }]])('is not offered where %s records no text, and a posted tick records nothing', async (_label, vars) => {
+    const { page, finish, diagnostics } = await finishing(async () => true, false, vars);
+    expect(await page.text()).not.toContain('diagnostic_recording');
+    const done = await finish({ diagnostic_recording: 'on' });
+    expect(done.status).toBe(303);
+    expect(diagnostics.set).not.toHaveBeenCalled();
   });
 
   it('records nothing when signup does not finish, and keeps the owner\'s tick for the retry', async () => {

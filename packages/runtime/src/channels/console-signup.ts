@@ -4,6 +4,7 @@ import { OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { signupAuth, SIGNUP_COOKIE, SIGNUP_TTL_SECONDS, type SignupAuth, type SignupProgress } from '../identity/console-signup';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
+import { resolveCaptureText } from '../observability/trace-privacy';
 import { DIAGNOSTIC_RECORDING_WORDING, diagnosticRecordingDirectory, type DiagnosticRecordingDirectory } from '../identity/diagnostic-recording';
 
 export const CONSOLE_SIGNUP_PATH = '/console/signup';
@@ -28,19 +29,23 @@ const csrf = (p: SignupProgress) => `<input type="hidden" name="csrf" value="${e
 const otp = (p: SignupProgress, text = '') => page(`<h1>Check your email.</h1><ol aria-label="Verification progress"><li>Email: waiting for a code</li></ol><p>Enter the most recent email code for ${esc(p.email)}. Codes are requested only when this email has existing member access or a valid matching invite. This does not prove that an invite is valid. Delivery can take a few minutes.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/verify">${csrf(p)}<label for="code">Email verification code</label><input id="code" name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="16" required><button>Verify email</button></form><form method="post" action="${CONSOLE_SIGNUP_PATH}/resend">${csrf(p)}<button>Send another code</button></form><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Use another invite or email</a></p>`, 200, restartScript);
 // Beta diagnostic recording is optional and starts unticked; a retry shows the owner's own earlier choice.
 const diagnosticChoice = (ticked: boolean) => `<label class="consent" for="diagnostic-recording"><input id="diagnostic-recording" name="diagnostic_recording" type="checkbox" value="on" aria-describedby="diagnostic-recording-help"${ticked ? ' checked' : ''}><span>${esc(DIAGNOSTIC_RECORDING_WORDING.label)}</span></label><p id="diagnostic-recording-help" class="help">${esc(DIAGNOSTIC_RECORDING_WORDING.detail)}</p>`;
-const finish = (p: SignupProgress, text = '', ticked = false) => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li></ol>${note(text)}<p>Your verified email and invite are enough to join. No SMS is sent.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}${diagnosticChoice(ticked)}<button>Finish signup</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p class="help">Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
-const resume = (p: SignupProgress, text = '') => p.emailVerified ? finish(p, text) : otp(p, text);
+// offered: this environment records text, so the choice means something; elsewhere the box is not shown.
+const finishPage = (p: SignupProgress, text = '', choice: Readonly<{ offered: boolean; ticked: boolean }>) => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li></ol>${note(text)}<p>Your verified email and invite are enough to join. No SMS is sent.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}${choice.offered ? diagnosticChoice(choice.ticked) : ''}<button>Finish signup</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p class="help">Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
 const withCookie = (response: Response, value: string) => {
   response.headers.append('set-cookie', `${SIGNUP_COOKIE}=${value}; Path=${CONSOLE_SIGNUP_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SIGNUP_TTL_SECONDS}`);
   return response;
 };
 const redirect = (value: string, notice: 'unconfirmed' | 'throttled' | null = null) => withCookie(new Response(null, { status: 303, headers: { location: notice ? `${CONSOLE_SIGNUP_PATH}?send=${notice}` : CONSOLE_SIGNUP_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } }), value);
-type SignupEnv = OwnerDirectoryEnv & Readonly<{ RESPONSIBILITY_RATE_LIMITER?: RateLimit; OWNER_DO?: DurableObjectNamespace }>;
+type SignupEnv = OwnerDirectoryEnv & Readonly<{ RESPONSIBILITY_RATE_LIMITER?: RateLimit; OWNER_DO?: DurableObjectNamespace; LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>;
 // Completion admits only the verified invite identity. Phone collection never grants channel authority.
 export const handleSignup = async (request: Request, env: SignupEnv, auth: ConsoleAuth | null, signup: SignupAuth | null = signupAuth(env), trace = consoleTrace(),
   diagnostics: DiagnosticRecordingDirectory | null = diagnosticRecordingDirectory(env)): Promise<Response> => {
   const url = new URL(request.url);
   const progress = signup ? await signup.read(request) : null;
+  const offered = resolveCaptureText(env);
+  let ticked = false;
+  const finish = (p: SignupProgress, text = '') => finishPage(p, text, { offered, ticked });
+  const resume = (p: SignupProgress, text = '') => p.emailVerified ? finish(p, text) : otp(p, text);
   if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === CONSOLE_SIGNUP_PATH) {
     const restarting = url.searchParams.has('restart');
     const response = progress && !restarting ? resume(progress, url.searchParams.get('send') === 'throttled' ? 'Too many attempts. No new code was requested. Wait a few minutes and retry below.' : url.searchParams.get('send') === 'unconfirmed' ? 'We could not confirm that an email code was sent. Request another code below, or retry a code you already received.' : '') : entry();
@@ -63,9 +68,9 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
   // Seal the draft before attempts, so throttle and transport failures can resume with a
   // hash after the browser has cleared its fragment. This is not proof of eligibility.
   const draftValue = action === '/send' ? await signup.begin(email, invite) : null;
-  const ticked = action === '/complete' && form.get('diagnostic_recording') === 'on';
+  ticked = offered && action === '/complete' && form.get('diagnostic_recording') === 'on';
   const retry = (message: string) => action === '/phone' || action === '/complete'
-    ? finish(progress!, message, ticked) : resume(progress!, message);
+    ? finish(progress!, message) : resume(progress!, message);
   // Coarse per-location and durable per-email/IP limits cover every attempt, including phone
   // collection rechecks. Errors fail closed and expose only a retryable, content-free message.
   try {
@@ -100,28 +105,28 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
     }
     const rawPhone = String(form.get('phone') ?? '');
     const compact = rawPhone.replace(/[\s().-]/g, '');
-    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.', ticked);
-    if (action === '/complete' && !env.OWNER_DO) return finish(progress!, unavailable, ticked);
+    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.');
+    if (action === '/complete' && !env.OWNER_DO) return finish(progress!, unavailable);
     let value: string | null;
     try { value = await signup.collectPhone(progress!, compact); }
-    catch { return finish(progress!, unavailable, ticked); }
-    if (!value) return finish(progress!, unavailableCompletion, ticked);
+    catch { return finish(progress!, unavailable); }
+    if (!value) return finish(progress!, unavailableCompletion);
     if (action === '/phone') return redirect(value);
     const saved = await signup.read(new Request(request.url, { headers: { cookie: `${SIGNUP_COOKIE}=${value}` } }));
-    if (!saved) return withCookie(finish(progress!, unavailable, ticked), value);
+    if (!saved) return withCookie(finish(progress!, unavailable), value);
     // Keep verified progress and entered contact on any uncertain completion/session result.
     // A retry resolves the already-bound owner and never replays the consumed OTP.
     try {
       const doName = await signup.complete(saved, compact);
-      if (!doName) return withCookie(finish(saved, unavailableCompletion, ticked), value);
+      if (!doName) return withCookie(finish(saved, unavailableCompletion), value);
       const grant = await withRequestTimeout(async signal => {
         const response = await env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName))
           .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName }, signal });
         return response.ok ? await response.text() : null;
       });
-      if (!grant) return withCookie(finish(saved, unavailable, ticked), value);
+      if (!grant) return withCookie(finish(saved, unavailable), value);
       const ownerCookie = await auth.ownerCookie(doName);
-      if (!ownerCookie) return withCookie(finish(saved, unavailable, ticked), value);
+      if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
       // Recorded only once the account is open. A failure leaves recording off and signup finished; the owner can agree
       // later in the console, which shows the state the directory actually holds.
       if (ticked) {
@@ -138,7 +143,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       return new Response(null, { status: 303, headers });
     } catch {
       consoleLog(trace, 'console_signup', false, 'completion_unconfirmed');
-      return withCookie(finish(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.', ticked), value);
+      return withCookie(finish(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.'), value);
     }
   } catch {
     consoleLog(trace, 'console_signup', false, 'verification_unavailable');

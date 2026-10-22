@@ -5,11 +5,11 @@ import { signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 export const DIAGNOSTIC_RECORDING_WORDING = Object.freeze({
   version: 'beta-2026-10-22',
   label: 'During the beta, let the Waldo team read my chats with Waldo to find and fix problems (optional)',
-  detail: 'If you agree, Waldo records the full text of your conversations with it in Langfuse, our diagnostic tool: your messages, '
-    + 'Waldo’s replies, what its tools returned and any health information in them, with your email address. The Ecofresh team '
-    + 'members who work on Waldo can read these records. You can turn this off at any time in the console, under Settings, Your day; '
-    + 'recording stops from your next message. To have earlier records deleted, write to woof@heywaldo.in. Waldo works the same '
-    + 'whether or not you agree.',
+  detail: 'If you agree, Waldo records the full text of your conversations with it: your messages, Waldo’s replies, what its '
+    + 'tools returned and any health information in them, with your email address. The records go to Langfuse, the diagnostic '
+    + 'service we use; error details and your email address also go to our service logs. The Ecofresh team members who work on '
+    + 'Waldo can read them. You can turn this off at any time in the console, under Settings, Your day; recording stops from your '
+    + 'next message. To have earlier records deleted, write to woof@heywaldo.in. Waldo works the same whether or not you agree.',
 });
 
 export type DiagnosticAgreement = Readonly<{ agreed: boolean; version: string | null }>;

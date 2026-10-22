@@ -65,13 +65,14 @@ export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
 export const whatsappUnlinkReceipt=(done:boolean):ControlReceipt=>done
  ?{state:'recorded',message:'WhatsApp unlinked. New messages from that number no longer reach your Waldo, and Waldo will not message it.'}
  :{state:'rejected',message:'WhatsApp was not unlinked. Refresh the records and try again.'};
-// done: the directory recorded the change; refused: it did not; unconfirmed: the directory did not answer.
-export const diagnosticRecordingReceipt=(value:string,outcome:'done'|'refused'|'unconfirmed'|'unconfigured'):ControlReceipt=>
+// done: the directory recorded the change; refused: it did not; unconfirmed: the directory did not answer. recordedHere: this
+// environment records text at all; where it does not, a saved yes records nothing and the receipt says so.
+export const diagnosticRecordingReceipt=(value:string,outcome:'done'|'refused'|'unconfirmed'|'unconfigured',recordedHere=true):ControlReceipt=>
  outcome==='unconfigured'?{state:'rejected',message:'Diagnostic recording needs account sign-in, which is not configured on this server.'}
  :outcome==='unconfirmed'?{state:'unconfirmed',message:'Waldo could not confirm the change. Refresh the records before trying again.'}
  :outcome==='refused'?{state:'rejected',message:'Nothing changed. Refresh the records and try again.'}
- :value==='on'?{state:'recorded',message:'Diagnostic recording is on from your next message. You can turn it off here at any time.'}
- :{state:'recorded',message:'Diagnostic recording is off from now on. To have earlier records deleted, write to woof@heywaldo.in.'};
+ :value==='on'?{state:'recorded',message:recordedHere?'Diagnostic recording is on from your next message. You can turn it off here at any time.':'Your choice is saved. This server records no chat text, so nothing is recorded here.'}
+ :{state:'recorded',message:'Diagnostic recording is off from your next message. To have earlier records deleted, write to woof@heywaldo.in.'};
 export async function controlRevision(value:unknown):Promise<string>{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}
 function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:!card.sent);}
