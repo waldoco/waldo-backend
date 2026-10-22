@@ -177,7 +177,7 @@ export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTain
 // can ask for any of them, and one write would make the injection persist, so a tainted turn sends them to the owner's
 // card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
 // their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
-// Forgetting is the same kind of change in reverse: one injected forget by ids erases what Waldo knows for good.
+// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good.
 export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_reminder',
   'cancel_reminder',
@@ -189,19 +189,15 @@ export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'forget_memory',
 ];
 
-// The owner-approval law for a tainted turn: every privileged action, and every standing change. Two exceptions, read
-// from the frozen arguments; arguments that are not a plain record count as neither:
-// - a loop bound to an observed mail source records that source, its title never enters a prompt as the owner's
-//   (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back; it is the
-//   owner-enabled mail follow-through, so it needs no card;
-// - a forget that selects no ids selects only by a literal in the owner's own message or a span of it, which the
-//   handler checks against what the owner wrote, so outside text cannot choose what it removes.
+// The owner-approval law for a tainted turn: every privileged action, and every standing change. One exception, read
+// from the frozen arguments: a loop bound to an observed mail source records that source, its title never enters a
+// prompt as the owner's (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back;
+// it is the owner-enabled mail follow-through, so it needs no card. Arguments that are not a plain record are no loop.
 export function taintGateNeedsOwnerApproval(tool: ToolName, taint: SourceTaint, args?: unknown): boolean {
   if (taintGateBlocksDirectExecution(tool, taint)) return true;
   if (!isExternalSourceTaint(taint) || !STANDING_CHANGE_TOOLS.includes(tool)) return false;
-  const record = typeof args === 'object' && args !== null ? args as { source_ref?: unknown; claim_ids?: unknown } : undefined;
+  const record = typeof args === 'object' && args !== null ? args as { source_ref?: unknown } : undefined;
   if (tool === 'open_loop') return typeof record?.source_ref !== 'string';
-  if (tool === 'forget_memory') return record === undefined || record.claim_ids !== undefined;
   return true;
 }
 

@@ -29,7 +29,7 @@ export type ProposeActionHost = Readonly<{
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, proactivity or schedule setting). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, proactivity or schedule setting, or a forget by memory ids). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,
@@ -53,6 +53,11 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       return { ok: false, error: `The args do not match ${tool.data}'s schema: ${issues}.`, code: 'invalid_args' };
     }
     const frozen = parsed.data as Record<string, unknown>;
+    // A topic or span selects by matching the owner's message, and outside text can name any fragment of it (one letter
+    // selects everything). Ids are what the owner can check on the card, and the replay admits only those.
+    if (tool.data === 'forget_memory' && (frozen.topic !== undefined || frozen.source !== undefined)) {
+      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic or source.', code: 'rejected' };
+    }
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {
       const check = ctx.hasApproval;

@@ -231,7 +231,7 @@ describe('taint gate — hostile path (ADR-0049)', () => {
   it('sends every standing change from a tainted turn to the owner, and leaves the untainted turn alone', () => {
     expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory']);
     for (const tool of STANDING_CHANGE_TOOLS) {
-      expect(taintGateNeedsOwnerApproval(tool, 'external', tool === 'forget_memory' ? { claim_ids: [1] } : {})).toBe(true);
+      expect(taintGateNeedsOwnerApproval(tool, 'external', {})).toBe(true);
       expect(taintGateNeedsOwnerApproval(tool, null, {})).toBe(false);
       // Standing changes are not privileged: the trusted checkpoint law and the host approval line do not apply to them.
       expect(PRIVILEGED_ACTION_TOOLS).not.toContain(tool);
@@ -250,15 +250,19 @@ describe('taint gate — hostile path (ADR-0049)', () => {
     expect(taintGateNeedsOwnerApproval('set_reminder', 'external', { source_ref: 'gmail:m1' })).toBe(true);
   });
 
-  it('sends a forget by ids from a tainted turn to the owner; a forget bound to the owner\'s own words runs', () => {
+  it('sends every forget from a tainted turn to the owner, whatever it selects by', () => {
     const scope_note = 'the plan';
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', { claim_ids: [1], scope_note })).toBe(true);
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', { claim_ids: [1], topic: 'plan', scope_note })).toBe(true);
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', { topic: 'plan', scope_note })).toBe(false);
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note })).toBe(false);
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', { claim_ids: [], topic: 'plan', scope_note })).toBe(true);
-    expect(taintGateNeedsOwnerApproval('forget_memory', 'external', null)).toBe(true);
+    for (const args of [
+      { claim_ids: [1], scope_note },
+      { claim_ids: [1], topic: 'plan', scope_note },
+      { topic: 'plan', scope_note },
+      { topic: 'e', scope_note },
+      { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note },
+      null,
+      undefined,
+    ]) expect(taintGateNeedsOwnerApproval('forget_memory', 'external', args)).toBe(true);
     expect(taintGateNeedsOwnerApproval('forget_memory', null, { claim_ids: [1], scope_note })).toBe(false);
+    expect(taintGateNeedsOwnerApproval('forget_memory', null, { topic: 'plan', scope_note })).toBe(false);
   });
 
   it('leaves reads off tainted content executable — the gate guards mutations, not analysis', () => {

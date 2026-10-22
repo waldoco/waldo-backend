@@ -255,7 +255,7 @@ describe('taint goes to a card', () => {
     });
   });
 
-  it('a forget by ids from a tainted turn goes to the card and forgets on approval; a forget by the owner\'s own words runs directly', async () => {
+  it('a forget by ids from a tainted turn goes to the card and forgets on approval', async () => {
     await runInDurableObject(stub('forget'), async (_instance, state) => {
       const store = claimStore(state.storage.sql);
       store.add({ kind: 'fact', text: 'Project codename is copper-lantern', source: 'stated', evidence: 'copper-lantern', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
@@ -270,9 +270,60 @@ describe('taint goes to a card', () => {
       const [row] = rows('tainted_action');
       expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
       expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
-      const memoryTurn = { ownerId: 'owner-1', conversationRef: 'chat-1', current: { message_ref: 'tg-2', text: 'forget the tea thing' }, recent: [] };
-      expect(await dispatchTool({ id: 'c2', name: 'forget_memory', args: { topic: 'tea', scope_note: 'tea' } }, tainted({ memoryTurn } as never), { handlers })).toMatchObject({ ok: true });
-      expect(store.claims()).toEqual([]);
+    });
+  });
+
+  it('a tainted forget by topic or span never runs: the gate refuses it and the card takes only ids', async () => {
+    await runInDurableObject(stub('forget-topic'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      store.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: 'tea', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      const hidden: string[][] = [];
+      const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async (texts) => { hidden.push([...texts]); } });
+      const { desk, rows } = deskIn(state);
+      const memoryTurn = { ownerId: 'owner-1', conversationRef: 'chat-1', current: { message_ref: 'tg-1', text: 'forget the tea thing' }, recent: [] };
+      const byTopic = { topic: 'tea', scope_note: 'tea' };
+      const bySpan = { source: { message_ref: 'tg-1', start: 11, end: 14 }, scope_note: 'tea' };
+      for (const args of [byTopic, bySpan]) {
+        expect(await dispatchTool({ id: 'c1', name: 'forget_memory', args }, tainted({ memoryTurn } as never), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      }
+      const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool) });
+      for (const args of [byTopic, bySpan, { claim_ids: [1], topic: 'tea', scope_note: 'tea' }]) {
+        expect(await propose.handle({ tool: 'forget_memory', args, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
+          ok: false, code: 'rejected', error: expect.stringMatching(/read_memory[\s\S]*claim_ids/),
+        });
+      }
+      expect(rows('tainted_action')).toEqual([]);
+      expect(hidden).toEqual([]);
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+    });
+  });
+
+  // Injected text picks a one-letter topic that any owner message contains; once run, it would forget every claim and
+  // redact that letter across history.
+  it('mail text cannot forget by a letter of the owner\'s message', async () => {
+    await runInDurableObject(stub('forget-probe'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      for (const [text, evidence] of [['Prefers tea', 'tea'], ['Lives in Pune', 'Pune'], ['Daughter is Meera', 'Meera']] as const) {
+        store.add({ kind: 'fact', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      }
+      const hidden: string[][] = [];
+      const handlers = [mail, ...memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async (texts) => { hidden.push([...texts]); } })];
+      const memoryTurn = { ownerId: 'owner-1', conversationRef: 'chat-1', current: { message_ref: 'tg-9', text: 'check my email' }, recent: [] };
+      const outputs: string[] = [];
+      let round = 0;
+      await runToolLoop({
+        handlers: handlers as never, ctx: context({ memoryTurn } as never), maxSteps: 4, onTool: (e) => outputs.push(e.output),
+        step: async (tools) => {
+          round += 1;
+          if (!tools) return { text: 'done' };
+          if (round === 1) return { text: '', tool_calls: [readMail] };
+          if (round === 2) return { text: '', tool_calls: [{ call_id: 'f1', name: 'forget_memory', arguments: JSON.stringify({ topic: 'e', scope_note: 'e' }) }] };
+          return { text: 'done' };
+        },
+      });
+      expect(outputs[1]).toContain('taint_needs_approval');
+      expect(hidden).toEqual([]);
+      expect(store.claims()).toHaveLength(3);
     });
   });
 
