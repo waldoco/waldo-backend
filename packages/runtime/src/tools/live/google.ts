@@ -14,6 +14,7 @@ import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendP
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
+import { carriesSecretOrCanary } from '../../scribe/sanitiser';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
@@ -138,14 +139,25 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // never a truncated snippet) and relayed to the owner on his chat channel - the Instinct behavior
 // without the code ever entering model context, episodes, or traces. The tool result carries only
 // the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
+// The connector lists a message's link targets after its body. A target the scribe would refuse (a token or key in a hidden
+// href) is left out of that list, so it cannot make the scribe refuse the whole thread. The connector is also bundled into the
+// connector-proxy edge function, which cannot import the scribe, so this runs where the result is built.
+const LINK_LIST_HEADER = '\n\nLinks:\n';
+const withoutFlaggedLinks = (body: string): string => {
+  const at = body.lastIndexOf(LINK_LIST_HEADER);
+  if (at < 0) return body;
+  const kept = body.slice(at + LINK_LIST_HEADER.length).split('\n').filter((line) => !carriesSecretOrCanary(line));
+  return kept.length ? `${body.slice(0, at)}${LINK_LIST_HEADER}${kept.join('\n')}` : body.slice(0, at);
+};
+
 const relayThreadMessage = async <T extends { subject: string; body: string; from: string; artifact_scan?: string }>(item: T, relay: ArtifactRelay | undefined): Promise<Omit<T, 'artifact_scan'> & { quarantined?: readonly ArtifactKind[] }> => {
   const { artifact_scan: scan, ...visible } = item;
   const subject = extractArtifacts(visible.subject);
-  const body = extractArtifacts(visible.body);
+  const body = extractArtifacts(withoutFlaggedLinks(visible.body));
   const shown = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
   const linked = extractArtifacts(scan ?? '').artifacts.filter((l) => !shown.some((s) => s.value === l.value));
   const artifacts = [...shown, ...linked];
-  if (artifacts.length === 0) return visible;
+  if (artifacts.length === 0) return { ...visible, body: body.text };
   const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
   const relayed = relay !== undefined && await relay(item.from, artifacts).then(() => true, () => false);
   // Only the matched spans are replaced; the rest of subject and body stays readable. An artifact

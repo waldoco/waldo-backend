@@ -499,7 +499,7 @@ const htmlText = (html: string): Readonly<{ text: string; links: readonly string
     ontext(text) { if (!suppressed) { chunks.push(text.replace(/\s+/g, ' ')); anchor?.text.push(text); } },
     onclosetag(name) {
       if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' ');
-      if (name === 'a' && anchor) { if (anchors.length < LINK_SCAN_CAP) anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
+      if (name === 'a' && anchor) { if (anchors.length < LINK_SCAN_CAP) anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').replace(/\p{Cc}/gu, '').trim() }); anchor = null; }
     },
   }, { decodeEntities: true }).end(html);
   // A block or row ends a line, a cell ends with a space.

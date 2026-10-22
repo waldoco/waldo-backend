@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { buildSessionState } from '@waldo/contracts';
+import { sanitise } from '../src/scribe/sanitiser';
+import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { b64url, googleClient } from '../src/connectors/google';
 import { googleHandlers } from '../src/tools/live/google';
 
@@ -83,5 +86,38 @@ describe('the links list after an HTML body', () => {
     expect(shown).toContain(`Links:\\n- Join: ${zoom}`);
     expect(shown).not.toContain('synthetic-reset');
     expect(relays).toEqual([[{ kind: 'password_reset', value: reset }]]);
+  });
+});
+
+// Through the real scribe: a link target the scribe would refuse (a token, a key) must not fail the whole read, since any sender
+// could then hide a thread with a link the reader never sees. Synthetic tokens only.
+describe('a hidden link target the scribe refuses', () => {
+  const canaries = ['1111111111111111', '2222222222222222', '3333333333333333'];
+  const ctx = {
+    authenticatedUserId: 'user-1', trigger: 'user_message', hasApproval: () => true, sourceTaint: null, toolArgSourceTaint: null, sanitise,
+    session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 1_700_000_000_000 }),
+  } as ToolDispatcherContext;
+  const read = async (html: string) => {
+    const [handler] = googleHandlers({ client: async () => thread(html) }, { propose: async () => '', proposeSendEmail: async () => '', record: () => {} } as never,
+      { timezone: 'UTC', now: () => new Date() }).filter(h => h.name === 'read_thread');
+    return dispatchTool({ id: 'c1', name: 'read_thread', args: { thread_id: 't' } }, ctx, { handlers: [handler!] });
+  };
+  const jwt = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljc2lnbmF0dXJl';
+  it.each([
+    ['a JWT', `https://billing.example.test/view?t=${jwt}`],
+    ['a percent-encoded JWT', `https://billing.example.test/view?t=%65${jwt.slice(1).replace(/\./g, '%2E')}`],
+    ['a cloud access key', 'https://billing.example.test/view?k=AKIAABCDEFGHIJKLMNOP'],
+  ])('with %s leaves the body readable and the link unlisted', async (_name, href) => {
+    const result = await read(`<p>Your invoice is ready.</p><a href="${href}">View invoice</a> <a href="${zoom}">Join</a>`);
+    expect(result).toMatchObject({ ok: true });
+    const shown = JSON.stringify(result);
+    expect(shown).toContain('Your invoice is ready.');
+    expect(shown).not.toContain('View invoice:');
+    expect(shown).toContain(`Join: ${zoom}`);
+  });
+
+  it('strips control characters from a link\'s text', async () => {
+    const list = (await body(`<p><a href="${zoom}">Join\u001e the\u0007 meeting</a></p>`)).split('\n\nLinks:\n')[1]!;
+    expect(list).toBe(`- Join the meeting: ${zoom}`);
   });
 });
