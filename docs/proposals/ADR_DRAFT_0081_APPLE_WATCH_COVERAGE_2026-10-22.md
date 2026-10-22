@@ -288,6 +288,14 @@ Two things block that today:
 
 Lowering the 14-of-30 rule is not proposed. The relative standard error of a sample standard deviation is about 1/√(2(n−1)): about 0.20 at n = 14 and 0.29 at n = 7. So a 7-day baseline would mislabel ordinary days as unusual.
 
+### 4.7 What a stored zone word means (recorded from #1401)
+
+This amendment also records a change the health-freshness lane makes in #1401 (gate fix `7df80282`), because it alters what a stored zone means under ADR-0081 [verified from that lane's report, not from its source].
+- `public.health_context_daily.<pillar>.zone` is the **held** band, not always the band of the row's score.
+- A day's first row stores its own band. Later rows that day keep the stored word until the score is more than 5 points (`STEADY_SCORE_MOVE`) past that zone's band. For example, leaving `energized` (80 and above) takes 74 or below.
+- The hold never crosses an algorithm version or a day, and it applies only to `candidate_unaccepted` pillars. The stored word therefore differs from the score's band by at most 5 points, for at most the rest of one day.
+- Drivers (§4.5) take the same hold once they can wake the trigger (P6).
+
 ## 5. Sleep stages: representation [proposed]
 
 **Wire (request side):**
@@ -440,6 +448,7 @@ Both migrations use `create or replace` with unchanged signatures. Grants surviv
 
   The zone-change `changed` logic and the WHOOP basis stay as they are.
 - `waldo.health_scores_read` returns `sleep_debt` and `drivers` when stored.
+- `waldo.health_context_read`'s `previous` also returns the stored Form `zone` beside `form_score`. Today it returns only the score, so the trigger has to compare the previous day by band. With the stored word, it can compare held words like for like (§4.7). The health-freshness lane asked for this; it is an additive key in a backend-internal RPC answer.
 - #1127's 19 pgTAP tests are carried over, plus tests for driver phrases.
 
 **What happens to #1127:**
