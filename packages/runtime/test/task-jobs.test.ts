@@ -63,7 +63,7 @@ describe('task job book', () => {
       const second = book.startAttempt(row.id)!;
       expect(second.attempt).toBe(2);
       const claimed = book.claim(second);
-      expect(claimed !== 'fenced' && jobCheckpoint(claimed).turns).toEqual([turn(1)]);
+      expect(typeof claimed !== 'string' && jobCheckpoint(claimed).turns).toEqual([turn(1)]);
     });
   });
 

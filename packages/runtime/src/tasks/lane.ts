@@ -70,7 +70,9 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
 
   const topics = deps.heldTopics();
   let settled: JobRow[] = [];
-  const settle = (row: JobRow) => { if (book.settle(row.id)) settled.push(row); };
+  // Runs as the commit of a delivery, in the transaction that queues the message: a job cancelled or forgotten after its
+  // turn returned writes no row here, and the throw rolls the queued message back with it.
+  const settle = (row: JobRow) => { if (!book.settle(row.id)) throw new ClosedRunError(); settled.push(row); };
   const logSettled = () => {
     for (const row of settled) {
     const after = book.get(row.id)!;
@@ -86,8 +88,10 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
-      if (row.park_reason) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone), () => settle(row));
-      else settle(row);
+      try {
+        if (row.park_reason) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone), () => settle(row));
+        else settle(row);
+      } catch (error) { if (!(error instanceof ClosedRunError)) throw error; }
       logSettled();
       return;
     }
@@ -103,9 +107,13 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       }
       reply = fixedReport(row);
     }
-    if (book.get(row.id)?.status !== 'reported') return;
-    if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row));
-    else settle(row);
+    try {
+      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row));
+      else settle(row);
+    } catch (error) {
+      if (!(error instanceof ClosedRunError)) throw error;
+      hop(row, 'task_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+    }
     logSettled();
   };
 
@@ -127,10 +135,18 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       return;
     }
     const answered = () => {
-      if (book.report(ticket, { status: 'done', summary: reply === null ? 'No answer was needed any more.' : 'Answered the owner\'s message.', findings: [], proposals: [], left: [] }, NO_SPEND) === 'accepted') settle(book.get(row.id)!);
+      if (book.report(ticket, { status: 'done', summary: reply === null ? 'No answer was needed any more.' : 'Answered the owner\'s message.', findings: [], proposals: [], left: [] }, NO_SPEND) !== 'accepted') throw new ClosedRunError();
+      settle(book.get(row.id)!);
     };
-    if (reply !== null) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, reply, answered);
-    else answered();
+    try {
+      if (reply !== null) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, reply, answered);
+      else answered();
+    } catch (error) {
+      if (!(error instanceof ClosedRunError)) throw error;
+      hop(row, 'retry_turn_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+      logSettled();
+      return;
+    }
     hop(row, 'retry_turn_answered', { ms: deps.now() - brief.said_at, outcome: reply === null ? 'dropped' : 'answered' });
     logSettled();
   };
@@ -168,6 +184,6 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }
   book.trim();
-  const next = leftOver ? deps.now() : book.nextDue(slotsFull);
+  const next = leftOver ? deps.now() : book.nextDue(slotsFull, deps.host.busy());
   return next === null ? nextNote : nextNote === null ? next : Math.min(next, nextNote);
 }

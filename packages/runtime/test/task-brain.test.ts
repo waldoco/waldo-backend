@@ -7,8 +7,10 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
-import { taskHost, type TaskHostDeps } from '../src/tasks/brain';
+import { taskHost, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
+import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
+import { TOOL_RECORDS } from '../src/tools/records';
 
 // The brain's side of the job protocol over the real job book: every worker call is checked against its ticket, the
 // profile's tools are enforced here, and a cancel reaches a call that is already running.
@@ -25,7 +27,7 @@ type Harness = Readonly<{
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
   serial<T>(work: () => Promise<T>): Promise<T>;
-  browse: { ms: number };
+  browse: { ms: number; throws?: boolean };
   handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
 }>;
 let seq = 0;
@@ -39,13 +41,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const hold: Harness['hold'] = {};
     let queue: Promise<unknown> = Promise.resolve();
     const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
-    const browse = { ms: 0 };
+    const browse: Harness['browse'] = { ms: 0 };
     const handler: Harness['handler'] = {};
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
       { name: 'browse_act', description: 'Act in the browser.', schema: z.object({ url: z.string(), task: z.string() }).loose(), trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
-        async handle() { ran.push('browse_act'); if (browse.ms) await new Promise(resolve => setTimeout(resolve, browse.ms)); ran.push('browse_act:done'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
+        async handle() { ran.push('browse_act'); if (browse.ms) await new Promise(resolve => setTimeout(resolve, browse.ms)); if (browse.throws) throw new Error('vendor dropped the session'); ran.push('browse_act:done'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
     ] as unknown as ReturnType<TaskHostDeps['handlers']>;
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
@@ -86,7 +88,7 @@ describe('the task brain host', () => {
       const t = ticket();
       sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Bandra', 'Juhu') WHERE id = ?", t.jobId);
       expect(await host.claim(t)).toBe('fenced');
-      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'brief_changed' });
       expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ code: 'brief_changed', ok: false });
     });
   });
@@ -122,8 +124,105 @@ describe('the task brain host', () => {
       release();
       expect(await pending).toMatchObject({ ok: true });
       expect(ran).toEqual(['browse_act', 'browse_act:done']);
-      expect(book.get(t.jobId)!.inflight_json).toBeNull();
       expect(host.busy().has(t.jobId)).toBe(false);
+    });
+  });
+
+  // The effect's result exists only in the worker until a checkpoint or report records it, so the intent stays until then.
+  it('a worker lost after an unreplayable step but before its checkpoint: the lapse parks the job as an uncertain effect', async () => {
+    await withHost(async ({ host, ticket, book, clock, ran }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+      expect(JSON.parse(book.get(t.jobId)!.inflight_json!)).toMatchObject({ tool: 'browse_act', call_id: 'c-browse_act' });
+      clock.at += 10 * 60_000;
+      expect(book.lapse(host.busy())).toEqual([{ id: t.jobId, parked: true }]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+    });
+  });
+
+  it('the same attempt rejoining while the step is still recorded in flight is parked, not handed the job to run again', async () => {
+    await withHost(async ({ host, ticket, book, log, released }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      await host.tool(t, call('browse_act'), CANARIES);
+      expect(await host.claim(t)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect', lease_token: null });
+      expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ ok: false, code: 'uncertain_effect' });
+      expect(released).toHaveLength(1);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+    });
+  });
+
+  it('a checkpoint after the step records its result and clears the intent, so a later loss is an ordinary crash', async () => {
+    await withHost(async ({ host, ticket, book, clock }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      await host.tool(t, call('browse_act'), CANARIES);
+      const turns = [{ call: call('browse_act'), output: '{"ok":true}' }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+      clock.at += 10 * 60_000;
+      expect(book.lapse(host.busy())).toEqual([{ id: t.jobId, parked: false }]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 1, park_reason: null });
+    });
+  });
+
+  it('a report after the step clears the intent with the result', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      await host.tool(t, call('browse_act'), CANARIES);
+      const result = { status: 'done' as const, summary: 'Booked nothing; shortlist ready.', findings: [], proposals: [], left: [] };
+      expect(await host.report(t, { kind: 'result', result }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: null, inflight_json: null });
+    });
+  });
+
+  it('no provider after an unrecorded step: the job parks as an uncertain effect instead of waiting to run it again', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      await host.tool(t, call('browse_act'), CANARIES);
+      expect(await host.report(t, { kind: 'unavailable' }, [], { rounds: 1, costUsd: 0 })).toBe('parked');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+    });
+  });
+
+  it('a handler that throws during an unreplayable step parks the job as an uncertain effect; the worker gets nothing to retry', async () => {
+    await withHost(async ({ host, ticket, book, browse, ran }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      browse.throws = true;
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(ran).toEqual(['browse_act']);
+    });
+  });
+
+  it('a read that fails is an ordinary tool failure: nothing was in flight, the job keeps running', async () => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      handler.search = async () => { throw new Error('mail provider down'); };
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: false, error_code: 'handler_failed' });
+      expect(book.get(t.jobId)).toMatchObject({ status: 'running', inflight_json: null });
+    });
+  });
+
+  it('an MCP read\'s output is not kept in the checkpoint, so whatever a connected server returned never persists', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      const turns = [
+        { call: { call_id: 'm1', name: 'read_mcp_tool', arguments: '{"server":"ring","tool":"today","args":{}}' }, output: '{"ok":true,"data":{"output":"synthetic server text"}}' },
+        { call: call('search_communication'), output: '{"ok":true,"data":{"hits":2}}' },
+      ];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      const kept = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
+      expect(kept.map(turn => turn.output)).toEqual([UNKEPT_OUTPUT, '{"ok":true,"data":{"hits":2}}']);
+      expect(book.get(t.jobId)!.checkpoint_json).not.toContain('synthetic server text');
     });
   });
 
@@ -181,5 +280,27 @@ describe('the task brain host', () => {
       expect(await host.heartbeat(t)).toBe(false);
       expect(ran).toEqual([]);
     });
+  });
+});
+
+// Every profile against every tool a worker must never hold: a worker cannot reach the owner, approve or propose for them,
+// write or read their memory, hand work on, start or stop tasks, or read health. Read from the tool records, so a tool added
+// to one of those groups is covered without editing this list.
+describe('task profiles', () => {
+  const names = Object.keys(TOOL_RECORDS) as ToolName[];
+  const forbidden: Readonly<Record<string, readonly ToolName[]>> = {
+    send: names.filter(name => name.startsWith('send_') || name === 'attach_file'),
+    approve: ['propose_action', 'raise_approval', 'execute_action', 'propose_calendar_change', 'propose_google_task_change', 'propose_schedule'],
+    memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory'), 'read_memory', 'remember'],
+    delegation: ['delegate_task', 'use_mac'],
+    tasks: ['start_task', 'cancel_task'],
+    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
+  };
+
+  it.each(Object.keys(TASK_PROFILE_SPECS) as (keyof typeof TASK_PROFILE_SPECS)[])('%s holds no send, approve, memory, delegation, task or health tool', (profile) => {
+    for (const [group, tools] of Object.entries(forbidden)) {
+      expect(tools.length, group).toBeGreaterThan(0);
+      expect(TASK_PROFILE_SPECS[profile].tools.filter(tool => tools.includes(tool)), `${profile} ∩ ${group}`).toEqual([]);
+    }
   });
 });

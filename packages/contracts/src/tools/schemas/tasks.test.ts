@@ -13,8 +13,8 @@ const brief = {
 };
 
 describe('start_task arguments', () => {
-  it('accepts a complete brief, with or without constraints and effort', () => {
-    const accepted = [brief, { ...brief, constraints: 'Skip newsletters.', effort: 'deep' }, { ...brief, profile: 'errand', effort: 'standard' }, { ...brief, context: 'x'.repeat(200_000) }];
+  it('accepts a complete brief, with or without effort', () => {
+    const accepted = [brief, { ...brief, effort: 'deep' }, { ...brief, profile: 'errand', effort: 'standard' }, { ...brief, context: 'x'.repeat(200_000) }];
     for (const value of accepted) expect(startTaskArgsSchema.safeParse(value).success, JSON.stringify(value).slice(0, 80)).toBe(true);
   });
 

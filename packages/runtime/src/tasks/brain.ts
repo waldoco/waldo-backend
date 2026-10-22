@@ -42,6 +42,13 @@ const traceOf = (ticket: TaskTicket) => `task:${ticket.jobId}:${ticket.attempt}`
 export const TURN_OUTCOME = { done: 'completed', partial: 'answered', blocked: 'blocked', failed: 'failed' } as const satisfies Record<TaskResult['status'], TurnOutcome>;
 const failedResult = (code: string): TaskResult => ({ status: 'failed', summary: `The worker stopped with an error (${code}).`, findings: [], proposals: [], left: [] });
 
+// What an owner-connected MCP server returns is not known to be free of health readings (a wearable's server, say), and a
+// checkpoint persists in the owner object's storage. Its output is left out; a resumed attempt reads it again if it still
+// needs it, which a read allows.
+const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
+export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
+const keptTurn = (turn: LLMToolTurn): LLMToolTurn => UNKEPT_OUTPUT_TOOLS.has(turn.call.name) ? { ...turn, output: UNKEPT_OUTPUT } : turn;
+
 export const taskHost = (deps: TaskHostDeps) => {
   // One run scope per live attempt, so a cancel aborts the attempt's in-flight I/O and every later admit fails.
   const scopes = new Map<string, Readonly<{ attempt: number; scope: RunEffectScope; abort: AbortController }>>();
@@ -83,10 +90,15 @@ export const taskHost = (deps: TaskHostDeps) => {
     heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
       const row = deps.book.claim(ticket);
+      if (row === 'parked') {
+        fence(ticket.jobId);
+        hop(deps.book.get(ticket.jobId)!, 'task_parked', { ok: false, code: 'uncertain_effect' });
+        return 'fenced';
+      }
       if (row === 'fenced' || row.kind !== 'task' || row.profile === null) return 'fenced';
       // Frozen intent: a brief that changed after the job started is not run.
       if (md5Hex(row.brief_json) !== row.brief_digest) {
-        deps.book.park(row.id, 'uncertain_effect');
+        deps.book.park(row.id, 'brief_changed');
         fence(row.id);
         hop(row, 'task_parked', { ok: false, code: 'brief_changed' });
         return 'fenced';
@@ -146,7 +158,14 @@ export const taskHost = (deps: TaskHostDeps) => {
           const left = (busy.get(ticket.jobId) ?? 1) - 1;
           if (left > 0) busy.set(ticket.jobId, left); else busy.delete(ticket.jobId);
         }
-        if (effect) deps.book.endEffect(ticket);
+        // A handler that threw may have crossed its side-effect boundary first, so the effect is uncertain whatever the
+        // worker would do next: the job parks rather than hand the worker a failure it might retry.
+        if (effect && result.error_code === 'handler_failed') {
+          deps.book.park(row.id, 'uncertain_effect');
+          fence(row.id);
+          hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: call.name });
+          return 'fenced';
+        }
       }
       if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
       deps.log({
@@ -158,7 +177,7 @@ export const taskHost = (deps: TaskHostDeps) => {
     },
     async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'> {
       logEvents(events);
-      const written = deps.book.checkpoint(ticket, seq, { turns }, spend);
+      const written = deps.book.checkpoint(ticket, seq, { turns: turns.map(keptTurn) }, spend);
       if (written === 'fenced') { fence(ticket.jobId); return written; }
       const row = deps.book.get(ticket.jobId)!;
       hop(row, 'task_checkpoint', { detail: `seq=${seq}:turns=${turns.length}` });

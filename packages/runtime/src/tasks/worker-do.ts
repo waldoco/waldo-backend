@@ -34,11 +34,6 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
     await armAlarm(this.ctx.storage, Date.now());
   }
 
-  async stop(): Promise<void> {
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
-  }
-
   override async alarm(): Promise<void> {
     const held = this.ctx.storage.kv.get<Held>(HELD_KEY);
     if (!held || !this.env.OWNER_DO) return;

@@ -29,7 +29,7 @@ export type TaskToolDeps = Readonly<{
 export const taskToolHandlers = (deps: TaskToolDeps) => [
   {
     name: 'start_task',
-    description: 'Background work while you keep talking: a long mail backlog or document, many sources, a multi-step web errand. The worker sees only your brief, never this conversation, and cannot message, change or approve anything. It reports to you once. Use delegate_task when this reply needs the answer.',
+    description: 'Background work while you keep talking: long backlogs, many sources, web errands. The worker sees only this brief, cannot message, change or approve anything, and reports once. If this reply needs the answer, use delegate_task.',
     schema: startTaskArgsSchema,
     trigger_allowlist: allowlist('start_task'),
     autonomy_gated: false,
@@ -39,7 +39,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (unavailable) return refusal(unavailable);
       const now = deps.now();
       const brief: TaskBrief = {
-        title: args.title, goal: args.goal, context: args.context, ...(args.constraints ? { constraints: args.constraints } : {}),
+        title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead.

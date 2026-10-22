@@ -11,9 +11,10 @@ import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } fr
 import { sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
 
-// One attempt of a task, as a worker runs it. The worker holds no handler, credential or memory: the brain sends the tool
-// definitions of the job's profile when the worker claims its attempt, runs every tool call, takes every checkpoint and
-// applies the result. The worker sees only the brief, never the conversation.
+// One attempt of a task, as a worker runs it. The worker holds no handler, owner credential or memory, only the model
+// provider access its own calls need: the brain sends the tool definitions of the job's profile when the worker claims its
+// attempt, runs every tool call, takes every checkpoint and applies the result. The worker sees only the brief, never the
+// conversation.
 
 export type TaskClaim = Readonly<{
   jobId: string; profile: TaskProfile; brief: TaskBrief; tools: readonly LLMTool[]; mutations: readonly string[];
@@ -71,7 +72,6 @@ export const taskBriefText = (brief: TaskBrief, resumedFrom: number): string => 
   `Task: ${brief.title}`,
   `Goal:\n${brief.goal}`,
   `Context from the owner's conversation:\n${brief.context || '(none)'}`,
-  ...(brief.constraints ? [`Constraints:\n${brief.constraints}`] : []),
   `A good result:\n${brief.done_when}`,
   `The owner's time zone is ${brief.timezone}; the task started at ${new Date(brief.started_at).toISOString()}.`,
   ...(resumedFrom > 0 ? [`[This task was interrupted and resumed: the ${resumedFrom} tool results shown below are from before the interruption and are not run again. Continue from them.]`] : []),

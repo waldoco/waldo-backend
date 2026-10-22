@@ -34,9 +34,9 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       startWorker: async ticket => { started.push(ticket); },
       turn: async (_job, trace, text) => { turns.push(trace); return `Reply to ${text.slice(1, 40)}`; },
       applyTools: () => ['search_communication'] as ToolName[],
+      // The record and the commit land together or not at all: a commit that throws rolls the record back.
       deliver: async (id, _trace, text, commit) => {
-        if (!sent.has(id)) sent.set(id, text);
-        state.storage.transactionSync(commit);
+        state.storage.transactionSync(() => { commit(); if (!sent.has(id)) sent.set(id, text); });
       },
       room: () => true,
       heldTopics: () => [],
@@ -182,6 +182,43 @@ describe('the jobs lane', () => {
     });
   });
 
+  // The delivery awaits before its transaction, and the lane runs outside the owner's serial queue, so a cancel or forget can
+  // land after the apply turn returned and before the report is queued. The settle in that transaction is the fence.
+  it('a task cancelled after its report was written and before it was queued sends nothing', async () => {
+    await withLane(async ({ book, sent, deps, log }) => {
+      const id = reported(book, 'k1');
+      const lane = deps();
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { book.cancel(id, 'owner'); await lane.deliver(key, trace, text, commit); } });
+      expect(sent.size).toBe(0);
+      expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+      expect(log.find(entry => entry.hop === 'task_apply_dropped')).toMatchObject({ ok: false, code: 'owner', job_id: id });
+      expect(log.some(entry => entry.hop === 'task_applied')).toBe(false);
+    });
+  });
+
+  it('a forget that lands after the report was written and before it was queued sends nothing', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const id = reported(book, 'k1', { ...result, findings: [{ text: 'Asha asked about the Lisbon trip.' }] });
+      const lane = deps();
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { expect(book.forget(['Lisbon trip'])).toEqual([id]); await lane.deliver(key, trace, text, commit); } });
+      expect(sent.size).toBe(0);
+      expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+    });
+  });
+
+  it('a step running in the brain past its lease does not keep the alarm firing: the lane looks again a lease from now', async () => {
+    await withLane(async ({ book, clock, deps, busy }) => {
+      const { job } = book.create(task('k1'));
+      book.startAttempt(job.id);
+      clock.at += TASK_LEASE_MS + 1;
+      busy.add(job.id);
+      expect(await runJobsLane(deps())).toBe(clock.at + TASK_LEASE_MS);
+      expect(book.get(job.id)!.status).toBe('running');
+      busy.delete(job.id);
+      expect(book.nextDue()).toBe(T0 + TASK_LEASE_MS);
+    });
+  });
+
   it('with no time left in the alarm, a report waits for the next pass and the lane asks to run again now', async () => {
     await withLane(async ({ book, turns, clock, deps }) => {
       const id = reported(book, 'k1');
@@ -256,6 +293,20 @@ describe('R-4: the retried turn', () => {
       floor(book, clock.at);
       floor(book, clock.at + 1_000);
       expect(book.open()).toHaveLength(1);
+    });
+  });
+
+  it('a retry cancelled after its answer was written and before it was queued sends nothing', async () => {
+    await withLane(async ({ book, sent, clock, deps, log }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      const lane = deps({ turn: async () => 'Done late: your 3pm is now Friday.' });
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { book.cancel(job!.id, 'forgotten'); await lane.deliver(key, trace, text, commit); } });
+      expect(sent.size).toBe(0);
+      expect(book.get(job!.id)!.status).toBe('cancelled');
+      expect(log.find(entry => entry.hop === 'retry_turn_dropped')).toMatchObject({ ok: false, code: 'forgotten' });
+      expect(log.some(entry => entry.hop === 'retry_turn_answered')).toBe(false);
     });
   });
 

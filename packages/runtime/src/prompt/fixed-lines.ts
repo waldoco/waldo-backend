@@ -22,6 +22,7 @@ export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   provider_unavailable: 'no model could be reached for too long',
   uncertain_effect: 'it was interrupted in the middle of a step that cannot safely be repeated',
   deadline: 'it ran out of time',
+  brief_changed: 'its instructions changed after it started',
 };
 
 // A task's report when no model can write it.

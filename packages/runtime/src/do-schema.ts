@@ -393,7 +393,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
     taint           TEXT CHECK (taint IS NULL OR taint = 'external'),
     result_json     TEXT,
     outcome         TEXT CHECK (outcome IS NULL OR outcome IN ('done', 'partial', 'blocked', 'failed')),
-    park_reason     TEXT CHECK (park_reason IS NULL OR park_reason IN ('crashed', 'provider_unavailable', 'uncertain_effect', 'deadline')),
+    park_reason     TEXT CHECK (park_reason IS NULL OR park_reason IN ('crashed', 'provider_unavailable', 'uncertain_effect', 'deadline', 'brief_changed')),
     cancel_reason   TEXT CHECK (cancel_reason IS NULL OR cancel_reason IN ('owner', 'forgotten')),
     rounds          INTEGER NOT NULL DEFAULT 0 CHECK (rounds >= 0),
     cost_usd        REAL NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
