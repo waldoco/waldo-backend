@@ -254,7 +254,8 @@ Purge: a step that throws stays pending and the barrier still holds; a crash mid
 
 Each is its own PR on `beta-mvp`, Sonnet building, Opus reviewing the privacy surface.
 
-1. **Barrier + seam**: `context-composer/forget-barrier.ts`, `composer.view`, `owner-turn.ts` sites collapsed, `held-turns.ts` deleted, console graph and profile through the barrier; forget eval (recorded) and the twelve mutations. Behind `WALDO_FORGET_BARRIER` (staging `on`; off keeps today's filters) so the flip has a one-line rollback; the old path is deleted after the staging E2E passes.
+1. **Barrier semantics**: `context-composer/forget-barrier.ts` holds every rule for model-bound text (owner items dropped, outside text redacted, nothing withheld whole), and every `owner-turn.ts` site that withheld a whole read calls it; `held-turns.ts` deleted; the forget eval and the twelve mutations. Behind `WALDO_FORGET_BARRIER` (staging `on`; off is today's whole-read rule inside the same module) so the flip has a one-line rollback.
+1b. **One seam**: move history, the suffix, pinned memory, loops and orders behind `composer.view`, so the barrier is applied once per model call and a guard test fails on any fragment that bypasses it. Separate from 1 because recall and pinned memory render under a room budget that must see the filtered items; done first, it would mix a refactor with the privacy change. The console graph and profile move to slice 4.
 2. **Purge job + registry**: `forget_purge` kind, `forget_purge_steps`, `FORGET_STORES`, tool commit split, `restored()` removed. Same flag.
 3. **Hard deletion**: §4's delete and regenerate modes, store by store, each with a paraphrase probe.
 4. **Console**: held topics, masked label, retry.
