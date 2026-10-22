@@ -175,7 +175,7 @@ Each step lists the owner action, the blast radius and the rollback. A step star
     - set the Magic Link template from `supabase/templates/magic_link.html`;
     - configure custom SMTP and raise its hourly limit to cover a batch of invites;
     - check that `pgcrypto` and `supabase_vault` are present.
-  - Create the Vault secret `waldo_router_hmac` with a fresh 32-byte hex value (for example `openssl rand -hex 32`), typed into the SQL editor; it never passes through chat or a file.
+  - Create the Vault secret `waldo_router_hmac` with a fresh 32-byte hex value (for example `openssl rand -hex 32`) in the dashboard's Vault page ("Click a button, type in your secret, and save" [cited: [Supabase Vault](https://supabase.com/docs/guides/database/vault)]). Do not use `vault.create_secret` in the SQL editor: the editor keeps query history. The value never passes through chat or a file in the repo.
   - **Never run `scripts/owner_wire_supabase.sh` for production.** It runs an unpinned CLI with the database password in argv, pushes with no dry run, and writes secrets to `--name waldo-runtime-staging`, which is hard-coded (`scripts/owner_wire_supabase.sh:22-39`).
 - **Check.** Project ref recorded in the stand-up note; the dashboard shows PITR on; a test OTP email reaches a non-team address.
 - **Blast radius.** A new, empty project. No staging effect.
@@ -224,7 +224,7 @@ Each step lists the owner action, the blast radius and the rollback. A step star
   | `GET /app/v1/session` | 401 |
   | `GET /console` | 303 when signed out |
   | `POST /probe/turn` with a body | 404 (staging-only route) |
-  | `POST /telegram/webhook` | 404 (not configured) |
+  | `POST /telegram/webhook` without the secret header | 403. `TELEGRAM_WEBHOOK_SECRET` is set for OAuth state (§1.3), so the route answers 403 rather than 404 (`channels/telegram-webhook.ts:99-104`). After P8 it is 404. |
   | `POST /events/gmail` without a bearer | 403 or 404 |
   | unsigned `POST /functions/v1/connector-proxy` | 401 |
 
@@ -265,7 +265,7 @@ Each step lists the owner action, the blast radius and the rollback. A step star
 
 - **Owner action.**
   - Set `WALDO_COST_LEDGER_SYNC=on` for production, as a committed var or `--var` at deploy.
-  - Set hard monthly limits on the production OpenAI project and the Anthropic workspace, sized for 50 owners. At the code ceiling of USD 25 per owner per month, the upper bound is about USD 1,250 a month before background work, which the ceiling does not gate [inference from `docs/ops/OBSERVABILITY.md:85-89`].
+  - Set hard monthly limits on the production OpenAI project and the Anthropic workspace, sized for 50 owners. These provider limits are the only real stop. USD 25 per owner per month is where degradation starts, not a cap: past it an owner keeps spending on the auxiliary route, and background work is never gated (§3.1). So 50 × USD 25 = USD 1,250 a month is the point where degradation begins for everyone, not a ceiling on the bill [inference from `docs/ops/OBSERVABILITY.md:85-89` and §3.1].
 - **Check.** After one test-owner turn, `waldo.cost_ledger_daily` has a row for that owner (service-role read in the SQL editor).
 - **Blast radius.** A turn past the ceiling degrades to the auxiliary route and refuses browse and execute tools. The provider limit stops every owner at once.
 - **Rollback.** Unset the var. Raise the provider limit.
@@ -459,14 +459,15 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
 
 **P4. Account deletion that finishes.**
 1. **Erase the DO even when the directory call fails or is unknown.** Write an erase-pending marker first. On a lost or failed `delete_owner`, retry it from the DO's alarm with the same request id, and make the retry return a distinct "already gone" result instead of `false`.
-2. **Revoke at providers before the Vault delete.** Google `oauth2.googleapis.com/revoke`, WHOOP `DELETE user/access`, MCP RFC 7009, and stopping the Gmail and Calendar watches. Each is best-effort, and the receipt names it.
+2. **Revoke at providers before the Vault delete.** Google `oauth2.googleapis.com/revoke`, WHOOP `DELETE user/access`, MCP RFC 7009, and stopping the Gmail and Calendar watches. The runtime never holds these tokens. `connector-proxy` holds Google and `oauth-proxy` holds WHOOP and MCP (ADR-0075 custody), so each revoke is a new signed operation inside those functions. It runs before `delete_owner` removes the Vault rows. Each is best-effort, and the receipt names it.
 3. **Clear the device and iMessage bridge objects.**
 4. **Delete or fix the legacy console form and its copy.**
 5. **Name every store outside reach in the receipt:** Langfuse until P5's purge, model providers, backups and PITR, and copies the owner shared.
 
-- **Files.** `channels/dashboard-owner-controls.ts`, `channels/owner-do.ts` (delete branch only; a hot file, one writer), `identity/console-auth.ts`, `connectors/google.ts`, `health/providers/whoop-owner.ts`, `connectors/mcp-connections.ts`, `devices/device-bridge-do.ts`, `channels/imessage/bridge-do.ts`, `channels/console.ts`, and a new migration only if `delete_owner` needs the "already gone" result.
+- **Files.** `channels/dashboard-owner-controls.ts`, `channels/owner-do.ts` (delete branch only; a hot file, one writer), `identity/console-auth.ts`, `supabase/functions/connector-proxy/index.ts` and `supabase/functions/oauth-proxy/index.ts` (the revoke operations), `connectors/connections.ts` and `connectors/oauth-proxy-client.ts` (the signed calls), `devices/device-bridge-do.ts`, `channels/imessage/bridge-do.ts`, `channels/console.ts`, and a new migration only if `delete_owner` needs the "already gone" result.
 - **Tests.**
   - Fault injection on each step: a lost SQL response, `deleteAll` throwing, a revoke 500.
+  - Edge-function tests for each revoke operation, in the existing `test/connector-proxy-entry.test.ts` and `test/support/oauth-edge-harness.ts` pattern, including that an unsigned call is refused.
   - A read-back of every store in §3.2.
   - pgTAP cases for the untested cascades.
 
