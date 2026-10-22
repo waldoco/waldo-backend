@@ -1,8 +1,8 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
-import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
-import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { HELD_TOPIC_MARKER, narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
+import { carriesTopic, hidesTopic, redactTopics } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -650,7 +650,7 @@ export const createOwnerResponder = (
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
+          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally)), output => redactTopics(output, heldTopics(), HELD_TOPIC_MARKER)),
           ownerTurnActive ? undefined : auxiliaryModel,
           );
         },
