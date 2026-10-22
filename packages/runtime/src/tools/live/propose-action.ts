@@ -22,10 +22,15 @@ const OUTCOME_CHARS = 300;
 // What the host can do with an approved call: replayable names the tools in its own handler set, and raisesOwnCard
 // the ones whose handler only raises the owner's card (send_message), which the model calls directly instead.
 // A proposal for any other tool is refused here, so the owner is never shown a card that cannot run.
+// claims reads the owner's memory, so a forget card can show what each id removes.
 export type ProposeActionHost = Readonly<{
   replayable?(tool: ToolName): boolean;
   raisesOwnCard?(tool: ToolName): boolean;
+  claims?(): readonly Readonly<{ id: number; text: string }>[];
 }>;
+// A forget card lists every memory it removes, so the owner can read it before approving.
+export const FORGET_CARD_MAX_IDS = 20;
+const PREVIEW_CHARS = 200;
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
@@ -58,6 +63,15 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (tool.data === 'forget_memory' && (frozen.topic !== undefined || frozen.source !== undefined)) {
       return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic or source.', code: 'rejected' };
     }
+    let preview: readonly string[] | undefined;
+    if (tool.data === 'forget_memory' && host.claims) {
+      const ids = frozen.claim_ids as readonly number[];
+      if (ids.length > FORGET_CARD_MAX_IDS) return { ok: false, error: `A forget card lists at most ${FORGET_CARD_MAX_IDS} memories so the owner can read each one. Propose the ${FORGET_CARD_MAX_IDS} that matter most, or ask the owner to forget the rest in their own words.`, code: 'invalid_args' };
+      const known = new Map(host.claims().map((claim) => [claim.id, claim.text]));
+      const unknown = ids.filter((id) => !known.has(id));
+      if (unknown.length) return { ok: false, error: `Memory has nothing with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Call read_memory and propose only ids it lists.`, code: 'invalid_args' };
+      preview = ids.map((id) => { const text = known.get(id)!; return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS - 3)}...` : text; });
+    }
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {
       const check = ctx.hasApproval;
@@ -68,6 +82,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (digest === null) return { ok: false, error: 'The args could not be frozen as plain JSON.', code: 'invalid_args' };
     const proposal_id = await desk.proposeTaintedAction({
       operation_ref: await ownerEffectOperationRef(ctx), tool: tool.data, args: frozen, args_digest: digest, reasoning: args.reasoning, source: 'external',
+      ...(preview ? { preview } : {}),
     });
     return {
       ok: true,

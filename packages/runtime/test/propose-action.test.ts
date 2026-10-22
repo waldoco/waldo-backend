@@ -20,7 +20,7 @@ import { stableJson, sha256Hex } from '../src/context-composer/canonical';
 import { sanitise } from '../src/scribe/sanitiser';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sendMessageHandler } from '../src/tools/live/messaging';
-import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
+import { approvalReplayContext, FORGET_CARD_MAX_IDS, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { claimStore } from '../src/memory/claims';
 
@@ -295,6 +295,31 @@ describe('taint goes to a card', () => {
       expect(rows('tainted_action')).toEqual([]);
       expect(hidden).toEqual([]);
       expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+    });
+  });
+
+  it('a tainted forget by ids shows the owner what each id removes, and refuses an id memory lacks or a card too long to read', async () => {
+    await runInDurableObject(stub('forget-preview'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      for (const text of ['Prefers tea', 'Lives in Pune']) store.add({ kind: 'fact', text, source: 'stated', evidence: text, origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async () => undefined });
+      const { desk, cards, rows } = deskIn(state);
+      const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool), claims: () => store.allClaims() });
+      const ids = store.claims().map((claim) => claim.id);
+      expect(await propose.handle({ tool: 'forget_memory', args: { claim_ids: [ids[0], 999], scope_note: 'n' }, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
+        ok: false, code: 'invalid_args', error: expect.stringMatching(/999[\s\S]*read_memory/),
+      });
+      expect(await propose.handle({ tool: 'forget_memory', args: { claim_ids: Array.from({ length: FORGET_CARD_MAX_IDS + 1 }, (_, i) => i + 1), scope_note: 'n' }, reasoning: 'r' } as never, tainted({ toolCallId: 'p2' }))).toMatchObject({
+        ok: false, code: 'invalid_args', error: expect.stringContaining(`at most ${FORGET_CARD_MAX_IDS}`),
+      });
+      expect(rows('tainted_action')).toEqual([]);
+      expect(await propose.handle({ tool: 'forget_memory', args: { claim_ids: ids, scope_note: 'n' }, reasoning: 'r' } as never, tainted({ toolCallId: 'p3' }))).toMatchObject({ ok: true });
+      const [row] = rows('tainted_action');
+      const texts = ids.map((id) => store.allClaims().find((claim) => claim.id === id)!.text);
+      expect(texts.sort()).toEqual(['Lives in Pune', 'Prefers tea']);
+      expect(JSON.parse(row!.payload_json)).toMatchObject({ args: { claim_ids: ids }, preview: ids.map((id) => store.allClaims().find((claim) => claim.id === id)!.text) });
+      expect(JSON.parse(row!.payload_json).args).not.toHaveProperty('preview');
+      expect(cards.at(-1)).toContain(`It forgets:\n${ids.map((id) => `- ${store.allClaims().find((claim) => claim.id === id)!.text}`).join('\n')}`);
     });
   });
 
