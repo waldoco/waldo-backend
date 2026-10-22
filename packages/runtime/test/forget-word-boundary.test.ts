@@ -47,6 +47,8 @@ describe('the shared guard', () => {
   it('decoded JSON leaves and the LIKE prefilter follow the same rule', () => {
     expect(decodedLeafHit(JSON.stringify({ note: 'team' }), 'tea')).toBe(false);
     expect(decodedLeafHit(JSON.stringify({ note: 'tea' }), 'tea')).toBe(true);
+    // A decoded leaf is text, not JSON: its backslash is a character, so the name after it is found.
+    expect(decodedLeafHit(JSON.stringify({ path: String.raw`D:\budget.xlsx` }), 'budget')).toBe(true);
     // SQLite LIKE folds ASCII only: the prefilter keeps the run every case variant shares, never a non-ASCII letter, k or s.
     expect(likePrefilter('Café Zürich')).toBe('%rich%');
     expect(likePrefilter('Steak')).toBe('%tea%');
@@ -150,6 +152,22 @@ describe('the SQL purge', () => {
       ]);
     });
   });
+  it('a path inside stored JSON is forgotten in every store the purge reads decoded', async () => {
+    await inDo('boundary-purge-decoded-path', (state) => {
+      const sql = state.storage.sql;
+      ensureSchema(state.storage);
+      const store = claimStore(sql, work => state.storage.transactionSync(work));
+      const PATH = String.raw`D:\budget.xlsx`;
+      store.add({ kind: 'fact', text: `Keeps the plan in ${PATH}`, source: 'stated', evidence: PATH, origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      store.backup('fixture', { note: PATH }, AT);
+      sql.exec(`INSERT INTO outbox (outbox_id, run_id, kind, idempotency_key, payload, created_at) VALUES ('o1', 'r1', 'push', 'k1', ?, 1)`, JSON.stringify({ text: `open ${PATH}` }));
+      expect(store.purge([], AT, ['budget'])).toMatchObject({ ready: true, remaining: {}, failed: [] });
+      const stored = [...store.allClaims().flatMap(claim => [claim.text, claim.evidence]), JSON.parse(store.backups()[0]!.payload).note as string,
+        sql.exec<{ payload: string }>('SELECT payload FROM outbox').one().payload];
+      expect(stored.filter(value => /budget/i.test(value))).toEqual([]);
+      expect(JSON.parse(store.backups()[0]!.payload)).toEqual({ note: String.raw`D:\@.xlsx`.replace('@', FORGOTTEN) });
+    });
+  });
   it('a genuinely remaining copy still holds the forget', async () => {
     await inDo('boundary-purge-holds', (state) => {
       const store = claimStore(state.storage.sql);
@@ -184,6 +202,13 @@ describe('every KV redactor and its readback', () => {
       await state.storage.put('conv:1', { id: 'c1', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: UNRELATED, appPayload: 'tea at four', modelProjection: { mode: 'include' }, role: 'user' });
       expect(await redactConversationEntries(state.storage, ['tea'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 0 });
       expect(await state.storage.get('conv:1')).toMatchObject({ modelPayload: UNRELATED, appPayload: `${FORGOTTEN} at four` });
+    });
+  });
+  it('a path in a conversation payload', async () => {
+    await inDo('boundary-conversation-path', async (state) => {
+      await state.storage.put('conv:1', { id: 'c1', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'see the file', appPayload: String.raw`see D:\budget.xlsx`, modelProjection: { mode: 'include' }, role: 'user' });
+      expect(await redactConversationEntries(state.storage, ['budget'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 0 });
+      expect(await state.storage.get('conv:1')).toMatchObject({ appPayload: String.raw`see D:\@.xlsx`.replace('@', FORGOTTEN) });
     });
   });
   it('waiting job reports in the final outbox', async () => {
@@ -226,6 +251,18 @@ describe('every KV redactor and its readback', () => {
       expect(await toolOutputLedger(state.storage).remaining(['tea'])).toBe(0);
     });
   });
+  it('a path in a ledger summary, whole or cut short, is forgotten and never holds the forget', async () => {
+    await inDo('boundary-ledger-path', async (state) => {
+      const whole = JSON.stringify({ data: String.raw`D:\budget.xlsx` });
+      await state.storage.put('toolout:0001', { tool: 'read_file', ok: true, taint: null, at: 1, summary: whole });
+      // A capped summary is not valid JSON; it is matched as text, and nothing about it can stick the forget.
+      await state.storage.put('toolout:0002', { tool: 'read_file', ok: true, taint: null, at: 2, summary: whole.slice(0, -4) });
+      expect(await redactToolOutputLedger(state.storage, ['budget'], FORGOTTEN)).toBe(2);
+      expect(await toolOutputLedger(state.storage).remaining(['budget'])).toBe(0);
+      const summaries = [...(await state.storage.list<{ summary: string }>({ prefix: 'toolout:' })).values()].map(row => row.summary);
+      expect(summaries.filter(summary => /budget/i.test(summary))).toEqual([]);
+    });
+  });
 });
 
 describe('the forget tool', () => {
@@ -241,6 +278,15 @@ describe('the forget tool', () => {
       expect(result).toMatchObject({ ok: true });
       expect(store.allClaims().map(claim => claim.text)).toEqual(['Works with a team']);
       expect(store.pendingTopics()).toEqual(['steady']);
+    });
+  });
+  it('forgetting a name that follows a backslash in a path removes the claim that names it', async () => {
+    await inDo('boundary-tool-path', async (state) => {
+      const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: String.raw`Keeps the plan in D:\budget.xlsx`, source: 'stated', evidence: String.raw`D:\budget.xlsx`, origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      const [, , forget] = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', transaction: work => state.storage.transactionSync(work), hideHistory: async () => undefined });
+      expect(await forget!.handle({ topic: 'budget', scope_note: 'budget' }, owner('forget the budget') as never)).toMatchObject({ ok: true });
+      expect(store.allClaims()).toEqual([]);
     });
   });
   it('forgetting a place written without spaces removes the claim that names it, and says so', async () => {

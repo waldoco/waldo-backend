@@ -3574,7 +3574,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Memory learns from the conversation since the last pass that finished, oldest first and a bounded chunk at a time, so
     // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark. A turn that carries a
     // topic an unfinished forget still holds never reaches the model; the pass learns from the rest, and the withheld turn
-    // is not consolidated later either.
+    // waits on a retry list until it no longer carries a held topic.
     const consolidateBacklog = (trace: string, now: number) => consolidateNightly({
       kv: storage.kv, episodes, timezone: clock.timezone, now: Date.now, log,
       held: () => holdsIn(heldTopicsOf(memory)),
