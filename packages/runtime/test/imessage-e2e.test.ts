@@ -19,7 +19,7 @@ import { reminderBook } from '../src/channels/reminders';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import type { ScheduleEntry } from '@waldo/contracts';
-import { reminderDue, remindInTwoHours } from './helpers/reminder-wake';
+import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
@@ -744,12 +744,13 @@ it('a follow-up that reached the app is copied to iMessage once as it settles; m
 });
 
 // iMessage work re-arms the owner's one alarm, and each re-arm keeps the schedule's next entry: a reminder two hours out keeps
-// its wake. These read the alarm once the owner's serial queue has run everything queued, the reply's drain included.
+// its wake, or an owner job due sooner keeps its own. These read the alarm once the owner's serial queue has run everything
+// queued, the reply's drain included.
 const ownerIdle = (stub: DurableObjectStub) => runInDurableObject(stub, async instance => {
   const owner = instance as unknown as { queue: Promise<unknown> };
   for (let tail = owner.queue; ; tail = owner.queue) { await tail; if (tail === owner.queue) return; }
 });
-const ownerAlarm = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => ({ alarm: await state.storage.getAlarm(), due: reminderDue(state) }));
+const ownerAlarm = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => ({ alarm: await state.storage.getAlarm(), next: scheduleNext(state), reminder: reminderDue(state) }));
 const clearOwnerAlarm = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => { await state.storage.deleteAlarm(); });
 // A turn from the host's message: the bridge hands it over in its pass, and the owner runs it outside any pass of its own.
 const handedTurn = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
@@ -776,14 +777,16 @@ it('an iMessage turn keeps the alarm for the owner\'s reminder two hours out', a
   try {
     await handedTurn(w, 'Second message');
     expect(proof.turns).toHaveLength(2);
-    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBe(due);
+    expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);
 
 it('an iMessage turn that sets a reminder two hours out leaves the alarm at that reminder', async () => {
   const w = await world();
   await afterOneReply(w);
-  // The owner also has the app, so Waldo can reach them first; an iMessage-only owner is refused a reminder.
+  // The owner also has the app.
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true); state.storage.kv.put('app_subject', String(appSubjectFor(w.ownerName)));
   });
@@ -791,9 +794,9 @@ it('an iMessage turn that sets a reminder two hours out leaves the alarm at that
     arguments: JSON.stringify({ note: 'water plants', at: new Date(Date.now() + 2 * 3_600_000).toISOString().slice(0, 16), repeat: 'none' }) }], []);
   try {
     await handedTurn(w, 'Remind me to water the plants in two hours');
-    const { alarm, due } = await ownerAlarm(w.ownerStub);
-    expect(due).toBeGreaterThan(Date.now() + 3_600_000);
-    expect(alarm).toBe(due);
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBeGreaterThan(Date.now() + 3_600_000);
+    expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);
 
@@ -806,7 +809,8 @@ it('an iMessage drain that finds no turn left keeps the reminder\'s alarm', asyn
     const due = await remindInTwoHours(state);
     try {
       await (instance as unknown as { drainIMessage(): Promise<void> }).drainIMessage();
-      expect(await state.storage.getAlarm()).toBe(due);
+      expect(reminderDue(state)).toBe(due);
+      expect(await state.storage.getAlarm()).toBe(scheduleNext(state));
     } finally { await state.storage.deleteAlarm(); }
   });
 });
@@ -842,7 +846,7 @@ const seedDueReminder = (state: DurableObjectState) => {
     .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
 };
 
-it('an iMessage-only owner who asks for a reminder two hours out keeps the alarm at it', async () => {
+it('an iMessage-only owner who asks for a reminder two hours out has it scheduled, and the alarm keeps the schedule\'s next entry', async () => {
   const w = await world();
   await iMessageOnly(w);
   proof.outputs.push([{ type: 'function_call', call_id: 'remind', name: 'set_reminder',
@@ -850,9 +854,9 @@ it('an iMessage-only owner who asks for a reminder two hours out keeps the alarm
   try {
     await handedTurn(w, 'Remind me to water the plants in two hours');
     expect(proof.turns.join('\n')).not.toContain('Waldo cannot message this owner first here');
-    const { alarm, due } = await ownerAlarm(w.ownerStub);
-    expect(due).toBeGreaterThan(Date.now() + 110 * 60_000);
-    expect(alarm).toBe(due);
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBeGreaterThan(Date.now() + 110 * 60_000);
+    expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);
 
@@ -860,11 +864,30 @@ it('an iMessage-only owner\'s due reminder goes out on iMessage and settles once
   const w = await world();
   await iMessageOnly(w);
   await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
-  const delivery = await scheduledOnIMessage(w, REMINDER);
+  // Each step leaves a wake for the next one: the fire queues the record, the transport pass freezes it for the bridge.
+  const wakesSoon = () => runInDurableObject(w.ownerStub, async (_i, state) => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + 1_000));
+  proof.reply = REMINDER;
+  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+  await wakesSoon();
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await runDurableObjectAlarm(w.ownerStub); await w.settle();
+  // The part is in Waldo's custody for the bridge: frozen here, waking the owner to hand it over, or already handed over by a
+  // platform alarm that fired meanwhile.
+  const custody = await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status)).toEqual(['accepted']);
+    return new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:reminder:')).map((row) => row.state);
+  });
+  expect(custody).toHaveLength(1);
+  expect(['frozen', 'queued']).toContain(custody[0]);
+  if (custody[0] === 'frozen') await wakesSoon();
+  await w.pump();
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the reminder reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: REMINDER, binding: { subject: SUBJECT, chatGuid: CHAT } });
   await runInDurableObject(w.ownerStub, async (_i, state) => expect(reminderRuns(state)).toEqual(['running']));
   // The bridge's report, which it makes on its own once the host posts the result, ends the delivery record and wakes the
   // owner to settle the job.
-  await w.host.postResult(delivery, await w.host.execute(delivery));
+  await w.host.postResult(delivery!, await w.host.execute(delivery!));
   await w.settle();
   await vi.waitFor(async () => expect(await runInDurableObject(w.ownerStub, async (_i, state) =>
     deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status))).toEqual(['delivered']), { timeout: 5_000, interval: 50 });
@@ -916,6 +939,24 @@ it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMes
   await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['running']));
   await hostReports(w, delivery);
   await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed']));
+});
+
+// An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only
+// owner's runtime does. An owner who also has the app keeps the native-chat rule: an iMessage turn arms nothing for them.
+const armedKinds = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
+  state.storage.sql.exec<{ kind: string }>("SELECT kind FROM schedule WHERE status = 'armed' ORDER BY kind").toArray().map((row) => row.kind));
+it('an iMessage-only owner\'s first turn arms their own scheduled work', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  expect(await armedKinds(w)).toEqual(expect.arrayContaining(['dreaming', 'heartbeat', 'pre_activity_spot']));
+  await clearOwnerAlarm(w.ownerStub);
+});
+
+it('an owner who also has the app arms no scheduled work from an iMessage turn', async () => {
+  const w = await world();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('app_subject', String(appSubjectFor(w.ownerName))); });
+  await afterOneReply(w);
+  expect(await armedKinds(w)).toEqual([]);
 });
 
 // An owner with no surface at all runs no scheduled work and keeps no wake for it. So does one whose iMessage sender the
@@ -1003,6 +1044,8 @@ it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes o
     await vi.waitFor(async () => expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']), { timeout: 8_000, interval: 50 });
     expect(proof.turns).toHaveLength(2);
     await ownerIdle(w.ownerStub);
-    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBe(due);
+    expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);

@@ -825,6 +825,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return !!doName && kv.get<string>('imessage_subject') === String(appSubjectFor(doName)) && iMessageComposition(this.imessageHost.env) !== null
       && new IMessageOwnerInbox(this.ctx.storage).latest() !== null;
   }
+  // iMessage is the owner's only surface: no Telegram link and no app or WhatsApp binding.
+  private imessageOnly(): boolean {
+    return !telegramLinked(this.ctx.storage.kv) && !this.appBound() && !this.whatsappBound() && this.imessageBound();
+  }
   // Scheduled work for an owner whose only surface is iMessage is admitted by the sender they last wrote from, through the
   // same directory read that admits their turns. A newer sender or a revoked message ends it.
   private async imessageScheduledOwner(doName: string): Promise<ScheduledOwner> {
@@ -2175,7 +2179,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
         if (whatsappOnly) channel = 'whatsapp';
         // An owner whose only surface is iMessage runs on iMessage; the scheduled pass admits them through their sender.
-        const imessageOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && !this.whatsappBound() && this.imessageBound();
+        const imessageOnly = !telegramBound && appOwner?.kind !== 'admitted' && this.imessageOnly();
         if (imessageOnly) channel = 'imessage';
         if (!telegramBound && whatsappTarget === null && !whatsappOnly && !imessageOnly) {
           // No surface is left to run a transport pass, so a record that ended without its job being settled (an unlink whose
@@ -3177,8 +3181,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
     ]);
-    // Native chat initialization cannot launch unrequested background model work.
-    const proactiveReady = channel === 'imessage' ? this.browserReady : channel === 'app'
+    // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
+    // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
+    const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
         .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() })) : this.browserReady)
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
