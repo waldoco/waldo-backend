@@ -1892,7 +1892,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname.startsWith(CONSOLE_GOOGLE_START_PATH) && request.method === 'GET') {
       const nonce = url.pathname.slice(CONSOLE_GOOGLE_START_PATH.length);
       const target = /^[A-Za-z0-9_-]{43}$/.test(nonce) ? await this.serial(() => google.takeStart(nonce)) : null;
-      return target ? startRedirect('google', nonce, target, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
+      return target ? startRedirect('google', nonce, target, CONSENT_TTL_MS) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
     }
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');

@@ -217,7 +217,7 @@ describe('google callback in the Worker', () => {
   const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: ns }) as never;
   const callback = (query: string, cookie?: string) => new Request(`https://w.example/oauth/google/callback?${query}`, cookie ? { headers: { cookie } } : {});
   // The cookie the /c/ hop left in the browser that started the attempt.
-  const bound = async (nonce: string, at = Date.now()) => (await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, at)).split(';')[0]!;
+  const bound = async (nonce: string, at = Date.now()) => (await bindBrowser('google', nonce, CONSENT_TTL_MS, at)).split(';')[0]!;
 
   it('forwards a verified attempt to the owner Durable Object and renders its outcome', async () => {
     const { deps } = setup();
@@ -283,7 +283,7 @@ describe('google callback in the Worker', () => {
       const { deps } = setup();
       const { url, nonce } = await begin(deps, '5458446350', 'dashboard');
       const owner = linked(), jar = cookieJar();
-      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) } }));
+      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser('google', nonce, CONSENT_TTL_MS, Date.now()) } }));
       const response = jar.take(await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, jar.header()), env(owner.ns)));
       expect(response.status).toBe(200);
       expect(owner.calls).toHaveLength(1);
@@ -311,7 +311,7 @@ describe('google callback in the Worker', () => {
       const { deps } = setup();
       const { url, nonce } = await begin(deps);
       const owner = linked(), jar = cookieJar();
-      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) } }));
+      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser('google', nonce, CONSENT_TTL_MS, Date.now()) } }));
       const query = `state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`;
       expect(jar.take(await handleGoogleCallback(callback(query, jar.header()), env(owner.ns))).status).toBe(200);
       expect((await handleGoogleCallback(callback(query, jar.header()), env(owner.ns))).status).toBe(403);

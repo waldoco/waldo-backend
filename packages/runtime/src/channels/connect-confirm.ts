@@ -3,7 +3,7 @@
 // Waldo: the page names whose Waldo the account joins, by a masked hint only, and the browser goes on only when the
 // person presses Continue. Continue is a same-origin POST, so a link unfurler or prefetcher that GETs the link never
 // redirects, binds or spends the ticket.
-import { bindBrowser, checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import { bindBrowser, checkBrowser } from '../connectors/oauth-browser-binding';
 import type { signedRpc } from '../identity/owner-directory';
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -59,8 +59,6 @@ export const handOff = async (request: Request, call: Rpc, ticketHash: string, t
   if (request.method !== 'GET' || code === null || !HANDOFF.test(code)) return { ok: false };
   const hash = await handoffHash(code);
   if ((await call('connect_session_hand_off', `connsess.handoff.${ticketHash}.${hash}`, { p_ticket_hash: ticketHash, p_handoff_hash: hash })) !== true) return { ok: false };
-  return { ok: true, setCookie: await bindBrowser('handoff', ticketHash, url.pathname, ttlMs, now) };
+  return { ok: true, setCookie: await bindBrowser('handoff', ticketHash, ttlMs, now) };
 };
-// Continue spent the ticket, so the hop's own binding goes with it.
-export const releaseHandOff = (request: Request, ticketHash: string): Promise<string> => releaseBrowser('handoff', ticketHash, new URL(request.url).pathname);
 export const UNHANDED = { status: 403, title: 'Start the connection again', body: 'This link works once, in the browser Waldo first opened it in, so nothing was connected. Start the connection again from the Waldo app.' } as const;

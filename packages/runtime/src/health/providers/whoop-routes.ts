@@ -1,6 +1,6 @@
 import { APP_RETURN_DEEP_LINK } from '../../channels/google-oauth';
 import { constantTimeEqual } from '../../connectors/constant-time';
-import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from '../../channels/connect-confirm';
+import { confirmedHere, confirmPage, handOff, ownerHint, UNHANDED, type HandOff } from '../../channels/connect-confirm';
 import { checkBrowser, releaseBrowser, startRedirect } from '../../connectors/oauth-browser-binding';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../../identity/owner-directory';
 import { callOwnerProvider } from './provider-route';
@@ -102,8 +102,8 @@ export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): P
   try { begun = await call('connect_session_begin', `connsess.begin.${hash}`, { p_ticket_hash: hash }) as Session; } catch { log('begin_failed'); return whoopPage('failed'); }
   if (begun?.status !== 'ok') { log('used'); return whoopPage('used'); }
   log('started', true);
-  const redirect = await startRedirect('whoop', state, whoopAuthorizeUrl(config, state), WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS);
-  if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
+  const redirect = await startRedirect('whoop', state, whoopAuthorizeUrl(config, state), WHOOP_ATTEMPT_TTL_MS);
+  if (session.handoff) redirect.headers.append('set-cookie', await releaseBrowser('handoff', hash));
   return redirect;
 };
 
@@ -120,7 +120,7 @@ export const handleWhoopCallback = async (request: Request, env: WhoopRoutesEnv)
   if (browser !== 'bound') { log(`browser_${browser}`); return whoopPage('unbound'); }
   try { if (await throttled(env, request, 'whoop-callback')) return slowDown(); } catch { return whoopPage('failed'); }
   const page = await settleCallback(state, error, code, call, owners, secret);
-  page.headers.append('set-cookie', await releaseBrowser('whoop', state, WHOOP_CALLBACK_PATH));
+  page.headers.append('set-cookie', await releaseBrowser('whoop', state));
   return page;
 };
 

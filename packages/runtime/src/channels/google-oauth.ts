@@ -1,4 +1,4 @@
-import { readConsentState, GOOGLE_CALLBACK_PATH, type ConsentSurface } from '../connectors/google';
+import { readConsentState, type ConsentSurface } from '../connectors/google';
 import { checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import { CONSOLE_PATH } from './console';
@@ -106,6 +106,6 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
       return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null, state.surface);
     }
   })();
-  page.headers.append('set-cookie', await releaseBrowser('google', state.nonce, GOOGLE_CALLBACK_PATH));
+  page.headers.append('set-cookie', await releaseBrowser('google', state.nonce));
   return page;
 };

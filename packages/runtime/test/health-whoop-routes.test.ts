@@ -168,7 +168,7 @@ describe('the WHOOP webhook', () => {
 });
 
 // The cookie the start link leaves in the browser that followed it.
-const bound = async (state = 'AbCd1234', at = Date.now()) => (await bindBrowser('whoop', state, WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
+const bound = async (state = 'AbCd1234', at = Date.now()) => (await bindBrowser('whoop', state, WHOOP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
 const callback = async (query: string, over: { env?: Record<string, unknown>; answer?: Response; limited?: boolean; cookie?: string | null } = {}) => {
   const { owners, sent } = capture(() => over.answer ?? Response.json({ outcome: 'linked' }));
   const state = new URLSearchParams(query).get('state') ?? '';
@@ -283,7 +283,7 @@ describe('the WHOOP start link', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     const [set] = setCookies(response);
     expect(set!.split('=')[0]).toBe((await bound('AbCd1234')).split('=')[0]);
-    expect(set).toContain(`Path=${WHOOP_CALLBACK_PATH}`);
+    expect(set).toContain('Path=/;');
     expect(set).toContain('Max-Age=1800');
     expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve', 'connect_session_begin']);
     expect(JSON.stringify(rpcs)).not.toContain('AbCd1234');
@@ -382,7 +382,7 @@ describe('the WHOOP start link the app opens with its one-time code', () => {
     const app = browser();
     const page = await app.send(`?handoff=${CODE}`);
     expect([page.status, page.headers.get('location')]).toEqual([200, null]);
-    expect(setCookies(page)[0]).toContain(`Path=${WHOOP_START_PATH}AbCd1234`);
+    expect(setCookies(page)[0]).toMatch(/^__Host-waldo-oauth-[A-Za-z0-9_-]{16}=.*; Path=\/;/);
     expect(JSON.stringify(rpcs)).not.toContain(CODE);
     const begun = await app.send(`?handoff=${CODE}`, 'POST');
     expect(begun.status).toBe(303);

@@ -1,4 +1,4 @@
-import { clientMetadataDocument, MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
+import { clientMetadataDocument } from '../connectors/mcp-oauth';
 import { MCP_ATTEMPT_TTL_MS, MCP_FINISH_PATH, readMcpState, type ConnectOutcome } from '../connectors/mcp-connections';
 import { checkBrowser, releaseBrowser, startRedirect } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
@@ -26,7 +26,7 @@ const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth'
 
 // The console start link, followed by the signed-in owner: it sends the browser to the provider and binds the attempt
 // to that browser, so the callback accepts no other.
-export const mcpStartRedirect = (nonce: string, target: string): Promise<Response> => startRedirect('mcp', nonce, target, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS);
+export const mcpStartRedirect = (nonce: string, target: string): Promise<Response> => startRedirect('mcp', nonce, target, MCP_ATTEMPT_TTL_MS);
 
 // The provider redirects the owner here after consent. The signed state names the owner object and a
 // single-use attempt; that object settles the attempt, so a reloaded callback never redeems the code twice.
@@ -57,6 +57,6 @@ export const handleMcpCallback = async (request: Request, env: TelegramWebhookEn
       return callbackPage(false, COPY.failed);
     }
   })();
-  page.headers.append('set-cookie', await releaseBrowser('mcp', state.nonce, MCP_CALLBACK_PATH));
+  page.headers.append('set-cookie', await releaseBrowser('mcp', state.nonce));
   return page;
 };

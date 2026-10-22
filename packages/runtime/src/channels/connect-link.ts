@@ -1,11 +1,11 @@
 // S3 (CONNECT_FLOW_DESIGN): short first-party connect links. Chat carries /c/<ticket>; the
 // provider consent URL is minted on Continue inside the owner's Durable Object and travels
 // only in the redirect. The ticket itself is never stored - only its sha256 hash.
-import { GOOGLE_AUTH_ORIGIN, GOOGLE_CALLBACK_PATH } from '../connectors/google';
+import { GOOGLE_AUTH_ORIGIN } from '../connectors/google';
 import { CONSENT_TTL_MS } from '../connectors/google-consent';
-import { startRedirect } from '../connectors/oauth-browser-binding';
+import { releaseBrowser, startRedirect } from '../connectors/oauth-browser-binding';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from './connect-confirm';
+import { confirmedHere, confirmPage, handOff, ownerHint, UNHANDED, type HandOff } from './connect-confirm';
 import { callbackPage, consentPage } from './google-oauth';
 
 export const CONNECT_LINK_PREFIX = '/c/';
@@ -103,8 +103,8 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.
     if (!consent || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error('no consent url minted');
     hop('ok', hashPrefix);
-    const redirect = await startRedirect('google', nonce, consent, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS);
-    if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
+    const redirect = await startRedirect('google', nonce, consent, CONSENT_TTL_MS);
+    if (session.handoff) redirect.headers.append('set-cookie', await releaseBrowser('handoff', hash));
     return redirect;
   } catch (error) {
     return failed(error, 'mint failed');

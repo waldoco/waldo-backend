@@ -101,7 +101,7 @@ describe('handleConnectTicket', () => {
     expect(rpcCalls[1]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
     expect(doCalls).toEqual([{ path: BEGIN_SESSION_PATH, body: JSON.stringify({ ticket_hash: await ticketHash(TICKET) }) }]);
     const [set] = setCookies(response);
-    expect(set).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
+    expect(set).toContain('Path=/;');
     expect(set).toContain('Max-Age=43200');
     expect(set).toContain('SameSite=Lax');
     const atCallback = new Request(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`, { headers: { cookie: set!.split(';')[0]! } });
@@ -189,7 +189,7 @@ describe('a /c/ link handed to the app binds only the browser the app opened it 
     expect([page.status, page.headers.get('location')]).toEqual([200, null]);
     expect(await page.text()).toContain('a•••@example.com');
     const [bound] = setCookies(page);
-    expect(bound).toContain(`Path=/c/${TICKET}`);
+    expect(bound).toMatch(/^__Host-waldo-oauth-[A-Za-z0-9_-]{16}=.*; Path=\/;/);
     expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_hand_off']);
     expect(JSON.stringify(rpcCalls)).not.toContain(CODE);
     expect(doCalls).toEqual([]);

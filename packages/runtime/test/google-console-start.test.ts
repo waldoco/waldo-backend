@@ -61,7 +61,7 @@ describe('Google connect from the console starts behind the console session', ()
     expect(location.origin).toBe('https://accounts.google.com');
     expect(await readConsentState(STATE_SECRET, location.searchParams.get('state')!)).toMatchObject({ nonce, surface: 'dashboard' });
     const [bound] = setCookies(start);
-    expect(bound).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
+    expect(bound).toContain('Path=/;');
     expect(start.headers.get('referrer-policy')).toBe('no-referrer');
     const callback = new Request(`https://waldo.example${GOOGLE_CALLBACK_PATH}?state=x`, { headers: { cookie: jar.header() } });
     expect(await checkBrowser(callback, 'google', nonce, Date.now())).toBe('bound');
