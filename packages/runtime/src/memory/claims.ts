@@ -477,7 +477,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         }
         const carried = old.pinned && profileEligible({ kind: claim.kind, source: claim.source, origin: claim.origin ?? null, verification_status: 'owner-grounded' }) ? old : undefined;
         sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, 'owner-grounded', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null);
+          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null);
         const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
         if (retired.rowsWritten !== 1) throw new Error('correction conflict');
         return true;
@@ -985,7 +985,10 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // render as before; nothing is hidden or promoted. The label is applied by both renderers:
 // turnMemoryPrompt (its recall excludes 'untrusted' rows) and memoryPrompt (maps all active
 // claims with no origin filter, so it can render 'untrusted' rows; those stay unlabelled here).
-const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)' : '';
+// remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content.
+const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
+  : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content, so Waldo\'s read until the owner confirms it)'
+  : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 
 // The owner's pinned blocks for a system prompt: <owner_profile> and <owner_facts>, each in pin order within its budget. While
 // nothing is pinned, <owner_profile> shows the newest owner facts within both budgets, so an owner whose memory was never
