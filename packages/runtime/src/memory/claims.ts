@@ -572,7 +572,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // A claim's text is usually a paraphrase; retained history holds the owner's own words. The quoted evidence span (the
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
-      const quotedEvidence = topics.length ? [] : forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter(Boolean));
+      // A claim grounded in a message the owner wrote holds its quote whole when it has no quotation marks: the grounding check
+      // found that text in the owner's message. The words go with or without a topic, since a topic forget that also names
+      // the claim must reach the quoted words the topic does not cover (a code beside the word the owner named).
+      const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => {
+        const spans = quotedSpans(claim.evidence).map((span) => span.trim()).filter(Boolean);
+        return spans.length || claim.verification_status !== 'owner-grounded' ? spans : [claim.evidence.trim()].filter(Boolean);
+      });
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }

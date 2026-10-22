@@ -201,3 +201,42 @@ describe('health memory', () => {
     });
   });
 });
+
+describe('memory: forget', () => {
+  const forget = (topic: string, claimIds?: number[]) => ({ name: 'forget_memory', arguments: { topic, scope_note: topic, ...(claimIds ? { claim_ids: claimIds } : {}) } });
+  const locker = (forgets: boolean): ScriptRule[] => [
+    { match: /locker code at the climbing gym/, rounds: [{ toolCalls: [remember('fact', "The owner's climbing gym locker code is Bluefin 4471.", 'Bluefin 4471')] }, { text: 'Noted.' }] },
+    { match: /spare chalk bag in locker 12/, rounds: [{ toolCalls: [remember('fact', 'The owner keeps a spare chalk bag in locker 12.', 'spare chalk bag in locker 12')] }, { text: 'Noted.' }] },
+    // The code's number is not in the forget message, so a forget that reaches it names the claim that holds it.
+    { match: /Forget my locker code/, rounds: forgets ? [{ toolCalls: [forget('Bluefin', [1])] }, { text: 'Forgotten.' }] : [{ text: 'Forgotten.' }] },
+    say(/What's my locker code/, "I don't have that any more."),
+    say(/What number did I give/, 'You asked me to forget that one.'),
+    say(/Where do I keep my spare chalk bag/, 'Locker 12.'),
+  ];
+
+  it('passes when the forgotten code reaches neither the model nor a reply, and the chalk bag is kept', async () => {
+    expect(await failed('m05-forget-then-ask', locker(true))).toEqual([]);
+  });
+
+  it('fails a trial that only said it forgot', async () => {
+    expect(await failed('m05-forget-then-ask', locker(false))).toEqual([
+      'after the forget, no model input and no reply carries the locker code',
+      'no claim, in any state, still holds the locker code',
+    ]);
+  });
+
+  const tea = (forgets: boolean): ScriptRule[] => [
+    { match: /green tea every afternoon/, rounds: [{ toolCalls: [remember('preference', 'The owner drinks green tea every afternoon.', 'green tea every afternoon')] }, { text: 'Noted.' }] },
+    { match: /forget the tea/, rounds: forgets ? [{ toolCalls: [forget('tea')] }, { text: 'Done.' }] : [{ text: 'Done.' }] },
+    say(/team offsite is on Friday/, 'Got it.'),
+    say(/Remind me where Friday/, 'Steady Cafe.'),
+  ];
+
+  it('passes when the forgotten word is gone and the words that contain it reach the model whole', async () => {
+    expect(await failed('m06-forget-is-word-only', tea(true))).toEqual([]);
+  });
+
+  it('fails a trial that only said it forgot the word', async () => {
+    expect(await failed('m06-forget-is-word-only', tea(false))).toEqual(['after the forget, neither the model nor a reply carries the forgotten word']);
+  });
+});
