@@ -70,11 +70,17 @@ iMessage shows no typing dots, so a long owner turn sends at most two short note
   fixed line goes instead; note 2 is skipped, or declined by the model when it has nothing new to say.
 - **Delivery.** A note uses the reply outbox under `progress:<turn>:<n>` and is handed to the bridge once, from inside the
   turn:
-  - It is never retried and wakes nothing, and anything but `queued` settles it `not_started` (`progress_unsent`).
+  - It is never retried and wakes nothing.
+  - A bridge that answers without taking it settles it `not_started`. A handoff that threw, or a note dropped while
+    frozen, settles `unknown/may_have_completed`, because its handoff had already started.
   - The reply closes the pacer before it freezes, so a note still being written is dropped.
-  - The bridge refuses a note once its reply is in the mailbox (`progress_superseded`), and the reply withdraws a note
-    the host has not pulled.
-  - A note never waits for the busy slot (`progress_busy`).
+- **Notes come last in the one-slot mailbox.** All matches are within the note's own owner, since turn ids repeat
+  across owners.
+  - The bridge refuses a note once its own owner's reply for that turn is in the mailbox (`progress_superseded`).
+  - Any other message, from any owner (a reply, a proactive copy or a system reply), withdraws a note the host has not
+    pulled (`progress_preempted`).
+  - A note never waits for the slot (`progress_busy`), and while a reply waits, no note takes it (`progress_yields`).
+  - A reply that finds the slot busy retries in 1 s, and the slot is read before any directory lookup.
 - **Messages during a long turn.** iMessage has no steer or stop path. A message the owner sends meanwhile waits and runs
   as the next turn, after the current reply.
 - **Off switch:** `WALDO_IMESSAGE_PROGRESS=0`.

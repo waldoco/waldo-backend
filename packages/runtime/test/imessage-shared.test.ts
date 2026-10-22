@@ -323,31 +323,45 @@ it('a forged unlink form naming another owner only ever unlinks the signed-in ow
   expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
 });
 
-// Turn ids are each owner's own sequence, so two owners on the shared number reuse them. A progress note's fences match
-// only its own owner's deliveries: another owner's reply neither refuses it nor withdraws it.
-it('progress-note fences on the shared number stay within each owner, though both owners reuse the same turn ids', async () => {
+// Turn ids are each owner's own sequence, so two owners on the shared number reuse them: one owner's old reply never refuses
+// another owner's note. Notes come last in the shared one-slot mailbox: any owner's reply takes the slot from a note the
+// host has not pulled, and while a reply waits for the slot no note takes it.
+it('on the shared number a note yields to every owner\'s reply, and turn ids that repeat across owners refuse nothing', async () => {
   const w = await world();
   await w.sharedLive();
   for (const [o, handle] of [[w.alice, ALICE], [w.bob, BOB]] as const) expect(await w.linkVia(o, handle)).toMatchObject({ chatGuid: `iMessage;-;${handle}` });
-  const turn = async (handle: string, text: string) => { await w.host.send(w.host.message(text, { senderHandle: handle })); await w.pump(); return w.deliverNext(); };
-  await turn(ALICE, 'Alice one'); await turn(ALICE, 'Alice two');
-  await turn(BOB, 'Bob one');
-  const [aliceTwo] = (await w.inbox(w.alice)).slice(1), [bobOne] = await w.inbox(w.bob);
-  expect(aliceTwo!.id).toBe('imsg-9000000000002');
-  // Bob's notes, frozen and handed over through his own Waldo's outbox, for turn ids Alice has already used.
+  const turn = async (handle: string, text: string) => { await w.host.send(w.host.message(text, { senderHandle: handle })); await w.pump(); };
+  await turn(ALICE, 'Alice one'); await w.deliverNext();
+  await turn(ALICE, 'Alice two'); await w.deliverNext();
+  await turn(BOB, 'Bob one'); await w.deliverNext();
+  const [bobOne] = await w.inbox(w.bob);
+  expect((await w.inbox(w.alice)).map(r => r.id)).toEqual(['imsg-9000000000001', 'imsg-9000000000002']);
+  // Bob's notes, frozen and handed over through his own Waldo's outbox, under turn ids Alice has already used.
   const bobNote = (id: string) => runInDurableObject(w.bob.stub, async (_i, state) => {
     new IMessageFinalOutbox(state.storage).freezeProgress({ ...bobOne!, id, commandId: `wrc_bob_${id}` }, 1, `Bob's note for ${id}.`);
     return handOffIMessageProgress({ storage: state.storage, id: state.id, env: env as never, ownerNamespace: env.OWNER_DO }, `progress:${id}:1`);
   });
-  expect(await bobNote('imsg-9000000000002')).toBe(true); // Alice's reply:imsg-9000000000002 does not refuse it
-  expect(await w.deliverNext()).toMatchObject({ text: 'Bob\'s note for imsg-9000000000002.', chatGuid: `iMessage;-;${BOB}` });
+  const bobNotes = async () => (await w.outbox(w.bob)).filter(r => r.replyRef.startsWith('progress:')).map(r => [r.replyRef, r.result?.state, r.result && 'reason' in r.result ? r.result.reason : undefined]);
+  // Alice's reply:imsg-9000000000002 does not refuse Bob's note for his own imsg-9000000000002.
+  expect(await bobNote('imsg-9000000000002')).toBe(true);
+  // Alice's third reply takes the slot from that note before the host pulls it; Bob's Waldo hears it was preempted.
+  await turn(ALICE, 'Alice three');
+  expect(await w.deliverNext()).toMatchObject({ text: 'Scripted owner reply.', chatGuid: `iMessage;-;${ALICE}` });
+  expect(await bobNotes()).toEqual([['progress:imsg-9000000000002:1', 'rejected', 'progress_preempted']]);
+  // A note the host has already pulled goes out first; Alice's fourth reply waits for it, and meanwhile no note takes the slot.
   expect(await bobNote('imsg-9000000000003')).toBe(true);
-  // Alice's third turn has the same id. Her reply waits for the slot Bob's note holds; it does not withdraw his note.
-  await w.host.send(w.host.message('Alice three', { senderHandle: ALICE })); await w.pump();
-  expect(await w.deliverNext()).toMatchObject({ text: 'Bob\'s note for imsg-9000000000003.', chatGuid: `iMessage;-;${BOB}` });
+  const pulled = (await w.host.pull()).delivery!;
+  await turn(ALICE, 'Alice four');
+  await w.host.postResult(pulled, await w.host.execute(pulled));
+  expect(await bobNote('imsg-9000000000004')).toBe(false);
   await new Promise(resolve => setTimeout(resolve, 1_100));
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ text: 'Scripted owner reply.', chatGuid: `iMessage;-;${ALICE}` });
-  expect((await w.outbox(w.bob)).filter(r => r.replyRef.startsWith('progress:')).map(r => r.result?.state)).toEqual(['local_recorded', 'local_recorded']);
+  expect(w.host.nativeSends.map(send => send.text).filter(text => text.startsWith('Bob\'s note'))).toEqual(['Bob\'s note for imsg-9000000000003.']);
+  expect(await bobNotes()).toEqual([
+    ['progress:imsg-9000000000002:1', 'rejected', 'progress_preempted'],
+    ['progress:imsg-9000000000003:1', 'local_recorded', undefined],
+    ['progress:imsg-9000000000004:1', 'rejected', 'progress_yields'],
+  ]);
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);

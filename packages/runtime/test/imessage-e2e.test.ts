@@ -1018,23 +1018,29 @@ it('with capture off, neither the owner\'s words nor the note reach the console 
   }
 }, 20_000);
 
-it('the bridge refuses a note once its reply is in the mailbox, and a note never waits for a busy slot while a reply does', async () => {
+it('the bridge refuses a note once its reply is in the mailbox, a note never waits for the slot, and a waiting reply keeps notes off it', async () => {
   const w = await world();
   await w.pairAndActivate();
   await replyFor(w, 'Morning');
   const [reply] = await outbox(w.ownerStub);
   expect(reply).toMatchObject({ replyRef: expect.stringMatching(/^reply:/), state: 'queued' });
   const turn = reply!.replyRef.split(':')[1];
-  const handoff = (replyRef: string, commandId: string) => w.bridgeStub().enqueueReply({ replyRef, commandId, text: 'A note that came too late.', ownerDoName: reply!.ownerDoName,
+  const handoff = (replyRef: string, commandId: string, text = 'A note.') => w.bridgeStub().enqueueReply({ replyRef, commandId, text, ownerDoName: reply!.ownerDoName,
     revision: reply!.revision, bindingDigest: reply!.bindingDigest, ...(reply!.subject !== undefined ? { subject: reply!.subject } : {}) });
-  // While the reply holds the slot, a note is refused at once and another reply waits.
+  // While the reply holds the slot a note is refused at once.
   expect(await handoff(`progress:${turn}:1`, 'wpn1_early')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_busy' } });
-  expect(await handoff('reply:imsg-other', 'wrc_other')).toEqual({ kind: 'busy' });
   await sendNext(w);
   // Once the reply is sent the slot is free, and a note for that turn is still refused: it would follow its reply.
-  expect(await handoff(`progress:${turn}:1`, 'wpn1_late')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
-  expect((await w.host.pull()).delivery).toBeNull();
-  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect(await handoff(`progress:${turn}:1`, 'wpn1_late')).toMatchObject({ kind: 'terminal', result: { reason: 'progress_superseded' } });
+  // A note for another turn takes the free slot; once the host has pulled it, a reply waits, and while it waits no note goes.
+  expect(await handoff('progress:imsg-other:1', 'wpn1_other', 'Checking the other thing.')).toEqual({ kind: 'queued' });
+  const pulled = (await w.host.pull()).delivery!;
+  expect(await handoff('reply:imsg-other', 'wrc_other', 'The other answer.')).toEqual({ kind: 'busy' });
+  await w.host.postResult(pulled, await w.host.execute(pulled));
+  expect(await handoff('progress:imsg-third:1', 'wpn1_third')).toMatchObject({ kind: 'terminal', result: { reason: 'progress_yields' } });
+  expect(await handoff('reply:imsg-other', 'wrc_other', 'The other answer.')).toEqual({ kind: 'queued' });
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Checking the other thing.', 'The other answer.']);
 }, 20_000);
 
 it('a note whose handoff threw is settled as possibly sent, never retried, and the reply goes out as before', async () => {
