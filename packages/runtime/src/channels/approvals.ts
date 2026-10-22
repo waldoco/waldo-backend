@@ -886,7 +886,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const failure = toolFailed?.message ?? (isToolError(receipt.result) ? receipt.result.tool_error : undefined);
             if (failure !== undefined) {
               setStatus(id, 'failed');
-              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed: ${failure}` };
+              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed. ${failure}` };
             }
             const outcome = String(receipt.result);
             setStatus(id, 'done');

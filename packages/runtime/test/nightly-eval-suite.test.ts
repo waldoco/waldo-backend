@@ -78,17 +78,19 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the background task and the late answer, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(28);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(28);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the health trigger case, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(29);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(29);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step)).toBe(true);
+      // Something happens to the owner: they speak, an answer comes late, or the health trigger runs on a change in their health.
+      expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step || 'health_change' in step)).toBe(true);
     }
   });
 

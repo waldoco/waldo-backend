@@ -35,7 +35,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
@@ -139,6 +139,8 @@ import { runBook } from './background-runs';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
+import { mcpStartRedirect } from './mcp-oauth-routes';
+import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
@@ -356,10 +358,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private mcpRegistry?: McpConnections;
   // The owner's MCP connections: one registry per owner object, shared by every channel's runtime.
   private mcp(): McpConnections {
+    const stateSecret = oauthStateSecret(this.env);
     return this.mcpRegistry ??= mcpConnections({
       sql: this.ctx.storage.sql, transaction: (work) => this.ctx.storage.transactionSync(work),
       proxy: oauthProxy(this.env), doName: () => this.ctx.storage.kv.get<string>('do_name') ?? null,
-      ...(this.env.TELEGRAM_WEBHOOK_SECRET ? { stateSecret: this.env.TELEGRAM_WEBHOOK_SECRET } : {}),
+      ...(stateSecret ? { stateSecret } : {}),
       fetcher: (input, init) => fetch(input, init), now: () => Date.now(),
       reserved: () => mcpServers(this.env.WALDO_MCP_SERVERS).map((server) => server.name),
       log: (entry) => console.log(JSON.stringify({ trace: 'mcp', ...entry })),
@@ -1041,11 +1044,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
   // app's contract does not carry.
-  private consoleControls(source: ConsoleView, view: ControlsView) {
+  private async consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
     if (view === 'connections') {
       const mcp = this.mcp();
-      return { ...projection, data: { ...projection.data, mcp: mcp.list().map((connection) => ({ ...connection, tool_list: mcp.toolsOf(connection.id).map((tool) => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.server_text.title ? { title: tool.server_text.title } : {}) })) })) } };
+      const servers = await Promise.all(mcp.list().map(async (connection) => { const shown = await mcp.consoleTools(connection.id); return { ...connection, tool_list: shown.tools, read_only_digest: shown.read_only_digest }; }));
+      return { ...projection, data: { ...projection.data, mcp: servers } };
     }
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv;
@@ -1286,7 +1290,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const issuer = await this.ctx.storage.get<string>(`connect_channel:${ticket_hash}`);
       const begin = await this.serial(() => this.setup(issuer === 'app' ? 'app' : 'telegram').google.beginSession(ticket_hash));
       console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begin !== null }));
-      return Response.json({ url: begin?.url ?? null });
+      return Response.json({ url: begin?.url ?? null, nonce: begin?.nonce ?? null });
     }
     if (new URL(request.url).pathname === '/whatsapp-admit' && request.method === 'POST') return this.whatsappAdmit(request, body);
     if (new URL(request.url).pathname === '/whatsapp-status' && request.method === 'POST') return this.whatsappStatus(request, body);
@@ -1869,7 +1873,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if(!query)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
             let source=await runtime.view(session,null,query.page),pending=0;
             if(query.view==='profile'){pending=this.ctx.storage.sql.exec<{count:number}>('SELECT COUNT(*) AS count FROM purge_pending').toArray()[0]?.count??0;if(pending>0)source={...source,profile:[]};}
-            let projection=this.consoleControls(source,query.view);
+            let projection=await this.consoleControls(source,query.view);
             if(query.view==='profile'){const profile=projectControls(source,'profile');projection={...profile,data:{...profile.data,removal:{state:pending>0||source.forgettingSpots.length?'incomplete':'none_recorded',pending_count:Math.max(pending,source.forgettingSpots.length),items:source.forgettingSpots.map(claim=>({id:`${this.ctx.id.toString()}:claim:${claim.id}`,status:'purging' as const}))}}} as typeof projection;}
             return Response.json({...projection,revision:await controlRevision(projection)},{headers:DASHBOARD_OVERVIEW_HEADERS});
           }
@@ -1883,7 +1887,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
-              if(action.action==='mcp.runs'){const [tool,choice]=action.value.split('|');return !!tool&&(choice==='on'||choice==='off')&&await this.mcp().setRuns(action.id,tool,choice==='on');}
+              if(action.action==='mcp.runs')return mcpRunsReceipt(action.id,action.value,(id,tool,on,seen)=>this.mcp().setRuns(id,tool,on,seen));
               if(action.action==='telegram.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
@@ -1953,7 +1957,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname.startsWith(MCP_START_PATH) && request.method === 'GET') {
       // Behind the console session: only the signed-in owner can turn a connect attempt into a provider redirect.
       const target = await this.serial(() => this.mcp().start(url.pathname.slice(MCP_START_PATH.length)));
-      return target ? new Response(null, { status: 303, headers: { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
+      return target ? mcpStartRedirect(url.pathname.slice(MCP_START_PATH.length), target) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
     }
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -2833,7 +2837,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (ok) await storage.put('connect:offers', { ...sent, [key]: Date.now() });
       return ok;
     };
-    const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
+    const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret } = this.env, stateSecret = oauthStateSecret(this.env);
     const googleApp = async () => {
       const origin = await storage.get<string>('origin');
       return clientId && clientSecret && origin ? { clientId, clientSecret, redirectUri: `${origin}${GOOGLE_CALLBACK_PATH}` } : null;

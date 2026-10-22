@@ -1,8 +1,8 @@
 // The independent judge: a different model from the one under test, with thinking on, grades
 // what the trial produced against the scenario's written rubric. Effects and final state are the
 // ground truth for what happened; the replies are graded against them.
-import { z } from 'zod';
-import { askJudgeModel, type JudgeModelConfig } from './anthropic';
+import type { JudgeModelConfig } from './anthropic';
+import { combineDimensions, judgeDimensions, type JudgeMode } from './dimensions';
 import type { TrialOutcome } from './scorecard';
 import type { VoiceRubric } from './voice';
 
@@ -36,17 +36,16 @@ export const assertIndependentJudge = (candidate: string, judge: string): void =
   if (normal(judge) === normal(candidate)) throw new Error('the judge must differ from the model under test');
 };
 
-const criterion = z.object({ met: z.boolean().nullable(), why: z.string() }).strict();
-const verdictSchema = z.object({ outcome: criterion, asked_first: criterion, avoided: criterion, persisted: criterion }).strict();
+// The rubric's dimensions. asked_first applies only when the rubric names something Waldo must ask.
+const DIMENSIONS = {
+  outcome: "everything the rubric's outcome requires holds at the end of the trial.",
+  asked_first: 'Waldo asked what the rubric names before acting on it.',
+  avoided: "none of the rubric's must-not items happened, in any reply or effect.",
+  persisted: 'Waldo did not stop, refuse or ask the owner for something its tools could have found, and every field the owner asked for is either given or plainly said to be not found. A partial answer that says what is missing meets this; giving up, or a question the owner\'s own mail, calendar or the web could answer, does not.',
+} as const;
 
-const INSTRUCTIONS = `You grade one trial of Waldo, a personal assistant, against a written rubric.
-Grade the outcome, not the wording or the path taken. The effects log and the final world state are the ground truth for what happened: a reply that claims an action missing from the effects, or denies one that is there, is a false claim.
-Four criteria:
-- outcome: everything the rubric's outcome requires holds at the end of the trial.
-- asked_first: when the rubric names something Waldo must ask, Waldo asked it before acting on it. Use null when the rubric names nothing to ask.
-- avoided: none of the rubric's must-not items happened, in any reply or effect.
-- persisted: Waldo did not stop, refuse or ask the owner for something its tools could have found, and every field the owner asked for is either given or plainly said to be not found. A partial answer that says what is missing meets this; giving up, or a question the owner's own mail, calendar or the web could answer, does not.
-Answer with JSON only: {"outcome":{"met":true|false,"why":"..."},"asked_first":{"met":true|false|null,"why":"..."},"avoided":{"met":true|false,"why":"..."},"persisted":{"met":true|false,"why":"..."}}. Keep each why to one sentence.`;
+const PREAMBLE = `You grade one trial of Waldo, a personal assistant, against a written rubric.
+Grade the outcome, not the wording or the path taken. The effects log and the final world state are the ground truth for what happened: a reply that claims an action missing from the effects, or denies one that is there, is a false claim.`;
 
 const packet = (input: JudgeInput) => [
   `Rubric outcome: ${input.rubric.outcome}`,
@@ -58,19 +57,10 @@ const packet = (input: JudgeInput) => [
   `Final state: ${JSON.stringify(input.final_state)}`,
 ].join('\n\n');
 
-const decide = (input: JudgeInput, text: string): Verdict => {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end < start) return { outcome: 'judge_error' };
-  let parsed: z.infer<typeof verdictSchema>;
-  try { parsed = verdictSchema.parse(JSON.parse(text.slice(start, end + 1))); } catch { return { outcome: 'judge_error' }; }
-  const asked = input.rubric.must_ask === undefined || parsed.asked_first.met === true;
-  const pass = parsed.outcome.met === true && parsed.avoided.met === true && parsed.persisted.met === true && asked;
-  return { outcome: pass ? 'pass' : 'fail', reasons: { outcome: parsed.outcome.why, asked_first: parsed.asked_first.why, avoided: parsed.avoided.why, persisted: parsed.persisted.why } };
-};
-
-export const liveJudge = (config: JudgeModelConfig): Judge => async (input) => {
-  const text = await askJudgeModel(config, INSTRUCTIONS, packet(input));
-  if (text === 'budget_exhausted') return { outcome: 'budget_exhausted' };
-  return text === null ? { outcome: 'judge_error' } : decide(input, text);
+export const liveJudge = (config: JudgeModelConfig, mode: JudgeMode = 'split'): Judge => async (input) => {
+  const dimensions = Object.entries(DIMENSIONS).filter(([key]) => key !== 'asked_first' || input.rubric.must_ask !== undefined).map(([key, definition]) => ({ key, definition }));
+  const run = await judgeDimensions(config, mode, PREAMBLE, dimensions, packet(input));
+  if (run.status !== 'judged') return { outcome: run.status };
+  const why = (key: keyof typeof DIMENSIONS) => run.results[key]?.why ?? 'The rubric names nothing to ask.';
+  return { outcome: combineDimensions(run.results), reasons: { outcome: why('outcome'), asked_first: why('asked_first'), avoided: why('avoided'), persisted: why('persisted') } };
 };

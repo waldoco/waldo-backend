@@ -103,6 +103,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     return [
       attr('langfuse.observation.metadata.context_system_bytes', String(shape.system_bytes)),
       attr('langfuse.observation.metadata.context_request_bytes', String(shape.request_bytes)),
+      ...(shape.voice_version === undefined ? [] : [attr('langfuse.observation.metadata.voice_version', String(shape.voice_version))]),
       ...Object.entries(counts).map(([key, value]) => attr(`langfuse.observation.metadata.context_${key}`, String(value))),
       ...Object.entries(sections).map(([key, value]) => attr(`langfuse.observation.metadata.context_system_${key}_bytes`, String(value))),
       ...Object.entries(turnSections).map(([key, value]) => attr(`langfuse.observation.metadata.context_turn_${key}_bytes`, String(value))),
