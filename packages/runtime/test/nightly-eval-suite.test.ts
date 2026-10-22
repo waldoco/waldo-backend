@@ -6,6 +6,7 @@ import type { Judge } from '../evals/nightly/judge';
 import { nightlyConfig } from '../evals/nightly/config';
 import { SCENARIOS, type NightlyScenario } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
+import { failedReceipts } from '../evals/nightly/receipts';
 import { runTrial } from '../evals/nightly/trial';
 import { evalWorld } from '../evals/nightly/world';
 
@@ -116,6 +117,24 @@ describe('nightly eval catalogue', () => {
     const history = retry.messages.slice(0, -1).map((message) => `${message.role}:${JSON.stringify(message.content)}`).join('\n');
     expect(history).toContain('What should I pack?');
     expect(history).toMatch(/assistant:.*I can't answer properly right now/);
+  });
+
+  it('holds the background-task and late-answer scenarios to state asserted in code', async () => {
+    const w1 = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const w2 = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const brief = (title: string) => ({ name: 'start_task', arguments: { profile: 'reader', title, goal: 'Find every promise the owner made in mail from the last three months.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' } });
+    const w1Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w1, { gateway: scriptedGateway({ rules: [{ match: /every promise I made/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises')] }, { text: 'On it; I will tell you when it is done.' }]))).toEqual([]);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ text: 'Here are your promises.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), brief('Promises, again')] }, { text: 'Started twice.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    const reminder = { name: 'set_reminder', arguments: { note: 'check the promises list', at: '2026-09-24T18:00', repeat: 'none' } };
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), reminder] }, { text: 'On it.' }]))).toEqual(['nothing else was changed: no card, draft, reminder, standing order or open loop']);
+
+    const w2Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w2, { gateway: scriptedGateway({ rules: [{ match: /this is the late answer/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ text: 'Late, sorry: linen shirts, one blazer, sunscreen.' }]))).toEqual([]);
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ toolCalls: [reminder] }, { text: 'Late, sorry. I set a reminder.' }])).join()).toContain('nothing was changed');
   });
 
   it('a late answer to a message with health values reads it from the conversation, never from the retry brief', async () => {
