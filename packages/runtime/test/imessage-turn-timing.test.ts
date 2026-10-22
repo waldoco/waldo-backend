@@ -49,3 +49,21 @@ it('refuses without a trace, and a Langfuse fetch without its key says which set
   expect(await main({ argv: ['--trace-file', 'trace.json'], env: {}, read: async () => JSON.stringify(trace), log: (line: string) => logged.push(line), fail: () => undefined })).toBe(0);
   expect(logged[0]).toContain('model calls (llm_reply)');
 });
+
+it('reads every page of a long trace from Langfuse, and fails rather than drop spans when a full page has no page count', async () => {
+  const all = trace.observations, requested: string[] = [];
+  const pages = (meta: boolean) => async (url: URL, init: { headers: Record<string, string> }) => {
+    requested.push(`${url.searchParams.get('page')}:${init.headers.authorization?.startsWith('Basic ') ? 'auth' : 'none'}`);
+    const page = Number(url.searchParams.get('page'));
+    const data = meta ? all.slice((page - 1) * 5, page * 5) : Array.from({ length: 100 }, () => all[1]);
+    return new Response(JSON.stringify({ data, ...(meta ? { meta: { page, limit: 100, totalItems: all.length, totalPages: 2 } } : {}) }));
+  };
+  const env = { LANGFUSE_PUBLIC_KEY: 'pk-fixture', LANGFUSE_SECRET_KEY: 'sk-fixture', LANGFUSE_BASE_URL: 'https://langfuse.fixture.invalid' };
+  const logged: string[] = [], failed: string[] = [];
+  expect(await main({ argv: ['--trace', 'abc'], env, read: async () => '', log: (line: string) => logged.push(line), fail: () => undefined, fetch: pages(true) })).toBe(0);
+  expect(requested).toEqual(['1:auth', '2:auth']);
+  expect(logged[0]).toContain('+41,230 ms');
+  expect(logged.join('\n')).not.toMatch(/pk-fixture|sk-fixture/);
+  expect(await main({ argv: ['--trace', 'abc'], env, read: async () => '', log: () => undefined, fail: (line: string) => failed.push(line), fetch: pages(false) })).toBe(1);
+  expect(failed).toEqual(['timing: Langfuse sent a full page without a page count; export the trace and pass --trace-file']);
+});

@@ -738,6 +738,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         completed = true;
       } catch { console.error('imessage execution outcome unconfirmed'); }
       finally { await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
+      // Each reply goes to the bridge before the next turn starts, not after every turn this drain found.
+      await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     }
     await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     await this.rearmEveryWake();

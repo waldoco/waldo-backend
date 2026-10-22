@@ -533,8 +533,8 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
   await replyFor(w, 'Send me my console link');
-  // The link goes first and the reply waits behind it: the bridge holds one outstanding command at a time, and the
-  // reply's handoff is retried once the link's delivery has settled.
+  // The link goes first and the reply waits behind it: the bridge holds one outstanding command at a time. The reply polls
+  // the slot for a few seconds, then its handoff is retried once the link's delivery has settled.
   const first = (await w.host.pull()).delivery!;
   const link = JSON.parse(first.body);
   expect(link).toMatchObject({ operation: 'send', allowSMSFallback: false, attachments: [], target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
@@ -563,7 +563,7 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   expect(w.host.nativeSends).toHaveLength(1);
   expect(forbiddenEgress).toEqual([]);
   } finally { vi.useRealTimers(); }
-});
+}, 15_000);
 
 it('an iMessage turn with no public origin on record mints nothing, says so, and still replies', async () => {
   const w = await world();
@@ -967,7 +967,7 @@ it('a note the host has not pulled when the reply lands is withdrawn by the repl
   expect(reply).toMatchObject({ replyRef: expect.stringMatching(/^reply:/), state: 'settled', result: { state: 'local_recorded' } });
 }, 20_000);
 
-it('a reply behind a note the host already pulled waits for that one send and retries in a second', async () => {
+it('a reply behind a note the host already pulled, still unsent after the wait, retries in a second', async () => {
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 60_000);
@@ -986,6 +986,66 @@ it('a reply behind a note the host already pulled waits for that one send and re
   await sendNext(w);
   expect(sentTexts(w)).toEqual(['Working through your request now.', 'Scripted owner reply.']);
 }, 20_000);
+
+const admissions = () => {
+  const admitted: string[] = [], admit = IMessageOwnerInbox.prototype.admit;
+  vi.spyOn(IMessageOwnerInbox.prototype, 'admit').mockImplementation(async function (this: IMessageOwnerInbox, ...args: Parameters<typeof admit>) {
+    const result = await admit.apply(this, args); admitted.push(result.kind); return result;
+  });
+  return () => admitted.filter(kind => kind === 'admitted').length;
+};
+
+it('a reply that meets a note the host is still sending waits for that send and goes out before the owner\'s next message runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  const enqueue = IMessageBridgeDO.prototype.enqueueReply, outcomes: string[] = [];
+  vi.spyOn(IMessageBridgeDO.prototype, 'enqueueReply').mockImplementation(async function (this: IMessageBridgeDO, input) {
+    const outcome = await enqueue.call(this, input); outcomes.push(`${input.replyRef.split(':')[0]}:${outcome.kind}`); return outcome;
+  });
+  const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
+    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+  });
+  let note: Delivery | null = null, duringNextTurn: string[] = [];
+  proof.hold = async () => {
+    await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+    setTiming({ firstMs: 60_000, secondMs: 60_000, minTurnMs: 0 });
+    expect((await w.host.send(w.host.message('Make it vegetarian'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // The reply meets the slot the note still holds; the host finishes that send a moment later.
+    void waitFor(() => outcomes.includes('reply:busy')).then(async () => { await w.host.postResult(note!, await w.host.execute(note!)); });
+    proof.hold = async () => { await sendNext(w).catch(() => undefined); duringNextTurn = sentTexts(w); };
+  };
+  await replyFor(w, 'Find me three dinner options near me tonight');
+  await w.pump(2);
+  await sendNext(w);
+  expect(outcomes).toContain('reply:busy');
+  expect(duringNextTurn).toEqual(['Working through your request now.', 'Scripted owner reply.']);
+  expect(sentTexts(w)).toEqual(['Working through your request now.', 'Scripted owner reply.', 'Scripted owner reply.']);
+  expect(retries).toEqual([]);
+}, 30_000);
+
+it('two messages already waiting when a drain starts each have their reply handed over before the next one runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const admitted = admissions();
+  let duringThirdTurn: string[] = [];
+  proof.hold = async () => {
+    for (const text of ['And the weather there', 'And what to wear']) expect((await w.host.send(w.host.message(text))).status).toBe(200);
+    await waitFor(() => admitted() === 3);
+    proof.hold = async () => { await sendNext(w); proof.hold = async () => { await sendNext(w).catch(() => undefined); duringThirdTurn = sentTexts(w); }; };
+  };
+  await replyFor(w, 'Plan a day trip to the coast');
+  await w.pump(2);
+  await sendNext(w);
+  expect(duringThirdTurn).toEqual(['Scripted owner reply.', 'Scripted owner reply.']);
+  expect(sentTexts(w)).toHaveLength(3);
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed', 'completed']);
+}, 30_000);
 
 it('an iMessage turn that sent a progress note keeps the alarm for the owner\'s reminder two hours out', async () => {
   const w = await world();

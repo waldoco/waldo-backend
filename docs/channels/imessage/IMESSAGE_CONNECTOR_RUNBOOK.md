@@ -51,7 +51,9 @@ paused by an uncertain send. It never shows keys, invitations, challenges, bodie
 - One outstanding reply per bridge/account. A reply the host does not pull within the delivery deadline
   is `not_started` (`host_not_pulled`). A pulled reply without a terminal result within the mutation
   deadline becomes `unknown/still_in_flight` and **permanently** pauses sending for that account.
-- A reply that finds the slot busy is retried in 1 s; any other reply that could not be handed over is retried in 5 s.
+- Each reply goes to the bridge before the owner's next turn starts. A reply that finds the slot busy waits up to 4 s for
+  it, then is retried in 1 s; any other reply that could not be handed over is retried in 5 s. A retry runs in the
+  owner's queue, so a reply still waiting after those 4 s goes after the turn that runs next.
 - There is no reconciliation or quarantine-clear API. Recovery requires a reviewed design (history/GUID
   reconciliation on the host); until then revoke and re-pair.
 - An owner turn interrupted by restart is closed as `interrupted` with effects unconfirmed and is not
@@ -80,9 +82,9 @@ iMessage shows no typing dots, so a long owner turn sends at most two short note
   - Any other message, from any owner (a reply, a proactive copy or a system reply), withdraws a note the host has not
     pulled (`progress_preempted`).
   - A note never waits for the slot (`progress_busy`), and while a reply waits, no note takes it (`progress_yields`).
-  - A reply that finds the slot busy retries in 1 s, and the slot is read before any directory lookup.
+  - A reply that finds the slot busy waits for it as above, and the slot is read before any directory lookup.
 - **Messages during a long turn.** iMessage has no steer or stop path. A message the owner sends meanwhile waits and runs
-  as the next turn, after the current reply.
+  as the next turn, after the current reply has gone to the bridge.
 - **Off switch:** `WALDO_IMESSAGE_PROGRESS=0`.
 - **Typing dots** are a host change, proposed in `waldoco/waldo-imessage-host`: the host types from an owner message
   until its next send to that chat. The backend sends no typing commands, since they would take the single mailbox slot.

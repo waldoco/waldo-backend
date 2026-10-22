@@ -10,7 +10,8 @@
 //     node packages/runtime/scripts/imessage-turn-timing.mjs --trace <trace id> [--host-file host.jsonl]
 //
 // trace.json is a Langfuse trace or observations export: an object with `observations` or `data`, or a bare array of
-// observations. Each observation needs `name`, `startTime` and `endTime`.
+// observations. Each observation needs `name`, `startTime` and `endTime`. These shapes follow Langfuse's public API
+// reference and have not yet been checked against a real export.
 //
 // host.jsonl is one JSON object per line: {"at": <ISO time or epoch ms>, "phase": <phase>, "kind": "reply" | "progress"}.
 // The phases are:
@@ -70,22 +71,36 @@ export function timingRows(input, hostEvents = []) {
 
 export const formatRows = (rows) => rows.map(([label, value]) => value === '' ? label : `  ${label.padEnd(34)} ${value}`).join('\n');
 
-async function langfuseObservations(env, traceId) {
+const PAGE = 100, MAX_PAGES = 20;
+
+// A long turn can log more spans than one page holds, so every page is read; a missing page count fails rather than
+// leaving out the reply's span.
+async function langfuseObservations(env, traceId, get) {
   const { LANGFUSE_PUBLIC_KEY: pk, LANGFUSE_SECRET_KEY: sk, LANGFUSE_BASE_URL: base } = env;
   if (!pk || !sk || !base) throw new Error('set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL, or pass --trace-file');
-  const url = new URL('/api/public/observations', base);
-  url.searchParams.set('traceId', traceId); url.searchParams.set('limit', '100');
-  const response = await fetch(url, { headers: { authorization: `Basic ${Buffer.from(`${pk}:${sk}`).toString('base64')}` } });
-  if (!response.ok) throw new Error(`Langfuse answered ${response.status}`);
-  return response.json();
+  const headers = { authorization: `Basic ${Buffer.from(`${pk}:${sk}`).toString('base64')}` }, observations = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = new URL('/api/public/observations', base);
+    url.searchParams.set('traceId', traceId); url.searchParams.set('limit', String(PAGE)); url.searchParams.set('page', String(page));
+    const response = await get(url, { headers });
+    if (!response.ok) throw new Error(`Langfuse answered ${response.status}`);
+    const body = await response.json(), data = Array.isArray(body?.data) ? body.data : [], pages = body?.meta?.totalPages;
+    observations.push(...data);
+    if (typeof pages !== 'number') {
+      if (data.length >= PAGE) throw new Error('Langfuse sent a full page without a page count; export the trace and pass --trace-file');
+      return { observations };
+    }
+    if (page >= pages || !data.length) return { observations };
+  }
+  throw new Error(`the trace has more than ${MAX_PAGES * PAGE} spans; export it and pass --trace-file`);
 }
 
-export async function main({ argv, env, read, log, fail }) {
+export async function main({ argv, env, read, log, fail, fetch: get = globalThis.fetch }) {
   const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? undefined : argv[i + 1]; };
   try {
     const traceFile = flag('--trace-file'), traceId = flag('--trace'), hostFile = flag('--host-file');
     if (!traceFile && !traceId) throw new Error('pass --trace-file <file> or --trace <trace id>');
-    const trace = traceFile ? JSON.parse(await read(traceFile)) : await langfuseObservations(env, traceId);
+    const trace = traceFile ? JSON.parse(await read(traceFile)) : await langfuseObservations(env, traceId, get);
     const host = hostFile ? (await read(hostFile)).split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line)) : [];
     log(formatRows(timingRows(trace, host)));
     return 0;

@@ -68,6 +68,11 @@ const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
     ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
 };
 
+// The bridge's one slot frees within a host pull and a send, so a drain polls it for about 4 s before leaving the reply to
+// its retry. A retry runs in the owner's serial queue, where it would wait behind the next turn. The polls are counted
+// rather than timed, so the wait ends even when the clock does not move.
+const BUSY_POLL_MS = 500, BUSY_POLLS = 8;
+
 /** Hands frozen replies to their bridge mailbox; the bridge rechecks authority before publication. */
 export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Promise<void> => {
   const outbox = new IMessageFinalOutbox(host.storage);
@@ -75,7 +80,13 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
   outbox.dropProgress('progress_stale');
   for (const row of outbox.due()) {
     let outcome;
-    try { outcome = await handOff(host, row); } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
+    try {
+      outcome = await handOff(host, row);
+      for (let polls = 0; outcome.kind === 'busy' && polls < BUSY_POLLS; polls++) {
+        await new Promise(resolve => setTimeout(resolve, BUSY_POLL_MS));
+        outcome = await handOff(host, row);
+      }
+    } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
     if (outcome.kind === 'queued') outbox.markQueued(row.replyRef);
     else if (outcome.kind === 'terminal') outbox.settle(row.replyRef, row.commandId, outcome.result);
     else outbox.retryLater(row.replyRef, maxAgeMs, outcome.kind === 'busy' ? IMESSAGE_BUSY_RETRY_MS : undefined);
