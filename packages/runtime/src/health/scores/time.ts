@@ -23,6 +23,11 @@ const localMidnight = (day: string, timeZone: string): number => {
 };
 export const localDayWindow = (day: string, timeZone: string): Readonly<{ start: number; end: number }> =>
   ({ start: localMidnight(day, timeZone), end: localMidnight(shiftDay(day, 1), timeZone) });
+// Minutes past midnight on the local wall clock, so 15:00 is 900 on a 23- or 25-hour day as on any other.
+export const wallMinute = (instantMs: number, timeZone: string): number => {
+  const local = instantMs + offsetMinutes(instantMs, timeZone) * 60_000;
+  return Math.floor((((local % DAY_MS) + DAY_MS) % DAY_MS) / 60_000);
+};
 export const isTimeZone = (value: string): boolean => {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: value });

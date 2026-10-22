@@ -1,5 +1,6 @@
-import { toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { shiftDay } from './scores/time';
+import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, HrvMethod, Span } from './scores/types';
 
 // The producer turns an owner's stored readings into the derived row the app and the prompt read. It reads one 31-day
@@ -16,6 +17,9 @@ export type ProducerDeps = Readonly<{
   // Told the owner's local today when its row moved to another zone word, against the same sources. It carries the day
   // only: no pillar, zone or score. A failure here never fails the write.
   onZoneChange?: (day: string) => Promise<void>;
+  // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
+  // zone is the score's own band.
+  readScores?: (day: string) => Promise<unknown>;
 }>;
 
 const WINDOW_DAYS = 30;
@@ -187,6 +191,31 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
   };
 };
 
+// The row this one replaces: the same day's, written by an earlier upload. A day's first row, a read that fails and an answer
+// for another day are no row.
+const storedBefore = async (read: ProducerDeps['readScores'], day: string): Promise<Record<string, unknown> | null> => {
+  try {
+    const same = asRecord(asRecord(await read?.(day))?.scores);
+    return same?.day === day ? same : null;
+  } catch { return null; }
+};
+// Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
+// report a change only on a real crossing. A day's first row is its own band, so the word never drifts from a fresh night's
+// score for longer than that day. A zone another algorithm version wrote is not the same state and holds nothing.
+const steadied = (scores: DailyScores, before: Record<string, unknown> | null): DailyScores => {
+  const zoneBefore = <P extends 'recovery' | 'form' | 'weight'>(pillar: P, version: string) => {
+    const stored = asRecord(before?.[pillar]);
+    return stored?.algorithm_version === version ? fromRowZone(pillar, stored.zone) : null;
+  };
+  const { recovery, form, weight } = scores;
+  return {
+    ...scores,
+    recovery: recovery.state === 'available' ? { ...recovery, zone: heldZone(recoveryZone, recovery.score, zoneBefore('recovery', recovery.algorithm_version)) } : recovery,
+    form: form.state === 'available' ? { ...form, zone: heldZone(formZone, form.score, zoneBefore('form', form.algorithm_version)) } : form,
+    weight: weight.state === 'available' ? { ...weight, zone: heldZone(weightZone, weight.score, zoneBefore('weight', weight.algorithm_version)) } : weight,
+  };
+};
+
 // The writer names the pillars whose zone word changed; only whether any did leaves this function.
 const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
 
@@ -235,7 +264,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, tags);
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), chosen, parsed.series.readAt, at.timezone, tags);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
