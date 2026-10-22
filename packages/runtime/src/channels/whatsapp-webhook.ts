@@ -102,20 +102,28 @@ const hiddenNumberSenders = (body: WaBody): string[] => {
 
 const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone number, so I can't tell which Waldo account it belongs to and couldn't act on your message. Please use the Waldo app for now.";
 
-// Meta can accept a send and refuse it afterwards because the 24-hour window had closed on its clock: a failed status
-// carrying 131047. Only those are kept, with the time Meta refused them, grouped by the recipient they were sent to; every
-// other status is dropped.
+// Meta accepts a send and reports later what became of it. Three kinds reach the recipient's owner, by message id with the
+// time Meta reported it: a refusal for the 24-hour window (a failed status carrying 131047), arrival on the phone (delivered,
+// read or played; Meta skips delivered when a message is read at once), and any other failure. `sent` only says Meta's
+// servers sent it, and a failure can still follow, so it is dropped with every other status.
 type WaStatus = { id?: unknown; status?: unknown; timestamp?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
-type WaRefusal = { id: string; at: number | null };
+type WaReport = { id: string; at: number | null };
+type WaReports = { refused: WaReport[]; delivered: WaReport[]; failed: WaReport[] };
+const ARRIVED = new Set(['delivered', 'read', 'played']);
 const statusesOf = (body: WaBody): WaStatus[] => (body.entry ?? []).flatMap(entry => (entry.changes ?? []).flatMap(change =>
   Array.isArray(change.value?.statuses) ? change.value.statuses as WaStatus[] : []));
-const windowRefusals = (body: WaBody): Map<string, WaRefusal[]> => {
-  const out = new Map<string, WaRefusal[]>();
+const statusReports = (body: WaBody): Map<string, WaReports> => {
+  const out = new Map<string, WaReports>();
   for (const status of statusesOf(body)) {
-    if (status?.status !== 'failed' || typeof status.id !== 'string' || !status.id || typeof status.recipient_id !== 'string' || !status.recipient_id) continue;
-    if (!Array.isArray(status.errors) || !status.errors.some(error => error?.code === WHATSAPP_REENGAGEMENT_ERROR)) continue;
+    if (typeof status?.id !== 'string' || !status.id || typeof status.recipient_id !== 'string' || !status.recipient_id) continue;
+    const kind = ARRIVED.has(String(status.status)) ? 'delivered' as const
+      : status.status !== 'failed' ? null
+        : Array.isArray(status.errors) && status.errors.some(error => error?.code === WHATSAPP_REENGAGEMENT_ERROR) ? 'refused' as const : 'failed' as const;
+    if (!kind) continue;
     const at = typeof status.timestamp === 'string' && /^\d{1,12}$/.test(status.timestamp) ? Number(status.timestamp) * 1000 : null;
-    out.set(status.recipient_id, [...(out.get(status.recipient_id) ?? []), { id: status.id, at }]);
+    const reports = out.get(status.recipient_id) ?? { refused: [], delivered: [], failed: [] };
+    reports[kind].push({ id: status.id, at });
+    out.set(status.recipient_id, reports);
   }
   return out;
 };
@@ -147,8 +155,9 @@ const linkCode = (body: WaBody, senderId: string): string | null => {
 };
 
 // The webhook verifies Meta's signature, resolves which owner a WhatsApp sender belongs to and
-// wakes only that owner's Durable Object. A status callback reaches the owner only when Meta refused a send for the
-// 24-hour window; every failed one is logged by its error codes, and the rest are acknowledged and dropped.
+// wakes only that owner's Durable Object. A status callback reaches the owner when it reports a send's outcome: refused for
+// the 24-hour window, arrived on the phone, or failed; every failed one is also logged by its error codes, and the rest are
+// acknowledged and dropped.
 // A sender with no owner can redeem a one-time console link code ("waldo CODE"); any other message gets the
 // text-first reply: a one-tap sign-in link when one owner has this number on file, otherwise the waitlist.
 export const handleWhatsAppWebhook = async (
@@ -219,15 +228,15 @@ export const handleWhatsAppWebhook = async (
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error, debug) }))));
   }
   for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));
-  // A refusal the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta delivers it again; the owner
-  // handles each message id once. A definite refusal (a 4xx: a subject no longer bound, a malformed batch) is acknowledged,
+  // Reports the owner could not take for now (unreachable, or a 5xx) answer 503, so Meta delivers them again; the owner
+  // handles each report once. A definite refusal (a 4xx: a subject no longer bound, a malformed batch) is acknowledged,
   // since redelivering it can never succeed.
-  for (const [recipient, refused] of windowRefusals(payload)) {
+  for (const [recipient, reports] of statusReports(payload)) {
     try {
       const route = await directory.byPresence('whatsapp', recipient);
       if (!route) continue;
       const taken = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-status', {
-        method: 'POST', body: JSON.stringify({ refused }), headers: { 'x-waldo-whatsapp-subject': route.subject } });
+        method: 'POST', body: JSON.stringify(reports), headers: { 'x-waldo-whatsapp-subject': route.subject } });
       if (!taken.ok) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, status: taken.status })); if (taken.status >= 500) unavailable = true; }
     } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, error: String(error) })); unavailable = true; }
   }
