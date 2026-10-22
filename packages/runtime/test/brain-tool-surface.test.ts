@@ -13,6 +13,8 @@ import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools } from '../src/tools/records
 import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
 // tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
@@ -205,4 +207,11 @@ describe('the brain tool surface', () => {
     const wire = (await openAIBody(searched!)).input as Record<string, unknown>[];
     expect(wire.map((item) => item.type).filter(Boolean)).toEqual(['tool_search_call', 'tool_search_output', 'function_call', 'function_call_output']);
   });
+});
+
+// The deployed switch: staging runs tool search; production keeps the full menu until its own flip. Off is the rollback.
+it('staging runs tool search and production does not', () => {
+  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('on');
+  expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
