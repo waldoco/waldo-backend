@@ -11,11 +11,11 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
-import { HEALTH_ZONE_CHANGE_PATH, verifiedZoneChange } from '../health/zone-change-route';
+import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange } from '../health/zone-change-route';
+import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
-import { produceHealthScores } from '../health/producer';
 import { computeDailyScores } from '../health/scores';
 import { invokeHealth } from './app-health';
 import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, HEALTH_TRIGGER_FORMAT, HEALTH_TRIGGER_ID } from '../health/trigger';
@@ -225,6 +225,10 @@ type OwnerRuntime = Readonly<{
   noticeFailures(): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
+  // The owner's derived health rows: asked for by each upload that changed a reading (null zone: a wearable sync), and
+  // recomputed once for every window of asks.
+  healthSamples(timezone: string | null): Promise<void>;
+  healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
   healthTrigger(entry: ScheduleEntry): Promise<void>;
@@ -1025,6 +1029,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.setup('app').healthChanged(day);
     return Response.json({ok:true},{headers});
   }
+  // Worker-to-DO only: an upload changed this owner's readings. It carries the zone the batch was read in, and asks for one
+  // recompute of the derived rows.
+  private async healthSamples(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const timezone=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!timezone)return Response.json({error:'unavailable'},{status:403,headers});
+    await this.setup('app').healthSamples(timezone);
+    return Response.json({ok:true},{headers});
+  }
   // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
   private async healthProvider(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
@@ -1040,8 +1053,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.whoop??=whoopOwner({
       doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
       timezone:()=>this.setup('app').timezone,
-      produce:()=>{const app=this.setup('app'),rpc=signedRpc(this.env),doName=this.ctx.storage.kv.get<string>('do_name')??'';
-        return produceHealthScores({readSeries:range=>invokeHealth(rpc,doName,'series_read',JSON.stringify(range)),writeContext:payload=>invokeHealth(rpc,doName,'context_write',payload),readScores:day=>invokeHealth(rpc,doName,'scores_read',JSON.stringify(day===null?{}:{day})),compute:computeDailyScores,readDemand:range=>app.calendarDemand(range),onZoneChange:app.healthChanged},{now:Date.now(),timezone:app.timezone});},
+      produce:()=>this.setup('app').healthSamples(null),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
@@ -1180,6 +1192,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
     if(path===HEALTH_ZONE_CHANGE_PATH)return this.healthZoneChange(request);
+    if(path===HEALTH_SAMPLES_PATH)return this.healthSamples(request);
     if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
@@ -2161,7 +2174,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async () => { await this.providerOwner().sync(); } };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async (entry: ScheduleEntry) => { if (entry.id === HEALTH_RECOMPUTE_ID) await this.setup('app').healthRecompute(); else await this.providerOwner().sync(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
@@ -3602,6 +3615,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const due = healthTriggerDueAt(Date.now(), healthBook.lastRunAt());
       await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: due, dueAt: due, payloadRefs: { id: HEALTH_TRIGGER_ID } });
     };
+    const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
+    const recompute = healthRecompute({ scheduler, kv: identity, now: Date.now, ownerZone: () => clock.timezone, producer: {
+      readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
+      readScores: day => healthRpc('scores_read', JSON.stringify(day === null ? {} : { day })),
+      compute: computeDailyScores, readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
+    } });
+    const healthSamples = (timezone: string | null) => recompute.ask(timezone);
+    const healthRecomputeRun = async () => {
+      const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
+      try { log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: await recompute.run() }); }
+      catch (error) { log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: false, code: 'failed' }); throw error; }
+    };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
@@ -3960,7 +3985,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);

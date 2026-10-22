@@ -3,12 +3,17 @@ import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { HEALTH_SAMPLES_PATH, verifiedHealthSamples } from '../src/health/zone-change-route';
 
 const SECRET = 'fictional-router-secret-00000000000000000';
 const CREDENTIAL = `owner-1.${'a'.repeat(32)}.sig`;
 const auth = { readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null) } as unknown as ConsoleAuth;
+// Every request the Worker sends the owner's object, and how the object answers it. By default the object cannot take a
+// notice, so the Worker recomputes on its own, as it does when the object is away.
+const toOwner: Request[] = [];
+let ownerAnswer = (): Response => Response.json({ error: 'unavailable' }, { status: 503 });
 const env = () => ({
-  OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
+  OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { toOwner.push(request); return ownerAnswer(); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
 }) as never;
@@ -32,7 +37,8 @@ type Rpc = { fn: string; body: Record<string, unknown> };
 const rpcs: Rpc[] = [];
 let answers: Record<string, unknown | Error> = {};
 beforeEach(() => {
-  rpcs.length = 0;
+  rpcs.length = 0; toOwner.length = 0;
+  ownerAnswer = () => Response.json({ error: 'unavailable' }, { status: 503 });
   answers = { health_ingest: receipt, health_series_read: series(), health_context_write: { written: true } };
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     const fn = url.split('/rpc/')[1]!;
@@ -49,13 +55,39 @@ const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) =>
 }), env(), auth, defer) as Promise<Response>;
 const deferrals = () => { const work: Promise<unknown>[] = []; return { work, defer: (p: Promise<unknown>) => { work.push(p); } }; };
 
-describe('health producer after an ingest commit', () => {
+describe('a committed ingest asks the owner\'s object to recompute', () => {
+  it('sends the zone the batch was read in, signed, and reads and writes nothing itself', async () => {
+    ownerAnswer = () => Response.json({ ok: true });
+    const d = deferrals();
+    const response = await ingest({ ...batch, timezone: 'Asia/Kolkata' }, d.defer);
+    expect([response.status, await response.json()]).toEqual([200, receipt]);
+    await Promise.all(d.work);
+    expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
+    expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
+    expect(await toOwner[0]!.clone().json()).toEqual({ timezone: 'Asia/Kolkata' });
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('Asia/Kolkata');
+  });
+
+  it('asks nothing for a replayed, empty or refused batch', async () => {
+    ownerAnswer = () => Response.json({ ok: true });
+    for (const answer of [{ ...receipt, replayed: true }, { ...receipt, accepted: 0, deleted: 0, ignored: 1 }, { error: 'epoch_conflict' }]) {
+      answers.health_ingest = answer;
+      const d = deferrals();
+      await ingest(batch, d.defer);
+      await Promise.all(d.work);
+    }
+    expect(toOwner).toEqual([]);
+  });
+});
+
+describe('the Worker recomputes when the owner\'s object cannot take the notice', () => {
   it('reads the series and writes the derived rows once the batch is committed, after the receipt is settled', async () => {
     const d = deferrals();
     const response = await ingest(batch, d.defer);
     expect([response.status, await response.json()]).toEqual([200, receipt]);
     expect(d.work).toHaveLength(1);
     await Promise.all(d.work);
+    expect(new URL(toOwner[0]!.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     const fns = rpcs.map(r => r.fn);
     expect(fns[0]).toBe('health_ingest');
     expect(fns[1]).toBe('health_series_read');
