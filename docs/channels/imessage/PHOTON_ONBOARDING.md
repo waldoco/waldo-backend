@@ -41,8 +41,10 @@ is shared by every Worker that names it.
    - Scopes: `openid offline_access projects:read projects:write spectrum:read spectrum:write`.
    Keep the client secret. Photon shows it once.
 2. Configure the Worker:
-   - Vars: `PHOTON_PROJECT_ID`, `PHOTON_OAUTH_CLIENT_ID`, `IMESSAGE_CONSOLE_URL`.
-   - Secret: `wrangler secret put PHOTON_OAUTH_CLIENT_SECRET --env <env>`.
+   - Vars: `PHOTON_PROJECT_ID`, `IMESSAGE_CONSOLE_URL`.
+   - Secrets: `wrangler secret put PHOTON_OAUTH_CLIENT_ID --env <env>` and
+     `wrangler secret put PHOTON_OAUTH_CLIENT_SECRET --env <env>`. Both are secrets, so setting them turns Photon on
+     without a code change.
    Without all three of the project id, client id and secret, Photon is off and the console falls back to
    `IMESSAGE_WALDO_ADDRESS`.
 3. An admin opens `/console/imessage` and clicks **Connect Photon**. They sign in to Photon and approve. The callback
