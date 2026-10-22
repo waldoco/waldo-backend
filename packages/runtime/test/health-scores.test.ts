@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { computeDailyScores } from '../src/health/scores';
 import { localIso, localToEpoch } from '../src/channels/reminders';
 import { localDayWindow } from '../src/health/scores/time';
-import { formZone, recoveryZone, weightZone } from '../src/health/scores/zones';
+import { formZone, heldZone, recoveryZone, weightZone } from '../src/health/scores/zones';
 import type { DailyScoresInput, DayRecord, HourlyBucket } from '../src/health/scores/types';
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -54,6 +54,14 @@ describe('health scores: Recovery', () => {
     expect([100, 80, 79, 60, 59, 40, 39, 0].map(recoveryZone)).toEqual(['excellent', 'excellent', 'solid', 'solid', 'mixed', 'mixed', 'compromised', 'compromised']);
     expect([80, 79, 60, 59, 40, 39].map(formZone)).toEqual(['energized', 'steady', 'steady', 'flagging', 'flagging', 'depleted']);
     expect([0, 20, 21, 40, 41, 60, 61, 100].map(weightZone)).toEqual(['light', 'light', 'moderate', 'moderate', 'heavy', 'heavy', 'peak', 'peak']);
+  });
+  it('holds a zone through a move of five points or fewer past it, and leaves it on a larger one, in every band shape', () => {
+    expect([75, 74, 90].map(score => heldZone(formZone, score, 'energized'))).toEqual(['energized', 'steady', 'energized']);
+    expect([84, 85, 55, 54].map(score => heldZone(formZone, score, 'steady'))).toEqual(['steady', 'energized', 'steady', 'flagging']);
+    expect([25, 26].map(score => heldZone(weightZone, score, 'light'))).toEqual(['light', 'moderate']);
+    expect([79, 61, 35].map(score => heldZone(recoveryZone, score, null))).toEqual(['solid', 'solid', 'compromised']);
+    // Two zones away is never held, however near an edge.
+    expect(heldZone(formZone, 61, 'depleted')).toBe('steady');
   });
   it('is unavailable with missing_sleep when the target day has no sleep', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).recovery).toEqual({ state: 'unavailable', reason: 'missing_sleep' });

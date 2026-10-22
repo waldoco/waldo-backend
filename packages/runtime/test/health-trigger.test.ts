@@ -226,6 +226,12 @@ describe('the health trigger', () => {
     });
   });
 
+  it('shows the model the Form zone the backend stored, the same word the app shows', () => {
+    const held = healthTriggerView({ context: { ...ROW.context, form: { ...ROW.context.form, score: 43, zone: 'low' } }, previous: ROW.previous }, NOW, TZ)!;
+    expect(held.now.form).toBe('depleted');
+    expect(healthTriggerView({ context: { ...ROW.context, form: { ...ROW.context.form, zone: 'unknown' } }, previous: ROW.previous }, NOW, TZ)!.now.form).toBeNull();
+  });
+
   it('under auto, only watches until the owner\'s own baseline exists for the source, then proposes', () => {
     const view = (over: Record<string, unknown> = {}, previous: unknown = ROW.previous) => healthTriggerView({ context: { ...ROW.context, ...over }, previous }, NOW, TZ)!;
     expect(resolveHealthMode('auto', view())).toBe('live');

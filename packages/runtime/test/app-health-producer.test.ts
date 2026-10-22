@@ -59,8 +59,9 @@ describe('health producer after an ingest commit', () => {
     const fns = rpcs.map(r => r.fn);
     expect(fns[0]).toBe('health_ingest');
     expect(fns[1]).toBe('health_series_read');
-    expect(fns.slice(2).every(fn => fn === 'health_context_write')).toBe(true);
-    expect(fns.length).toBeGreaterThan(2);
+    // Each write is preceded by a read of the row it replaces, so its zones can hold through a steady move.
+    expect(fns.slice(2).every(fn => fn === 'health_context_write' || fn === 'health_scores_read')).toBe(true);
+    expect(fns.filter(fn => fn === 'health_context_write')).toHaveLength(2);
   });
 
   it('signs the series read and each write over the exact payload it sends', async () => {
@@ -80,7 +81,7 @@ describe('health producer after an ingest commit', () => {
     const d = deferrals();
     await ingest(batch, d.defer);
     await Promise.all(d.work);
-    const written = JSON.parse(rpcs[2]!.body.p_payload as string);
+    const written = JSON.parse(rpcs.find(r => r.fn === 'health_context_write')!.body.p_payload as string);
     expect(written.read_at).toBe('2026-10-11T08:00:00.000123Z');
     expect(written.basis).toEqual([{ source: 'apple', consent_epoch: 3 }]);
   });
