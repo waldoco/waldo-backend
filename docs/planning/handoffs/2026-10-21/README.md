@@ -259,6 +259,25 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | — browser errand wiring (no PR yet) | `claude/browser-errands-wiring` | `ea9f254f` | One WIP commit (typechecks; seam and engine tests not run): the Stagehand engine renamed, unadopted errand types refused, custody gaps, the env-flag gate, spend fixes. The plan, with the #1344 conditions 1–6 and their tests, is in #1410's Handoff. Local must add `BROWSER_ERRANDS_ENGINE=` and a `BROWSER_USE_API_KEY=` placeholder to `.env.example` | Next session (Sonnet), after #1355 and #1410 |
 | #1413 WhatsApp outbox follow-ups (#1380 items 2–9, #1310 LOW) | `claude/whatsapp-outbox-followups` | `969e08c7` | **Merged** as `6d70e46b` | — |
 
+### Re-verification at 14:26Z (C0, read-only; supersedes the table above where they differ)
+
+`beta-mvp` is `9360de09`, and no lane head below contains it, so each needs a carry at train time. Every open lane PR is now driven by another session (`session_01MUsBBq…`). Cloud lanes don't touch them.
+
+| PR | Current head | CI at head | Latest gate state | Ready posted at the current head? |
+|---|---|---|---|---|
+| #1355 worker layer | `d7329157` | running (0/7 done) | **BLOCK** at `c67e01e2` (10:38Z) | No (commits since the BLOCK) |
+| #1356 onboarding | `6ab65eed` | 7/7 | **BLOCK** at `6ab65eed` (12:42Z); merge state dirty | No |
+| #1378 iMessage proactive | `cb7db13e` | **no check runs on this head** | **BLOCK** at `ca06062c` (10:16Z); dirty | No |
+| #1383 H-9 | `472296cb` | 7/7 | no verdict; conflicts with #1364 in `evals/nightly/suite.ts` (additive) | Yes (earlier), dirty |
+| #1409 owner-session connects | `a66be55a` | 6/7, verify running | **BLOCK** at `992c6b5b` (10:50Z) | No (commits since the BLOCK) |
+| #1364 tool search | `4bb06d64` | 7/7 | **PASS** at `4bb06d64` (14:22Z), merge held by owner request | — |
+| #1379 M-4 flush | `6f8dd330` (contains #1381's current head) | 7/7 | — | Yes, 14:13Z |
+| #1381 `remember` floor | `aaf45ac4` | 7/7 | — | Yes, 14:13Z |
+| #1365 untrusted text | `ad5ef389` | 7/7 | **BLOCK** at `5c0c0377` (10:05Z); fix pushed since | No |
+| #1410 browser replay | `053c3e34` | 7/7 | — | Yes, 14:14Z ("merge #1355 first") |
+
+No local wall file exists for any head that changed after the lanes stopped; CI is the evidence there.
+
 ### Dropped or unowned follow-ups (pick up when there is capacity)
 - OAuth hardening from the #1388 and #1393 reviews (C10 began (a) on branch `claude/oauth-hardening-followups-c10-wip` at `085f0c23`: typecheck passes, no tests run, no PR; the specs for (a)–(e) are in #1409's Handoff; also, #1388's comments in `google-oauth.ts`, `mcp-oauth-routes.ts`, `whoop-routes.ts` and the `oauth-browser-binding.ts` header overclaim protection against code injection): the `__Host-` cookie prefix, a `/c/<ticket>` rate limit, a deploy-script check that `WALDO_OAUTH_STATE_SECRET` is set, a retry of the replaced-grant release, and correcting the PKCE overclaim (#1404).
 - A forget that selects nothing still wipes history (#1365 review, Probe B): `memory.ts:113` runs before the empty-selection failure at `:132`.
@@ -277,6 +296,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-22 11:24 | **Last C0 action.** **#1413 merged** (`6d70e46b`). Every head was unchanged since the lanes stopped, and CI had finished: C0 posted Ready on **#1364** (CI 7/7), **#1379** (CI 7/7) and **#1410** (CI 7/7, marked non-draft), each from its saved wall file. **#1381**: shard 2/4 was cancelled, not failed, so a status comment is posted and no Ready; re-run that job once. All four need a carry onto `6d70e46b` at train time. No more check-ins scheduled; the final handoff table above is current. | — | Next session: the "starts here" list. |
 | 2026-10-22 11:55 | **#1109 merged** (`27d228d7`). **#1365:** another session (`session_01MUsBBq…`) pushed the BLOCK fix `ad5ef389` at 11:14Z (topic and span forgets from a tainted turn now go to the owner's card by ids only); no Ready yet. **The owner ruled it stays with that session**: no cloud lane starts it, and the "starts here" list is updated. | #1365 `ad5ef389` | — |
 | 2026-10-22 13:57 | **C14** (Sonnet; started to re-run #1381's cancelled shard) **stopped without any change**: the other session `session_01MUsBBq…` had pushed to #1381 at 12:09Z. `f0899318` tightens the matcher; `aaf45ac4` merges `beta-mvp`. CI 7/7 green at `aaf45ac4`, shard 2 included; no wall covers the matcher change; no Ready posted. Per the owner's call on #1365, #1381 stays with that session too. **Knock-on:** #1379's Ready head `ecf1c88b` contains #1381's old `3b8f0db3`, so it must merge #1381's current head before landing. | #1381 `aaf45ac4` | — |
+| 2026-10-22 14:28 | **Read-only re-verification of the ten lane PRs** (table "Re-verification at 14:26Z" above). **Correction:** local had posted BLOCKs that C0's earlier tables missed: #1378 (10:16Z), #1355 (10:38Z), #1409 (10:50Z) and #1356 (12:42Z). **#1364 PASS** at `4bb06d64`, merge held. **Ready at the current head, CI 7/7:** #1379, #1381, #1410 (posted by the other session). #1378 has no check runs on its head. No head contains `beta-mvp` `9360de09`. | beta-mvp `9360de09` | — |
 
 ### Owner asks raised since handoff
 
