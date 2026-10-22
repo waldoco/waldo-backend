@@ -39,10 +39,10 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Pull Supabase images from public ECR
+      - name: Pull Supabase images from Docker Hub
         # setup-cli points every later Supabase CLI call at ghcr.io, which throttles hosted runners
-        # with toomanyrequests, signed in or not. Supabase publishes the same tags to public ECR.
-        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=public.ecr.aws" >> "$GITHUB_ENV"
+        # with toomanyrequests, signed in or not; public ECR answers them "Data limit exceeded".
+        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io" >> "$GITHUB_ENV"
 
       - name: Start isolated Supabase Auth, REST, and database stack
         run: supabase start > /dev/null
@@ -132,10 +132,10 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Pull Supabase images from public ECR
+      - name: Pull Supabase images from Docker Hub
         # setup-cli points every later Supabase CLI call at ghcr.io, which throttles hosted runners
-        # with toomanyrequests, signed in or not. Supabase publishes the same tags to public ECR.
-        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=public.ecr.aws" >> "$GITHUB_ENV"
+        # with toomanyrequests, signed in or not; public ECR answers them "Data limit exceeded".
+        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io" >> "$GITHUB_ENV"
 
       - name: Start isolated database and apply migrations from zero
         run: supabase db start
