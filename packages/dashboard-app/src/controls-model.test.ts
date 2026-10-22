@@ -149,7 +149,7 @@ describe('revision-bound owner control actions', () => {
 
 describe('iMessage and device setup reads', () => {
   const bridge = { id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid', observed: true, host_version: 'host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] };
-  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
+  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
   const device = { id: 'dev_fixture', label: '<b>Mac</b>', capabilities: ['machine_state_query'], created_at: '2026-10-16', actions: ['device.revoke', 'device.query'] };
   const devices = { ...day, view: 'devices', data: { actions: ['device.pair'], devices: [device], query_kinds: ['session_status'], notification_bodies: ['Your Mac is connected.'] }, status: { devices: [{ id: device.id, online: false, last_seen_at: null, commands: [{ class: 'machine_state_query', state: 'queued', result_state: null }] }] } };
   it('keeps only the listed fields and actions, and liveness beside the data', () => {
@@ -158,7 +158,7 @@ describe('iMessage and device setup reads', () => {
     expect(readControls({ ...devices, data: { ...devices.data, devices: [{ ...device, pubkey: 'never-retain' }] } }, 'devices')).toEqual(devices);
     for (const value of [
       { ...imessage, status: undefined }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'invite.create'] } }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'imessage.link'] } },
-      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } },
+      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } }, { ...imessage, data: { ...imessage.data, photon: 'maybe' } }, { ...imessage, data: { ...imessage.data, phone: 5 } },
     ]) expect(() => readControls(value, 'imessage')).toThrow('unsupported');
     for (const value of [{ ...devices, data: { ...devices.data, actions: ['device.revoke'] } }, { ...devices, data: { ...devices.data, devices: [{ ...device, actions: ['device.pair'] }] } }, { ...devices, status: { devices: [{ ...devices.status.devices[0], online: 'yes' }] } }])
       expect(() => readControls(value, 'devices')).toThrow('unsupported');
