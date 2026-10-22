@@ -49,6 +49,17 @@ describe('Photon OAuth custody', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('calls fetch unbound, as Workers require', async () => {
+    // Workers' fetch throws "Illegal invocation" when called with another object as `this`.
+    const strictFetch = function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+      return Promise.resolve(Response.json({ access_token: 'a', expires_in: 900, refresh_token: 'r' }));
+    } as unknown as typeof fetch;
+    const t = new PhotonTokens(memoryKv(), config, strictFetch, () => 0);
+    const { nonce } = await t.begin('o', 'https://w/cb');
+    expect(await t.finish(nonce, new URLSearchParams({ code: 'c' }))).toBe('linked');
+  });
+
   it('refuses an expired, denied or codeless attempt without calling Photon', async () => {
     const kv = memoryKv(); let now = 0;
     const t = new PhotonTokens(kv, config, scripted([]).fetcher, () => now);
