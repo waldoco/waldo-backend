@@ -27,6 +27,11 @@ describe('browser errand checkpoint', () => {
     expect(browserErrandCheckpointSchema.safeParse({ ...valid, ...change }).success).toBe(false);
   });
 
+  it('names its engines with the browser session contract\'s provider names', () => {
+    expect(browserErrandCheckpointSchema.safeParse({ ...valid, engine: 'browserbase_stagehand_http_v3' }).success).toBe(true);
+    expect(browserErrandCheckpointSchema.safeParse({ ...valid, engine: 'stagehand_browserbase' }).success).toBe(false);
+  });
+
   it('names exactly three structured blocks and seven login states', () => {
     expect(browserErrandBlockedSchema.options).toEqual(['challenge', 'login_required', 'js_required']);
     expect(browserErrandBlockedSchema.safeParse('captcha').success).toBe(false);

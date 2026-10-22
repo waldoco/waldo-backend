@@ -24,7 +24,7 @@ function world(spec: ErrandSpec, behaviour: Behaviour, run: number) {
     findSubmit: async () => ({ status: 'absent' }),
     run: async () => ({ state: 'finished', vendorClaim: true }),
     verify: async ({ keys }) => ({ observed: Object.fromEntries(keys.map(key => [key, account[key]!])), confirmationId: null }),
-    release: async () => {}, fence: async () => {},
+    release: async () => {}, fence: async () => {}, held: async () => true,
     login: { start: async () => ({ sessionRef: 's-live', liveViewUrl: 'https://live.synthetic.example/v' }), confirm: async () => { signedIn = true; return true; } },
   };
   const oracle: AccountOracle = async (_spec, _target, keys) => Object.fromEntries(keys.map(key => [key, account[key]!]));

@@ -15,14 +15,20 @@ export type BrowserErrandEngine = Readonly<{
   name: BrowserErrandEngineName;
   // Runs the errand up to its final review screen, stops before the committing action, and keeps the browser open
   // for holdSeconds. The facts are what the review screen says the final action would commit.
-  prepare(input: Readonly<{ goal: string; origin: string; finalAction: string; profileRef: string | null; holdSeconds: number }>): Promise<
+  // started is called as soon as the engine has a session, before it waits on the run, so a crash mid-prepare leaves the
+  // session on record for the sweep to stop.
+  prepare(input: Readonly<{ goal: string; origin: string; finalAction: string; profileRef: string | null; holdSeconds: number;
+    started?(refs: Readonly<{ sessionRef: string; runRef: string }>): Promise<void> }>): Promise<
     | Readonly<{ kind: 'review'; sessionRef: string; runRef: string; url: string; facts: Facts }>
     | Readonly<{ kind: 'blocked'; reason: BrowserErrandBlocked; sessionRef: string | null; runRef: string | null }>
     | Readonly<{ kind: 'failed'; sessionRef: string | null; runRef: string | null }>>;
-  // Performs only the approved final action in the held browser. 'not_started' means the engine knows no run started.
-  // A throw means the outcome is unknown.
+  // Performs only the approved final action in the held browser. 'not_started' means the engine knows no run started;
+  // 'unknown' means a run started somewhere other than the held browser and was stopped. A throw means the outcome is unknown.
   submit(input: Readonly<{ sessionRef: string; submitKey: string; profileRef: string | null; finalAction: string; facts: Facts }>): Promise<
-    Readonly<{ status: 'started'; runRef: string }> | Readonly<{ status: 'not_started' }>>;
+    Readonly<{ status: 'started'; runRef: string }> | Readonly<{ status: 'not_started' }> | Readonly<{ status: 'unknown' }>>;
+  // Whether the held session still has the live browser the review ran in. A hold that lapsed may be given a fresh,
+  // empty browser on the next run, where the final step would act on a page the owner never saw.
+  held(sessionRef: string): Promise<boolean>;
   // Looks for a submit run the errand started but never recorded, ignoring the runs it already knows.
   findSubmit(input: Readonly<{ sessionRef: string; knownRunRefs: readonly string[] }>): Promise<
     Readonly<{ status: 'found'; runRef: string }> | Readonly<{ status: 'absent' }> | Readonly<{ status: 'unknown' }>>;
@@ -64,7 +70,10 @@ export type BrowserErrandPlan = Readonly<{
 export type BrowserErrandPrepared =
   | Readonly<{ status: 'review'; proposal: BrowserSubmitProposal }>
   | Readonly<{ status: 'blocked'; blocked: BrowserErrandBlocked }>
-  | Readonly<{ status: 'failed'; message: string }>;
+  | Readonly<{ status: 'failed'; message: string }>
+  // An errand type this engine may not submit: refused before any browser starts, so the owner never sees a card that
+  // cannot be approved.
+  | Readonly<{ status: 'unsupported'; message: string }>;
 
 export type BrowserErrandView = Readonly<{
   errandId: string; phase: BrowserErrandCheckpoint['phase']; blocked: BrowserErrandBlocked | null;
@@ -78,6 +87,10 @@ const TERMINAL: ReadonlySet<BrowserErrandCheckpoint['phase']> = new Set(['verifi
 const DEFAULT_HOLD_SECONDS = 1800;
 const DEFAULT_SUBMIT_MARGIN_MS = 120_000;
 const DEFAULT_LOGIN_MINUTES = 15;
+// A submitted errand whose outcome is still open is read back by the sweep at most this often, and for this long after
+// its submit: every readback of a finished run is a paid verify run on the owner's account.
+export const ERRAND_FOLLOW_UP_EVERY_MS = 10 * 60_000;
+export const ERRAND_FOLLOW_UP_FOR_MS = 24 * 60 * 60_000;
 
 const sortedFacts = (facts: Facts) => Object.entries(facts).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -127,7 +140,7 @@ export function browserErrand(options: Readonly<{
   };
   const factsDigest = (facts: Facts) => fixtureDigest(sortedFacts(facts));
   const scopeDigest = (record: BrowserErrandCheckpoint, proposalId: string) => fixtureDigest({
-    owner: options.ownerId, errand: options.errandId, engine: options.engine.name, origin: record.origin, facts: record.review?.factsDigest ?? null, proposalId,
+    owner: options.ownerId, errand: options.errandId, engine: options.engine.name, origin: record.origin, finalAction: record.finalAction, facts: record.review?.factsDigest ?? null, proposalId,
   });
   const actionDigest = (record: BrowserErrandCheckpoint) => fixtureDigest({ errand: options.errandId, origin: record.origin, finalAction: record.finalAction, facts: record.review?.factsDigest ?? null });
   const sameOrigin = (url: string, origin: string) => { try { return new URL(url).origin === origin; } catch { return false; } };
@@ -146,12 +159,13 @@ export function browserErrand(options: Readonly<{
     if (record.custody.submitRunRef === null) {
       // The submit request may have reached the engine before the process lost its answer. End the engine session
       // first so nothing can start later, then look for the run.
-      const sessionRef = record.custody.sessionRef;
-      if (sessionRef === null) { await save({ ...record, phase: 'unknown' }); return uncertain(); }
+      const sessionRef = record.custody.sessionRef, prepareRunRef = record.custody.prepareRunRef;
+      // Without the prepare run to look for, a listing cannot tell an absent submit from one the listing missed.
+      if (sessionRef === null || prepareRunRef === null) { await save({ ...record, phase: 'unknown' }); return uncertain(); }
       try { await options.engine.fence(sessionRef); }
       catch { await save({ ...record, phase: 'unknown' }); return uncertain(); }
       let found: Awaited<ReturnType<BrowserErrandEngine['findSubmit']>>;
-      try { found = await options.engine.findSubmit({ sessionRef, knownRunRefs: record.custody.prepareRunRef ? [record.custody.prepareRunRef] : [] }); }
+      try { found = await options.engine.findSubmit({ sessionRef, knownRunRefs: [prepareRunRef] }); }
       catch { found = { status: 'unknown' }; }
       if (found.status === 'absent') {
         await save({ ...record, phase: 'not_applied', holdExpiresAt: null, custody: { ...record.custody, sessionRef: null, liveViewUrl: null } });
@@ -197,6 +211,7 @@ export function browserErrand(options: Readonly<{
     async prepare(owner: string, plan: BrowserErrandPlan): Promise<BrowserErrandPrepared> {
       enabled(owner);
       if (plan.healthAdjacent) return { status: 'failed', message: 'Health-related errands cannot run in a hosted browser yet.' };
+      if (!options.submitAdopted(plan.errandType)) return { status: 'unsupported', message: 'This kind of errand cannot be finished in this browser yet, so nothing was started.' };
       return options.store.exclusive(async () => {
         const prior = await load();
         if (prior && prior.phase !== 'ready') throw Error('browser errand already exists');
@@ -209,9 +224,12 @@ export function browserErrand(options: Readonly<{
           custody: { profileRef: plan.profileRef, sessionRef: prior?.custody.sessionRef ?? null, prepareRunRef: null, submitRunRef: null, liveViewUrl: null },
         }));
         let result: Awaited<ReturnType<BrowserErrandEngine['prepare']>>;
-        try { result = await options.engine.prepare({ goal: plan.goal, origin: plan.origin, finalAction: plan.finalAction, profileRef: plan.profileRef, holdSeconds }); }
-        catch { await save({ ...intent, phase: 'failed' }); return { status: 'failed', message: 'The browser could not get to the review screen.' }; }
-        const custody = { ...intent.custody, sessionRef: result.sessionRef ?? intent.custody.sessionRef, prepareRunRef: result.runRef };
+        let started = intent;
+        try {
+          result = await options.engine.prepare({ goal: plan.goal, origin: plan.origin, finalAction: plan.finalAction, profileRef: plan.profileRef, holdSeconds,
+            started: async ({ sessionRef, runRef }) => { started = await save({ ...started, custody: { ...started.custody, sessionRef, prepareRunRef: runRef } }); } });
+        } catch { await release(started, 'failed', true); return { status: 'failed', message: 'The browser could not get to the review screen.' }; }
+        const custody = { ...started.custody, sessionRef: result.sessionRef ?? started.custody.sessionRef, prepareRunRef: result.runRef ?? started.custody.prepareRunRef };
         if (result.kind === 'failed') { await release({ ...intent, custody }, 'failed'); return { status: 'failed', message: 'The browser could not get to the review screen.' }; }
         if (result.kind === 'blocked') {
           // A login wall keeps the browser for the owner's sign-in; any other block releases it.
@@ -315,11 +333,19 @@ export function browserErrand(options: Readonly<{
         }
         const grant = await permit('submit', { errandId: options.errandId, proposalId: record.proposalId!, approvalRef, factsDigest: record.review.factsDigest });
         if (!grant || record.custody.sessionRef === null) return rejected('The approval could not be confirmed, so nothing was submitted.');
+        let live = false;
+        try { live = await options.engine.held(record.custody.sessionRef); } catch { live = false; }
+        if (!live) {
+          await release({ ...record, review: null, proposalId: null, approvalExpiresAt: null, submit: null, custody: { ...record.custody, prepareRunRef: null } }, 'ready', true);
+          return rejected('The browser held for this review had closed, so nothing was submitted. Ask me to prepare it again and approve the new review.');
+        }
         // The intent is durable before the request leaves, so a lost answer becomes a readback, never a second submit.
         const intent = await save({ ...record, phase: 'submitting', submit: { key: (await fixtureDigest(options.newId())).slice(7, 39), startedAt: options.now() } });
         let started: Awaited<ReturnType<BrowserErrandEngine['submit']>>;
         try { started = await options.engine.submit({ sessionRef: record.custody.sessionRef, submitKey: intent.submit!.key, profileRef: record.custody.profileRef, finalAction: record.finalAction, facts: record.review.facts }); }
         catch { return readback(intent); }
+        // A run that started outside the held browser was stopped by the engine; whether it acted first is unknown.
+        if (started.status === 'unknown') { await save({ ...intent, phase: 'unknown' }); return uncertain(); }
         if (started.status === 'not_started') {
           // No run was created, but the held browser is still signed in, and on a conflict another run is active in it:
           // the session is ended so nothing in it can act. A failed end keeps the reference for the sweep.
@@ -367,6 +393,13 @@ export function browserErrand(options: Readonly<{
           return (await release({ ...record, login: { ...record.login, state: 'expired' } }, 'expired')).phase;
         }
         if (TERMINAL.has(record.phase) && record.custody.sessionRef !== null) return (await release(record, record.phase)).phase;
+        // Only a lost process leaves an errand preparing while the errand is not locked: its browser is stopped.
+        if (record.phase === 'preparing') return (await release(record, 'failed', true)).phase;
+        // A submit whose outcome is open is followed: its run is read back and the account verified, never resubmitted.
+        if (IN_FLIGHT.has(record.phase) && record.submit !== null && now - record.submit.startedAt < ERRAND_FOLLOW_UP_FOR_MS && now - record.updatedAt >= ERRAND_FOLLOW_UP_EVERY_MS) {
+          await readback(record);
+          return (await get()).phase;
+        }
         // Only a failed stop leaves a ready errand holding a browser.
         if (record.phase === 'ready' && record.custody.sessionRef !== null) return (await release(record, 'ready', true)).phase;
         return record.phase;

@@ -14,7 +14,8 @@ const factsSchema = z.record(z.string().min(1).max(80), z.string().min(1).max(50
 export const browserErrandBlockedSchema = rungBlockedOutcomeSchema;
 export type BrowserErrandBlocked = z.infer<typeof browserErrandBlockedSchema>;
 
-export const browserErrandEngineSchema = z.enum(['browser_use_v4', 'stagehand_browserbase']);
+// The Stagehand engine carries the provider name the browser session contract already uses.
+export const browserErrandEngineSchema = z.enum(['browser_use_v4', 'browserbase_stagehand_http_v3']);
 export type BrowserErrandEngineName = z.infer<typeof browserErrandEngineSchema>;
 
 export const browserLoginStateSchema = z.enum(['requested', 'owner_in_control', 'owner_done', 'signed_in', 'failed', 'expired', 'cancelled']);

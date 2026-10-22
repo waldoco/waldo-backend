@@ -1,6 +1,6 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
-import { browserUseErrandEngine } from '../../src/channels/browser-use-errand-engine';
+import { browserUseErrandEngineFromEnv, ERRAND_MAX_RUNS } from '../../src/channels/browser-use-errand-engine';
 import { bakeoffTargetsSchema, liveBakeoffConfig } from './live-config';
 import { runErrand, scoreBakeoff, type AccountOracle, type BakeoffRun } from './runner';
 import { BAKEOFF_SPECS } from './specs';
@@ -22,8 +22,11 @@ outer: for (const spec of BAKEOFF_SPECS) {
   const target = targets[spec.type];
   if (!target) continue;
   for (let run = 1; run <= config.runsPerType; run++) {
-    if (spent + config.maxCostUsdPerRun > config.spendCapUsd) { console.log(`Stopping: the next run could pass the $${config.spendCapUsd} cap.`); break outer; }
-    const engine = browserUseErrandEngine({ apiKey: config.apiKey, maxCostUsdPerRun: config.maxCostUsdPerRun });
+    // One errand makes up to ERRAND_MAX_RUNS runs, each capped at maxCostUsdPerRun, so that is what the next errand may spend.
+    if (spent + ERRAND_MAX_RUNS * config.maxCostUsdPerRun > config.spendCapUsd) { console.log(`Stopping: the next errand could pass the $${config.spendCapUsd} cap.`); break outer; }
+    // The engine is built through its env gate like every other caller; the operator's shell sets the flag and staging.
+    const engine = browserUseErrandEngineFromEnv(process.env, { maxCostUsdPerRun: config.maxCostUsdPerRun });
+    if (!engine) throw Error('Set BROWSER_ERRANDS_ENGINE=browser_use_v4 and WALDO_ENVIRONMENT=staging for the bake-off shell.');
     let result: BakeoffRun;
     try {
       result = await runErrand({ engineName: 'browser_use_v4', engine, spec, target, run, oracle, now: Date.now,

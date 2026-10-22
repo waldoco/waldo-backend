@@ -40,7 +40,7 @@ const runCreated = z.object({ id: z.string().regex(ID), sessionId: z.string().re
 const runStatus = z.object({ status: z.string() });
 const runSummary = z.object({ id: z.string(), status: z.string(), sessionId: z.string(), output: z.unknown().optional(), totalCostUsd: z.string() });
 const runList = z.object({ runs: z.array(z.object({ id: z.string().regex(ID), createdAt: z.string() })), hasMore: z.boolean().optional() });
-const browserView = z.object({ id: z.string().regex(ID), status: z.string(), liveUrl: z.string().nullable().optional(), proxyUsedMb: z.union([z.number(), z.string()]).nullable().optional(), proxyCost: z.union([z.number(), z.string()]).nullable().optional(), browserCost: z.union([z.number(), z.string()]).nullable().optional() });
+const browserView = z.object({ id: z.string().regex(ID), status: z.string(), agentSessionId: z.string().nullable().optional(), liveUrl: z.string().nullable().optional(), proxyUsedMb: z.union([z.number(), z.string()]).nullable().optional(), proxyCost: z.union([z.number(), z.string()]).nullable().optional(), browserCost: z.union([z.number(), z.string()]).nullable().optional() });
 const browserList = z.object({ items: z.array(browserView) });
 
 const sessionOf = (ref: string) => { const match = /^session:([A-Za-z0-9_-]{1,100})$/.exec(ref); return match ? match[1]! : null; };
@@ -54,19 +54,25 @@ export class BrowserUseUnavailable extends Error {}
 // Stagehand path; wiring passes this set to browserErrand's submitAdopted.
 export const BROWSER_USE_ADOPTED_ERRAND_TYPES: ReadonlySet<string> = new Set();
 
-// Errands are off unless the flag names this engine, a key exists, and the Worker says it is staging. An unset or
-// unknown environment name counts as not staging.
-export function browserUseErrandEngineFromEnv(env: BrowserUseErrandEnv, fetcher: typeof fetch = fetch): ReturnType<typeof browserUseErrandEngine> | null {
-  if (env.BROWSER_ERRANDS_ENGINE !== 'browser_use_v4' || env.WALDO_ENVIRONMENT !== 'staging' || !env.BROWSER_USE_API_KEY) return null;
-  return browserUseErrandEngine({ apiKey: env.BROWSER_USE_API_KEY, fetcher });
-}
+// The most runs one errand makes: prepare, submit, verify, and a login confirm with its own read. A spend reserve for an
+// errand covers all of them, since each may cost up to the per-run cap.
+export const ERRAND_MAX_RUNS = 5;
 
-export function browserUseErrandEngine(options: Readonly<{
-  apiKey: string; fetcher?: typeof fetch;
+export type BrowserUseErrandOptions = Readonly<{
+  fetcher?: typeof fetch;
   model?: string; maxCostUsdPerRun?: number;
   // How long one call waits for a run to finish; a run still going afterwards is reported, not abandoned.
   runWaitMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number;
-}>): BrowserErrandEngine & Readonly<{ spend(): BrowserUseSpend }> {
+}>;
+
+// Errands are off unless the flag names this engine, a key exists, and the Worker says it is staging. An unset or
+// unknown environment name counts as not staging. This is the only way to build the engine.
+export function browserUseErrandEngineFromEnv(env: BrowserUseErrandEnv, options: BrowserUseErrandOptions = {}): ReturnType<typeof browserUseErrandEngine> | null {
+  if (env.BROWSER_ERRANDS_ENGINE !== 'browser_use_v4' || env.WALDO_ENVIRONMENT !== 'staging' || !env.BROWSER_USE_API_KEY) return null;
+  return browserUseErrandEngine({ ...options, apiKey: env.BROWSER_USE_API_KEY });
+}
+
+function browserUseErrandEngine(options: BrowserUseErrandOptions & Readonly<{ apiKey: string }>): BrowserErrandEngine & Readonly<{ spend(): BrowserUseSpend }> {
   const fetcher = options.fetcher ?? fetch, now = options.now ?? Date.now;
   const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const runWaitMs = options.runWaitMs ?? 10 * 60_000, pollMs = options.pollMs ?? 3000;
@@ -134,10 +140,12 @@ export function browserUseErrandEngine(options: Readonly<{
       return parsed.success ? parsed.data : null;
     } finally { await endSession(created.sessionId).catch(() => undefined); }
   };
+  // The session's browsers. Each item's own session is checked rather than trusting the query filter, so a browser of
+  // another session is never stopped or counted here.
   const agentBrowsers = async (sessionId: string) => {
     const response = await call('GET', `/browsers?agentSessionId=${encodeURIComponent(sessionId)}&pageSize=10`);
     if (!response.ok) throw new BrowserUseUnavailable(`browser list HTTP ${response.status}`);
-    return (await json(response, browserList)).items;
+    return (await json(response, browserList)).items.filter(item => item.agentSessionId === sessionId);
   };
   // Counts each stopped browser's reported cost once. A browser whose cost was not reported makes the total unknown.
   const counted = new Set<string>(), unsettled = new Set<string>();
@@ -160,7 +168,10 @@ export function browserUseErrandEngine(options: Readonly<{
     else { browserUsd = null; proxyUsd = null; proxyMb = null; }
   };
   const stopAgentBrowsers = async (sessionId: string) => {
-    for (const browser of await agentBrowsers(sessionId)) {
+    const browsers = await agentBrowsers(sessionId);
+    // A session whose browser was never listed ran on a browser whose cost was never reported: unknown, not free.
+    if (browsers.length === 0) unsettled.add(`session:${sessionId}`);
+    for (const browser of browsers) {
       if (browser.status === 'stopped') account(browser);
       else await stopBrowser(browser.id);
     }
@@ -176,7 +187,7 @@ export function browserUseErrandEngine(options: Readonly<{
     name: 'browser_use_v4',
     spend: () => ({ modelUsd: open.size > 0 ? null : modelUsd, ...(unsettled.size > 0 ? { browserUsd: null, proxyUsd: null, proxyMb: null } : { browserUsd, proxyUsd, proxyMb }) }),
 
-    async prepare({ goal, origin, finalAction, profileRef, holdSeconds }) {
+    async prepare({ goal, origin, finalAction, profileRef, holdSeconds, started }) {
       const task = [
         `Start at ${origin}. Errand: ${goal}`,
         `Go as far as the final review or confirmation screen and STOP there. Do not perform the final step "${finalAction}", and do not click anything that submits, pays, books, cancels, sends or confirms.`,
@@ -185,6 +196,7 @@ export function browserUseErrandEngine(options: Readonly<{
       ].join('\n');
       const created = await start(base(task, PREPARE_SCHEMA, { keepAlive: Math.min(14400, Math.max(120, Math.round(holdSeconds))), browserSettings: browserSettings(profileRef) }));
       const sessionRef = `session:${created.sessionId}`;
+      await started?.({ sessionRef, runRef: created.id });
       // A run that is still going, or whose status or result could not be read, may still be acting in the owner's
       // signed-in browser: it is cancelled and its session ended. If ending fails, the session goes back to the seam,
       // whose release and sweep keep trying.
@@ -225,7 +237,13 @@ export function browserUseErrandEngine(options: Readonly<{
       if (!response.ok) throw new BrowserUseUnavailable(`submit HTTP ${response.status}`);
       const created = await json(response, runCreated, 16384);
       open.add(created.id);
-      if (created.sessionId !== sessionId) throw new BrowserUseUnavailable('submit landed in another session');
+      // A run outside the held browser is not the approved step on the reviewed page: it is cancelled and its session
+      // ended. It may have acted before that, so its outcome is unknown, never "not started".
+      if (created.sessionId !== sessionId) {
+        await cancel(created.id);
+        await endSession(created.sessionId).catch(() => undefined);
+        return { status: 'unknown' };
+      }
       return { status: 'started', runRef: created.id };
     },
 
@@ -236,6 +254,8 @@ export function browserUseErrandEngine(options: Readonly<{
       if (!response.ok) return { status: 'unknown' };
       const parsed = runList.safeParse(await browserBoundedJson(response, 65536).catch(() => null));
       if (!parsed.success || parsed.data.hasMore) return { status: 'unknown' };
+      // A listing that does not show the runs the errand knows of cannot show that a submit is absent.
+      if (!knownRunRefs.every(known => parsed.data.runs.some(run => run.id === known))) return { status: 'unknown' };
       const others = parsed.data.runs.filter(run => !knownRunRefs.includes(run.id));
       if (others.length === 0) return { status: 'absent' };
       return others.length === 1 ? { status: 'found', runRef: others[0]!.id } : { status: 'unknown' };
@@ -263,6 +283,12 @@ export function browserUseErrandEngine(options: Readonly<{
       return observed && { observed, confirmationId: result.confirmation_id };
     },
 
+    async held(sessionRef) {
+      const sessionId = sessionOf(sessionRef);
+      if (!sessionId) return false;
+      return (await agentBrowsers(sessionId)).some(browser => browser.status !== 'stopped');
+    },
+
     async release(sessionRef) {
       const sessionId = sessionOf(sessionRef), browserId = browserOf(sessionRef);
       if (sessionId) await stopAgentBrowsers(sessionId);
@@ -284,7 +310,15 @@ export function browserUseErrandEngine(options: Readonly<{
         if (!profileRef) throw new BrowserUseUnavailable('login needs a profile');
         const response = await call('POST', '/browsers', { profileId: profileRef, timeout: Math.min(240, Math.max(1, Math.round(minutes))), proxyCountryCode: null });
         if (!response.ok) throw new BrowserUseUnavailable(`browser create HTTP ${response.status}`);
-        const browser = await json(response, browserView, 16384);
+        const body = await browserBoundedJson(response, 16384);
+        const parsed = browserView.safeParse(body);
+        if (!parsed.success) {
+          // The browser may exist even though its answer did not parse: stop it if its id can be read.
+          const id = z.object({ id: z.string().regex(ID) }).safeParse(body);
+          if (id.success) await stopBrowser(id.data.id).catch(() => undefined);
+          throw new BrowserUseUnavailable('browser create response unreadable');
+        }
+        const browser = parsed.data;
         let live: URL;
         try { live = new URL(browser.liveUrl ?? ''); } catch { await stopBrowser(browser.id).catch(() => undefined); throw new BrowserUseUnavailable('live view missing'); }
         if (live.protocol !== 'https:' || live.hostname !== LIVE_VIEW_HOST || live.username || live.password) { await stopBrowser(browser.id).catch(() => undefined); throw new BrowserUseUnavailable('live view host rejected'); }

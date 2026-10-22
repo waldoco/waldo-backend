@@ -24,8 +24,8 @@ type Script = {
 
 function harness(overrides: Partial<Script> = {}) {
   let row: unknown = null, lock: Promise<unknown> = Promise.resolve(), now = 1_000_000, grant = true;
-  let failSave: ((record: BrowserErrandCheckpoint) => boolean) | undefined, fenceFails = false;
-  const calls = { prepare: 0, submit: 0, find: 0, run: 0, verify: 0, release: 0, fence: 0, loginStart: 0, confirm: 0 };
+  let failSave: ((record: BrowserErrandCheckpoint) => boolean) | undefined, fenceFails = false, live = true;
+  const calls = { prepare: 0, submit: 0, find: 0, run: 0, verify: 0, release: 0, fence: 0, loginStart: 0, confirm: 0, held: 0 };
   const script: Script = {
     prepare: { kind: 'review', sessionRef: 'vendor-session-secret', runRef: 'vendor-run-prepare', url: 'https://shop.example/account/cancel', facts: { plan: 'Synthetic Premium', effective: '2026-11-01' } },
     submit: async () => ({ status: 'started', runRef: 'vendor-run-submit' }),
@@ -48,6 +48,7 @@ function harness(overrides: Partial<Script> = {}) {
     verify: async () => { calls.verify++; return script.verify; },
     release: async () => { calls.release++; },
     fence: async () => { calls.fence++; if (fenceFails) throw Error('vendor unavailable'); },
+    held: async () => { calls.held++; return live; },
     login: {
       start: async () => { calls.loginStart++; return { sessionRef: 'vendor-session-secret', liveViewUrl: 'https://live.vendor.test/view/secret-token' }; },
       confirm: async ({ account }) => { calls.confirm++; return account === 'owner@shop.example'; },
@@ -65,6 +66,7 @@ function harness(overrides: Partial<Script> = {}) {
     revoke: () => { grant = false; },
     dieOnSave: (when: (record: BrowserErrandCheckpoint) => boolean) => { failSave = when; },
     failFence: (on: boolean) => { fenceFails = on; },
+    lapseHold: () => { live = false; },
   };
 }
 

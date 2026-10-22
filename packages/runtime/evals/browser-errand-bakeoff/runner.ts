@@ -82,7 +82,7 @@ export async function runErrand(input: Readonly<{
       prepared = await errand.prepare(owner, plan);
     }
     if (prepared.status === 'blocked') return finish('blocked');
-    if (prepared.status === 'failed') return finish('failed');
+    if (prepared.status === 'failed' || prepared.status === 'unsupported') return finish('failed');
     // The approval card is shown now. Anything the account shows changed already happened without approval.
     const atCard = await input.oracle(spec, target, keys);
     if (differs(before, atCard, keys)) {

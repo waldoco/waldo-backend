@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { BrowserErrandCheckpoint } from '@waldo/contracts';
-import { browserUseErrandEngine, browserUseErrandEngineFromEnv } from '../src/channels/browser-use-errand-engine';
+import { browserUseErrandEngineFromEnv, type BrowserUseErrandOptions } from '../src/channels/browser-use-errand-engine';
 import { browserErrand, type BrowserErrandStore } from '../src/channels/browser-errand';
 
 const KEY = 'bu_synthetic_test_key_0000';
+const STAGING = { WALDO_ENVIRONMENT: 'staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY } as const;
+// The engine is built only through its env gate, as every caller builds it.
+const browserUseErrandEngine = (options: BrowserUseErrandOptions) => browserUseErrandEngineFromEnv(STAGING, options)!;
 type Run = { id: string; sessionId: string; task: string; body: Record<string, unknown>; statuses: string[]; output: unknown; cost: string };
 
 // A stand-in for the Browser Use v4 API. Any other host, or an unknown route, fails the test.
@@ -52,19 +55,19 @@ function fakeBrowserUse(script: { outputs: unknown[]; statuses?: string[][] }) {
   return { fetcher, runs, requests, browsers, deletedSessions };
 }
 
-const engine = (api: ReturnType<typeof fakeBrowserUse>) => browserUseErrandEngine({ apiKey: KEY, fetcher: api.fetcher, sleep: async () => {}, pollMs: 1, runWaitMs: 1000, now: () => 0 });
+const engine = (api: ReturnType<typeof fakeBrowserUse>) => browserUseErrandEngine({ fetcher: api.fetcher, sleep: async () => {}, pollMs: 1, runWaitMs: 1000, now: () => 0 });
 const review = { outcome: 'at_review', review_url: 'https://shop.example/cancel', facts: [{ name: 'plan', value: 'Synthetic Premium' }], block_reason: null };
 
 describe('Browser Use v4 errand engine', () => {
   it('is off unless the flag names it, a key exists, and the environment is explicitly staging', () => {
     const fetcher = (async () => { throw Error('no egress'); }) as typeof fetch;
-    expect(browserUseErrandEngineFromEnv({}, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_USE_API_KEY: KEY }, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4' }, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'production', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'Staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, fetcher)).toBeNull();
-    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, fetcher)?.name).toBe('browser_use_v4');
+    expect(browserUseErrandEngineFromEnv({}, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_USE_API_KEY: KEY }, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4' }, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'production', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'Staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, { fetcher })).toBeNull();
+    expect(browserUseErrandEngineFromEnv({ WALDO_ENVIRONMENT: 'staging', BROWSER_ERRANDS_ENGINE: 'browser_use_v4', BROWSER_USE_API_KEY: KEY }, { fetcher })?.name).toBe('browser_use_v4');
   });
 
   it('prepares with a held browser, the owner profile, no proxy and a schema; the key stays in the header', async () => {
@@ -91,7 +94,7 @@ describe('Browser Use v4 errand engine', () => {
         if (deleteFails && method === 'DELETE') return new Response(null, { status: 503 });
         return api.fetcher(input, init);
       };
-      const prepared = await browserUseErrandEngine({ apiKey: KEY, fetcher, sleep: async () => {}, pollMs: 1, runWaitMs: 1000, now: () => 0 })
+      const prepared = await browserUseErrandEngine({ fetcher, sleep: async () => {}, pollMs: 1, runWaitMs: 1000, now: () => 0 })
         .prepare({ goal: 'Cancel the plan', origin: 'https://shop.example', finalAction: 'Confirm cancellation', profileRef: 'prof1', holdSeconds: 600 });
       const run = api.runs[0]!;
       expect(prepared).toEqual({ kind: 'failed', sessionRef: deleteFails ? `session:${run.sessionId}` : null, runRef: run.id });
@@ -106,7 +109,7 @@ describe('Browser Use v4 errand engine', () => {
     const prose = fakeBrowserUse({ outputs: ['I hit a login page, probably'] });
     expect(await engine(prose).prepare({ goal: 'g', origin: 'https://shop.example', finalAction: 'f', profileRef: null, holdSeconds: 600 })).toMatchObject({ kind: 'failed' });
     const slow = fakeBrowserUse({ outputs: [review], statuses: [['running']] });
-    const timedOut = browserUseErrandEngine({ apiKey: KEY, fetcher: slow.fetcher, sleep: async () => {}, pollMs: 600, runWaitMs: 1000, now: (() => { let t = 0; return () => (t += 500); })() });
+    const timedOut = browserUseErrandEngine({ fetcher: slow.fetcher, sleep: async () => {}, pollMs: 600, runWaitMs: 1000, now: (() => { let t = 0; return () => (t += 500); })() });
     expect(await timedOut.prepare({ goal: 'g', origin: 'https://shop.example', finalAction: 'f', profileRef: null, holdSeconds: 600 })).toMatchObject({ kind: 'failed', sessionRef: null });
     expect(slow.requests.some(r => r.method === 'POST' && r.path === '/runs/run2/cancel')).toBe(true);
     expect(slow.deletedSessions.has('sess1')).toBe(true);
