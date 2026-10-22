@@ -2,8 +2,10 @@ name: evals-live
 
 # The nightly eval suite in live mode: the chat model answers and an independent judge grades each trial.
 # It skips cleanly unless the repository has the secrets WALDO_EVAL_OPENAI_KEY and WALDO_EVAL_ANTHROPIC_KEY and the
-# variable WALDO_EVAL_JUDGE_MODEL. Spend cap: WALDO_EVAL_MAX_CALLS below bounds model calls (candidate plus judge)
-# for the whole run; the runner refuses the call past it and the card reports the budget as exhausted.
+# variable WALDO_EVAL_JUDGE_MODEL. Spend cap: WALDO_EVAL_MAX_CALLS below bounds model calls (candidate plus both judges)
+# for the whole run; the runner refuses the call past it and the card reports the budget as exhausted. It is set from
+# `pnpm eval:plan` (evals/nightly/plan.ts), and a test holds it at or above the plan's suggestion. Cost per run and
+# the first-run procedure: docs/evals/LIVE_BASELINE_RUNBOOK.md.
 # GitHub runs schedules, and lists workflows for manual dispatch, from the default branch (main) only, so this
 # workflow does nothing until it reaches main.
 on:
@@ -22,7 +24,8 @@ jobs:
   live:
     name: Nightly eval (live)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The suite runs trials one after another: about 950 model calls at several seconds each, plus the judges.
+    timeout-minutes: 240
     steps:
       - name: Check for eval keys
         id: keys
@@ -64,7 +67,7 @@ jobs:
         env:
           WALDO_EVAL_MODE: live
           WALDO_EVAL_TRIALS: '3'
-          WALDO_EVAL_MAX_CALLS: '300'
+          WALDO_EVAL_MAX_CALLS: '1200'
           OPENAI_API_KEY: ${{ secrets.WALDO_EVAL_OPENAI_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.WALDO_EVAL_ANTHROPIC_KEY }}
           WALDO_EVAL_JUDGE_MODEL: ${{ vars.WALDO_EVAL_JUDGE_MODEL }}
