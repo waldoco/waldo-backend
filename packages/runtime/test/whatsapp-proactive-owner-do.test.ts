@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
+import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { reminderBook } from '../src/channels/reminders';
 import { claimStore } from '../src/memory/claims';
@@ -90,6 +91,9 @@ const drive = async (name: string, script: (steps: Readonly<{
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     traceBook(state.storage.sql);
+    // Today's cards are already planned, so the runtime's boot neither plans nor arms them whatever the time of day: only what
+    // a test schedules fires.
+    for (const card of ['card:brief', 'card:midday', 'card:close'] as const) dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card, time: null, reason: 'planned by the fixture' });
     const clockBack = (ms: number) => () => new Date(Date.now() - ms);
     const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
@@ -194,15 +198,21 @@ const drive = async (name: string, script: (steps: Readonly<{
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
-  it('a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent', async () => {
-    await drive('whatsapp-only-reminder-lapsed', async ({ alarms, later, ledger, reminderRuns }) => {
-      await alarms(3);
-      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
-      await later(31 * 24 * 60 * 60_000, () => alarms(2));
-      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
-      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
-      expect(ledger().runs).toEqual([expect.objectContaining({ delivery: 'failed' })]);
-    });
+  // The clock is pinned: the scenario moves it 31 days on, and what the runtime plans and fires depends on the time of day it
+  // starts at. One start just after midnight and one just before cover both sides of a day change.
+  it.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before midnight', '2026-10-21T23:30:00Z']])(
+    'a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent (%s)', async (_name, start) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse(start), shouldAdvanceTime: true });
+    try {
+      await drive(`whatsapp-only-reminder-lapsed-${start}`, async ({ alarms, later, ledger, reminderRuns }) => {
+        await alarms(3);
+        expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+        await later(31 * 24 * 60 * 60_000, () => alarms(2));
+        expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
+        expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
+        expect(ledger().runs).toEqual([expect.objectContaining({ delivery: 'failed' })]);
+      });
+    } finally { vi.useRealTimers(); }
   });
 
   it('holds a due reminder with one template knock, never retries or reports it, and delivers it on the reply before that turn', async () => {
