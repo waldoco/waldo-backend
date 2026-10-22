@@ -14,7 +14,7 @@ export const EVERY_READ_ONLY_HINT = '*read_only_hint';
 export const MCP_START_PATH = '/console/mcp/start/';
 // The Worker hands the provider's callback to the owner object on this internal path.
 export const MCP_FINISH_PATH = '/mcp/consent';
-const ATTEMPT_TTL_MS = 15 * 60_000;
+export const MCP_ATTEMPT_TTL_MS = 15 * 60_000;
 // How long a server's questions wait for the owner's answer. The server's own requestState may expire
 // sooner; its retry then simply asks again.
 const QUESTION_TTL_MS = 24 * 60 * 60_000;
@@ -451,7 +451,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
           client_id: client.client_id, client_auth: client.client_auth, registration: mode, ...(scope ? { scope } : {}),
         };
         sweep();
-        sql.exec('INSERT INTO mcp_attempts (nonce, record, expires) VALUES (?, ?, ?)', nonce, JSON.stringify(attempt), deps.now() + ATTEMPT_TTL_MS);
+        sql.exec('INSERT INTO mcp_attempts (nonce, record, expires) VALUES (?, ?, ?)', nonce, JSON.stringify(attempt), deps.now() + MCP_ATTEMPT_TTL_MS);
         log('mcp_connect', started);
         return { kind: 'redirect', path: `${MCP_START_PATH}${nonce}` };
       } catch (error) {
