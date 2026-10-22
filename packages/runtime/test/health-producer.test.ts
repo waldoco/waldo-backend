@@ -388,7 +388,7 @@ describe('produceHealthScores', () => {
 
   describe('a zone that holds through a steady move', () => {
     // The derived rows as the database keeps them: the writer reports a pillar changed against the row it replaces or, for a
-    // day's first row, the newest earlier day; the scores read returns one day's row or the newest.
+    // day's first row, the newest earlier day; the scores read returns one day's row.
     const plane = () => {
       const rows = new Map<string, Record<string, Record<string, unknown>>>();
       const newestBefore = (day: string) => [...rows.keys()].filter(d => d < day).sort().at(-1);
@@ -401,24 +401,23 @@ describe('produceHealthScores', () => {
           rows.set(row.day, row);
           return { written: true, changed };
         },
-        readScores: async (day: string | null) => {
-          const at = day ?? [...rows.keys()].sort().at(-1);
-          const row = at === undefined ? undefined : rows.get(at);
-          return row ? { scores: { day: at, timezone: 'UTC', compiled_at: '2026-03-20T11:00:00.000Z', freshness: 'fresh', form: row.form, recovery: row.recovery, weight: row.weight } } : { unavailable: 'no_readings' };
+        readScores: async (day: string) => {
+          const row = rows.get(day);
+          return row ? { scores: { day, timezone: 'UTC', compiled_at: '2026-03-20T11:00:00.000Z', freshness: 'fresh', form: row.form, recovery: row.recovery, weight: row.weight } } : { unavailable: 'no_readings' };
         },
       };
     };
-    const scored = (form: number, version = 'form.candidate.v4'): DailyScores => ({
-      recovery: { state: 'available', score: 70, zone: recoveryZone(70), algorithm_version: 'recovery.candidate.v1', activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
+    const scored = (form: number, version = 'form.candidate.v4', recovery = 70): DailyScores => ({
+      recovery: { state: 'available', score: recovery, zone: recoveryZone(recovery), algorithm_version: 'recovery.candidate.v1', activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
       form: { state: 'available', score: form, zone: formZone(form), algorithm_version: version, activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
       weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' }, sleep_debt: { state: 'unavailable', reason: 'no_readings' },
     });
     // One recompute per score; for each, whether the owner's object was told today moved zone.
-    const uploads = async (scores: readonly number[], store = plane(), version?: string) => {
+    const uploads = async (scores: readonly number[], store = plane(), version?: string, recovery?: number) => {
       const told: boolean[] = [];
       for (const score of scores) {
         let notified = false;
-        await run(harness(seriesOf(history(25)), undefined, () => scored(score, version), { writeContext: store.writeContext, readScores: store.readScores, onZoneChange: async () => { notified = true; } }));
+        await run(harness(seriesOf(history(25)), undefined, () => scored(score, version, recovery), { writeContext: store.writeContext, readScores: store.readScores, onZoneChange: async () => { notified = true; } }));
         told.push(notified);
       }
       return { told, store };
@@ -447,12 +446,19 @@ describe('produceHealthScores', () => {
       expect((await uploads([79, 84])).told).toEqual([false, false]);
       expect((await uploads([79, 85])).told).toEqual([false, true]);
     });
-    it('holds a day\'s first row to the newest earlier day, the row the writer compares it with', async () => {
+    it('holds nothing across days, so a fresh night\'s score writes its own band and its crossing is told', async () => {
+      // Yesterday's row was Recovery 82 and Form 62; tonight's scores are 76 and 58, each within a steady move of yesterday's zone.
       const store = plane();
-      store.rows.set(addDays(TODAY, -2), { form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v4' } });
-      const { told } = await uploads([58], store);
-      expect(told).toEqual([false]);
-      expect([formWord(store, addDays(TODAY, -1)), formWord(store)]).toEqual(['steady', 'steady']);
+      store.rows.set(addDays(TODAY, -1), {
+        recovery: { score: 82, zone: 'high', algorithm_version: 'recovery.candidate.v1' },
+        form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v4' },
+      });
+      let told = false;
+      const nightly = (input: DailyScoresInput) => (input.targetDay === TODAY ? scored(58, undefined, 76) : scored(62, undefined, 82));
+      await run(harness(seriesOf(history(25)), undefined, nightly, { writeContext: store.writeContext, readScores: store.readScores, onZoneChange: async () => { told = true; } }));
+      expect(told).toBe(true);
+      expect(fromRowZone('recovery', store.rows.get(TODAY)?.recovery?.zone)).toBe('solid');
+      expect(formWord(store)).toBe('flagging');
     });
     it('holds nothing from a zone another algorithm version wrote', async () => {
       const store = plane();

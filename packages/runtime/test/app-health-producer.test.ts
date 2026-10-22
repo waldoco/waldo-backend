@@ -56,7 +56,7 @@ const ingest = async (body: unknown = batch, defer?: (work: Promise<unknown>) =>
 const deferrals = () => { const work: Promise<unknown>[] = []; return { work, defer: (p: Promise<unknown>) => { work.push(p); } }; };
 
 describe('a committed ingest asks the owner\'s object to recompute', () => {
-  it('sends the zone the batch was read in, signed, and reads and writes nothing itself', async () => {
+  it('sends a signed notice that carries nothing, and reads and writes nothing itself', async () => {
     ownerAnswer = () => Response.json({ ok: true });
     const d = deferrals();
     const response = await ingest({ ...batch, timezone: 'Asia/Kolkata' }, d.defer);
@@ -64,8 +64,8 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     await Promise.all(d.work);
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
     expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
-    expect(await toOwner[0]!.clone().json()).toEqual({ timezone: 'Asia/Kolkata' });
-    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe('Asia/Kolkata');
+    expect(await toOwner[0]!.clone().json()).toEqual({});
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toBe(true);
   });
 
   it('asks nothing for a replayed, empty or refused batch', async () => {

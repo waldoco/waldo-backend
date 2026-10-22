@@ -143,8 +143,10 @@ export const healthTriggerView = (raw: unknown, now: number, timezone: string): 
   if (!Number.isFinite(compiled) || compiled > now) return null;
   const freshness = rowFreshness(context.compiled_at, context.day, timezone, now);
   if (freshness === 'expired') return null;
-  // Form's zone is the stored word, which holds through a steady move, as the app shows it.
-  const zones: Zones = { recovery: fromRowZone('recovery', zoneOf(context.recovery)), form: scoreOf(context.form) === null ? null : fromRowZone('form', zoneOf(context.form)), load: fromRowZone('weight', zoneOf(context.weight)) };
+  // The earlier row names only Form's score, so Form is compared band to band. Its stored word can hold a zone through a
+  // steady move within a day, and set beside the earlier day's band it would show a change the score never made.
+  const formScore = scoreOf(context.form);
+  const zones: Zones = { recovery: fromRowZone('recovery', zoneOf(context.recovery)), form: formScore === null ? null : formZoneOf(formScore), load: fromRowZone('weight', zoneOf(context.weight)) };
   if (!zones.recovery && !zones.form && !zones.load) return null;
   const previous = record(record(raw)?.previous);
   const previousForm = typeof previous?.form_score === 'number' && Number.isFinite(previous.form_score) ? formZoneOf(previous.form_score) : null;

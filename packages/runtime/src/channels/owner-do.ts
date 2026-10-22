@@ -225,9 +225,9 @@ type OwnerRuntime = Readonly<{
   noticeFailures(): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
-  // The owner's derived health rows: asked for by each upload that changed a reading (null zone: a wearable sync), and
-  // recomputed once for every window of asks.
-  healthSamples(timezone: string | null): Promise<void>;
+  // The owner's derived health rows: asked for by each upload that changed a reading and each wearable sync, and recomputed
+  // once for every window of asks.
+  healthSamples(): Promise<void>;
   healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
@@ -1029,13 +1029,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.setup('app').healthChanged(day);
     return Response.json({ok:true},{headers});
   }
-  // Worker-to-DO only: an upload changed this owner's readings. It carries the zone the batch was read in, and asks for one
-  // recompute of the derived rows.
+  // Worker-to-DO only: an upload changed this owner's readings, and asks for one recompute of the derived rows.
   private async healthSamples(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
-    const timezone=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
-    if(!timezone)return Response.json({error:'unavailable'},{status:403,headers});
-    await this.setup('app').healthSamples(timezone);
+    if(!await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name))return Response.json({error:'unavailable'},{status:403,headers});
+    await this.setup('app').healthSamples();
     return Response.json({ok:true},{headers});
   }
   // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
@@ -1053,7 +1051,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.whoop??=whoopOwner({
       doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
       timezone:()=>this.setup('app').timezone,
-      produce:()=>this.setup('app').healthSamples(null),
+      produce:()=>this.setup('app').healthSamples(),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
@@ -3616,12 +3614,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: due, dueAt: due, payloadRefs: { id: HEALTH_TRIGGER_ID } });
     };
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
-    const recompute = healthRecompute({ scheduler, kv: identity, now: Date.now, ownerZone: () => clock.timezone, producer: {
+    const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
-      readScores: day => healthRpc('scores_read', JSON.stringify(day === null ? {} : { day })),
+      readScores: day => healthRpc('scores_read', JSON.stringify({ day })),
       compute: computeDailyScores, readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
     } });
-    const healthSamples = (timezone: string | null) => recompute.ask(timezone);
+    const healthSamples = () => recompute.ask();
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
       let outcome: string;

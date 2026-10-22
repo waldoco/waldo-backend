@@ -138,7 +138,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
-        notifySamples: (timezone: string) => notifyOwnerHealthSamples(owners, secret, doName, timezone) } : {}) });
+        notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName) } : {}) });
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');

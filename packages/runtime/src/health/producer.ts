@@ -17,9 +17,9 @@ export type ProducerDeps = Readonly<{
   // Told the owner's local today when its row moved to another zone word, against the same sources. It carries the day
   // only: no pillar, zone or score. A failure here never fails the write.
   onZoneChange?: (day: string) => Promise<void>;
-  // The stored row for one day, or the newest row when the day is null (waldo.health_scores_read). Each zone holds through
-  // a steady move from it; without it every zone is the score's own band.
-  readScores?: (day: string | null) => Promise<unknown>;
+  // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
+  // zone is the score's own band.
+  readScores?: (day: string) => Promise<unknown>;
 }>;
 
 const WINDOW_DAYS = 30;
@@ -191,17 +191,17 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
   };
 };
 
-// The row the writer compares a new one with when it reports a zone change: the row it replaces or, for a day's first row,
-// the newest earlier day. A read that fails or answers anything else is no row.
+// The row this one replaces: the same day's, written by an earlier upload. A day's first row, a read that fails and an answer
+// for another day are no row.
 const storedBefore = async (read: ProducerDeps['readScores'], day: string): Promise<Record<string, unknown> | null> => {
-  const stored = async (of: string | null) => { try { return asRecord(asRecord(await read?.(of))?.scores); } catch { return null; } };
-  const same = await stored(day);
-  if (same?.day === day) return same;
-  const newest = await stored(null);
-  return typeof newest?.day === 'string' && newest.day < day ? newest : null;
+  try {
+    const same = asRecord(asRecord(await read?.(day))?.scores);
+    return same?.day === day ? same : null;
+  } catch { return null; }
 };
-// Each pillar's zone holds through a steady move from the zone its stored row had, so the writer reports a change only on a
-// real crossing. A zone another algorithm version wrote is not the same state and holds nothing.
+// Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
+// report a change only on a real crossing. A day's first row is its own band, so the word never drifts from a fresh night's
+// score for longer than that day. A zone another algorithm version wrote is not the same state and holds nothing.
 const steadied = (scores: DailyScores, before: Record<string, unknown> | null): DailyScores => {
   const zoneBefore = <P extends 'recovery' | 'form' | 'weight'>(pillar: P, version: string) => {
     const stored = asRecord(before?.[pillar]);

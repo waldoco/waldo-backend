@@ -226,10 +226,11 @@ describe('the health trigger', () => {
     });
   });
 
-  it('shows the model the Form zone the backend stored, the same word the app shows', () => {
-    const held = healthTriggerView({ context: { ...ROW.context, form: { ...ROW.context.form, score: 43, zone: 'low' } }, previous: ROW.previous }, NOW, TZ)!;
-    expect(held.now.form).toBe('depleted');
-    expect(healthTriggerView({ context: { ...ROW.context, form: { ...ROW.context.form, zone: 'unknown' } }, previous: ROW.previous }, NOW, TZ)!.now.form).toBeNull();
+  it('compares Form band to band, so a held word never reads as a change the score did not make', () => {
+    // Form fell from 58 to 57 while both days' stored words held steady: no improvement and no change.
+    const held = healthTriggerView({ context: { ...ROW.context, form: { ...ROW.context.form, score: 57, zone: 'good' } }, previous: { ...ROW.previous, form_score: 58 } }, NOW, TZ)!;
+    expect(held.now.form).toBe('flagging');
+    expect(held.before?.zones.form).toBe('flagging');
   });
 
   it('under auto, only watches until the owner\'s own baseline exists for the source, then proposes', () => {

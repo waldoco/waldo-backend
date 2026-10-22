@@ -20,9 +20,10 @@ export type AppHealthInput = Readonly<{
   request: Request; url: URL; doName: string; rpc: Rpc | null;
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
   // After a committed ingest the owner's derived rows are recomputed off the request path. The owner's Durable Object does
-  // it, once for a run of uploads; without a way to tell it, or when it cannot take the notice, the Worker recomputes here.
+  // it, once for a run of uploads, in the owner's own zone; without a way to tell it, or when it cannot take the notice, the
+  // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
-  notifySamples?: (timezone: string) => Promise<void>;
+  notifySamples?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
   readDemand?: ProducerDeps['readDemand'];
@@ -137,12 +138,12 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
   const here = async () => compute && produceHealthScores({
     readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
-    readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify(day === null ? {} : { day })),
+    readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     compute,
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
   }, { now: Date.now(), timezone });
-  defer(notifySamples ? notifySamples(timezone).catch(() => { console.error('health samples notice failed'); return here(); }) : here());
+  defer(notifySamples ? notifySamples().catch(() => { console.error('health samples notice failed'); return here(); }) : here());
 };
 
 export const handleAppHealth = async (input: AppHealthInput): Promise<Response> => {

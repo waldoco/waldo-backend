@@ -9,22 +9,17 @@ import { produceHealthScores, type ProducerDeps, type ProducerOutcome } from './
 export const HEALTH_RECOMPUTE_ID = 'health-recompute';
 // Long enough to take one sync's run of upload batches, short enough that a change reaches the trigger within a minute.
 export const HEALTH_RECOMPUTE_WINDOW_MS = 60_000;
-// The zone the newest upload was read in. It names the owner's local today for the recompute, as each upload's own zone did
-// when the Worker recomputed after every batch. A sync from a cloud wearable names none and keeps it.
-const ZONE_KEY = 'health_recompute_timezone';
 
 export type HealthRecomputeDeps = Readonly<{
   scheduler: Pick<Scheduler, 'lookup' | 'schedule'>;
-  kv: Pick<SyncKvStorage, 'get' | 'put'>;
   now(): number;
-  // The owner's own zone, for a recompute no upload has named a zone for.
+  // The owner's own zone, read when the recompute runs. It names the owner's local today, whichever zone a reading came from.
   ownerZone(): string;
   producer: ProducerDeps;
 }>;
 
 export const healthRecompute = (deps: HealthRecomputeDeps) => ({
-  async ask(timezone: string | null): Promise<void> {
-    if (timezone !== null) deps.kv.put(ZONE_KEY, timezone);
+  async ask(): Promise<void> {
     const now = deps.now(), found = deps.scheduler.lookup(HEALTH_RECOMPUTE_ID);
     // One already waiting takes this upload too. One that is due or running may have read before this batch committed, and
     // a paused one is retried by new readings, so each of those is armed for a fresh window. A row this Worker cannot read
@@ -35,7 +30,7 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => ({
   },
   // A recompute that failed throws, so the scheduler retries it and then pauses it; the next upload asks again.
   async run(): Promise<ProducerOutcome> {
-    const outcome = await produceHealthScores(deps.producer, { now: deps.now(), timezone: deps.kv.get<string>(ZONE_KEY) ?? deps.ownerZone() });
+    const outcome = await produceHealthScores(deps.producer, { now: deps.now(), timezone: deps.ownerZone() });
     if (outcome === 'failed') throw new Error('health recompute failed');
     return outcome;
   },
