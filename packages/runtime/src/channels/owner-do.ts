@@ -3355,11 +3355,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined),episodes,()=>Date.now()),
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,loopIsSourceBound:loops.sourceBound,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})},
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,connectors,loopIsSourceBound:loops.sourceBound,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,loopIsSourceBound:loops.sourceBound,...(spend ? { spend } : {})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it

@@ -1,11 +1,11 @@
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import {
-  TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, taintGateNeedsOwnerApproval, toolNameSchema, triggerTypeSchema,
+  TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, toolNameSchema, triggerTypeSchema,
   type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
-import { TOOL_ARG_SCHEMAS } from '../../hooks/registry';
+import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 
 export type TaintedActionDesk = Readonly<{
@@ -44,7 +44,8 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
-    if (!taintGateNeedsOwnerApproval(tool.data, 'external', args.args)) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted.
+    if (!(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {
