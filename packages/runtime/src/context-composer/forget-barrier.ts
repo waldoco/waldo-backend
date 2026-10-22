@@ -33,12 +33,14 @@ const removalNote = ({ dropped, redacted }: BarrierTally): string => {
   return `[waldo: ${parts.join(' and ')} mentioning a topic the owner asked to forget ${dropped + redacted === 1 ? 'was' : 'were'} removed; the rest is shown. Do not report the result as empty.]`;
 };
 
-// Escapes a reader can still decode into letters. Unlike stored JSON, the model's view is read as text, so an unknown
-// escape such as \d spells nothing and must not cost the owner the whole page.
-const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\', '/': '/' };
+// Escapes read the most permissive way any reader takes them, as the storage test reads them: \uXXXX and \xHH as the
+// character they name, the simple and control escapes as theirs, a backslash before a line break or at the end as nothing,
+// and any other escaped character as itself. A path or a regex reads as letters that carry nothing, so it costs nothing.
+const ESCAPES: Readonly<Record<string, string>> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', '0': '\0', v: '\v' };
 const decodeOnce = (value: string): string =>
-  value.replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[bfnrt"\\/])/g, (_match, escape: string) =>
-    escape.length > 1 ? String.fromCharCode(parseInt(escape.slice(1), 16)) : SIMPLE_ESCAPES[escape]!);
+  value.replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\r\n|[\s\S]|$)/gu, (_match, escape: string) =>
+    escape.length > 2 ? String.fromCharCode(parseInt(escape.slice(1), 16))
+      : /^(?:\r\n|[\n\r\u2028\u2029])?$/.test(escape) ? '' : ESCAPES[escape] ?? escape);
 // Every pass that decodes something shortens the text, so this ends; nesting cannot hide the topic.
 const decodeEscapes = (value: string): string => {
   for (let next = decodeOnce(value); next !== value; next = decodeOnce(value)) value = next;
@@ -51,9 +53,9 @@ export const forgetBarrier = (held: readonly string[], mode: ForgetBarrierMode =
   // The storage-grade test, the one the purge reads back by: an escape it cannot rule out counts as the topic. Owner memory
   // items are judged by it, so a doubtful item is dropped rather than shown.
   const holds = holdsIn(topics);
-  // What a reader of the text would see: the topic as written, or spelled by escapes that decode.
+  // What a reader of the text could see: the topic as written, spelled by an escape, or by escapes nested in escapes.
   const shows = (value: string): boolean =>
-    topics.some((topic) => carriesTopic(value, topic) || (value.includes('\\') && carriesTopic(decodeEscapes(value), topic)));
+    holds(value) || (value.includes('\\') && topics.some((topic) => carriesTopic(decodeEscapes(value), topic)));
 
   // Text from outside the owner's memory: the words go, the rest stays. Text keeps its own spelling unless the topic hides
   // behind escapes, which are then decoded so the words can be removed. undefined is the flag-off rule's whole-read hold.
@@ -97,8 +99,8 @@ export const forgetBarrier = (held: readonly string[], mode: ForgetBarrierMode =
   // A tool output as the model reads it: its JSON line is cut like any structured result and the loop's own notes after it
   // ride along; text that is not JSON is cut as text.
   const output = (raw: string, origin: ResultOrigin): string => {
-    if (!holds(raw)) return raw;
     const clean = (value: string) => (mode === 'items' ? !shows(value) : !holds(value));
+    if (clean(raw)) return raw;
     const cut = raw.indexOf('\n');
     const head = cut === -1 ? raw : raw.slice(0, cut);
     const rest = cut === -1 ? '' : raw.slice(cut);

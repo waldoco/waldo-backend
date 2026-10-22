@@ -40,6 +40,19 @@ describe('items mode, text from outside the owner', () => {
     expect(barrier.output('see C:\\data\\d+ for the logs', 'external')).toBe('see C:\\data\\d+ for the logs');
   });
 
+  it('reads every escape the storage test reads, so a topic spelled by an identity escape or a line continuation is removed', () => {
+    expect(barrier.text('menu: t\\ea and cake', tally())).toBe(`menu: ${FORGET_MARKER} and cake`);
+    expect(barrier.text('menu: te\\\na and cake', tally())).toBe(`menu: ${FORGET_MARKER} and cake`);
+    expect(barrier.output('{"menu":"t\\\\ea and cake"}', 'external')).not.toMatch(/t\\+ea/);
+    expect(forgetBarrier(['\u{1F375}tea']).text('\\\u{1F375}\\x74ea', tally())).toBe(FORGET_MARKER);
+  });
+
+  it('cuts a raw JSON output whose escapes are nested, which the storage test reads one layer of', () => {
+    const out = barrier.output('{"body":"\\\\u0074ea time"}', 'external');
+    expect(out).toContain(FORGET_MARKER);
+    expect(out).not.toContain('u0074ea');
+  });
+
   it('decodes nested escapes until the topic can be removed, so nothing is withheld whole', () => {
     expect(barrier.text('\\u005cu0074ea time', tally())).toBe(`${FORGET_MARKER} time`);
     const out = barrier.structured({ page: { title: 'Menu', body: '\\u005cu0074ea' } }, 'external', tally());
@@ -68,9 +81,9 @@ describe('items mode, the owner\'s memory', () => {
     expect(counts).toEqual({ dropped: 1, redacted: 0 });
   });
 
-  it('drops an item it cannot prove clean, since memory is judged as the purge reads it back', () => {
-    const out = barrier.structured({ claims: [{ text: 'path C:\\x' }, { text: 'runs' }] }, 'owner_store', tally());
-    expect(out).toEqual({ claims: [{ text: 'runs' }] });
+  it('drops an item an escape spells the topic in, since memory is judged as the purge reads it back', () => {
+    const out = barrier.structured({ claims: [{ text: 'likes t\\ea' }, { text: 'path C:\\x' }, { text: 'runs' }] }, 'owner_store', tally());
+    expect(out).toEqual({ claims: [{ text: 'path C:\\x' }, { text: 'runs' }] });
   });
 
   it('replaces the words in a value outside a list instead of withholding the read', () => {
