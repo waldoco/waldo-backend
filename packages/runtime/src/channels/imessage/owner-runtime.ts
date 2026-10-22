@@ -78,7 +78,11 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
   const outbox = new IMessageFinalOutbox(host.storage);
   // A drain runs only between turns, so a progress note still frozen here lost its turn and is never handed over again.
   outbox.dropProgress('progress_stale');
+  // A bridge has one slot, so once a reply is still waiting after its polls the replies behind it on that bridge keep their
+  // order and wait for the same retry, and a drain holds the owner's queue for one wait at most.
+  const waiting = new Set<string>();
   for (const row of outbox.due()) {
+    if (waiting.has(row.bridgeDoName)) { outbox.retryLater(row.replyRef, maxAgeMs, IMESSAGE_BUSY_RETRY_MS); continue; }
     let outcome;
     try {
       outcome = await handOff(host, row);
@@ -89,7 +93,10 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
     if (outcome.kind === 'queued') outbox.markQueued(row.replyRef);
     else if (outcome.kind === 'terminal') outbox.settle(row.replyRef, row.commandId, outcome.result);
-    else outbox.retryLater(row.replyRef, maxAgeMs, outcome.kind === 'busy' ? IMESSAGE_BUSY_RETRY_MS : undefined);
+    else {
+      if (outcome.kind === 'busy') waiting.add(row.bridgeDoName);
+      outbox.retryLater(row.replyRef, maxAgeMs, outcome.kind === 'busy' ? IMESSAGE_BUSY_RETRY_MS : undefined);
+    }
   }
 };
 

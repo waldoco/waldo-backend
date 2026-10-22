@@ -2,6 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { IMESSAGE_BUSY_RETRY_MS, IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { drainIMessageOutbox } from '../src/channels/imessage/owner-runtime';
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
@@ -179,5 +180,27 @@ it('a reply the bridge found busy tries again in a second, not five', async () =
     expect(outbox.get('reply:a')).toMatchObject({ state: 'frozen', attempts: 1, nextAttemptAt: now + 1_000 });
     outbox.retryLater('reply:a', 600_000);
     expect(outbox.get('reply:a')?.nextAttemptAt).toBe(now + 5_000);
+  });
+});
+
+it('a drain waits once for a busy bridge: the replies behind it there keep their order and wait for the same retry, and another bridge is still tried', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage), calls: string[] = [];
+    outbox.freeze(turn('a'), 'first'); outbox.freeze(turn('b'), 'second'); outbox.freeze({ ...turn('c'), bridgeDoName: 'bridge-2' }, 'third');
+    const bridges = { idFromName: (name: string) => name, get: (name: string) => ({ enqueueReply: async ({ replyRef }: { replyRef: string }) => {
+      calls.push(`${name} ${replyRef}`); return name === 'bridge' ? { kind: 'busy' } : { kind: 'queued' };
+    } }) };
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const drained = drainIMessageOutbox({ storage: state.storage, id: state.id, env: { IMESSAGE_BRIDGE_DO: bridges } as never }, 600_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await drained;
+    } finally { vi.useRealTimers(); }
+    expect(calls).toEqual([...Array<string>(9).fill('bridge reply:a'), 'bridge-2 reply:c']);
+    expect(outbox.get('reply:a')).toMatchObject({ state: 'frozen', attempts: 1 });
+    expect(outbox.get('reply:b')).toMatchObject({ state: 'frozen', attempts: 1 });
+    expect(outbox.get('reply:c')).toMatchObject({ state: 'queued' });
+    expect(outbox.due()).toEqual([]);
+    expect(outbox.dueAt()).toBeLessThanOrEqual(Date.now() + IMESSAGE_BUSY_RETRY_MS);
   });
 });
