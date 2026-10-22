@@ -5,6 +5,8 @@ type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: Contr
 
 const REVEAL_LABEL: Record<ActionReveal['kind'], string> = { link_code: 'Text this from your iPhone', host_code: 'Mac host code', challenge: 'Challenge text', pairing_code: 'Kennel pairing code' };
 // The value is shown once. If the clipboard is refused, the whole value is selected so one keystroke copies it.
+/** sms: link that opens Messages to `to` with the text filled in (the iPhone's one-tap send). */
+const smsLink = (to: string, body: string) => `sms:${encodeURIComponent(to).replace(/%40/g, '@').replace(/%2B/g, '+')}&body=${encodeURIComponent(body)}`;
 export function RevealedValue({ reveal }: { reveal: ActionReveal }) {
   const [copy, setCopy] = useState<'idle' | 'copied' | 'selected'>('idle');
   const value = useRef<HTMLParagraphElement>(null);
@@ -19,6 +21,7 @@ export function RevealedValue({ reveal }: { reveal: ActionReveal }) {
   return <div className="revealed">
     <p className="label">{REVEAL_LABEL[reveal.kind]}</p>
     <p className="revealed-value" ref={value}>{reveal.value}</p>
+    {reveal.kind === 'link_code' && reveal.to && <p>Send it to <strong>{reveal.to}</strong>. On your iPhone, <a className="button primary" href={smsLink(reveal.to, reveal.value)}>Open Messages</a> and tap Send.</p>}
     <div className="control-actions">
       <button type="button" onClick={() => void onCopy()}>{copy === 'copied' ? 'Copied' : copy === 'selected' ? 'Selected. Press Command-C to copy' : 'Copy'}</button>
     </div>
@@ -58,6 +61,7 @@ function HostRow({ bridge, live, busy, onAction }: { bridge: Bridge; live: Bridg
 
 export function IMessageControls({ record, busy, onAction }: { record: IMessageRecord } & Actions) {
   const { data } = record, live = new Map(record.status.bridges.map(row => [row.id, row]));
+  const [phone, setPhone] = useState(data.phone ?? '');
   if (!data.enabled) return <section className="panel"><h2>iMessage isn’t enabled on this server.</h2><p>Nothing here can link a number or pair a Mac host until it is.</p></section>;
   const offered = (action: IMessageRecord['data']['actions'][number]) => data.actions.includes(action);
   const hosts = (kind: Bridge['kind']) => data.bridges.filter(bridge => bridge.kind === kind);
@@ -65,8 +69,14 @@ export function IMessageControls({ record, busy, onAction }: { record: IMessageR
   return <>
     <section className="tile" aria-labelledby="imessage-link-title">
       <div className="chart-head"><h2 id="imessage-link-title">Text Waldo from your iPhone</h2><span className={`access-label${data.linked_hint ? ' done' : ''}`}>{data.linked_hint ? 'Linked' : 'Not linked'}</span></div>
-      <p>Get a one-time code, then text <strong>waldo</strong> and the code to {data.address ?? 'the Waldo iMessage number'} from your iPhone. Only your own number reaches your Waldo.</p>
+      {data.address
+        ? <p>Your Waldo number is <strong>{data.address}</strong>. Get a one-time code, then text <strong>waldo</strong> and the code to it from your iPhone. Only your own number reaches your Waldo.</p>
+        : <p>Enter your iPhone number. Waldo gives you a number to text and a one-time code to send it.</p>}
       {data.linked_hint && <p>Linked: •••{data.linked_hint}. Texts from this number reach your Waldo.</p>}
+      {offered('imessage.enroll') && !data.address && <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('imessage.enroll', { phone }); }}>
+        <label>Your iPhone number<input type="tel" autoComplete="tel" placeholder="+15551234567" value={phone} disabled={busy} onChange={event => setPhone(event.target.value)} required/></label>
+        <div className="control-actions"><button className="primary" disabled={busy || !phone.trim()}>Get my Waldo number</button></div>
+      </form>}
       <div className="control-actions">
         {offered('imessage.link') && <button className="primary" disabled={busy} onClick={() => onAction('imessage.link')}>Get an iMessage link code</button>}
         {offered('imessage.unlink') && <button disabled={busy} onClick={() => { if (window.confirm('Unlink this number? Texts from it stop reaching your Waldo.')) onAction('imessage.unlink'); }}>Unlink this number</button>}
@@ -79,6 +89,11 @@ export function IMessageControls({ record, busy, onAction }: { record: IMessageR
       {offered('imessage.pair') && <div className="control-actions"><button disabled={busy} onClick={() => onAction('imessage.pair')}>Pair a Mac host</button></div>}
       {list(hosts('owner'), 'No Mac host paired.')}
     </section>
+    {data.admin && data.photon && <section className="tile" aria-labelledby="imessage-photon-title">
+      <div className="chart-head"><h2 id="imessage-photon-title">Photon</h2><span className={`access-label${data.photon === 'connected' ? ' done' : ''}`}>{data.photon === 'connected' ? 'Connected' : 'Not connected'}</span></div>
+      <p>{data.photon === 'connected' ? 'Owners get their Waldo number automatically.' : 'Owners can’t get a Waldo number until an operator connects Photon.'}</p>
+      <div className="control-actions"><a className="button" href="/console/imessage/photon/start">{data.photon === 'connected' ? 'Reconnect Photon' : 'Connect Photon'}</a></div>
+    </section>}
     {data.admin && <section className="tile" aria-labelledby="imessage-shared-title">
       <div className="chart-head"><h2 id="imessage-shared-title">Shared Waldo number</h2><span className="access-label">Operator</span></div>
       <p>Pairs the Mac that runs {data.address ?? 'the Waldo iMessage number'} for everyone. Each sender still reaches only their own Waldo.</p>
