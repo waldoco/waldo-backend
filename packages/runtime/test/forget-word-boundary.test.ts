@@ -50,6 +50,8 @@ describe('the shared guard', () => {
   it('the update-card prefix floor matches whole words, and an open end only for a cut prefix', () => {
     expect(cardCarriesTopic(JSON.stringify([{ detail: 'team sync' }]), 'steady pace', 'tea')).toBe(false);
     expect(cardCarriesTopic(JSON.stringify([{ detail: 'tea sync' }]), null, 'tea')).toBe(true);
+    // A topic split across leaves still holds when an unrelated leaf follows: a run of leaves ends at a leaf edge.
+    expect(cardCarriesTopic(JSON.stringify([{ detail: 'green t' }, { detail: 'ea time' }, { detail: 'Invoice' }]), null, 'green tea time')).toBe(true);
     // A topic longer than the floor is cut mid-word: the floor's end is open, its start is still a word start.
     const long = `${'a'.repeat(38)} tea ceremony`;
     expect(cardCarriesTopic(JSON.stringify([{ detail: `${'a'.repeat(38)} teapot` }]), null, long)).toBe(true);

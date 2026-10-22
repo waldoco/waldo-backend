@@ -198,6 +198,24 @@ const redactRawJsonValues = (json: string, redact: (value: string) => string): s
   return out + json.slice(last);
 };
 const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
+// From each start, the shortest run of consecutive leaves whose texts, joined by `separator`, carry the topic. A run begins and
+// ends at leaf edges, so an unrelated neighbouring leaf never joins the topic's first or last word. Leaves strictly between the
+// first and last of a run lie wholly inside it, so their total length cannot exceed the topic's: the search stops extending
+// past that, which keeps it near linear instead of cubic (it was about 1s at 200 leaves).
+function* shortestRuns(texts: readonly string[], separator: string, topic: string, carries: (joined: string) => boolean): Generator<readonly [number, number]> {
+  const topicLength = topic.toLowerCase().length;
+  for (let from = 0; from < texts.length; from++) {
+    let inside = 0;
+    for (let to = from; to < texts.length; to++) {
+      if (to > from + 1) { inside += texts[to - 1]!.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
+      if (carries(texts.slice(from, to + 1).join(separator))) { yield [from, to]; break; }
+    }
+  }
+}
+// A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without
+// bound there), so that mode skips it. Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts.
+const runPieces = <T,>(list: readonly T[], separator: string, text: (item: T) => string): readonly T[] =>
+  separator === '' ? list.filter(item => text(item).replace(/\u0000/g, '').length > 0) : list;
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
   if (text !== null && text !== undefined && typeof text !== 'string') return true;
@@ -234,7 +252,7 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
       for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
     }
   }
-  return all.some(decoded) || [all, values].some(list => decoded(list.join('')) || decoded(list.join(' ')));
+  return [all, values].some(list => ['', ' '].some(separator => !shortestRuns(runPieces(list, separator, text => text), separator, topic, decoded).next().done));
 };
 const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
 // Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
@@ -254,25 +272,16 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   walk(parsed, '', false);
   const exact = (value: string) => carriesTopic(value, topic) || carriesTopic(value.replace(/\u0000/g, ''), topic);
   const marked = new Set<string>();
-  const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
-  // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
-  // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  // A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without bound there), so that mode skips it.
-  // Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts, so that mode keeps every leaf.
-  const topicLength = topic.toLowerCase().length;
+  // Same piece lists, join modes and run search as cardCarriesTopic. A run whose tail alone still holds the topic is skipped
+  // (a later start finds that one), so unrelated leaves before, between or after the copies are never marked. Marks
+  // accumulate over every list and join mode, because separate copies may need different ones.
   for (const separator of ['', ' ']) {
-    const base = separator === '' ? leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0) : leaves;
+    const base = runPieces(leaves, separator, leaf => leaf.text);
     for (const list of [base.filter(leaf => !leaf.key), base]) {
-      for (let from = 0; from < list.length; from++) {
-        // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
-        // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).
-        let inside = 0;
-        for (let to = from; to < list.length; to++) {
-          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
-          if (!holds(list, from, to, separator)) continue;
-          if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
-          break;
-        }
+      const texts = list.map(leaf => leaf.text);
+      for (const [from, to] of shortestRuns(texts, separator, topic, exact)) {
+        if (from < to && exact(texts.slice(from + 1, to + 1).join(separator))) continue;
+        for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
       }
     }
   }

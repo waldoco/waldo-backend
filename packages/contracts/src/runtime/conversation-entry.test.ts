@@ -17,6 +17,9 @@ describe('forget matches whole words', () => {
     expect(forget(['Café Zürich'], 'Lunch at CAFÉ ZÜRICH, not Café Zürichsee')).toBe('Lunch at [forgotten], not Café Zürichsee');
     expect(forget(['οδος'], 'ΟΔΟΣ 5')).toBe('[forgotten] 5');
     expect(forget(['kite'], `${String.fromCharCode(0x212a)}ite repair`)).toBe('[forgotten] repair');
+    const dottedI = String.fromCharCode(0x130), iDot = `i${String.fromCharCode(0x307)}`;
+    expect(forget([`A${dottedI}B`], `A${iDot}B and I${String.fromCharCode(0x307)}`)).toBe('[forgotten] and I' + String.fromCharCode(0x307));
+    expect(forget([`a${iDot}b`], `A${dottedI}B, aib`)).toBe('[forgotten], aib');
     expect(forget(['cafe'], 'café and cafe')).toBe('café and [forgotten]');
   });
   it('reads raw JSON escapes: an escape ends a word, and a match never starts inside one', () => {
