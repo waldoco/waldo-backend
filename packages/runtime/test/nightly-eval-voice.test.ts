@@ -12,6 +12,7 @@ import { runTrial } from '../evals/nightly/trial';
 import { liveVoiceJudge, VOICE_ANCHORS, VOICE_TESTS, voicePacket, type VoiceJudge, type VoiceJudgeInput } from '../evals/nightly/voice';
 import { labelInput, loadVoiceLabels, parseVoiceLabels, voiceAgreement, type LabelledVerdict, type VoiceLabel } from '../evals/nightly/voice-labels';
 import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
+import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
 import { evalWorld } from '../evals/nightly/world';
 
 const scenario = (id: string) => NIGHTLY_SCENARIOS.find((entry) => entry.id === id)!;
@@ -227,14 +228,14 @@ describe('the voice world', () => {
 });
 
 describe('the nightly catalogue', () => {
-  it('holds the research tasks, the owner\'s two and the fourteen voice and safety scenarios, at the gate\'s floor', () => {
+  it('holds the research tasks, the owner\'s two, the voice and safety set and the runnable errands, at the gate\'s floor', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
-    // (h1-health-change-card) and this set, so it holds whether or not other scenarios land beside it.
+    // (h1-health-change-card) and these sets, so it holds whether or not other scenarios land beside them.
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'c1-connected-tracker')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + VOICE_SCENARIOS.length);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {
