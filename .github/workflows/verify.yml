@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: read
+  # Read-only package access lets the Supabase image pulls below authenticate to ghcr.io.
+  packages: read
 
 jobs:
   verify:
@@ -38,6 +40,13 @@ jobs:
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
         with:
           version: 2.109.1
+
+      - name: Log in to ghcr.io for the Supabase images
+        # Anonymous ghcr.io pulls from hosted runners are rate-limited (toomanyrequests); the job's own read-only token is not.
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Start isolated Supabase Auth, REST, and database stack
         run: supabase start > /dev/null
@@ -126,6 +135,13 @@ jobs:
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
         with:
           version: 2.109.1
+
+      - name: Log in to ghcr.io for the Supabase images
+        # Anonymous ghcr.io pulls from hosted runners are rate-limited (toomanyrequests); the job's own read-only token is not.
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Start isolated database and apply migrations from zero
         run: supabase db start
