@@ -52,7 +52,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string) => Promise<void> }>;
+type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string) => Promise<void>; wake: (at: number) => Promise<void> }>;
 const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
@@ -72,7 +72,14 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
         await owner.alarm();
         now += 1000;
       };
-      await work({ scheduler, state, fire });
+      // The owner's own alarm at a given time: it runs whatever the schedule holds due then, and nothing the test armed.
+      const wake = async (at: number) => {
+        now = at;
+        state.storage.kv.put('owner_alarm_last_v1', 1);
+        await owner.alarm();
+        now += 1000;
+      };
+      await work({ scheduler, state, fire, wake });
     } finally { Date.now = realNow; quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 // The owner rows these tests seed are the owner's own words as the index that splits owner messages stores them.
@@ -139,7 +146,7 @@ it('quiet days are not a backlog: the day count is from the oldest turn not yet 
 });
 
 it('a ten-day backlog is consolidated in full, oldest first, a bounded chunk count per pass, and the mark moves only on success', async () => {
-  await withOwner('nightly-catch-up-ten-days', async ({ scheduler, state, fire }) => {
+  await withOwner('nightly-catch-up-ten-days', async ({ scheduler, state, fire, wake }) => {
     const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       // One long owner message a day, so each chunk holds exactly one day and the backlog needs ten consolidation calls.
@@ -148,20 +155,22 @@ it('a ten-day backlog is consolidated in full, oldest first, a bounded chunk cou
       const episodes = episodeIndex(state.storage.sql);
       days.forEach((day, index) => episodes.add(`app-${2000000 + index}`, OWNER_SAID, `${day} journal: ${'quiet steady notes '.repeat(1300)}`, NOW - (10 - index) * DAY - HOUR));
       const passes: number[] = [];
-      const pass = async (id: string) => { const before = model.nights.length; await fire(id); passes.push(model.nights.length - before); };
-      await pass(NIGHTLY_ID);
+      const count = async (run: () => Promise<void>) => { const before = model.nights.length; await run(); passes.push(model.nights.length - before); };
+      // After the night itself, every catch-up runs on the owner's own wake at the time its row is due.
+      const catchUp = () => count(() => wake(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at));
+      await count(() => fire(NIGHTLY_ID));
       const behind = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { code?: string; detail?: string });
       expect(behind).toContainEqual(expect.objectContaining({ code: 'backlog', detail: '10 days behind' }));
       expect(scheduler.read(NIGHTLY_CATCH_UP_ID)?.status).toBe('armed');
       // The second day of this pass fails: the mark stays after the first, and the next pass resumes at the failed day.
       model.failOn = 'Echo journal';
-      await pass(NIGHTLY_CATCH_UP_ID);
+      await catchUp();
       model.failOn = '';
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 7 * DAY - HOUR);
       // A catch-up that leaves a backlog arms the next one itself, soon, instead of waiting for the next night.
       for (let more = 0; more < 5 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) {
         expect(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at).toBeLessThanOrEqual(Date.now() + NIGHTLY_CATCH_UP_DELAY_MS);
-        await pass(NIGHTLY_CATCH_UP_ID);
+        await catchUp();
       }
       expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
       expect(passes.every(calls => calls <= NIGHTLY_CHUNKS)).toBe(true);
