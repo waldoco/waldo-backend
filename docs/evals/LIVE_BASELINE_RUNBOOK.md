@@ -116,7 +116,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
    - Judge errors should be few. A judge error is an ungraded trial, and many of them mean the judge request is wrong.
 
    Note the voice-judge and receipt failure lines.
-5. **Set the floor.** Run `pnpm eval:plan live-scorecard.json`. It prints the graded trials, the observed pass rate, the 95% Wilson lower bound and `suggested_min_pass_rate`, which is the lower bound rounded down to a 0.05 step. Put that number in `NIGHTLY_THRESHOLDS.live.min_pass_rate` in `evals/nightly/gate.ts`.
+5. **Set the floor.** Run `pnpm eval:plan live-scorecard.json`. It prints the graded and ungraded trials (an ungraded trial counts as no pass, so a judge that abstains cannot raise the floor), the observed pass rate, the 95% Wilson lower bound and `suggested_min_pass_rate`, which is the lower bound rounded down to a 0.05 step. Put that number in `NIGHTLY_THRESHOLDS.live.min_pass_rate` in `evals/nightly/gate.ts`.
 
    With about 140 graded trials, the point estimate moves by several points from run to run. A floor at the point estimate would fail the next honest run, so the lower bound is the defensible floor.
 6. **Record the baseline.** Open the PR that sets the floor with the scorecard's Markdown (`live-scorecard.md`), the exact SHA, the models, the call and token counts, and the dashboard cost. The scorecard holds no reply text.

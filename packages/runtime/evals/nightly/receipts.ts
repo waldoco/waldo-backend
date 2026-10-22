@@ -5,7 +5,7 @@
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools'>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'>;
 // memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 
@@ -82,6 +82,20 @@ export const memoryReplyOmits = (renderings: readonly string[], why: string): Re
     const last = [...trial.transcript].reverse().find((turn) => turn.role === 'waldo');
     return !last || renderings.every((rendering) => !last.text.toLowerCase().includes(rendering.toLowerCase()));
   },
+});
+
+// Every one of these appeared in what some tool returned: the answer could rest on it, whatever the reply then says. A
+// literal seeded in the world (a subject line), so the check reads evidence the model was given, never its wording.
+export const sawInToolOutput = (needles: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => needles.every((needle) => trial.toolOutputs.some((entry) => entry.output.toLowerCase().includes(needle.toLowerCase()))),
+});
+
+// No claim of this kind was written this trial, for a case where nothing the owner gave or shared supports one.
+export const noClaimOfKind = (kind: string, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => (((trial.final_state as { memory?: { kind: string; seeded: boolean }[] }).memory) ?? []).every((claim) => claim.seeded || claim.kind !== kind),
 });
 
 // At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.

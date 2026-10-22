@@ -42,27 +42,35 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     const errors: string[] = [];
     let voiceFailed = 0;
     let receiptFailed = 0;
+    let judgePassed = 0;
+    let receiptsSkipped = 0;
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
-      let outcome: TrialOutcome = verdict.outcome;
+      // What the judges alone made of the trial, before receipts: the figure two memory modes can be compared on.
+      let judged: TrialOutcome = verdict.outcome;
       let voice: VoiceVerdict | undefined;
-      const receipts = graded(outcome) || run.holdState ? failedReceipts([...STATE_INVARIANTS, ...(scenario.receipts ?? [])], record, run.memory) : [];
-      if (receipts.length) { receiptFailed += 1; outcome = 'fail'; }
       if (graded(verdict.outcome) && scenario.rubric.voice && run.voiceJudge) {
         voice = await run.voiceJudge({ voice: scenario.rubric.voice, transcript: record.transcript, tools: record.tools, effects: record.effects });
-        if (voice.outcome === 'fail') { voiceFailed += 1; outcome = 'fail'; }
-        else if (voice.outcome !== 'pass' && outcome === 'pass') outcome = voice.outcome;
+        if (voice.outcome === 'fail') { voiceFailed += 1; judged = 'fail'; }
+        else if (voice.outcome !== 'pass' && judged === 'pass') judged = voice.outcome;
       }
+      const allReceipts = [...STATE_INVARIANTS, ...(scenario.receipts ?? [])];
+      const reading = graded(judged) || run.holdState;
+      const receipts = reading ? failedReceipts(allReceipts, record, run.memory) : [];
+      if (reading && (run.memory ?? 'claims') !== 'claims') receiptsSkipped += allReceipts.filter((receipt) => receipt.memory_store).length;
+      if (receipts.length) receiptFailed += 1;
+      if (judged === 'pass') judgePassed += 1;
+      const outcome: TrialOutcome = receipts.length ? 'fail' : judged;
       outcomes.push(outcome);
       run.show?.(scenario, record, verdict, { ...(voice ? { voice } : {}), receipts });
     }
     results.push({
       id: scenario.id, pain: scenario.pain, outcomes, ...(errors.length ? { harness_errors: errors } : {}),
-      ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), receipt_failed: receiptFailed,
+      ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), receipt_failed: receiptFailed, judge_passed: judgePassed, receipts_skipped: receiptsSkipped,
     });
   }
   return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage() });

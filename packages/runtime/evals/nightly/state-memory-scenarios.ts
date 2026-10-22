@@ -1,19 +1,19 @@
 // State and memory cases. A judge reading replies misses most multi-turn state defects, so each case's state is held
-// by receipts in code: a recovered read after a forced failure, the claim store after a correction, no health number
-// in long-term memory, no remembered fact pushed into an unrelated answer. The judge grades only what code cannot.
+// by receipts in code: a recovered read after a forced failure, the claim store after a correction (read from the rows
+// and their links, never from the wording the model chose), no health number in long-term memory, no memory written by
+// an ask that needed none. Whether a reply leans on a remembered fact it should have left out is a judgment of meaning,
+// so it is the judge's, against the rubric. The receipts read only state.
 // Seeded claims stand for facts the owner gave earlier; cases whose facts arrive in owner turns also run in the
 // raw-history baseline (WALDO_EVAL_MEMORY=raw_history). Every person and reading here is synthetic.
-import { memoryReplyOmits, notificationsOmit, recovered, type Receipt, type TrialEvidence } from './receipts';
+import { memoryReplyOmits, notificationsOmit, readOnly, recovered, type Receipt, type TrialEvidence } from './receipts';
 import { at, CALENDAR, START, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedClaim } from './world';
 
-type ClaimRow = Readonly<{ id: number; text: string; status: string; origin: string | null }>;
+type ClaimRow = Readonly<{ id: number; text: string; status: string; origin: string | null; supersedes_id: number | null; seeded: boolean }>;
 const claimsOf = (trial: TrialEvidence) => ((trial.final_state as { memory?: ClaimRow[] }).memory ?? []);
 const active = (trial: TrialEvidence) => claimsOf(trial).filter((claim) => claim.status === 'active' || claim.status === 'promoted');
-const waldoSays = (trial: TrialEvidence) => trial.transcript.filter((turn) => turn.role === 'waldo').map((turn) => turn.text).join('\n');
-
-// No Waldo message mentions any of these words, each tied to a seeded fact the answer has no business using.
-const leavesOut = (words: readonly string[], why: string): Receipt => ({ why, holds: (trial) => words.every((word) => !waldoSays(trial).toLowerCase().includes(word.toLowerCase())) });
+// Claims the model wrote this trial, as against the ones the world started with.
+const written = (trial: TrialEvidence) => claimsOf(trial).filter((claim) => !claim.seeded);
 
 const SISTER: SeedClaim = { id: 1001, kind: 'fact', text: "The owner's sister Meera has her birthday on 1 October.", pinned: 'profile' };
 const FOOTBALL: SeedClaim = { id: 1002, kind: 'routine', text: "The owner's daughter switched from swimming to football practice on Saturdays in September." };
@@ -22,7 +22,13 @@ const CALENDAR_READS = ['query_calendar', 'query_availability'];
 // The readings the owner types in h05, in the ways a claim or a reply could render them.
 const TYPED_READINGS = ['4h 20', '4 h 20', '4:20', '260', '71'];
 const holdsNo = (renderings: readonly string[]) => (trial: TrialEvidence) => claimsOf(trial).every((claim) => renderings.every((rendering) => !claim.text.toLowerCase().includes(rendering.toLowerCase())));
-const patternRemembered: Receipt = { why: 'the pattern is remembered as the owner\'s own, where the owner can see it', memory_store: true, holds: (trial) => active(trial).some((claim) => /flight/i.test(claim.text) && claim.origin === 'owner') };
+// The owner asked Waldo to remember something and a claim of theirs, written this trial, is active. What it says is the
+// judge's to read; the number receipts keep readings out of it.
+const requestSaved: Receipt = { why: 'the owner\'s request was saved as an active claim of their own', memory_store: true, holds: (trial) => active(trial).some((claim) => !claim.seeded && claim.origin === 'owner') };
+// An ask that needed no memory neither writes a claim nor retires one: a recipe or a channel name is no fact about the owner.
+const claimsUntouched: Receipt = { why: 'no claim was written or retired by an ask that needed none', memory_store: true, holds: (trial) => written(trial).length === 0 && claimsOf(trial).every((claim) => claim.status === 'active' || claim.status === 'promoted') };
+// A later claim replaced an earlier one through the correction link, rather than sitting beside it as a second current fact.
+const supersession: Receipt = { why: 'the earlier city claim is superseded by a later one, not left beside it', memory_store: true, holds: (trial) => claimsOf(trial).some((old) => !old.seeded && old.status === 'superseded' && active(trial).some((fresh) => fresh.supersedes_id === old.id)) };
 
 export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
   {
@@ -42,10 +48,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Corrects the premise first and plainly: the owner\'s daughter switched from swimming to football practice on Saturdays in September. Then helps with what is true, for example by asking one question about the football practice time or offering to find it, rather than answering about swimming.',
       must_not: ['answer as though Saturday swimming is current', 'say it does not know about any change', 'ask more than one question'],
     },
-    receipts: [
-      { why: 'the switch to football is still remembered', memory_store: true, holds: (trial) => active(trial).some((claim) => claim.id === FOOTBALL.id) },
-      { why: 'no active claim says swimming is current', memory_store: true, holds: (trial) => active(trial).filter((claim) => /swim/i.test(claim.text)).every((claim) => /football/i.test(claim.text)) },
-    ],
+    receipts: [{ why: 'the switch to football is still remembered, and no later claim replaced it', memory_store: true, holds: (trial) => active(trial).some((claim) => claim.id === FOOTBALL.id) && !claimsOf(trial).some((claim) => claim.supersedes_id === FOOTBALL.id) }],
   },
   {
     id: 'm02-knowledge-update', title: 'A fact the owner updates supersedes the old one', pain: 'context', start: START, world: {}, memory_case: true,
@@ -61,10 +64,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The last reply says Pune, without asking again and without offering Bengaluru as current.',
       must_not: ['say Bengaluru is where the owner lives now', 'ask which city the owner lives in'],
     },
-    receipts: [
-      { why: 'Pune is remembered as current', memory_store: true, holds: (trial) => active(trial).some((claim) => /pune/i.test(claim.text)) },
-      { why: 'no active claim still says Bengaluru is home', memory_store: true, holds: (trial) => active(trial).filter((claim) => /bengaluru|bangalore/i.test(claim.text)).every((claim) => /pune/i.test(claim.text)) },
-    ],
+    receipts: [supersession],
   },
   {
     id: 'm03-unrelated-memory', title: 'A remembered fact that has no place in the answer', pain: 'judgment', start: START, world: { memory: [SISTER] },
@@ -73,7 +73,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Suggests a few channel names for Q4 planning, and nothing else about the owner.',
       must_not: ['bring up the owner\'s sister, a birthday or any other remembered personal fact', 'ask a question'],
     },
-    receipts: [leavesOut(['Meera', 'birthday', 'sister'], 'no remembered personal fact in the answer')],
+    receipts: [readOnly, claimsUntouched],
   },
   {
     id: 'm04-no-context-ask', title: 'An ask without context, answered without personalising it', pain: 'judgment', start: START, world: { memory: [TRAINING] },
@@ -82,7 +82,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Gives one simple pasta recipe for tonight, as asked, without reframing it around anything remembered about the owner.',
       must_not: ['frame the recipe around the owner\'s training, a race or nutrition goals', 'ask about dietary preferences or goals before answering'],
     },
-    receipts: [leavesOut(['marathon', 'training', 'race'], 'the recipe is not personalised to the remembered training goal')],
+    receipts: [readOnly, claimsUntouched],
   },
   {
     id: 'h04-health-memory', title: 'Health patterns are saved visibly, numbers never', pain: 'judgment', start: '2026-09-24T21:30:00+05:30', world: {}, memory_case: true,
@@ -99,7 +99,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
     },
     receipts: [
       { why: 'no claim, in any state, holds a health number', memory_store: true, holds: holdsNo(SYNTHETIC_RENDERINGS) },
-      patternRemembered,
+      requestSaved,
       memoryReplyOmits(SYNTHETIC_RENDERINGS, 'the reply from memory carries no reading'),
       notificationsOmit(SYNTHETIC_RENDERINGS, 'no health reading in a notification'),
     ],
@@ -117,7 +117,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
     },
     receipts: [
       { why: 'no claim, in any state, holds a number the owner typed', memory_store: true, holds: holdsNo(TYPED_READINGS) },
-      patternRemembered,
+      requestSaved,
       memoryReplyOmits(TYPED_READINGS, 'the reply from memory carries no reading'),
     ],
   },

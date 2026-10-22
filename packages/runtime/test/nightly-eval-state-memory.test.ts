@@ -120,7 +120,7 @@ describe('memory: supersession, stale premises and over-personalisation', () => 
 
   it('passes a correction that supersedes the old city, and fails one that leaves both as current', async () => {
     expect(await failed('m02-knowledge-update', update(true))).toEqual([]);
-    expect(await failed('m02-knowledge-update', update(false))).toEqual(['no active claim still says Bengaluru is home']);
+    expect(await failed('m02-knowledge-update', update(false))).toEqual(['the earlier city claim is superseded by a later one, not left beside it']);
   });
 
   it('skips the claim-store receipts in the raw-history baseline, where no store exists', async () => {
@@ -133,14 +133,24 @@ describe('memory: supersession, stale premises and over-personalisation', () => 
     expect(await failed('m01-stale-premise', [say(/swimming/, 'She moved to football in September. Want me to find the practice time?')])).toEqual([]);
     expect(await failed('m01-stale-premise', [{ match: /swimming/, rounds: [
       { toolCalls: [remember('routine', "The owner's daughter has swimming on Saturdays.", "my daughter's swimming on Saturday", 1002)] }, { text: 'Leave at 9.' },
-    ] }])).toEqual(['the switch to football is still remembered', 'no active claim says swimming is current']);
+    ] }])).toEqual(['the switch to football is still remembered, and no later claim replaced it']);
   });
 
-  it('fails an answer that pushes an unrelated remembered fact into it', async () => {
-    expect(await failed('m03-unrelated-memory', [say(/Slack channel/, '#q4-planning, #q4-plan or #planning-q4.')])).toEqual([]);
-    expect(await failed('m03-unrelated-memory', [say(/Slack channel/, "#q4-planning. And Meera's birthday is next week.")])).toEqual(['no remembered personal fact in the answer']);
-    expect(await failed('m04-no-context-ask', [say(/pasta recipe/, 'Aglio e olio: spaghetti, garlic, olive oil, chilli.')])).toEqual([]);
-    expect(await failed('m04-no-context-ask', [say(/pasta recipe/, 'A high-carb pasta for your marathon training.')])).toEqual(['the recipe is not personalised to the remembered training goal']);
+  it('holds a no-context ask to no change in memory: nothing written, nothing retired, nothing set', async () => {
+    const slack = say(/Slack channel/, '#q4-planning, #q4-plan or #planning-q4.');
+    const pasta = say(/pasta recipe/, 'Aglio e olio: spaghetti, garlic, olive oil, chilli.');
+    expect(await failed('m03-unrelated-memory', [slack])).toEqual([]);
+    expect(await failed('m04-no-context-ask', [pasta])).toEqual([]);
+    const wrote = (match: RegExp, quote: string): ScriptRule[] => [{ match, rounds: [{ toolCalls: [remember('preference', 'The owner is planning something.', quote)] }, { text: 'Here you go.' }] }];
+    expect(await failed('m03-unrelated-memory', wrote(/Slack channel/, 'Slack channel about Q4 planning'))).toEqual(['no claim was written or retired by an ask that needed none']);
+    expect(await failed('m04-no-context-ask', wrote(/pasta recipe/, 'simple pasta recipe'))).toEqual(['no claim was written or retired by an ask that needed none']);
+    const reminder = { name: 'set_reminder', arguments: { note: 'Cook pasta', at: '2026-09-24T19:00', repeat: 'none' } };
+    expect(await failed('m04-no-context-ask', [{ match: /pasta recipe/, rounds: [{ toolCalls: [reminder] }, { text: 'Set a reminder.' }] }]))
+      .toEqual(['nothing was changed: no effect, reminder, standing order or open loop']);
+  });
+
+  it('does not match a word that merely contains one: a correct recipe is never failed on its spelling', async () => {
+    expect(await failed('m04-no-context-ask', [say(/pasta recipe/, 'Straining the pasta well keeps the sauce from thinning; trace amounts of chilli are plenty.')])).toEqual([]);
   });
 });
 
@@ -157,7 +167,7 @@ describe('health memory', () => {
   });
 
   it('fails when the pattern was never saved', async () => {
-    expect(await failed('h04-health-memory', [say(/remember about my sleep/, 'Not much yet.')])).toEqual(["the pattern is remembered as the owner's own, where the owner can see it"]);
+    expect(await failed('h04-health-memory', [say(/remember about my sleep/, 'Not much yet.')])).toEqual(["the owner's request was saved as an active claim of their own"]);
   });
 
   it('fails a reply that quotes last night\'s reading back as something it remembers', async () => {
@@ -181,8 +191,9 @@ describe('health memory', () => {
       expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you slept 4h 20 and your resting heart rate was 71.'))).toEqual(['the reply from memory carries no reading']);
     });
 
-    it('fails when only the number was kept and the pattern was dropped', async () => {
-      expect(await failed('h05-typed-numbers', typed('The owner slept badly last night.', 'Not much.'))).toEqual(["the pattern is remembered as the owner's own, where the owner can see it"]);
+    it('fails when nothing was saved at all', async () => {
+      const unsaved: ScriptRule[] = [say(/slept 4h 20/, 'Okay.'), say(/remember about my sleep/, 'Not much.')];
+      expect(await failed('h05-typed-numbers', unsaved)).toEqual(["the owner's request was saved as an active claim of their own"]);
     });
 
     it('stays out of the raw-history baseline, where the typed numbers are in the history by construction', () => {

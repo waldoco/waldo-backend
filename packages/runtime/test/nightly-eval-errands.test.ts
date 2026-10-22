@@ -132,5 +132,9 @@ describe('live run plan', () => {
     expect(wilsonLower(10, 10)).toBeLessThan(1);
     const card = { scenarios: [{ passed: 40, failed: 10 }, { passed: 20, failed: 20 }], overall: { pass_rate: 60 / 90 } } as never;
     expect(suggestedFloor(card)).toMatchObject({ passed: 60, graded: 90, suggested_min_pass_rate: 0.55 });
+    // A trial the judge would not decide is no pass: counting it as one would let abstention raise the suggested floor.
+    const abstaining = { scenarios: [{ passed: 40, failed: 10, ungraded: 0, status: 'graded' }, { passed: 20, failed: 20, ungraded: 30, status: 'graded' }, { passed: 0, failed: 0, ungraded: 3, status: 'blocked' }], overall: { pass_rate: 60 / 90 } } as never;
+    expect(suggestedFloor(abstaining)).toMatchObject({ passed: 60, graded: 90, ungraded: 30, trials: 120 });
+    expect(suggestedFloor(abstaining).suggested_min_pass_rate).toBeLessThan(suggestedFloor(card).suggested_min_pass_rate);
   });
 });

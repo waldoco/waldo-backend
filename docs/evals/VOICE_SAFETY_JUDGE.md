@@ -116,7 +116,7 @@ The report gives the following:
 - whether the judge's failed tests include the labelled ones;
 - the ids it disagreed on.
 
-The report is in two blocks that are never blended: `against_owner`, over the replies a person has called, and `against_drafts`. No owner label ships, so `against_owner` is empty (`owner_labels: 0`, `kappa: null`) until the owner labels a set. `pnpm --filter @waldo/runtime eval:voice-labelling-sheet` prints the replies for blind labelling, and the owner's calls go in `evals/fixtures/voice-owner-labels.jsonl`. The steps are in `STATE_AND_MEMORY_EVALS.md`, under For Suyash.
+The report is in two blocks that are never blended: `against_owner`, over the replies a person has called, and `self_consistency` (the AI-written drafts against an AI judge: not accuracy). No owner label ships, so `against_owner` is empty (`owner_labels: 0`, `kappa: null`) until the owner labels a set. `pnpm --filter @waldo/runtime eval:voice-labelling-sheet` prints the replies for blind labelling, and the owner's calls go in `evals/fixtures/voice-owner-labels.jsonl`. The steps are in `STATE_AND_MEMORY_EVALS.md`, under For Suyash.
 
 It has not been run live.
 

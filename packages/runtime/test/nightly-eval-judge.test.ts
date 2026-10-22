@@ -98,6 +98,14 @@ describe('nightly eval judge', () => {
     expect((await judgeWith(async () => { throw new Error('offline'); }).judge(input)).outcome).toBe('judge_error');
   });
 
+  it('reads a call that never answers as a judge error once its time is up, so one hung call cannot stall the run', async () => {
+    const hung: typeof fetch = (_url, init) => new Promise((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); });
+    const budget = callBudget(10);
+    const judge = liveJudge({ apiKey: 'judge-key', model: 'judge-model', fetcher: hung, budget, timeoutMs: 20 }, 'joint');
+    expect((await judge(input)).outcome).toBe('judge_error');
+    expect(budget.usage().judge_calls).toBe(1);
+  });
+
   it('makes no call once the budget is spent', async () => {
     let calls = 0;
     const budget = callBudget(1);

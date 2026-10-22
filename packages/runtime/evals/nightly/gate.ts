@@ -9,6 +9,10 @@ export type GateThresholds = Readonly<{
   max_incomplete: number;
   // null: report the pass rate without holding it to a floor.
   min_pass_rate: number | null;
+  // A judge that answers unknown leaves a trial ungraded, not failed, so a high share of abstentions can lift the pass
+  // rate over the trials it chose to decide. Absent or null reports the share only; set a ceiling once a live baseline
+  // shows what a healthy run abstains on. The recorded dry run grades nothing, so it never carries one.
+  max_ungraded_share?: number | null;
 }>;
 export type GateResult = Readonly<{ ok: boolean; failures: readonly string[] }>;
 
@@ -34,6 +38,12 @@ export const gateScorecard = (card: Scorecard, limits: GateThresholds): GateResu
   if (harness.length > limits.max_harness_errors) failures.push(`harness errors ${harness.length} > ${limits.max_harness_errors} (${[...new Set(harness)].join(', ')})`);
   if (count('incomplete') > limits.max_incomplete) failures.push(`incomplete scenarios ${count('incomplete')} > ${limits.max_incomplete}`);
   if (card.budget_exhausted) failures.push('the call budget ran out');
+  const trials = card.scenarios.filter((row) => row.status !== 'blocked');
+  const total = trials.reduce((sum, row) => sum + row.trials, 0);
+  const ungraded = trials.reduce((sum, row) => sum + row.ungraded, 0);
+  if (limits.max_ungraded_share != null && total > 0 && ungraded / total > limits.max_ungraded_share) {
+    failures.push(`ungraded trials ${rate(ungraded / total * 100)}% > ${rate(limits.max_ungraded_share * 100)}%`);
+  }
   if (limits.min_pass_rate !== null) {
     const passRate = card.overall.pass_rate;
     if (passRate === null) failures.push(`pass rate ${limits.min_pass_rate} required but nothing was graded`);
@@ -47,7 +57,13 @@ const checkLines = (card: Scorecard): string[] => {
   if (card.overall.graded === 0) return [];
   const total = (key: 'voice_failed' | 'receipt_failed') => card.scenarios.reduce((sum, row) => sum + (row[key] ?? 0), 0);
   const has = (key: 'voice_failed' | 'receipt_failed') => card.scenarios.some((row) => row[key] !== undefined);
+  const trials = card.scenarios.filter((row) => row.status !== 'blocked');
+  const ungraded = trials.reduce((sum, row) => sum + row.ungraded, 0);
+  const sum = (key: 'judge_passed' | 'receipts_skipped') => card.scenarios.reduce((total, row) => total + (row[key] ?? 0), 0);
+  const gradedTrials = card.scenarios.reduce((total, row) => total + row.passed + row.failed, 0);
   const lines = [
+    `Judges alone passed ${sum('judge_passed')} of ${gradedTrials} graded trials${sum('receipts_skipped') ? `; ${sum('receipts_skipped')} receipt check${sum('receipts_skipped') === 1 ? '' : 's'} skipped (no claim store)` : ''}.`,
+    `Ungraded: ${ungraded} of ${trials.reduce((sum, row) => sum + row.trials, 0)} trials (the judge answered unknown, errored or ran out of budget). They are no pass.`,
     ...(has('voice_failed') ? [`Voice judge: ${total('voice_failed')} graded trials failed the six tests.`] : []),
     ...(has('receipt_failed') ? [`Receipts: ${total('receipt_failed')} graded trials failed a receipt check.`] : []),
   ];

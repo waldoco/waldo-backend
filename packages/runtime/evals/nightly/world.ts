@@ -317,7 +317,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       standing_orders: orders.map(({ id: _id, created_at: _created, ...order }) => order),
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
-      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null })),
+      // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
+      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
     }),
   };
 };

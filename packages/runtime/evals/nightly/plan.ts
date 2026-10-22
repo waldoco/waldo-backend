@@ -43,10 +43,15 @@ export const wilsonLower = (passed: number, graded: number, z = 1.96): number =>
   const margin = z * Math.sqrt((rate * (1 - rate)) / graded + (z * z) / (4 * graded * graded));
   return (centre - margin) / (1 + (z * z) / graded);
 };
+// Ungraded trials (a judge answer of unknown, a judge error, a spent budget) count as no pass: counting only the trials the
+// judge chose to decide would let abstention raise the floor. Blocked scenarios are out of both counts.
 export const suggestedFloor = (card: Scorecard) => {
-  const passed = card.scenarios.reduce((sum, row) => sum + row.passed, 0);
-  const graded = card.scenarios.reduce((sum, row) => sum + row.passed + row.failed, 0);
-  return { passed, graded, pass_rate: card.overall.pass_rate, wilson_lower: wilsonLower(passed, graded), suggested_min_pass_rate: Math.floor(wilsonLower(passed, graded) * 20) / 20 };
+  const rows = card.scenarios.filter((row) => row.status !== 'blocked');
+  const passed = rows.reduce((sum, row) => sum + row.passed, 0);
+  const graded = rows.reduce((sum, row) => sum + row.passed + row.failed, 0);
+  const ungraded = rows.reduce((sum, row) => sum + (row.ungraded ?? 0), 0);
+  const trials = graded + ungraded;
+  return { passed, graded, ungraded, trials, pass_rate: card.overall.pass_rate, wilson_lower: wilsonLower(passed, trials), suggested_min_pass_rate: Math.floor(wilsonLower(passed, trials) * 20) / 20 };
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
