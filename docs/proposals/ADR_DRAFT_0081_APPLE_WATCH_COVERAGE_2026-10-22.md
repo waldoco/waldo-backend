@@ -502,6 +502,16 @@ Each PR is small and red-first. Each uses synthetic fixtures only, valid and inv
 | P5 | Form, the version after the freshness lane's: hourly-minimum stress input, compared against the mean | After the freshness lane merges | `scores/form.ts`, with that lane's agreement |
 | P6 | Health trigger: drivers in the trigger's view, and the writer reports a driver set change in `changed` | Owner of `trigger.ts`, most likely the health-freshness session, whose brief includes the trigger | `health/trigger.ts`, a small writer migration |
 
+### 12.1 Open health PRs from 13 October
+
+| PR | What it is | Recommendation |
+|---|---|---|
+| #1127 (head `a0669da8`, conflicting) | Sleep debt on the derived row: migration `20261013090000` | **Superseded by M2.** Its number sorts before `20261021150000`, and its writer is the fence-era body, so applying it would undo the zone-change report and the WHOOP basis. M2 rebuilds its exact key sets and its 19 pgTAP tests on the current writer, and credits it. Close it with a pointer once M2 merges. |
+| #1159 (head `4539c597`, conflicting) | Contract only: `GET /health/scores/history` query and response, days built from `healthScoresV1Schema` | **Revive by rebasing.** It has no migration number, and this proposal adds no score history, so nothing replaces it. It conflicts textually with P1 in `health-ingest.ts`, so whichever merges second rebases. Because each history day is a `healthScoresV1Schema` row, it gets P1's `drivers` key at `health=3` with no extra change. |
+| #1161 (head `f04081d9`, mergeable, stacked on #1159) | Migration `20261013140000` (a new read-only `waldo.health_scores_history`) plus the Worker route | **Revive and renumber.** Give it a number above the newest on `beta-mvp` when it is rebased: `20261013140000` sorts before `20261021150000`/`20261021170000`, so the staging apply preflight would refuse it. It creates one new function and replaces nothing, so it doesn't collide with M1 or M2. After M2 it also returns `sleep_debt` and `drivers` per day, which is additive. Re-run its 17 pgTAP tests after the renumber. |
+
+None of the three is on the critical path for Apple Watch coverage. #1159 and #1161 serve the app's Body detail chart, and app UI work is paused (owner, 13 October), so they can land in any order after P1.
+
 ## 13. Falsifiers: the first red tests
 
 **P1, contract:**
