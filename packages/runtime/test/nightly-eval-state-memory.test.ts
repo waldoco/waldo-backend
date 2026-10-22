@@ -201,7 +201,8 @@ describe('health memory', () => {
 
     it('passes a pattern saved without the hours or the heart rate, and fails a claim or a reply that carries them', async () => {
       expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you sleep badly before early flights.'))).toEqual([]);
-      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights: 4h 20 and a resting heart rate of 71.', 'That you sleep badly before early flights.'))).toEqual(['no claim, in any state, holds a number the owner typed']);
+      // remember's floor refuses a claim carrying the heart rate, so a run that tries one fails on the pattern it never saved.
+      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights: 4h 20 and a resting heart rate of 71.', 'That you sleep badly before early flights.'))).toEqual(["the owner's request was saved as an active claim of their own"]);
       expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you slept 4h 20 and your resting heart rate was 71.'))).toEqual(['the reply from memory carries no reading']);
     });
 
