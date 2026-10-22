@@ -19,7 +19,7 @@ export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
 export const compactionId = (toId: string): string => `${toId}-compaction`;
 // The summary has fixed sections, so what the owner asked for survives each re-compaction in the same place instead of
-// thinning out of free prose. Headings carry no numbers: the numeric health floor rejects a numbered list.
+// thinning out of free prose.
 export const COMPACTION_INSTRUCTION = [
   'Summarise the earlier part of this conversation between the owner and Waldo for Waldo\'s own later use. The conversation is in the owner\'s language; write in it.',
   'Write these sections, in this order, each a heading line followed by plain bullets, and leave a section with no bullets out:',
