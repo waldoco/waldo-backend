@@ -170,7 +170,7 @@ import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandl
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
-import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
+import { approvalJobReplay, approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { sanitise } from '../scribe/sanitiser';
 import { ownerToolApproval } from './owner-turn';
@@ -189,7 +189,8 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
-import { jobBook, type JobBook, type TaskTicket } from '../tasks/jobs';
+import { jobBook, REPLAY_DEADLINE_MS, replayKey, type JobBook, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
+import { BROWSER_TOOLS } from '../tasks/profiles';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -261,6 +262,8 @@ type OwnerRuntime = Readonly<{
   taskContext(): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
   // The month's spend against the owner's ceiling, while the cost ledger counts the month.
   monthSpend(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
+  // Runs an approved card's frozen call once under the replay job's scope, if the card is still the one approved.
+  replayApproval(brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
@@ -399,6 +402,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log: entry => self.taskLog(entry),
       spend: () => { try { return self.setup(self.taskChannel()).monthSpend(); } catch { return undefined; } },
       wake: due => armTaskJobsWake(self.ctx.storage, due),
+      replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
     });
   })();
 
@@ -415,7 +419,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Owner forget, from every place it runs: an open task whose brief, progress or result carried the text is cancelled and
   // its worker fenced, since the worker holds its own copy of what it was given.
   private forgetTasks(texts: readonly string[]): void {
-    for (const id of this.jobs().forget(texts)) this.tasks.fence(id);
+    const cancelled = this.jobs().forget(texts);
+    for (const id of cancelled) this.tasks.fence(id);
+    // The jobs lane settles the card of an approved action the forget stopped.
+    if (cancelled.length) this.ctx.waitUntil(armTaskJobsWake(this.ctx.storage, Date.now()));
   }
 
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book.
@@ -2391,6 +2398,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         },
         room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
         heldTopics: () => claimStore(storage.sql).pendingTopics(),
+        // The replay's browser step queues on the serial lane behind this pass, so it is started, never awaited, here.
+        startReplay: ticket => { this.ctx.waitUntil(this.tasks.replay(ticket).catch(() => { console.error(JSON.stringify({ hop: 'approval_replay', ok: false, code: 'replay_threw' })); })); },
+        approvals: runtime.desk,
       });
       next = ran;
     } finally {
@@ -3107,6 +3117,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       // An approved tainted action (propose_action) replays its frozen call once through the dispatcher, with this
       // owner's own tool set, approval line, sanitiser and egress allowlist.
+      // An approved browser call needs a run scope the owner's browser accepts, which a decision cannot hold: it runs later
+      // as a replay job on the jobs lane, under the job's own scope.
+      replayLater: {
+        takes: tool => BROWSER_TOOLS.has(tool as ToolName),
+        enqueue: (approvalId, call) => {
+          const now = Date.now();
+          this.jobs().create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: channel,
+            brief: { approval_id: approvalId, ...call, approved_at: now }, dueAt: now, deadlineAt: now + REPLAY_DEADLINE_MS, taint: 'external' });
+        },
+        wake: () => armTaskJobsWake(storage, Date.now()),
+      },
       replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
       // the owner gets a bounded line, and it never re-enters model context.
@@ -4109,6 +4130,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
+      replayApproval: approvalJobReplay({ current: (id, digest) => desk.replayCurrent(id, digest), handlers: () => replayHandlers,
+        context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) }),
       taskContext: () => { const egress = parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST); return { authenticatedUserId: ownerRef(), sanitise, ...(egress ? { egressAllowlist: egress } : {}) }; },
       view: async (session, notice, page) => {
         const linked = await google.state();

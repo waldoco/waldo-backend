@@ -19,12 +19,15 @@ export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: 
 
 type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null };
-type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
+// running: approved, and its frozen call waits for or runs on the jobs lane.
+type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'running' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
 // One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
 export const APP_APPROVAL_STATE: Readonly<Record<DeskStatus, AppApprovalStateV1>> = {
   card_unconfirmed: 'unconfirmed', open: 'open', review_only: 'review_only', changing: 'edit_requested', skipped: 'skipped', expired: 'expired',
-  done: 'done', rejected: 'not_done', failed: 'not_done', stale: 'not_done', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', undone: 'undone',
+  running: 'outcome_unknown', done: 'done', rejected: 'not_done', failed: 'not_done', stale: 'not_done', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', undone: 'undone',
 };
+// How an approved action that ran on the jobs lane ended, as its card records it.
+export type ReplayCardStatus = 'done' | 'rejected' | 'failed' | 'uncertain' | 'skipped';
 export class EmailProposalError extends Error {
   constructor(readonly reason: 'identifier_reused' | 'card_unconfirmed' | 'already_handled') { super(reason); }
 }
@@ -95,6 +98,14 @@ export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: str
 export type TaintedActionOutcome = Readonly<{ status: 'done' | 'rejected' | 'failed' | 'uncertain'; message: string }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
+// An approved call the desk does not run inside the decision: the host's jobs lane runs it later, under its own run scope.
+// enqueue runs inside the decision's commit, so the card is claimed exactly when its job exists.
+export type DeferredReplay = Readonly<{
+  takes(tool: string): boolean;
+  enqueue(approvalId: string, call: Readonly<{ tool: string; args: Record<string, unknown>; args_digest: string }>): void;
+  // Wakes the jobs lane once the commit has landed.
+  wake(): Promise<void>;
+}>;
 // a approve, s skip, e edit, u undo, d defer ("Not now": the row stays open and keeps its cards).
 export type DeskAction = 'a' | 's' | 'e' | 'u' | 'd';
 export type ApprovalSurface = 'telegram' | 'whatsapp' | 'app' | 'console';
@@ -138,6 +149,14 @@ export type ApprovalDesk = Readonly<{
   // Shows an approval the owner put off to them again. Only one that is put off, still waiting and unexpired is raised.
   reraise(id: string): Promise<ReraiseOutcome>;
   placement(id: string): CardPlacement;
+  // Approved cards whose call runs on the jobs lane and has not settled.
+  replays(): readonly string[];
+  // The owner's receipt for a settled replay, from the card's own frozen call.
+  replayReceipt(id: string, status: ReplayCardStatus, message: string): string;
+  // Whether a card is still running under the digest its replay job froze: anything else fences the replay before I/O.
+  replayCurrent(id: string, argsDigest: string): Promise<boolean>;
+  // Moves a running card to how its replay ended. Only a running card moves, so a settle is applied once.
+  settleReplay(id: string, status: ReplayCardStatus): boolean;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
@@ -279,6 +298,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string | EffectReceipt>;
   // Replays an approved tainted action once through the dispatcher; the outcome says only what the replay established.
   replayTaintedAction?: (proposal: TaintedActionProposal, approvalRef: string) => Promise<TaintedActionOutcome>;
+  replayLater?: DeferredReplay;
   googleTasks?: () => GoogleTaskApprovalAdapter;
   // Host-derived correlation of a proposal with the run that raised it; it never grants execution authority.
   currentRunRef?: () => string | undefined;
@@ -518,6 +538,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
+  const replayAccepted = (entry: LedgerRow): ApprovalDecision =>
+    ({ toast: 'Approved', message: `Approved: ${describeAny(entry)}. It runs in the background, and I'll tell you how it went.` });
   const decide = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const started = deps.now();
     expireDue(id);
@@ -528,6 +550,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
+    // An approved card whose call waits for or runs on the jobs lane answers every later decision with its approval's
+    // receipt; the owner hears how it ended when it ends.
+    if (entry?.status === 'running') return replayAccepted(entry);
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
@@ -784,11 +809,25 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const tp = JSON.parse(entry.payload_json) as TaintedActionProposal;
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'An approved action cannot be undone from here. Nothing was reversed.' };
-        } else if (!deps.replayTaintedAction) {
+        } else if (!deps.replayTaintedAction && !deps.replayLater?.takes(tp.tool)) {
           out = { toast: 'Not available', message: 'This action cannot be run from here. Nothing was done.' };
         } else if (!entry.proposal_digest || await sha256Hex(stableJson(tp.args)) !== entry.proposal_digest || tp.args_digest !== entry.proposal_digest) {
           setStatus(id, 'failed');
           out = { toast: 'Action changed', message: `The stored action no longer matches what you approved, so nothing ran: ${describeTaintedAction(tp)}. Ask me again and I'll propose it afresh.` };
+        } else if (deps.replayLater?.takes(tp.tool)) {
+          // A replay that ended uncertain has no effect record (its job was the intent), so it is never retried from here.
+          if (entry.status !== 'open') return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was run again.' };
+          // Intent before I/O: the claim and the frozen call's job land in one commit; nothing runs in the decision.
+          const replay = deps.replayLater;
+          const lost = commit(() => {
+            sql.exec("UPDATE ledger SET status = 'running', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return noLongerOpen(id);
+            replay.enqueue(id, { tool: tp.tool, args: tp.args, args_digest: tp.args_digest });
+            return null;
+          });
+          if (lost) return lost;
+          await replay.wake();
+          out = replayAccepted(entry);
         } else {
           if (!recovering) {
             const lost = claimOpen(id);
@@ -959,6 +998,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const waitingRow = (entry: LedgerRow) => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p') && (entry.status === 'open' || entry.status === 'review_only');
   return {
     decide: decideOnce,
+    replays: () => sql.exec<{ id: string }>("SELECT id FROM ledger WHERE status = 'running' ORDER BY decided_at").toArray().map(entry => entry.id),
+    replayReceipt(id, status, message) {
+      const entry = row(id);
+      const what = entry ? describeAny(entry) : 'the approved action';
+      if (status === 'done') return `Done: ${what}. ${message}`;
+      if (status === 'skipped') return `Stopped before it ran, so nothing was done: ${what}.`;
+      if (status === 'uncertain') return `The outcome is unknown: ${what}. ${message} Check the result before asking again; nothing was run again.`;
+      return `Nothing was done: ${what}. ${message}`;
+    },
+    async replayCurrent(id, argsDigest) {
+      const entry = row(id);
+      if (entry?.status !== 'running' || entry.kind !== 'tainted_action' || entry.proposal_digest !== argsDigest) return false;
+      const tp = JSON.parse(entry.payload_json) as TaintedActionProposal;
+      return tp.args_digest === argsDigest && await sha256Hex(stableJson(tp.args)) === argsDigest;
+    },
+    settleReplay(id, status) {
+      return sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE id = ? AND status = 'running'", status, deps.now(), id).rowsWritten > 0;
+    },
     waiting() {
       expireDue();
       return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'review_only') ORDER BY created_at").toArray()

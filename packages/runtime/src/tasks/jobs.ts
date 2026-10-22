@@ -1,4 +1,5 @@
 import { type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
+import type { TaintedActionOutcome } from '../channels/approvals';
 import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { FORGOTTEN } from '../memory/claims';
@@ -9,7 +10,7 @@ import { md5Hex } from '../channels/md5';
 // worker call from an old attempt, a cancelled job or a duplicate report changes nothing and is told it was fenced.
 
 type Sql = Pick<SqlStorage, 'exec'>;
-export type JobKind = 'task' | 'retry_turn';
+export type JobKind = 'task' | 'retry_turn' | 'approval_replay';
 export type JobStatus = 'queued' | 'running' | 'reported' | 'applied' | 'cancelled' | 'parked';
 export type JobOutcome = TaskResult['status'];
 export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect' | 'deadline';
@@ -24,6 +25,10 @@ export type TaskBrief = Readonly<{
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.
 export type RetryBrief = Readonly<{ message_ref: string; text: string; conversation_ref: string; said_at: number; promised_by: number }>;
+// An approval card the owner said yes to, frozen at the decision: the call exactly as the card showed it and the digest
+// the card was approved under. The brain runs it once, later, under the job's own run scope.
+export type ReplayBrief = Readonly<{ approval_id: string; tool: string; args: Record<string, unknown>; args_digest: string; approved_at: number }>;
+export type ReplayOutcome = TaintedActionOutcome;
 export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[] }>;
 
 export type JobRow = Readonly<{
@@ -47,13 +52,16 @@ export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
 // minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
 // starts when a running one reports.
 export const TASK_MAX_RUNNING = 3;
+// An approved action runs within this time of the approval or not at all: the owner said yes to the page as it was then,
+// and a browser step that has waited longer behind other work no longer acts on what they saw.
+export const REPLAY_DEADLINE_MS = 30 * 60_000;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
 
 export type CreateJob = Readonly<{
   kind: JobKind; profile: TaskProfile | null; idempotencyKey: string; origin: string; surface: string;
-  brief: TaskBrief | RetryBrief; dueAt: number; deadlineAt: number;
+  brief: TaskBrief | RetryBrief | ReplayBrief; dueAt: number; deadlineAt: number;
   // A job born tainted: a retried turn whose original carried someone else's words.
   taint?: 'external' | null;
 }>;
@@ -63,6 +71,16 @@ const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string }>) => {
+  // A table an earlier build created does not admit approval replays; it is rebuilt with the same columns and rows in this
+  // synchronous block, which the storage commits as one transaction.
+  const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
+  if (made !== undefined && !made.includes("'approval_replay'")) {
+    sql.exec('DROP INDEX IF EXISTS task_jobs_open');
+    sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_replay');
+    for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
+    sql.exec('INSERT INTO task_jobs SELECT * FROM task_jobs_before_replay');
+    sql.exec('DROP TABLE task_jobs_before_replay');
+  }
   for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);
   const get = (id: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE id = ?', id).toArray()[0] ?? null;
   // The ticket is current only for the attempt that holds the lease; anything else is an old, cancelled or finished attempt.
@@ -75,8 +93,24 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     deps.now() + TASK_LEASE_MS, deps.now(), ...values, ticket.jobId, ticket.attempt, ticket.token,
   ).rowsWritten > 0;
 
+  // Apply-once by job id: only the attempt holding the lease can report, once. A second report from the same attempt is a
+  // duplicate; one from any other attempt or after a cancel is fenced and discarded.
+  const finish = (ticket: TaskTicket, resultJson: string, outcome: JobOutcome, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | Fenced => {
+    const now = deps.now();
+    const written = sql.exec(
+      `UPDATE task_jobs SET status = 'reported', result_json = ?, outcome = ?, inflight_json = NULL, lease_token = NULL, lease_until = NULL, due_at = ?,
+         rounds = rounds + ?, cost_usd = cost_usd + ?, updated_at = ?
+       WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
+      resultJson, outcome, now, spend.rounds, spend.costUsd, now, ticket.jobId, ticket.attempt, ticket.token,
+    ).rowsWritten;
+    if (written > 0) return 'accepted';
+    const row = get(ticket.jobId);
+    return row && row.attempt === ticket.attempt && (row.status === 'reported' || row.status === 'applied') ? 'duplicate' : 'fenced';
+  };
+
   return {
     get,
+    byKey: (key: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', key).toArray()[0] ?? null,
     // Intent before I/O: the row is written before any worker starts. The same idempotency key (a replayed turn's tool call)
     // returns the job it already made instead of making a second one.
     create(input: CreateJob): Readonly<{ job: JobRow; created: boolean }> {
@@ -129,19 +163,13 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       if (seq <= row.checkpoint_seq) return renew(ticket) ? 'stale' : 'fenced';
       return renew(ticket, ', checkpoint_seq = ?, checkpoint_json = ?, rounds = rounds + ?, cost_usd = cost_usd + ?', seq, JSON.stringify(checkpoint), spend.rounds, spend.costUsd) ? 'ok' : 'fenced';
     },
-    // Apply-once by job id: only the attempt holding the lease can report, once. A second report from the same attempt is a
-    // duplicate; one from any other attempt or after a cancel is fenced and discarded.
     report(ticket: TaskTicket, result: TaskResult, spend: Readonly<{ rounds: number; costUsd: number }>): 'accepted' | 'duplicate' | Fenced {
-      const now = deps.now();
-      const written = sql.exec(
-        `UPDATE task_jobs SET status = 'reported', result_json = ?, outcome = ?, lease_token = NULL, lease_until = NULL, due_at = ?,
-           rounds = rounds + ?, cost_usd = cost_usd + ?, updated_at = ?
-         WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
-        JSON.stringify(result), result.status, now, spend.rounds, spend.costUsd, now, ticket.jobId, ticket.attempt, ticket.token,
-      ).rowsWritten;
-      if (written > 0) return 'accepted';
-      const row = get(ticket.jobId);
-      return row && row.attempt === ticket.attempt && (row.status === 'reported' || row.status === 'applied') ? 'duplicate' : 'fenced';
+      return finish(ticket, JSON.stringify(result), result.status, spend);
+    },
+    // An approved action's attempt ends with what its replay established. The intent marker is cleared in the same write,
+    // so the job is never both reported and in flight.
+    reportReplay(ticket: TaskTicket, outcome: ReplayOutcome): 'accepted' | 'duplicate' | Fenced {
+      return finish(ticket, JSON.stringify(outcome), REPLAY_JOB_OUTCOME[outcome.status], { rounds: 0, costUsd: 0 });
     },
     // No provider could answer: the attempt ends without counting as a crash, and the job waits for its next try. A next
     // try past the deadline parks the job instead; a try at the deadline is the last one.
@@ -216,6 +244,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     open: (): readonly JobRow[] => sql.exec<JobRow>(`SELECT * FROM task_jobs WHERE status IN (${placeholders(OPEN)}) ORDER BY created_at`, ...OPEN).toArray(),
     running: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'running' ORDER BY created_at").toArray(),
+    replaying: (): boolean => sql.exec("SELECT 1 FROM task_jobs WHERE status = 'running' AND kind = 'approval_replay' LIMIT 1").toArray().length > 0,
     runningTasks: (): number => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task'").toArray()[0]?.n ?? 0,
     // Work the brain owes now: queued attempts whose time came, and reported jobs not yet applied.
     due: (): readonly JobRow[] => sql.exec<JobRow>(
@@ -227,11 +256,13 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1 WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
     },
     // The next moment the brain has something to do: a queued job's due time, a running attempt's lease end, or now for a report.
-    // While every task slot is taken, a queued task waits for a report rather than its due time.
-    nextDue(slotsFull = false): number | null {
+    // While every task slot is taken, a queued task waits for a report rather than its due time; so does a queued replay
+    // while another replay runs.
+    nextDue(slotsFull = false, replayRunning = false): number | null {
       const row = sql.exec<{ next: number | null }>(
         `SELECT MIN(CASE status WHEN 'running' THEN lease_until ELSE due_at END) AS next
-         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task')`, ...OPEN, slotsFull ? 1 : 0,
+         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task')
+           AND NOT (? AND status = 'queued' AND kind = 'approval_replay')`, ...OPEN, slotsFull ? 1 : 0, replayRunning ? 1 : 0,
       ).toArray()[0];
       return row?.next ?? null;
     },
@@ -260,5 +291,12 @@ export type JobBook = ReturnType<typeof jobBook>;
 
 export const taskBrief = (row: JobRow): TaskBrief => JSON.parse(row.brief_json) as TaskBrief;
 export const retryBrief = (row: JobRow): RetryBrief => JSON.parse(row.brief_json) as RetryBrief;
+export const replayBrief = (row: JobRow): ReplayBrief => JSON.parse(row.brief_json) as ReplayBrief;
+export const replayOutcome = (row: JobRow): ReplayOutcome | null => row.result_json === null ? null : JSON.parse(row.result_json) as ReplayOutcome;
+// The job's outcome column for a replay: a refusal before the tool ran is a blocked job; an unknown outcome is a failed one,
+// and the card keeps the replay's own word for it.
+const REPLAY_JOB_OUTCOME = { done: 'done', rejected: 'blocked', failed: 'failed', uncertain: 'failed' } as const satisfies Record<ReplayOutcome['status'], JobOutcome>;
+// The key an approval's replay job is written under: one job per card, whatever decides it how often.
+export const replayKey = (approvalId: string): string => `approval:${approvalId}`;
 export const jobCheckpoint = (row: JobRow): Checkpoint => row.checkpoint_json === null ? { turns: [] } : JSON.parse(row.checkpoint_json) as Checkpoint;
 export const jobResult = (row: JobRow): TaskResult | null => row.result_json === null ? null : JSON.parse(row.result_json) as TaskResult;

@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
+import { TASK_JOBS_TABLE_SCHEMA } from '../src/do-schema';
 import { jobBook, jobCheckpoint, jobResult, TASK_LEASE_MS, TASK_MAX_CRASHES, type CreateJob, type TaskBrief } from '../src/tasks/jobs';
 
 // The job book on real Durable Object SQLite. Each case drives one recovery path of the job protocol and checks that the
@@ -26,6 +27,20 @@ const spend = { rounds: 1, costUsd: 0.01 };
 const turn = (n: number) => ({ call: { call_id: `c${n}`, name: 'search_communication', arguments: '{}' }, output: `page ${n}` });
 
 describe('task job book', () => {
+  it('a table an earlier build made, which does not admit approval replays, is rebuilt with its rows kept', async () => {
+    const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-${seq += 1}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql, deps = { now: () => 1_800_000_000_000, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() };
+      for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement.replace("'task', 'retry_turn', 'approval_replay'", "'task', 'retry_turn'"));
+      const before = jobBook(sql, deps).create(job()).job;
+      expect(sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'task_jobs'").one().sql).toContain("'approval_replay'");
+      const book = jobBook(sql, deps);
+      expect(book.get(before.id)).toEqual(before);
+      expect(book.create(job('approval:p1', { kind: 'approval_replay', profile: null })).job.kind).toBe('approval_replay');
+      expect(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'task_jobs%' ORDER BY name").toArray().map(row => row.name)).toEqual(['task_jobs', 'task_jobs_open']);
+    });
+  });
+
   it('writes the job before any I/O, once per idempotency key', async () => {
     await withBook((book) => {
       const first = book.create(job());

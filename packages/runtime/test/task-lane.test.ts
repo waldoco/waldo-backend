@@ -40,6 +40,8 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       },
       room: () => true,
       heldTopics: () => [],
+      startReplay: () => { throw new Error('no approval replays in this harness'); },
+      approvals: { replays: () => [], replayReceipt: () => '', settleReplay: () => false },
       ...over,
     });
     return work({ book, clock, sent, turns, started, fenced, log, deps, busy });

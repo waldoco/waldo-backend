@@ -1004,9 +1004,9 @@ describe('app approval projection', () => {
   it('maps every desk status to one app state, shows the exact block per kind and the stored digest, and offers undo only with undo data', async () => {
     const { APP_APPROVAL_STATE } = await import('../src/channels/approvals');
     const { appApprovalStateV1Schema, appApprovalV1Schema } = await import('../../contracts/src/app/approvals');
-    expect(Object.keys(APP_APPROVAL_STATE).sort()).toEqual(['card_unconfirmed', 'changing', 'done', 'expired', 'failed', 'open', 'rejected', 'review_only', 'skipped', 'stale', 'uncertain', 'undone', 'unverified']);
+    expect(Object.keys(APP_APPROVAL_STATE).sort()).toEqual(['card_unconfirmed', 'changing', 'done', 'expired', 'failed', 'open', 'rejected', 'review_only', 'running', 'skipped', 'stale', 'uncertain', 'undone', 'unverified']);
     for (const state of Object.values(APP_APPROVAL_STATE)) expect(appApprovalStateV1Schema.safeParse(state).success).toBe(true);
-    expect(APP_APPROVAL_STATE).toMatchObject({ changing: 'edit_requested', rejected: 'not_done', failed: 'not_done', stale: 'not_done', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', card_unconfirmed: 'unconfirmed' });
+    expect(APP_APPROVAL_STATE).toMatchObject({ changing: 'edit_requested', rejected: 'not_done', failed: 'not_done', stale: 'not_done', running: 'outcome_unknown', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', card_unconfirmed: 'unconfirmed' });
 
     const { appCaller } = await import('../src/channels/surfaces/app');
     const { appApprovalParts } = await import('../src/channels/approvals');

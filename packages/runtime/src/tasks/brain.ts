@@ -7,7 +7,7 @@ import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
-import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { jobCheckpoint, jobResult, replayBrief, retryBrief, taskBrief, type JobBook, type JobRow, type ReplayBrief, type ReplayOutcome, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
 import type { TaskClaim, TaskOutcome, TaskSpend } from './worker-loop';
 
@@ -32,6 +32,9 @@ export type TaskHostDeps = Readonly<{
   spend?(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
   // Arms the jobs lane's wake.
   wake(due: number): Promise<void>;
+  // Runs an approved card's frozen call once, on the surface whose desk froze it, under the given scope. The host checks
+  // the card is still the one approved; the outcome claims only what the replay established.
+  replayApproval(surface: string, brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
 }>;
 
 // After a provider outage a task waits before its next attempt: 2, 5, 10, then every 20 minutes until its deadline.
@@ -40,6 +43,7 @@ export const deferDelay = (deferrals: number): number => TASK_DEFER_MS[Math.min(
 
 const traceOf = (ticket: TaskTicket) => `task:${ticket.jobId}:${ticket.attempt}`;
 export const TURN_OUTCOME = { done: 'completed', partial: 'answered', blocked: 'blocked', failed: 'failed' } as const satisfies Record<TaskResult['status'], TurnOutcome>;
+const REPLAY_TURN_OUTCOME = { done: 'completed', rejected: 'blocked', failed: 'failed', uncertain: 'failed' } as const satisfies Record<ReplayOutcome['status'], TurnOutcome>;
 const failedResult = (code: string): TaskResult => ({ status: 'failed', summary: `The worker stopped with an error (${code}).`, findings: [], proposals: [], left: [] });
 
 export const taskHost = (deps: TaskHostDeps) => {
@@ -155,6 +159,40 @@ export const taskHost = (deps: TaskHostDeps) => {
         text: { input: call.arguments, output: JSON.stringify(result) },
       });
       return result;
+    },
+    // An approved action, run once by the brain itself: no worker holds it. The intent is on the job before the call can
+    // start, so an attempt lost mid-call parks as an uncertain effect and is never run again blind. A browser step takes
+    // the serial lane under the job's own scope, as a worker's does; this is called from outside that lane.
+    async replay(ticket: TaskTicket): Promise<void> {
+      const claimed = deps.book.claim(ticket);
+      if (claimed === 'fenced' || claimed.kind !== 'approval_replay') return;
+      const row = claimed, brief = replayBrief(row), started = deps.now();
+      const scope = scopeFor(ticket, row);
+      let outcome: ReplayOutcome;
+      if (md5Hex(row.brief_json) !== row.brief_digest) {
+        outcome = { status: 'failed', message: 'The stored action changed after you approved it, so nothing ran.' };
+      } else {
+        const run = async () => {
+          if (!deps.book.beginEffect(ticket, { tool: brief.tool, call_id: row.idempotency_key })) throw new ClosedRunError();
+          return deps.replayApproval(row.surface, brief, scope);
+        };
+        busy.set(ticket.jobId, (busy.get(ticket.jobId) ?? 0) + 1);
+        try {
+          outcome = BROWSER_TOOLS.has(brief.tool as never) ? await deps.serialBrowser(scope, run) : await run();
+        } catch (error) {
+          // Fenced before the intent was written: nothing ran, and the cancel that fenced it settles the card.
+          if (error instanceof ClosedRunError && deps.book.get(ticket.jobId)?.inflight_json == null) { fence(ticket.jobId); return; }
+          outcome = { status: 'uncertain', message: 'The outcome of that action is unknown.' };
+        } finally {
+          const left = (busy.get(ticket.jobId) ?? 1) - 1;
+          if (left > 0) busy.set(ticket.jobId, left); else busy.delete(ticket.jobId);
+        }
+      }
+      const written = deps.book.reportReplay(ticket, outcome);
+      fence(ticket.jobId);
+      if (written !== 'accepted') return;
+      hop(row, 'approval_replay_reported', { ok: outcome.status === 'done', ms: deps.now() - started, outcome: REPLAY_TURN_OUTCOME[outcome.status], code: outcome.status, detail: brief.tool });
+      await deps.wake(deps.now());
     },
     async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'> {
       logEvents(events);

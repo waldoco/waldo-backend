@@ -51,6 +51,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined,
+      replayApproval: async () => { throw new Error('no approval replays in this harness'); },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
