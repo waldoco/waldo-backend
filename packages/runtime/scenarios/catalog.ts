@@ -2,6 +2,7 @@
 // are the cases whose expectations are exact enough to check without a judge. New tools add
 // their scenarios here (or in a sibling module) in the same commit - see the spec's rules.
 import { ASKING_SCENARIOS } from './asking';
+import { UNTRUSTED_SCENARIOS } from './untrusted';
 import type { Scenario } from './types';
 
 export const SCENARIOS: readonly Scenario[] = [
@@ -465,4 +466,5 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   ...ASKING_SCENARIOS,
+  ...UNTRUSTED_SCENARIOS,
 ];

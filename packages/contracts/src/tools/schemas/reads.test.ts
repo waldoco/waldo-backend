@@ -460,6 +460,11 @@ describe('Calendar page receipts',()=>{
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
  });
+ it('admits the owner status only as organizer or accepted',()=>{
+  const event={id:'e1',title:'Standup',start:'2026-10-06T09:00:00Z',end:'2026-10-06T09:30:00Z',all_day:false};
+  for(const owner_status of ['organizer','accepted'])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(true);
+  for(const owner_status of ['tentative','needsAction','',true])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(false);
+  });
  it('admits the operation marker on an event Waldo changed, and refuses an empty or oversized one',()=>{
   const event={id:'e1',title:'QA',start:'2026-10-13T10:30:00Z',end:'2026-10-13T11:30:00Z',all_day:false};
   const withMarker=(operation_marker:string)=>({...page,events:[{...event,operation_marker}],fetched_count:1});

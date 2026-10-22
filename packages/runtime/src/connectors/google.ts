@@ -1,5 +1,5 @@
 import { Parser } from 'htmlparser2';
-import { constantTimeEqual } from './constant-time';
+import { constantTimeEqual } from './constant-time.ts';
 import { extractArtifacts } from '../security/artifact-hygiene.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
@@ -183,7 +183,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
-  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[] }>;
+  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
@@ -191,10 +191,10 @@ export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?:
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
-// the join link and attachments stay out of the shared card projection; meeting prep adds the
-// link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, ...projection } = event;
+// the join link, attachments and the owner's status stay out of the shared card projection; meeting
+// prep adds the link and attachment titles itself.
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
   return projection;
 };
 
@@ -401,7 +401,7 @@ export type GoogleClient = Readonly<{
   driveListFiles?(input: Readonly<{ pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveSearchFiles?(input: Readonly<{ nameContains: string; pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
-  driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
+  driveReadFileContent?(input: import('./drive-rest.ts').DriveContentArgs): Promise<import('./drive-rest.ts').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
   calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
@@ -561,14 +561,16 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-// calendarDetails adds an event's join link, attachments and attendee emails. A Worker that predates them
-// parses calendar pages strictly and hashes every field into its prep digest, so the connector-proxy maps
-// them only when the calling Worker asks (proxyClientOptions). The Worker's own clients default to on.
-export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean }>;
-export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown }>): GoogleClientOptions => ({ calendarDetails: body.calendar_details === true });
+// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
+// A Worker that predates a field parses calendar pages strictly and hashes every field into its prep digest,
+// so the connector-proxy maps each only when the calling Worker asks (proxyClientOptions). The Worker's own
+// clients default to on.
+export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean }>;
+export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown }>): GoogleClientOptions =>
+  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
-  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true);
+  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
@@ -1027,7 +1029,7 @@ const calendarTimes = (start: string, end: string) => {
   // PATCH merges nested fields, so explicitly clear the previous representation.
   return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
 };
-const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
+const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
   all_day: event.start?.dateTime === undefined,
@@ -1044,7 +1046,13 @@ const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
   ...(details ? detailsOf(event) : {}),
+  ...(ownerStatus ? ownerStatusOf(event) : {}),
 });
+// Set only when the owner organized the event or accepted it. An invite they haven't answered, or answered
+// tentatively, gets neither: its title and attendee list were written by someone else.
+const ownerStatusOf = (event: GoogleEvent): Pick<CalendarItem, 'owner_status'> =>
+  event.organizer?.self === true ? { owner_status: 'organizer' }
+    : event.attendees?.find(a => a.self)?.responseStatus === 'accepted' ? { owner_status: 'accepted' } : {};
 const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | 'conference_url' | 'attachments'> => ({
   // The owner's own entry (self) is never listed: a meeting's attendees are the other people in it.
   ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
@@ -1057,6 +1065,7 @@ type GoogleEvent = {
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
+  organizer?: { self?: boolean };
   hangoutLink?: string; conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] };
   attachments?: { fileId?: string; title?: string }[];
 };

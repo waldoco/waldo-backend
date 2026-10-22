@@ -37,7 +37,7 @@ const PREP_TEXT = 'Design review at 09:30. Bring the onboarding mocks; Pat is li
 const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const REMINDER_TEXT = 'Time to call Sam.';
 const ORDER_TEXT = 'Rain after 4 pm; the forecast changed since this morning.';
-const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[] }));
+const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], reminderText: null as string | null }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -55,7 +55,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Meeting prep decision') ? JSON.stringify({ kind: 'notify', text: PREP_TEXT })
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
-      : content.includes('[Reminder due now') ? REMINDER_TEXT
+      : content.includes('[Reminder due now') ? fixture.reminderText ?? REMINDER_TEXT
       : content.includes('[Standing order due now') ? ORDER_TEXT
       : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -76,7 +76,7 @@ const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_P
 const wire = { presence: true as boolean | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0 };
 
 beforeEach(() => {
-  fixture.event = null; fixture.changes = [];
+  fixture.event = null; fixture.changes = []; fixture.reminderText = null;
   wire.presence = true; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -457,6 +457,35 @@ describe('falling back to the app', { timeout: 20_000 }, () => {
     }, { surface: 'whatsapp', window: 'closed' });
   });
 
+  // A text long enough that WhatsApp's shim sends it in two parts. Meta takes both and then refuses the tail for the window, so
+  // the head is on the owner's phone and the record waits in the outbox for the tail.
+  // After a switch the record stays WhatsApp's, waiting for the owner's next message there; after an unlink nothing will reach it,
+  // so it ends unconfirmed. Either way the app never gets the tail alone.
+  it.each([
+    ['the owner switches to the app', 'setting', { status: 'pending' }, { outcome: 'running', delivery: 'pending' }],
+    ['WhatsApp is unlinked', 'unlink', { status: 'quarantined' }, { outcome: 'quarantined', delivery: 'failed' }],
+  ] as const)('a split reminder whose head WhatsApp took is not sent to the app as its tail alone when %s', async (_how, change, record, run) => {
+    const parts = ['a'.repeat(3000), 'b'.repeat(3000)];
+    fixture.reminderText = parts.join('\n\n');
+    await withOwner(`surface-split-${change}`, async (owner, state, ctx) => {
+      const reminder = await dueReminder(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(parts.map(part => `text:${part}`));
+      const refused = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+        method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id: 'wamid.out.2', at: ctx.now }] }) }));
+      expect(refused.status).toBe(200);
+      await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+      expect(outbox(state)).toMatchObject([{ status: 'pending', providerMessageIds: ['wamid.out.1', null] }]);
+      if (change === 'unlink') unlinkWhatsApp(owner, state);
+      else state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'app');
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(await said(owner, ctx)).toEqual([]);
+      expect(outbox(state)).toMatchObject([{ ...record, providerMessageIds: ['wamid.out.1', null] }]);
+      expect(reminderRuns(state, reminder.id)).toEqual([run]);
+    }, { surface: 'whatsapp', window: 'open' });
+  });
+
   it('a reminder the owner cancelled while it waited for WhatsApp is not sent to the app', async () => {
     await withOwner('surface-fallback-cancelled', async (owner, state, ctx) => {
       await dueReminder(state);
@@ -594,7 +623,7 @@ describe('the console control', () => {
   it('reads the setting with what the owner can be reached on, and saves a new value against a fresh read', async () => {
     await withConsole('surface-console-save', async (stub, token) => {
       const before = await read(stub, token);
-      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, telegram_linked: false });
+      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, imessage_linked: false, telegram_linked: false });
       const saved = await post(stub, token, before, { value: 'both', request_id: 'surface-request-01' });
       expect(saved.status).toBe(200);
       expect(await saved.json()).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false });

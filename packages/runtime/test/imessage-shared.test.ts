@@ -89,10 +89,9 @@ async function world() {
   const sharedLive = async () => {
     const code = (await (await op.action('imessage.pair_shared')).text()).split('\n')[0]!;
     expect(code).toMatch(/^wim_[a-f0-9]{48}$/);
-    expect((await host.redeem(code)).status).toBe(200);
-    const challenge = (await (await op.action('imessage.verify', { id: host.bridgeId, subject: OP, chat: `iMessage;-;${OP}` })).text()).split('\n')[0]!;
-    expect((await host.send(host.message(challenge, { senderHandle: OP }))).status).toBe(200);
-    expect((await op.action('imessage.activate_shared', { id: host.bridgeId, subject: OP, chat: `iMessage;-;${OP}` })).status).toBe(303);
+    const redeemed = await host.redeem(code);
+    expect(redeemed.status).toBe(200);
+    expect((await redeemed.json() as { state: string }).state).toBe('active'); // a shared host is live at redemption
     expect((await host.heartbeat()).status).toBe(200);
     expect((await host.capabilities()).status).toBe(200);
   };

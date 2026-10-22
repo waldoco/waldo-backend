@@ -196,7 +196,7 @@ const messageById = async (client: GoogleClient, threadId: string, messageId: st
 // href) is left out of that list, so it cannot make the scribe refuse the whole thread. The connector is also bundled into the
 // connector-proxy edge function, which cannot import the scribe, so this runs where the result is built.
 const LINK_LIST_HEADER = '\n\nLinks:\n';
-const withoutFlaggedLinks = (body: string): string => {
+export const withoutFlaggedLinks = (body: string): string => {
   const at = body.lastIndexOf(LINK_LIST_HEADER);
   if (at < 0) return body;
   const kept = body.slice(at + LINK_LIST_HEADER.length).split('\n').filter((line) => !carriesSecretOrCanary(line));
