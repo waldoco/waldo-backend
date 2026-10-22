@@ -394,15 +394,17 @@ describe('the job-report redactor covers heartbeat check-backs and reminders', (
     ]);
   });
 
-  // The redactor folds case as a non-Unicode regex does and the remaining check as toLowerCase does, so the Kelvin sign
-  // (U+212A, which lowercases to "k") survives the scrub. The forget must count that copy, not report itself complete.
-  it('counts a waiting check-back the scrub could not clean', async () => {
+  // The redactor and the remaining check share one pattern: a Unicode case variant (the Kelvin sign folds to "k") is scrubbed,
+  // and a copy the scrub cannot clean, where the marker itself carries the topic, is counted, never reported complete.
+  it('scrubs a Unicode case variant and counts a waiting check-back the scrub could not clean', async () => {
     const { TelegramFinalOutbox, redactJobReportEntries } = await import('../src/channels/telegram-final-outbox');
     const values = new Map<string, unknown>();
     const kv = { get: <T>(key: string) => structuredClone(values.get(key)) as T | undefined, put: (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
-    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: 'Your Kite lesson is still open.' }, ownerSubject: '42', doName: 'owner',
+    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: `Your ${String.fromCharCode(0x212a)}ite lesson is still open.` }, ownerSubject: '42', doName: 'owner',
       heartbeat: { id: HEARTBEAT_ID, occurrence: 900, schedulerRunId: 'run', loops: [{ id: 'o1', due: '2026-10-18T08:00', status: 'open' }] } });
-    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 0, remaining: 1 });
+    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 0 });
+    expect(new TelegramFinalOutbox(kv).records()[0]!.payload.text).toBe(`Your ${FORGOTTEN} lesson is still open.`);
+    expect(redactJobReportEntries(kv, ['forgotten'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 1 });
   });
 });
 

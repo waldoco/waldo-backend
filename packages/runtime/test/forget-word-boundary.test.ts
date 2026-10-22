@@ -8,7 +8,8 @@ import { blankCardPieces, cardCarriesTopic, claimStore, decodedLeafHit, FORGOTTE
 import { carriesTopic, hidesTopic } from '../src/memory/forget-guard';
 import { heldRowShapes } from '../src/memory/held-rows';
 import { episodeIndex } from '../src/channels/episodes';
-import { redactConversationEntries } from '../src/channels/conversation-store';
+import { conversationForgetSources, redactConversationEntries } from '../src/channels/conversation-store';
+import { forgetSourceBatch } from '../src/memory/selective-forget';
 import { FINAL_OUTBOX_KEY, redactJobReportEntries } from '../src/channels/telegram-final-outbox';
 import { redactThreadTitles } from '../src/channels/app-threads';
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
@@ -54,6 +55,21 @@ describe('the shared guard', () => {
     expect(cardCarriesTopic(JSON.stringify([{ detail: `${'a'.repeat(38)} teapot` }]), null, long)).toBe(true);
     expect(cardCarriesTopic(JSON.stringify([{ detail: `b${'a'.repeat(38)} teapot` }]), null, long)).toBe(false);
     expect(blankCardPieces([{ detail: 'team sync' }, { detail: 'tea' }], 'tea')).toEqual([{ detail: 'team sync' }, { detail: FORGOTTEN }]);
+    // A card held only by the floor blanks just the leaves that start the topic, never one that holds it inside a word.
+    const inside = `b${'a'.repeat(38)} teapot`, starts = `${'a'.repeat(38)} teapot`;
+    expect(blankCardPieces([{ detail: inside }, { detail: starts }], long)).toEqual([{ detail: inside }, { detail: FORGOTTEN }]);
+  });
+  it('the source inventories (selector batch, conversation, ledger, SQL stores) list only whole-word rows', async () => {
+    expect(forgetSourceBatch('tea', [{ ref: 'a', text: UNRELATED }, { ref: 'b', text: 'Tea at four' }]).sources).toEqual([{ ref: 'b', text: 'Tea at four' }]);
+    await inDo('boundary-sources', async (state) => {
+      await state.storage.put('conv:1', { id: 'c1', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: UNRELATED, appPayload: 'x', modelProjection: { mode: 'include' }, role: 'user' });
+      expect(await conversationForgetSources(state.storage, 'tea')).toEqual({ sources: [], incomplete: false });
+      await state.storage.put('toolout:0001', { tool: 'search_episodes', ok: true, taint: null, at: 1, summary: JSON.stringify({ team: UNRELATED }) });
+      expect(await toolOutputLedger(state.storage).forgetSources('tea')).toEqual({ sources: [], incomplete: false });
+      const store = claimStore(state.storage.sql);
+      episodeIndex(state.storage.sql).add('tg-1', 'owner', UNRELATED, 1);
+      expect(store.forgetSources('tea')).toMatchObject({ sources: [], incomplete: false });
+    });
   });
 });
 

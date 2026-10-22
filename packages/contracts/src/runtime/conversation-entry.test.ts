@@ -16,6 +16,7 @@ describe('forget matches whole words', () => {
   it('folds non-ASCII case and never matches into a combining mark', () => {
     expect(forget(['Café Zürich'], 'Lunch at CAFÉ ZÜRICH, not Café Zürichsee')).toBe('Lunch at [forgotten], not Café Zürichsee');
     expect(forget(['οδος'], 'ΟΔΟΣ 5')).toBe('[forgotten] 5');
+    expect(forget(['kite'], `${String.fromCharCode(0x212a)}ite repair`)).toBe('[forgotten] repair');
     expect(forget(['cafe'], 'café and cafe')).toBe('café and [forgotten]');
   });
   it('reads raw JSON escapes: an escape ends a word, and a match never starts inside one', () => {
