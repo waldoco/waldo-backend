@@ -42,6 +42,9 @@ Up to five lanes share one container: 4 cores, 15 GB. So:
 ## Before you start an issue
 Search open PRs for the issue number (`search_pull_requests` with `repo:waldoco/waldo-backend is:open <number>`) and recent branches. Local also writes fixes. If someone else already has it, stop and report to C0 rather than duplicating.
 
+## Keep nothing local
+Commit and push at every green step, and at least every 15 minutes. Before any wait (a wall, CI), push, and update the PR `## Handoff` with the head and the next step. If the usage window ends mid-edit, the pushed branch plus the Handoff must let another agent continue.
+
 ## Protocol
 - **Checkpoint.** After each meaningful step, push and update the `## Handoff` section at the top of your PR body (`update_pull_request` with the full body; keep the rest of the body intact). The Handoff says: branch, head SHA, done, in progress, next in order, last results, open questions. Another session must be able to continue from it alone.
 - **Design question** not settled by the build direction, the README or your PR body: post a PR comment headed `## Question for orchestrator`, then carry on with other work. Name your default answer; if C0 has not answered when you reach the point where it blocks, proceed on the default only if it is reversible, and say so in the Handoff.
