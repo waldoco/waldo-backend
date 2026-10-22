@@ -120,7 +120,21 @@ describe('memory: supersession, stale premises and over-personalisation', () => 
 
   it('passes a correction that supersedes the old city, and fails one that leaves both as current', async () => {
     expect(await failed('m02-knowledge-update', update(true))).toEqual([]);
-    expect(await failed('m02-knowledge-update', update(false))).toEqual(['the earlier city claim is superseded by a later one, not left beside it']);
+    expect(await failed('m02-knowledge-update', update(false))).toEqual(['nothing written before the update is still current, and an owner claim written after it is']);
+  });
+
+  it('reads the end state, not the link: an old claim retired without a link passes, a model that saved only the move passes, and the old claim left active fails', () => {
+    const held = { transcript: [], effects: [], tools: [], toolOutputs: [] };
+    const row = (id: number, status: string, created_at: string, over: Record<string, unknown> = {}) => ({ id, kind: 'fact', text: 'x', status, origin: 'owner', supersedes_id: null, seeded: false, created_at, ...over });
+    const before = '2026-09-24T03:30:00.000Z';
+    const after = '2026-09-25T02:45:00.000Z';
+    const receipt = scenario('m02-knowledge-update').receipts![0]!;
+    const holds = (memory: unknown[]) => receipt.holds({ ...held, final_state: { memory } });
+    expect(holds([row(1, 'superseded', before), row(2, 'active', after, { supersedes_id: 1 })])).toBe(true);
+    expect(holds([row(1, 'dismissed', before), row(2, 'active', after)])).toBe(true);
+    expect(holds([row(2, 'active', after)])).toBe(true);
+    expect(holds([row(1, 'active', before), row(2, 'active', after)])).toBe(false);
+    expect(holds([row(1, 'superseded', before)])).toBe(false);
   });
 
   it('skips the claim-store receipts in the raw-history baseline, where no store exists', async () => {

@@ -49,11 +49,13 @@ The recorded gate stays deterministic: the scripted gateway grades nothing, and 
 
 **Ask: please label the 33 replies, about 15 minutes.** Every row in `voice-labels-v0.jsonl` is a draft with `reviewed_by: null`, so the judge's agreement with the owner is unmeasured until a person calls them.
 
+**Before you start: do not open `packages/runtime/evals/fixtures/voice-labels-v0.jsonl`, and do not search the repository for a reply you read on the sheet.** That file ships every draft call (the label, the failed tests and the reasons) beside each reply word for word, and its ids name the verdict, so one search for a line of the sheet would show you the draft's call. A label made after seeing it measures agreement with the draft, and that cannot be undone once you have labelled. Label from the printed sheet alone.
+
 1. `npx -y pnpm@10.34.4 --filter @waldo/runtime eval:voice-labelling-sheet > sheet.md` prints each reply as the judge sees it, with the six tests, under an opaque id (`L01-xxxx`, in an order that says nothing about the verdict). The draft's own id, which names its verdict and defect, never appears; only the scorer maps the opaque id back. None of the draft calls are shown, so you label blind. Use the ids exactly as printed: they carry a fingerprint of the set, so ids from an old sheet stop matching if the set changes.
 2. Write one row per reply in `packages/runtime/evals/fixtures/voice-owner-labels.jsonl`: `{"id":"<id>","label":"pass","reviewed_by":"<your name>"}`, or for a fail `{"id":"<id>","label":"fail","failed_tests":["<every test it fails>"],"reviewed_by":"<your name>"}`. A fail must list every test the reply fails, not only the first, because per-test kappa treats a missing test as a pass. A reply you skip stays uncounted.
 3. The report marks the figure `enough` from 30 labelled replies; fewer still shows numbers, flagged as thin.
 
-Signing a draft in place (`reviewed_by` on its row in `voice-labels-v0.jsonl`) also counts, but anchors you on the draft's call; the sheet does not.
+Signing a draft in place (`reviewed_by` on its row in `voice-labels-v0.jsonl`) also counts, but it means opening the file above and anchors you on the draft's call; the sheet does not. Use the sheet.
 
 ## What these cases do not claim
 
