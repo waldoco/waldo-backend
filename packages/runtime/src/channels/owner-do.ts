@@ -7,7 +7,8 @@ import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
+import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
@@ -256,6 +257,7 @@ type OwnerRuntime = Readonly<{
   ready: Promise<void>;
   log(entry: TurnLogEntry): void;
   titleThread(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
+  progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
@@ -692,6 +694,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // iMessage owner channel: bridge DO -> durable owner inbox -> existing responder -> frozen reply outbox.
   private readonly imessageAttempts = new Set<string>();
   private activeIMessage: IMessageInboxRecord | null = null;
+  private iMessageProgress: ProgressPacer | null = null;
+  private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
   private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.OWNER_DO }; }
   /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
   async admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'> {
@@ -727,15 +731,43 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const abort = new AbortController(), scope = inbox.scope(record, abort.signal);
       this.activeScope = scope; this.activeAbort = abort; let completed = false;
       const timeout = setTimeout(() => abort.abort(), Math.max(0, scope.deadline - Date.now()));
+      this.iMessageProgress = this.startIMessageProgress(record, scope);
       try {
         const subject = appSubjectFor(record.ownerDoName);
         await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: record.text } }, 'imessage', true, scope);
         completed = true;
       } catch { console.error('imessage execution outcome unconfirmed'); }
-      finally { clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
+      finally { await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
     }
     await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     await this.rearmEveryWake();
+  }
+  // Short notes while a long iMessage turn runs (see progress-pacer). The model writes each one; it freezes under the turn's
+  // own scope and goes to the bridge from inside the turn, which already holds the serial queue, so nothing is queued
+  // behind the turn and nothing re-arms: a note that cannot go at once is settled unsent. WALDO_IMESSAGE_PROGRESS=0 is off.
+  private startIMessageProgress(record: IMessageInboxRecord, scope: RunEffectScope): ProgressPacer | null {
+    if (this.env.WALDO_IMESSAGE_PROGRESS === '0') return null;
+    let runtime: OwnerRuntime;
+    // A runtime that cannot be built fails the turn itself; the notes just stay off.
+    try { runtime = this.setup('imessage'); } catch { return null; }
+    const outbox = new IMessageFinalOutbox(this.ctx.storage), trace = ownerTurnTrace('imessage', record.updateId);
+    const pacer = new ProgressPacer(record.text, {
+      since: Math.max(Math.min(record.occurredAt, record.admittedAt), outbox.lastSentAt() ?? 0),
+      ...(this.iMessageProgressTiming ? { timing: this.iMessageProgressTiming } : {}),
+      write: async (draft, signal) => {
+        const own: RunEffectScope = { ...scope, signal: AbortSignal.any([scope.signal, signal]), deadline: Math.min(scope.deadline, Date.now() + PROGRESS_WRITE_MAX_MS) };
+        const { note } = JSON.parse(await runtime.progressNote(trace, progressInput(draft), own)) as { note?: unknown };
+        if (note !== null && typeof note !== 'string') throw new Error('progress note unreadable');
+        return note;
+      },
+      send: (index, text) => {
+        scope.commit(() => outbox.freezeProgress(record, index, text));
+        return handOffIMessageProgress(this.imessageHost, `progress:${record.id}:${index}`);
+      },
+      log: ({ index, outcome, writer, ms }) => runtime.log({ trace, hop: 'progress_note', ms, ok: outcome === 'sent', code: `${outcome}:${writer}`, detail: `note=${index}` }),
+    });
+    pacer.start();
+    return pacer;
   }
   private async appAuthority(name: string, hash: string) {
     if (!name || this.env.OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
@@ -2612,6 +2644,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : null;
     const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {
+      // A progress note may name the steps the running iMessage turn has taken: their tool names, nothing they returned.
+      const step = this.iMessageProgress && entry.trace === ownerTurnTrace('imessage', this.activeIMessage?.updateId ?? -1) ? /^(?:subagent_)?tool_(.+)$/.exec(entry.hop)?.[1] : undefined;
+      if (step) this.iMessageProgress?.saw(step);
       if (entry.principal !== undefined) { const { principal, ...rest } = entry; tracePrincipal = principal; entry = rest; }
       if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact')) {
         try {
@@ -2721,10 +2756,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const consoleLinkTool = consoleLinkHandler(consoleLinkSender({
       surface: channel, route: consoleLinkRoutes[channel], available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,
     }));
-    // Progress notes go only where a send can leave while the turn runs. A Telegram turn runs inside alarm(), so its note
-    // goes straight out on the reply caller, not through the final outbox that alarm drains. iMessage replies leave
-    // through an outbox drained after the turn and the app has no part type for a note, so neither is offered the tool;
-    // WhatsApp stays off until a mid-turn send there is tested.
+    // The model's progress-note tool goes only where a send can leave while the turn runs. A Telegram turn runs inside alarm(),
+    // so its note goes straight out on the reply caller, not through the final outbox that alarm drains. iMessage times its
+    // notes in the harness instead (startIMessageProgress), so it is not offered the tool: one mechanism, one cap. The app
+    // has no part type for a note and shows its own typing dots; WhatsApp stays off until a mid-turn send there is tested.
     const progressNoteRoutes: Record<ChannelKind, ProgressNoteDeliver | null> = {
       telegram: async (text, turn) => { turn.runScope?.admit(); return (await routedCall('sendMessage', { chat_id: owner, text })) !== undefined; },
       imessage: null, app: null, whatsapp: null,
@@ -3394,7 +3429,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const record = this.activeIMessage;
         if (!turn.runScope || !record || record.id !== turn.runScope.runId || record.attempt !== turn.runScope.attempt || record.updateId !== turn.updateId) throw new ClosedRunError();
         const text = redactSecretUrls(payload.text).text;
-        turn.runScope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, text); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });
+        // The reply ends the turn's progress notes first: one still unsent never goes, and one on its way out lands before it.
+        await this.iMessageProgress?.close();
+        turn.runScope.commit(() => {
+          const outbox = new IMessageFinalOutbox(this.ctx.storage);
+          outbox.dropProgress('progress_superseded', record.id); outbox.freeze(record, text); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record);
+        });
         this.ctx.waitUntil(this.serial(() => drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0).then(() => this.rearmEveryWake())).catch(() => { console.error('imessage outbox drain deferred'); }));
       } } : {}),
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
@@ -4210,6 +4250,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       },
       titleThread: (trace, exchange, scope) => responder.threadTitle(trace, exchange, scope),
+      progressNote: (trace, input, scope) => responder.progressNote(trace, input, scope),
       timezone: clock.timezone, ready };
     this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
     return runtime;

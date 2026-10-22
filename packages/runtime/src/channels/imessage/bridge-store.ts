@@ -213,6 +213,10 @@ export class BridgeStore {
     return row ? toDelivery(row) : null;
   }
   deliveries(): DeliveryRow[] { return this.rows('SELECT * FROM deliveries ORDER BY created_at, delivery_id').map(toDelivery); }
+  /** Deliveries whose replyRef is exactly `ref`, or starts with it when `ref` ends in ':'. */
+  deliveriesFor(ref: string): DeliveryRow[] {
+    return this.rows(ref.endsWith(':') ? 'SELECT * FROM deliveries WHERE substr(reply_ref, 1, length(?1)) = ?1 ORDER BY created_at' : 'SELECT * FROM deliveries WHERE reply_ref = ?1', ref).map(toDelivery);
+  }
 
   /** Marks the single outstanding command delivered (attempt+1) and returns its unchanged bytes. */
   pull(h: S2Headers): DeliveryRow | null {

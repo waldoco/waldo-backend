@@ -55,7 +55,8 @@ export type IMessageTurnHandoff = Readonly<{
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
 export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string }>;
-export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' } | { kind: 'terminal'; result: IMessageResult };
+// busy: the one mailbox slot holds another command; the slot frees within a host pull and a send, so retry soon.
+export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' | 'busy' } | { kind: 'terminal'; result: IMessageResult };
 export interface OwnerIMessagePort {
   admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'>;
   recordIMessageResult(input: IMessageResultReport): Promise<boolean>;
@@ -224,17 +225,26 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (!store.online() || !caps || caps.readiness !== 'ready' || !caps.features.text.send || !caps.features.text.verified || !caps.features.text.exactTarget) return { kind: 'retry' };
     const key = await this.key(authority, environment, c.wrappingKey);
     if (!key) return { kind: 'retry' };
+    // A turn's progress note never follows its reply: refused once the reply is here, and withdrawn by the reply while the
+    // host has not pulled it. One the host already pulled goes out first, since the mailbox sends in order.
+    const [kind, turn] = input.replyRef.split(':');
+    const progress = kind === 'progress';
     let command: IMessageCommand;
     try { command = buildTextReply(binding, input.commandId, input.text); }
     catch { return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'reply_invalid') }; }
     const body = JSON.stringify(command), commandDigest = await sha256Hex(body), now = Date.now(), deliveryId = crypto.randomUUID();
     const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
     const commitment = await signCommitment({ bridgeId, accountId, deliveryId, commandId: command.commandId, commandDigest, expiresAtMs: now + c.policy.commitmentMaxAgeMs }, key);
+    // Checked with no await before the enqueue, so a reply that landed during this call's awaits is seen.
+    if (progress && store.deliveriesFor(`reply:${turn}`).length) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_superseded') };
     try {
+      if (kind === 'reply') for (const note of store.deliveriesFor(`progress:${turn}:`)) if (note.state === 'queued') store.withdraw(note.deliveryId, 'progress_superseded');
       store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: input.ownerDoName, replyRef: input.replyRef });
     } catch (error) {
       if (error instanceof BridgeStoreError && error.code === 'lane_quarantined') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'mutation_lane_poisoned') };
       if (error instanceof BridgeStoreError && error.code === 'command_conflict') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'command_conflict') };
+      // A note that cannot go now is stale by the time it could; a reply waits for the slot.
+      if (error instanceof BridgeStoreError && error.code === 'outstanding_command') return progress ? { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_busy') } : { kind: 'busy' };
       return { kind: 'retry' };
     }
     await this.rearm(store);
