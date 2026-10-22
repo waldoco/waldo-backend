@@ -11,6 +11,7 @@ describe('owner-scoped overview contract', () => {
   it('rejects unknown versions and malformed or fabricated values', () => {
     expect(() => readOverview({ ...empty, version: 2 })).toThrow();
     expect(() => readOverview({ ...empty, brief: { status: 'delivered', at: null } })).toThrow();
+    expect(readOverview({ ...empty, brief: { status: 'sent_unconfirmed', at: null } }).brief.status).toBe('sent_unconfirmed');
     expect(() => readOverview({ ...empty, as_of: 'bad date' })).toThrow();
     expect(() => readOverview({ ...empty, waiting: { count: -1, first: null } })).toThrow();
   });

@@ -10,6 +10,9 @@ import { traceBook } from '../src/channels/harness';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
+import { consoleAccess } from '../src/channels/console';
+import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
+import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { runBook } from '../src/channels/background-runs';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
@@ -57,14 +60,17 @@ const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_P
 const HOUR = 60 * 60_000;
 const today = () => new Date().toISOString().slice(0, 10);
 
-const wire = { events: [] as string[], wamid: 0 };
+const wire = { events: [] as string[], wamid: 0, unlinked: false };
 beforeEach(() => {
-  model.checkBacks = 0; model.reminders = 0; release.held = false; wire.events = []; wire.wamid = 0;
+  model.checkBacks = 0; model.reminders = 0; release.held = false; wire.events = []; wire.wamid = 0; wire.unlinked = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
-    if (fn === 'assert_channel_presence') return Response.json(true);
+    // The directory's WhatsApp presence: active until the owner unlinks it from the console.
+    if (fn === 'assert_channel_presence') return Response.json(!wire.unlinked);
+    if (fn === 'presence_hint') return Response.json(!wire.unlinked && String(init?.body).includes('"p_provider":"whatsapp"') ? '1111' : null);
+    if (fn === 'unlink_presence') { wire.unlinked = true; return Response.json(true); }
     if (fn === 'health_context_read') return Response.json(null);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
@@ -87,6 +93,10 @@ type Steps = Readonly<{
   // A reminder due now, one-off or daily; answers its id.
   reminder(repeat: 'none' | 'daily'): Promise<string>;
   forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  // Meta's report on every message it accepted: it reached the phone, or it was refused for the closed window.
+  report(kind: 'delivered' | 'refused'): Promise<void>;
+  // The owner unlinks WhatsApp from the console.
+  unlink(): Promise<void>;
   remember(text: string, status?: 'purging'): void;
   outbox(): Row[];
   // The job's background run and the scheduler's run row for the occurrence that ran. The heartbeat's interval sits on the
@@ -157,6 +167,29 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
           const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims().find(row => row.text === text)!.id;
           return internals.setup('whatsapp').act({ action: `${kind}.forget`, id: String(id), value: '' });
+        },
+        report: async kind => {
+          const ids = (state.storage.kv.get<{ status: string; providerMessageIds?: (string | null)[] }[]>('telegram_final_outbox_v1') ?? [])
+            .filter(record => record.status === 'accepted').flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          expect(ids.length).toBeGreaterThan(0);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ [kind]: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await internals.serial(async () => undefined);
+        },
+        // The console's controls build the Telegram runtime, which needs a bot token; it is lent for this step only.
+        unlink: async () => {
+          const settings = (owner as unknown as { env: Record<string, unknown> }).env;
+          settings.TELEGRAM_BOT_TOKEN = '123:synthetic';
+          try {
+            const cookie = { cookie: 'waldo_console=' + await consoleAccess(state.storage).grant() };
+            const read = await owner.fetch(new Request('https://telegram-owner' + CONTROLS_PATH + '?view=connections', { headers: cookie }));
+            const { csrf, revision } = await read.json() as { csrf: string; revision: string };
+            const response = await owner.fetch(new Request('https://telegram-owner' + CONTROL_ACTION_PATH, { method: 'POST', headers: { ...cookie, 'content-type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ csrf, revision, view: 'connections', action: 'whatsapp.unlink', request_id: 'wa-unlink-forget' }) }));
+            expect(await response.json()).toMatchObject({ receipt: { state: 'recorded' } });
+          } finally { settings.TELEGRAM_BOT_TOKEN = undefined; }
+          await internals.serial(async () => undefined);
         },
         remember: (text, status) => {
           memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
@@ -281,6 +314,50 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       await alarms(1);
       expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
       expect(job('reminder')).toEqual({ run: [{ status: 'stopped', summary: 'reminder cancelled before delivery' }], scheduled: [{ outcome: 'ok', delivery: null }] });
+    });
+  });
+
+  // Forget that reaches a record Meta has already accepted leaves it to arrive: it settles as delivered, and only a refusal
+  // ends it by forget. A one-off's note goes with its only occurrence either way.
+  it('lets a forgotten, accepted reminder settle as delivered once Meta reports it arrived', async () => {
+    await owned('wa-forget-reminder-accepted-arrived', async ({ alarms, write, reminder, forget, report, outbox, job, note }) => {
+      const id = await reminder('none');
+      await alarms(3);
+      await write('hi');
+      expect(outbox()).toMatchObject([{ status: 'accepted' }]);
+      expect(await forget('node', SECRET)).toBe(true);
+      expect(outbox()).toMatchObject([{ status: 'accepted', payload: { text: REMINDER.replace(SECRET, FORGOTTEN) } }]);
+      await report('delivered');
+      await alarms(1);
+      expect(outbox()).toMatchObject([{ status: 'delivered' }]);
+      expect(job('reminder')).toEqual({ run: [{ status: 'completed', summary: 'reminder sent' }], scheduled: [{ outcome: 'ok', delivery: 'sent' }] });
+      expect(note(id)).toBeNull();
+    });
+  });
+
+  it('ends a forgotten, accepted reminder by forget when Meta then refuses it', async () => {
+    await owned('wa-forget-reminder-accepted-refused', async ({ alarms, write, reminder, forget, report, outbox, job, note }) => {
+      const id = await reminder('none');
+      await alarms(3);
+      await write('hi');
+      expect(await forget('node', SECRET)).toBe(true);
+      await report('refused');
+      await alarms(1);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
+      expect(job('reminder')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_REMINDER }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(note(id)).toBeNull();
+    });
+  });
+
+  it('keeps the forget summary when forget ends a waiting reminder and the number is then unlinked', async () => {
+    await owned('wa-forget-reminder-unlinked', async ({ alarms, reminder, forget, unlink, outbox, job }) => {
+      await reminder('none');
+      await alarms(3);
+      expect(await forget('node', SECRET)).toBe(true);
+      await unlink();
+      await alarms(1);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: expect.stringMatching(/^(owner_forget|surface_unlinked)$/) }]);
+      expect(job('reminder').run).toEqual([{ status: 'stopped', summary: STOPPED_REMINDER }]);
     });
   });
 
