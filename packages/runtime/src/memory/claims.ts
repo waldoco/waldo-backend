@@ -1,7 +1,8 @@
 type Sql = Pick<SqlStorage, 'exec'>;
-import { carriesTopic, hidesTopic } from './forget-guard';
+import { replaceLiteralText } from '@waldo/contracts';
+import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
-import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
+import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -85,7 +86,7 @@ export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   } catch { return 'unreadable'; }
 };
 const ciRedact = (value: string, needle: string, marker: string): string =>
-  needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
+  needle ? replaceLiteralText(value, needle, marker) : value;
 
 export const FORGOTTEN = '[forgotten]';
 
@@ -97,7 +98,13 @@ const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char
 // on a short literal prefix chunk instead; the JS-side case-insensitive full-text match keeps
 // exact semantics - the SQL LIKE only ever selects a superset of the real matches.
 const LIKE_PREFILTER_MAX = 40;
-export const likePrefilter = (text: string) => `%${likeEscape(text.slice(0, LIKE_PREFILTER_MAX))}%`;
+// LIKE folds ASCII case only, while the exact check folds Unicode case (É to é, and the Kelvin sign and long s to k and s).
+// So the prefilter is the longest run of the topic that every case variant spells the same way to LIKE: printable ASCII
+// other than k and s. A topic with no such run scans every row.
+export const likePrefilter = (text: string) => {
+  const run = text.split(/[^\x20-\x7e]|[ksKS]/).reduce((longest, part) => part.length > longest.length ? part : longest, '');
+  return `%${likeEscape(run.slice(0, LIKE_PREFILTER_MAX))}%`;
+};
 
 // Existing cleanup projections outside the bounded selector's source contract. A row that still carries the topic (raw text, a JSON string value or a JSON key) keeps the forget incomplete.
 // The predicate is shared with the /heldrows diagnostic so the two cannot disagree. Three bound parameters per column: like, like, like.
@@ -191,6 +198,24 @@ const redactRawJsonValues = (json: string, redact: (value: string) => string): s
   return out + json.slice(last);
 };
 const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
+// From each start, the shortest run of consecutive leaves whose texts, joined by `separator`, carry the topic. A run begins and
+// ends at leaf edges, so an unrelated neighbouring leaf never joins the topic's first or last word. Leaves strictly between the
+// first and last of a run lie wholly inside it, so their total length cannot exceed the topic's: the search stops extending
+// past that, which keeps it near linear instead of cubic (it was about 1s at 200 leaves).
+function* shortestRuns(texts: readonly string[], separator: string, topic: string, carries: (joined: string) => boolean): Generator<readonly [number, number]> {
+  const topicLength = topic.toLowerCase().length;
+  for (let from = 0; from < texts.length; from++) {
+    let inside = 0;
+    for (let to = from; to < texts.length; to++) {
+      if (to > from + 1) { inside += texts[to - 1]!.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
+      if (carries(texts.slice(from, to + 1).join(separator))) { yield [from, to]; break; }
+    }
+  }
+}
+// A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without
+// bound there), so that mode skips it. Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts.
+const runPieces = <T,>(list: readonly T[], separator: string, text: (item: T) => string): readonly T[] =>
+  separator === '' ? list.filter(item => text(item).replace(/\u0000/g, '').length > 0) : list;
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
   if (text !== null && text !== undefined && typeof text !== 'string') return true;
@@ -200,9 +225,9 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   const decoded = (value: string) => carriesTopic(value, topic) || (value.includes('\u0000') && carriesTopic(strip(value), topic));
   // Fail-closed floor kept from the original prefix hold: a card whose raw text holds the topic's first LIKE_PREFILTER_MAX characters stays held even when the rest sits in another field or row,
   // which no per-card test can prove. The purge exit blanks it (every leaf when the pieces cannot be localised); join keys and send state stay.
-  const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+  const prefix = topic.slice(0, LIKE_PREFILTER_MAX);
   const raw = [changes, text].filter((value): value is string => typeof value === 'string');
-  if (prefix && raw.some(value => value.toLowerCase().includes(prefix) || (value.includes('\u0000') && strip(value).toLowerCase().includes(prefix)))) return true;
+  if (prefix && raw.some(value => startsTopic(value, prefix, topic) || (value.includes('\u0000') && startsTopic(strip(value), prefix, topic)))) return true;
   if (typeof text === 'string' && decoded(text)) return true;
   if (typeof changes !== 'string') return false;
   let parsed: unknown;
@@ -227,7 +252,7 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
       for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
     }
   }
-  return all.some(decoded) || [all, values].some(list => decoded(list.join('')) || decoded(list.join(' ')));
+  return [all, values].some(list => ['', ' '].some(separator => !shortestRuns(runPieces(list, separator, text => text), separator, topic, decoded).next().done));
 };
 const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
 // Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
@@ -247,32 +272,23 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   walk(parsed, '', false);
   const exact = (value: string) => carriesTopic(value, topic) || carriesTopic(value.replace(/\u0000/g, ''), topic);
   const marked = new Set<string>();
-  const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
-  // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
-  // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  // A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without bound there), so that mode skips it.
-  // Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts, so that mode keeps every leaf.
-  const topicLength = topic.toLowerCase().length;
+  // Same piece lists, join modes and run search as cardCarriesTopic. A run whose tail alone still holds the topic is skipped
+  // (a later start finds that one), so unrelated leaves before, between or after the copies are never marked. Marks
+  // accumulate over every list and join mode, because separate copies may need different ones.
   for (const separator of ['', ' ']) {
-    const base = separator === '' ? leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0) : leaves;
+    const base = runPieces(leaves, separator, leaf => leaf.text);
     for (const list of [base.filter(leaf => !leaf.key), base]) {
-      for (let from = 0; from < list.length; from++) {
-        // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
-        // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).
-        let inside = 0;
-        for (let to = from; to < list.length; to++) {
-          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
-          if (!holds(list, from, to, separator)) continue;
-          if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
-          break;
-        }
+      const texts = list.map(leaf => leaf.text);
+      for (const [from, to] of shortestRuns(texts, separator, topic, exact)) {
+        if (from < to && exact(texts.slice(from + 1, to + 1).join(separator))) continue;
+        for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
       }
     }
   }
   // A card held only by the prefix floor has no localisable run: redact just the leaves whose own text carries the prefix, and everything only if none does.
   if (marked.size === 0) {
-    const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
-    for (const leaf of leaves) if (prefix && leaf.text.replace(/\u0000/g, '').toLowerCase().includes(prefix)) marked.add(`${leaf.path}|${leaf.key}`);
+    const prefix = topic.slice(0, LIKE_PREFILTER_MAX);
+    for (const leaf of leaves) if (prefix && startsTopic(leaf.text.replace(/\u0000/g, ''), prefix, topic)) marked.add(`${leaf.path}|${leaf.key}`);
   }
   const all = marked.size === 0;
   const rebuild = (node: unknown, path: string, key: boolean): unknown => {
@@ -308,7 +324,7 @@ export const projectionValueHolds = (value: unknown, topic: string): boolean => 
 export const decodedLeafHit = (value: string, topic: string): boolean => {
   const leaves = jsonLeaves(value);
   if (leaves === null) return false;
-  return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
+  return leaves === 'unreadable' || leaves.some(leaf => carriesTopic(leaf, topic));
 };
 
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
@@ -716,7 +732,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           const parsed = parsedJson(raw);
           return parsed === undefined ? ci(raw) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
         };
-        const hits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some((v) => v.toLowerCase().includes(text.toLowerCase())); };
+        const hits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some((v) => carriesTopic(v, text)); };
         if (hasRunCandidates) attempt('run_candidates', () => {
           for (const row of sql.exec<{ run_id: string; candidate_json: string }>(`SELECT run_id, candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
             if (!hits(row.candidate_json)) continue;
@@ -868,7 +884,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (rows.length > MAX_FORGET_SOURCES) { if (batch) more = true; else incomplete = true; }
         for (const row of rows.slice(0, MAX_FORGET_SOURCES)) for (const column of columns) {
           const text = row[column];
-          if (typeof text === 'string' && asciiLiteralIncludes(text, topic)) sources.push({ ref: `${table}:${row.source_id}:${column}`, text });
+          if (typeof text === 'string' && carriesTopic(text, topic)) sources.push({ ref: `${table}:${row.source_id}:${column}`, text });
         }
       };
       collect('episodes', 'rowid', ['text']);
@@ -900,14 +916,15 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of PROJECTION_STORES) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        // Fail closed: a row whose text matches the topic prefilter holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
+        // Fail closed: a row whose raw text, decoded JSON value or JSON key carries the topic holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
         // The exit is the purge, which blanks such rows (see the update_cards pass above).
-        // update_cards is checked card by card with the shared exact test (it also catches splits and NULs inside the first characters); other stores keep the prefilter.
+        // update_cards is checked card by card with the shared exact test (it also catches splits and NULs inside the first characters); other stores judge the prefilter's candidates with the shared guard.
         // The count is every row that holds, so /heldrows shows how large the backlog is. Holding is still any one row.
         const heldRows = !available.length ? 0
           : table === 'update_cards' && available.includes('changes')
             ? sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM update_cards`).toArray().filter(row => cardCarriesTopic(row.changes, available.includes('text') ? row.text : null, topic)).length
-            : Number(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).one().n);
+            : sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).toArray()
+              .filter(row => available.some(column => projectionValueHolds(row[column], topic))).length;
         if (heldRows > 0) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: heldRows }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
