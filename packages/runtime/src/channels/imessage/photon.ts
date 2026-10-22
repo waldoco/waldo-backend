@@ -17,6 +17,8 @@ const SCOPE = 'openid offline_access projects:read projects:write spectrum:read 
 export const PHOTON_CALLBACK_PATH = '/imessage/photon/callback';
 export const PHOTON_ATTEMPT_TTL_MS = 15 * 60_000;
 const ACCESS_SLACK_MS = 60_000;
+/** Every Photon call is bounded: a hung call must not hold the serialized token refresh. */
+const TIMEOUT_MS = 10_000;
 /** Refresh tokens live 30 days and rotate on use; a weekly refresh keeps an idle connection alive. */
 export const PHOTON_KEEPALIVE_MS = 7 * 24 * 60 * 60_000;
 
@@ -71,13 +73,18 @@ export class PhotonTokens {
     if (query.get('error')) return 'denied';
     const code = query.get('code');
     if (!code || code.length > 2048) return 'invalid';
-    const tokens = await this.token({ grant_type: 'authorization_code', code, redirect_uri: attempt.redirectUri, code_verifier: attempt.verifier });
-    if (tokens === 'rejected' || !tokens.refresh) return 'failed';
+    let tokens: Awaited<ReturnType<PhotonTokens['token']>>;
+    try { tokens = await this.token({ grant_type: 'authorization_code', code, redirect_uri: attempt.redirectUri, code_verifier: attempt.verifier }); }
+    catch { return 'failed'; }
+    if (tokens === 'invalid_grant' || !tokens.refresh) return 'failed';
     const at = this.now();
     this.kv.put('photon.refresh', { token: tokens.refresh, connectedAt: at, refreshedAt: at, owner: attempt.owner } satisfies Refresh);
     this.kv.put('photon.access', { token: tokens.access, expiresAt: at + tokens.expiresIn * 1000 } satisfies Access);
     return 'linked';
   }
+
+  /** Forgets the cached access token after Photon refused it, so the next call refreshes. */
+  dropAccess(): void { this.kv.delete('photon.access'); }
 
   /** A live access token, refreshing when needed. null = not connected (or Photon refused the refresh token). */
   async accessToken(): Promise<string | null> {
@@ -103,7 +110,8 @@ export class PhotonTokens {
     const stored = this.kv.get<Refresh>('photon.refresh');
     if (!stored) return null;
     const tokens = await this.token({ grant_type: 'refresh_token', refresh_token: stored.token });
-    if (tokens === 'rejected') {
+    // Only an invalid grant ends the connection; a bad client secret or a malformed request keeps the token.
+    if (tokens === 'invalid_grant') {
       this.kv.delete('photon.refresh'); this.kv.delete('photon.access');
       return null;
     }
@@ -114,15 +122,19 @@ export class PhotonTokens {
     return tokens.access;
   }
 
-  /** 'rejected': Photon answered 400/401 (invalid grant or client). Anything else unexpected throws PhotonUnavailable. */
-  private async token(params: Record<string, string>): Promise<{ access: string; refresh: string | null; expiresIn: number } | 'rejected'> {
+  /** 'invalid_grant': Photon refused the code or refresh token. Any other failure throws PhotonUnavailable. */
+  private async token(params: Record<string, string>): Promise<{ access: string; refresh: string | null; expiresIn: number } | 'invalid_grant'> {
     let response: Response;
     try {
-      response = await this.fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual',
+      response = await this.fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
         body: new URLSearchParams({ ...params, client_id: this.config.clientId, client_secret: this.config.clientSecret }) });
     } catch { throw new PhotonUnavailable('photon_token_unreachable'); }
-    if (response.status === 400 || response.status === 401) return 'rejected';
+    if (response.status === 400 || response.status === 401) {
+      const error = (await response.json().catch(() => null) as { error?: unknown } | null)?.error;
+      if (error === 'invalid_grant') return 'invalid_grant';
+      throw new PhotonUnavailable(`photon_token_${typeof error === 'string' && /^[a-z_]{1,40}$/.test(error) ? error : response.status}`);
+    }
     if (!response.ok) throw new PhotonUnavailable(`photon_token_${response.status}`);
     const body = await response.json().catch(() => null) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown } | null;
     if (!body || typeof body.access_token !== 'string' || !body.access_token) throw new PhotonUnavailable('photon_token_malformed');
@@ -132,13 +144,14 @@ export class PhotonTokens {
 }
 
 const E164 = /^\+[1-9]\d{6,14}$/;
-export type PhotonUser = Readonly<{ userId: string; assignedNumber: string }>;
+/** created: Waldo made this Photon user now (rather than finding it in the project). */
+export type PhotonUser = Readonly<{ userId: string; assignedNumber: string; created: boolean }>;
 export type PhotonEnrollResult = PhotonUser | { error: 'unauthorized' | 'insufficient_scope' | 'refused' };
 
-const userOf = (raw: unknown, phone: string): PhotonUser | null => {
+const userOf = (raw: unknown, phone: string, created: boolean): PhotonUser | null => {
   const u = raw as { id?: unknown; phoneNumber?: unknown; assignedPhoneNumber?: unknown } | null;
   return u && typeof u.id === 'string' && u.id && u.phoneNumber === phone && typeof u.assignedPhoneNumber === 'string' && E164.test(u.assignedPhoneNumber)
-    ? { userId: u.id, assignedNumber: u.assignedPhoneNumber } : null;
+    ? { userId: u.id, assignedNumber: u.assignedPhoneNumber, created } : null;
 };
 
 /**
@@ -150,35 +163,42 @@ export async function photonEnroll(config: PhotonConfig, token: string, person: 
   const url = `${ORIGIN}/api/projects/${encodeURIComponent(config.projectId)}/spectrum/users`;
   const headers = { authorization: `Bearer ${token}`, accept: 'application/json' };
   const call = async (init: RequestInit) => {
-    try { return await fetcher(url, { ...init, redirect: 'manual', headers: { ...headers, ...(init.headers ?? {}) } }); }
+    try { return await fetcher(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS), headers: { ...headers, ...(init.headers ?? {}) } }); }
     catch { throw new PhotonUnavailable('photon_api_unreachable'); }
   };
   const refusal = (status: number): PhotonEnrollResult | null =>
     status === 401 ? { error: 'unauthorized' } : status === 403 ? { error: 'insufficient_scope' } : null;
-  const find = async (): Promise<PhotonEnrollResult | null> => {
+  const find = async (created: boolean): Promise<PhotonEnrollResult | null> => {
     const response = await call({ method: 'GET' });
     const refused = refusal(response.status); if (refused) return refused;
     if (!response.ok) throw new PhotonUnavailable(`photon_users_${response.status}`);
     const body = await response.json().catch(() => null) as unknown;
     const rows = Array.isArray(body) ? body : Array.isArray((body as { users?: unknown } | null)?.users) ? (body as { users: unknown[] }).users : null;
     if (!rows) throw new PhotonUnavailable('photon_users_malformed');
-    for (const row of rows) { const user = userOf(row, person.phone); if (user) return user; }
+    for (const row of rows) { const user = userOf(row, person.phone, created); if (user) return user; }
     return null;
   };
-  const existing = await find();
+  const existing = await find(false);
   if (existing) return existing;
   const response = await call({ method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'shared', firstName: person.firstName, lastName: person.lastName, email: person.email, phoneNumber: person.phone, sendInvite: false }) });
   const refused = refusal(response.status); if (refused) return refused;
   const body = await response.json().catch(() => null) as { success?: unknown; user?: unknown; error?: unknown } | null;
   if (response.ok && body?.success === true) {
-    const created = userOf(body.user, person.phone);
+    const created = userOf(body.user, person.phone, true);
     if (created) return created;
     // Created without an assigned number in the answer: read it back.
-    const readBack = await find();
+    const readBack = await find(true);
     if (readBack) return readBack;
     throw new PhotonUnavailable('photon_user_unassigned');
   }
+  // A duplicate means an earlier, unconfirmed create landed: adopt it, but never treat it as Waldo-created.
+  if (response.status === 409) {
+    const found = await find(false);
+    if (found) return found;
+    throw new PhotonUnavailable('photon_create_conflict');
+  }
+  if (response.status === 408 || response.status === 429) throw new PhotonUnavailable(`photon_create_${response.status}`);
   if (response.status >= 400 && response.status < 500) return { error: 'refused' };
   throw new PhotonUnavailable(`photon_create_${response.status}`);
 }
@@ -187,7 +207,7 @@ export async function photonEnroll(config: PhotonConfig, token: string, person: 
 export async function photonRemove(config: PhotonConfig, token: string, userId: string, fetcher: typeof fetch = fetch): Promise<boolean> {
   try {
     const response = await fetcher(`${ORIGIN}/api/projects/${encodeURIComponent(config.projectId)}/spectrum/users/${encodeURIComponent(userId)}`,
-      { method: 'DELETE', redirect: 'manual', headers: { authorization: `Bearer ${token}`, accept: 'application/json' } });
+      { method: 'DELETE', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS), headers: { authorization: `Bearer ${token}`, accept: 'application/json' } });
     return response.ok || response.status === 404;
   } catch { return false; }
 }

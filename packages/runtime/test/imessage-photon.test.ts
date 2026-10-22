@@ -75,14 +75,14 @@ describe('Photon OAuth custody', () => {
     expect(new URLSearchParams(calls[2]!.body).get('refresh_token')).toBe('refresh-2');
   });
 
-  it('drops a refresh token Photon refuses, but keeps it when Photon cannot be reached', async () => {
+  it('drops the refresh token only on invalid_grant; unreachable Photon or a bad client keeps it', async () => {
     const kv = memoryKv(); let now = 0;
-    const { fetcher } = scripted([tokens('a', 'r'), () => { throw new TypeError('network'); }, () => new Response('', { status: 503 }), () => Response.json({ error: 'invalid_grant' }, { status: 400 })]);
+    const { fetcher } = scripted([tokens('a', 'r'), () => { throw new TypeError('network'); }, () => new Response('', { status: 503 }),
+      () => Response.json({ error: 'invalid_client' }, { status: 401 }), () => Response.json({ error: 'invalid_grant' }, { status: 400 })]);
     const t = new PhotonTokens(kv, config, fetcher, () => now);
     const { nonce } = await t.begin('o', 'https://w/cb'); await t.finish(nonce, new URLSearchParams({ code: 'c' }));
     now = 3_600_000;
-    await expect(t.accessToken()).rejects.toBeInstanceOf(PhotonUnavailable);
-    await expect(t.accessToken()).rejects.toBeInstanceOf(PhotonUnavailable);
+    for (let i = 0; i < 3; i++) await expect(t.accessToken()).rejects.toBeInstanceOf(PhotonUnavailable);
     expect(t.status().connected).toBe(true);
     expect(await t.accessToken()).toBeNull();
     expect(t.status().connected).toBe(false);
@@ -106,20 +106,25 @@ describe('Photon enrollment', () => {
 
   it('finds the project user already holding this phone and creates nothing', async () => {
     const { fetcher, calls } = scripted([() => Response.json([{ id: 'other', phoneNumber: '+15550000002', assignedPhoneNumber: '+16285550101' }, user])]);
-    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100' });
+    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100', created: false });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ method: 'GET', url: 'https://app.photon.codes/api/projects/proj-fixture/spectrum/users', auth: 'Bearer tok' });
   });
 
   it('creates a shared-pool user without an invite and returns the assigned number', async () => {
     const { fetcher, calls } = scripted([() => Response.json([]), () => Response.json({ success: true, user })]);
-    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100' });
+    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100', created: true });
     expect(JSON.parse(calls[1]!.body)).toEqual({ type: 'shared', firstName: 'Sam', lastName: 'Waldo', email: 'sam@example.invalid', phoneNumber: '+15550000001', sendInvite: false });
   });
 
   it('reads the number back when the create answer has none', async () => {
     const { fetcher } = scripted([() => Response.json({ users: [] }), () => Response.json({ success: true, user: { id: 'user-1', phoneNumber: '+15550000001' } }), () => Response.json({ users: [user] })]);
-    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100' });
+    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100', created: true });
+  });
+
+  it('adopts the user behind a duplicate answer as found, not created', async () => {
+    const { fetcher } = scripted([() => Response.json([]), () => Response.json({ error: 'exists' }, { status: 409 }), () => Response.json([user])]);
+    expect(await photonEnroll(config, 'tok', person, fetcher)).toEqual({ userId: 'user-1', assignedNumber: '+16285550100', created: false });
   });
 
   it('separates a disconnected token, a missing scope and a refused number from an unknown outcome', async () => {
@@ -127,6 +132,7 @@ describe('Photon enrollment', () => {
     expect(await photonEnroll(config, 't', person, scripted([() => Response.json([]), () => new Response('insufficient_scope: spectrum:write', { status: 403 })]).fetcher)).toEqual({ error: 'insufficient_scope' });
     expect(await photonEnroll(config, 't', person, scripted([() => Response.json([]), () => Response.json({ error: 'shared_user_create_failed' }, { status: 422 })]).fetcher)).toEqual({ error: 'refused' });
     await expect(photonEnroll(config, 't', person, scripted([() => Response.json([]), () => new Response('', { status: 502 })]).fetcher)).rejects.toBeInstanceOf(PhotonUnavailable);
+    await expect(photonEnroll(config, 't', person, scripted([() => Response.json([]), () => new Response('', { status: 429 })]).fetcher)).rejects.toBeInstanceOf(PhotonUnavailable);
     await expect(photonEnroll(config, 't', person, scripted([() => Response.json({ unexpected: true })]).fetcher)).rejects.toBeInstanceOf(PhotonUnavailable);
   });
 

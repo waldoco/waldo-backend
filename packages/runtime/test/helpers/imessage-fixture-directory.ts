@@ -21,7 +21,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
   const presences = new Map<string, { id: string; owner: string; subject: string; active: boolean; provider?: string }>();
   const linkCodes = new Map<string, { owner: string; provider: string; expires: number; used: boolean }>();
   const onboarding = new Map<string, number>(); // `${bridge}|${subjectHash}` -> last sent ms
-  const enrollments = new Map<string, { environment: string; phone: string; photon_user_id: string; assigned_number: string }>(); // by do_name
+  const enrollments = new Map<string, { environment: string; phone: string; photon_user_id: string; assigned_number: string; photon_created: boolean }>(); // by do_name
   const calls: string[] = [];
   let seq = 1;
   let unavailable = false;
@@ -136,10 +136,15 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
         enrollment: e && e.environment === a.p_environment ? { phone: e.phone, photon_user_id: e.photon_user_id, assigned_number: e.assigned_number } : null };
     },
     imessage_enrollment_record: (a) => {
-      const o = owner(a.p_do_name); if (!o || o.state !== 'active' || !/^\+[1-9]\d{6,14}$/.test(a.p_phone) || !/^\+[1-9]\d{6,14}$/.test(a.p_assigned_number)) return 'rejected';
-      if ([...enrollments.entries()].some(([name, e]) => name !== o.do_name && e.environment === a.p_environment && e.phone === a.p_phone && owner(name)?.state === 'active')) return 'phone_taken';
-      enrollments.set(o.do_name, { environment: a.p_environment, phone: a.p_phone, photon_user_id: a.p_photon_user_id, assigned_number: a.p_assigned_number });
-      return 'recorded';
+      const o = owner(a.p_do_name); if (!o || o.state !== 'active' || !/^\+[1-9]\d{6,14}$/.test(a.p_phone) || !/^\+[1-9]\d{6,14}$/.test(a.p_assigned_number)) return { result: 'rejected' };
+      const linked = (subject: string, mine: boolean) => [...presences.values()].some((p) => p.active && (p.provider ?? 'imessage') === 'imessage' && p.subject === subject && (p.owner === o.do_name) === mine);
+      if (linked(a.p_phone, false)) return { result: 'phone_taken' };
+      const prev = enrollments.get(o.do_name);
+      enrollments.set(o.do_name, { environment: a.p_environment, phone: a.p_phone, photon_user_id: a.p_photon_user_id, assigned_number: a.p_assigned_number,
+        photon_created: prev && prev.photon_user_id === a.p_photon_user_id ? prev.photon_created || a.p_photon_created : a.p_photon_created });
+      const prevUser = prev?.photon_user_id;
+      const release = prev && prev.photon_user_id !== a.p_photon_user_id && prev.photon_created && ![...enrollments.values()].some((e) => e.photon_user_id === prevUser) && !linked(prev.phone, true) ? prev.photon_user_id : null;
+      return { result: 'recorded', release };
     },
     imessage_enrolled_handle: (a) => [...enrollments.entries()].some(([name, e]) => e.environment === a.p_environment && e.phone === a.p_subject && owner(name)?.state === 'active'),
     route_presence: (a) => {

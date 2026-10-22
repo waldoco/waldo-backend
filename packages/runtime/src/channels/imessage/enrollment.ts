@@ -15,10 +15,10 @@ export const normalizePhone = (raw: unknown): string | null => {
   return E164.test(compact) ? compact : null;
 };
 
-const photonObject = (env: IMessageEnv, environment: string) => {
+function photonObject(env: IMessageEnv, environment: string) {
   const ns = env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO>;
   return ns.get(ns.idFromName(photonDoName(environment)));
-};
+}
 
 export async function enrollOwner(env: IMessageEnv, owner: string, rawPhone: unknown): Promise<EnrollOutcome> {
   const c = iMessageComposition(env), config = photonConfig(env);
@@ -29,15 +29,22 @@ export async function enrollOwner(env: IMessageEnv, owner: string, rawPhone: unk
   try {
     const context = await directory.enrollmentRead(owner, c.environment);
     if (!context) return { kind: 'refused' };
-    if (context.enrollment?.phone === phone) return { kind: 'enrolled', number: context.enrollment.assignedNumber };
-    const photon = photonObject(env, c.environment);
-    const token = await photon.photonAccessToken();
+    // Find-or-create runs even for the same number: a Photon user removed meanwhile is made again.
+    const photon = photonObject(env, c.environment), person = { phone, email: context.email, ...photonPersonName(context.email) };
+    let token = await photon.photonAccessToken();
     if (!token) return { kind: 'photon_disconnected' };
-    const user = await photonEnroll(config, token, { phone, email: context.email, ...photonPersonName(context.email) });
+    let user = await photonEnroll(config, token, person);
+    if ('error' in user && user.error === 'unauthorized') {
+      // A cached access token Photon no longer honours: refresh once.
+      await photon.photonDropAccess();
+      token = await photon.photonAccessToken();
+      if (!token) return { kind: 'photon_disconnected' };
+      user = await photonEnroll(config, token, person);
+    }
     if ('error' in user) return user.error === 'refused' ? { kind: 'refused' } : { kind: 'photon_disconnected' };
-    const recorded = await directory.enrollmentRecord(owner, c.environment, phone, user.userId, user.assignedNumber);
-    if (recorded !== 'recorded') return { kind: recorded === 'phone_taken' ? 'phone_taken' : 'refused' };
-    if (context.enrollment && context.enrollment.photonUserId !== user.userId) await photonRemove(config, token, context.enrollment.photonUserId);
+    const recorded = await directory.enrollmentRecord(owner, c.environment, phone, user.userId, user.assignedNumber, user.created);
+    if (recorded.result !== 'recorded') return { kind: recorded.result === 'phone_taken' ? 'phone_taken' : 'refused' };
+    if (recorded.release) await photonRemove(config, token, recorded.release);
     return { kind: 'enrolled', number: user.assignedNumber };
   } catch { return { kind: 'unknown' }; }
 }

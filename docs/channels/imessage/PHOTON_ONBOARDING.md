@@ -14,11 +14,27 @@ assigns each user the pool number they text. The Worker does that enrollment, so
 3. The page shows their Waldo number and an **Open Messages** link with `waldo CODE` filled in. Sending it links the
    number to the owner's own Waldo, through the existing link-code redemption.
 
-Enrollment links no one. Until the code arrives from that phone, a text from the enrolled number gets one reply
-pointing at `IMESSAGE_CONSOLE_URL`. Like the waitlist reply, it is sent at most once per 30 days and reaches no
-Waldo. When an owner changes number, their previous Photon user is removed, so it doesn't hold a Free-plan slot.
+Enrollment proves nothing about the phone, so it locks nothing. Several owners may enroll the same number until one of
+them links it with `waldo CODE` from the phone. After that, other owners get a refusal. Until a link happens, a text
+from an enrolled number gets one reply pointing at `IMESSAGE_CONSOLE_URL`. Like the waitlist reply, it is sent at most
+once per 30 days and reaches no Waldo.
+
+Waldo removes a Photon user only when all of these hold:
+
+- Waldo created it.
+- No enrollment references it any more.
+- It isn't the owner's linked number.
+
+A user Waldo found already in the project is never removed.
+
+**Data at Photon.** Photon receives each enrolled owner's phone number and sign-in email, plus a first name derived from
+the email. Every message passes through Photon. Deleting a Waldo account deletes the enrollment row, but it doesn't yet
+remove the Photon user. Remove it by hand with `photon spectrum users remove` until that is automated.
 
 ## Operator setup, once per environment
+
+Use one Photon project per environment. The database keeps one owner per number per environment, but a Photon project
+is shared by every Worker that names it.
 
 1. In the Photon dashboard, open **Developer → Apps** and create a confidential OAuth app:
    - Redirect URI: `<worker origin>/imessage/photon/callback`, exactly.
@@ -34,5 +50,6 @@ Waldo. When an owner changes number, their previous Photon user is removed, so i
 
 Photon's Dashboard API takes only user OAuth tokens. Refresh tokens rotate on every use and last 30 days, so one
 Durable Object holds them: the `IMessageBridgeDO` instance named `["photon-oauth", <environment>]`. It serializes
-refreshes, and the daily cron rotates an idle token weekly. If Photon refuses the refresh token, the console shows
+refreshes. Staging's daily cron rotates an idle token weekly. Production has no cron trigger yet, so an idle production
+connection must be reconnected after 30 days. If Photon refuses the refresh token, the console shows
 Photon as **Not connected** and enrollment asks for a reconnect. Nothing fails silently.

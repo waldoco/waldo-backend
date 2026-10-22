@@ -50,7 +50,7 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
     + `<p>Direct iMessage text only. Groups, SMS, files and reactions are not supported.</p>`
     + `<h2>Text your Waldo from your iPhone</h2>${number}${enroll}${photon}`
     + `<h2>Your own Mac host</h2>${form('imessage.pair', '', 'Pair a Mac host')}`
-    + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the Mac that runs ${address} for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
+    + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the host that runs the shared Waldo number for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
     + `<table><tr><th>Status</th><th>Sender</th><th>Host</th><th>Actions</th></tr>${rows.map(row).join('')}</table></body></html>`;
 }
 
@@ -58,8 +58,9 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
 export const ENROLL_REFUSED: Readonly<Record<Extract<IMessageOutcome, { kind: 'enroll_refused' }>['reason'], string>> = {
   invalid: 'Enter your iPhone number with its country code, for example +15551234567.',
   photon_disconnected: 'Waldo numbers are not available right now: an operator needs to reconnect Photon. Nothing was changed.',
-  phone_taken: 'That number is already set up for another Waldo account. Nothing was changed.',
-  refused: 'Photon did not accept that number. Check it and try again; nothing was changed.',
+  phone_taken: 'That number can\'t be set up for this account. If it\'s yours, unlink it from the other Waldo account first. Nothing was changed.',
+  refused: 'That number could not be set up. Check it and try again; nothing was changed.',
+  not_enrolled: 'Get your Waldo number first: enter your iPhone number on this page.',
 };
 
 /** Result of "Get an iMessage link code": the code, and on a phone a button that opens Messages ready to send. */
@@ -95,7 +96,7 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
 export type IMessageOutcome =
   | { kind: 'disabled' } | { kind: 'invalid' } | { kind: 'failed' } | { kind: 'unknown' } | { kind: 'done' }
   | { kind: 'link_code'; code: string; address: string | null }
-  | { kind: 'enroll_refused'; reason: Exclude<EnrollOutcome['kind'], 'enrolled' | 'disabled' | 'unknown'> }
+  | { kind: 'enroll_refused'; reason: Exclude<EnrollOutcome['kind'], 'enrolled' | 'disabled' | 'unknown'> | 'not_enrolled' }
   | { kind: 'host_code'; code: string; shared: boolean; minutes: number }
   | { kind: 'challenge'; challenge: string; subject: string };
 export type IMessageActionInput = Readonly<{ id?: unknown; subject?: unknown; chat?: unknown; phone?: unknown }>;
@@ -113,11 +114,12 @@ export async function iMessageAction(env: IMessageEnv, owner: string, action: st
       const enrolled = await enrollOwner(env, owner, input.phone);
       if (enrolled.kind === 'disabled' || enrolled.kind === 'unknown') return { kind: enrolled.kind };
       if (enrolled.kind !== 'enrolled') return { kind: 'enroll_refused', reason: enrolled.kind };
-      const code = await auth.issueProviderLinkCode?.(owner, 'imessage');
-      if (code) return { kind: 'link_code', code, address: enrolled.number };
+      // Enrolled, but the code could not be confirmed: the number is set up, so this is not a refusal.
+      const code = await auth.issueProviderLinkCode?.(owner, 'imessage').catch(() => null);
+      return code ? { kind: 'link_code', code, address: enrolled.number } : { kind: 'unknown' };
     } else if (action === 'imessage.link') {
       const view = await iMessageNumberView(env, owner);
-      if (!view.number) return { kind: 'invalid' };
+      if (!view.number) return { kind: 'enroll_refused', reason: 'not_enrolled' };
       const code = await consoleAuth(env)?.issueProviderLinkCode?.(owner, 'imessage');
       if (code) return { kind: 'link_code', code, address: view.number };
     } else if (action === 'imessage.unlink') {

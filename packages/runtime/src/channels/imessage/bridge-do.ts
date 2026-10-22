@@ -265,19 +265,29 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const tokens = this.photonTokens();
     return tokens ? tokens.begin(owner, redirectUri) : null;
   }
+  /**
+   * Token work is serialized (a refresh spends the refresh token it uses). Failures are caught inside the serialized
+   * section and rethrown after it: a throw inside blockConcurrencyWhile would reset the object.
+   */
+  private async serialized<T>(work: () => Promise<T>): Promise<T> {
+    const outcome = await this.ctx.blockConcurrencyWhile(async () => { try { return { ok: true as const, value: await work() }; } catch { return { ok: false as const }; } });
+    if (!outcome.ok) throw new Error('photon_unavailable');
+    return outcome.value;
+  }
   async photonFinish(nonce: string, query: string): Promise<PhotonFinish> {
     const tokens = this.photonTokens();
     if (!tokens) return 'failed';
-    try { return await this.ctx.blockConcurrencyWhile(() => tokens.finish(nonce, new URLSearchParams(query))); } catch { return 'failed'; }
+    try { return await this.serialized(() => tokens.finish(nonce, new URLSearchParams(query))); } catch { return 'failed'; }
   }
-  /** Serialized: a refresh spends the refresh token it uses. Throws when Photon's answer is unknown. */
+  /** null = not connected. Throws when Photon's answer is unknown (the stored token is kept). */
   async photonAccessToken(): Promise<string | null> {
     const tokens = this.photonTokens();
-    return tokens ? this.ctx.blockConcurrencyWhile(() => tokens.accessToken()) : null;
+    return tokens ? this.serialized(() => tokens.accessToken()) : null;
   }
+  async photonDropAccess(): Promise<void> { this.photonTokens()?.dropAccess(); }
   async photonKeepAlive(): Promise<'fresh' | 'refreshed' | 'disconnected' | 'unconfigured'> {
     const tokens = this.photonTokens();
-    return tokens ? this.ctx.blockConcurrencyWhile(() => tokens.keepAlive()) : 'unconfigured';
+    return tokens ? this.serialized(() => tokens.keepAlive()) : 'unconfigured';
   }
   async photonStatus(): Promise<PhotonStatus | null> { return this.photonTokens()?.status() ?? null; }
 

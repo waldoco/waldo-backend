@@ -96,7 +96,7 @@ export function IMessageControls({ record, busy, onAction }: { record: IMessageR
     </section>}
     {data.admin && <section className="tile" aria-labelledby="imessage-shared-title">
       <div className="chart-head"><h2 id="imessage-shared-title">Shared Waldo number</h2><span className="access-label">Operator</span></div>
-      <p>Pairs the Mac that runs {data.address ?? 'the Waldo iMessage number'} for everyone. Each sender still reaches only their own Waldo.</p>
+      <p>Pairs the host that runs the shared Waldo number for everyone. Each sender still reaches only their own Waldo.</p>
       {offered('imessage.pair_shared') && <div className="control-actions"><button disabled={busy} onClick={() => onAction('imessage.pair_shared')}>Pair the shared number’s host</button></div>}
       {list(hosts('shared'), 'No shared number host paired.')}
     </section>}

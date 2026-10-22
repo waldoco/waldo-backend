@@ -55,7 +55,7 @@ const parseSenderAuthority = (raw: unknown): SenderAuthority | null => {
 
 export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
   const rpc = signedRpc(env, fetcher, now);
-  const call = async (fn: string, op: string, params: Record<string, string | number>): Promise<unknown> => {
+  const call = async (fn: string, op: string, params: Record<string, string | number | boolean>): Promise<unknown> => {
     if (!rpc) throw new IMessageDirectoryUnavailable();
     const locator = JSON.stringify(Object.values(params));
     try { return await rpc(fn, `imsg.${op}.${await sha256Hex(locator)}`, { ...params, p_locator: locator }); }
@@ -101,9 +101,12 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
       return { email: row.email, phone: nullable(row.phone),
         enrollment: e && str(e.phone) && str(e.assigned_number) && str(e.photon_user_id) ? { phone: e.phone, assignedNumber: e.assigned_number, photonUserId: e.photon_user_id } : null };
     },
-    enrollmentRecord: async (doName: string, environment: string, phone: string, photonUserId: string, assignedNumber: string) => {
-      const r = await call('imessage_enrollment_record', 'enroll_record', { p_do_name: doName, p_environment: environment, p_phone: phone, p_photon_user_id: photonUserId, p_assigned_number: assignedNumber });
-      return r === 'recorded' || r === 'phone_taken' ? r : 'rejected' as const;
+    async enrollmentRecord(doName: string, environment: string, phone: string, photonUserId: string, assignedNumber: string, photonCreated: boolean)
+      : Promise<{ result: 'recorded' | 'phone_taken' | 'rejected'; release: string | null }> {
+      const r = await call('imessage_enrollment_record', 'enroll_record', { p_do_name: doName, p_environment: environment, p_phone: phone,
+        p_photon_user_id: photonUserId, p_assigned_number: assignedNumber, p_photon_created: photonCreated }) as Record<string, unknown> | null;
+      const result = r?.result === 'recorded' || r?.result === 'phone_taken' ? r.result : 'rejected' as const;
+      return { result, release: result === 'recorded' ? nullable(r?.release) : null };
     },
     enrolledHandle: async (environment: string, subject: string) => bool(await call('imessage_enrolled_handle', 'enrolled', { p_environment: environment, p_subject: subject })),
     async activate(doName: string, bridgeId: string, subject: string, chatGuid: string) {

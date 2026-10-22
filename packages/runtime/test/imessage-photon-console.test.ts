@@ -175,11 +175,14 @@ it('an owner gets their own Waldo number in one step and links it with one text;
   expect(w.photon.users).toEqual([expect.objectContaining({ phoneNumber: ALICE, assignedPhoneNumber: '+16285550101', email: 'alice@example.invalid' })]);
   const after = await w.alice.controls();
   expect(after.data.address).toBe('+16285550101'); expect(after.data.actions).toContain('imessage.link');
-  // Enrolling the same number again is a no-op; another owner cannot take it.
+  // Enrolling the same number again finds the same Photon user.
   expect((await w.alice.act('imessage.enroll', { phone: ALICE })).body.reveal).toMatchObject({ to: '+16285550101' });
   expect(w.photon.creates).toBe(1);
-  const taken = await w.bob.act('imessage.enroll', { phone: ALICE });
-  expect(taken.body.receipt).toMatchObject({ state: 'rejected' }); expect(taken.body.receipt!.message).toContain('another Waldo account');
+  // Enrollment proves nothing about the phone, so it locks nothing: Bob may enroll Alice's unlinked number (adopting
+  // her Photon user), and moving to his own number never deletes a user Waldo did not create for him.
+  expect((await w.bob.act('imessage.enroll', { phone: ALICE })).body.receipt).toMatchObject({ state: 'recorded' });
+  expect((await w.bob.act('imessage.enroll', { phone: '+15550000012' })).body.receipt).toMatchObject({ state: 'recorded' });
+  expect(w.photon.users.map((u) => u.phoneNumber)).toEqual([ALICE, '+15550000012']);
 
   // The shared number is live. Alice texts it without a code: she is told to finish in her console, and reaches no Waldo.
   await w.sharedLive();
@@ -193,6 +196,9 @@ it('an owner gets their own Waldo number in one step and links it with one text;
   expect((await w.host.send(w.host.message(`waldo ${code}`, { senderHandle: ALICE }))).status).toBe(200);
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ text: LINK_REPLIES.redeemed, chatGuid: `iMessage;-;${ALICE}` });
+  // Possession decided: now that Alice's phone is linked to her, nobody else can enroll it.
+  const taken = await w.bob.act('imessage.enroll', { phone: ALICE });
+  expect(taken.body.receipt).toMatchObject({ state: 'rejected' }); expect(taken.body.receipt!.message).toContain('unlink it from the other Waldo account');
   expect(w.egress).toEqual([]);
 });
 
