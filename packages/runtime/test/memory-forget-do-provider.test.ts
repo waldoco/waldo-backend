@@ -891,9 +891,18 @@ it('a complete model reply carries no stop note', async () => {
   expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'Done'))).length).toBeGreaterThan(0);
 });
 
+
+// This config models staging with capture on; these checks also need an owner who agreed to diagnostic recording, which
+// the directory would answer and this suite has none of.
+const asAgreedOwner = async <T>(work: () => Promise<T>): Promise<T> => {
+  const { OwnerDO: Owner } = await import('../src/channels/owner-do');
+  const agreed = vi.spyOn(Owner.prototype as unknown as { ownerAgreedToRecording(): Promise<boolean> }, 'ownerAgreedToRecording').mockResolvedValue(true);
+  try { return await work(); } finally { agreed.mockRestore(); }
+};
+
 it('PHASES a turn records how long each context phase took, without content', async () => {
   const name = 'memory-do-phase-timing';
-  await turn(name, 1, 'What time is my standup?');
+  await asAgreedOwner(() => turn(name, 1, 'What time is my standup?'));
   await runInDurableObject(stub(name), (_i, state) => {
     const rows = state.storage.sql.exec<{ code: string; ms: number }>("SELECT note AS code, ms FROM trace_log WHERE hop = 'composer_phase'").toArray();
     expect(rows.map(row => row.code).join(',')).toContain('materials');
@@ -934,7 +943,7 @@ it('HELDCOST a held topic with a large claim store reads the purge tables a boun
 
 it('CPHASE a model call records content-free phase hops around the gateway', async () => {
   const name = 'memory-do-complete-phase';
-  await turn(name, 1, 'What time is my standup?');
+  await asAgreedOwner(() => turn(name, 1, 'What time is my standup?'));
   await runInDurableObject(stub(name), (_i, state) => {
     const rows = state.storage.sql.exec<{ code: string }>("SELECT note AS code FROM trace_log WHERE hop = 'complete_phase'").toArray().map(row => row.code);
     expect(rows).toEqual(expect.arrayContaining(['reply:enter', 'reply:messages=1', 'reply:gateway_call:messages=1', 'reply:gateway_return']));

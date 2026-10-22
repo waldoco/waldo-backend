@@ -9,7 +9,10 @@ export type DayRecord = Base<'day', {
   proactivity: { quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' };
   // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
   proactive_surface?: ProactiveSurface;
+  // Whether the owner agreed to beta diagnostic recording, with the wording they agree to. Absent from a Worker that does not say.
+  diagnostic_recording?: DiagnosticRecording;
 }>;
+export type DiagnosticRecording = { state: 'on' | 'off' | 'unknown'; recorded_here: boolean; version: string; label: string; detail: string };
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both'; app_linked: boolean; whatsapp_linked: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
@@ -50,7 +53,7 @@ export type DevicesRecord = Base<'devices', {
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs' | 'diagnostic_recording.set'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -90,12 +93,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean'))) throw shapeError();
+    const recording = data.diagnostic_recording;
+    if (recording !== undefined && (!obj(recording) || !['on', 'off', 'unknown'].includes(String(recording.state)) || typeof recording.recorded_here !== 'boolean' || ![recording.version, recording.label, recording.detail].every(value => string(value) && value.length > 0))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, telegram_linked: surface.telegram_linked } } : {}),
+      ...(obj(recording) ? { diagnostic_recording: { state: recording.state, recorded_here: recording.recorded_here, version: recording.version, label: recording.label, detail: recording.detail } } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {

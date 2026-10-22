@@ -1210,6 +1210,10 @@ it('real webhook/inbox/turn path emits each verified owner email in Worker logs 
   const b = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'trace-b@test.invalid' };
   traceIdentities.set(81103, a); traceIdentities.set(81104, b);
   const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  // Both owners agreed to diagnostic recording, which the directory would answer and this suite has none of; the email
+  // follows that agreement (diagnostic-recording-capture.test.ts covers an owner who did not agree).
+  const { OwnerDO: Owner } = await import('../src/channels/owner-do');
+  const agreed = vi.spyOn(Owner.prototype as unknown as { ownerAgreedToRecording(): Promise<boolean> }, 'ownerAgreedToRecording').mockResolvedValue(true);
   try {
     await Promise.all([send(81103, 'Synthetic hello', 994901), send(81104, 'Synthetic hello', 994902)]);
     traceIdentities.set(81103, { ...a, owner_email: 'trace-new@test.invalid' });
@@ -1225,7 +1229,7 @@ it('real webhook/inbox/turn path emits each verified owner email in Worker logs 
       expect(JSON.stringify(hops)).not.toMatch(/hermetic-test-(bot-token|webhook-secret|model-key)|hermetic-google-secret/);
     }
   } finally {
-    log.mockRestore();
+    log.mockRestore(); agreed.mockRestore();
     for (const subject of [81103, 81104]) await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
   }
 });

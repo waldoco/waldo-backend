@@ -9,7 +9,7 @@ Meta write, secret change and deploy below needs the owner's yes at the time. Ru
 
 | Piece | State |
 | --- | --- |
-| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused webhook reply or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:212`, `:219`, `:221`). On staging only, while `WHATSAPP_DEBUG_LOG` is `"true"`, each signed webhook payload is also logged whole (`:23`, `:176`). A refused text-first, link-code or hidden-number reply then adds Graph's answer (its first 4,096 characters, with the token masked), and any other failure on those paths adds its text as `detail` (`:131-134`). In the owner's Durable Object, the knock and held messages log `whatsapp_` lines with Meta's code (`whatsapp-window.ts:90`, `:254`). An owner's reply refused for any reason other than 131047 logs a `send` line with code `unknown` (`telegram-listener.ts:105`, `turn-failure-code.ts:15`). On staging, where trace text capture is on, that line's `error` also carries the first 200 characters of Graph's answer (`whatsapp-api.ts:21`). |
+| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused webhook reply or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:212`, `:219`, `:221`). On staging only, while `WHATSAPP_DEBUG_LOG` is `"true"`, each signed webhook payload is also logged whole (`:23`, `:176`). The committed staging value is `"false"` since 22 October 2026; turning it on is an explicit owner choice. A refused text-first, link-code or hidden-number reply then adds Graph's answer (its first 4,096 characters, with the token masked), and any other failure on those paths adds its text as `detail` (`:131-134`). In the owner's Durable Object, the knock and held messages log `whatsapp_` lines with Meta's code (`whatsapp-window.ts:90`, `:254`). An owner's reply refused for any reason other than 131047 logs a `send` line with code `unknown` (`telegram-listener.ts:105`, `turn-failure-code.ts:15`). On staging, for an owner who agreed to diagnostic recording, that line's `error` also carries the first 200 characters of Graph's answer (`whatsapp-api.ts:21`). |
 | Meta app "Waldo" | Published. Its callback is staging's `/whatsapp/webhook`, subscribed to the `messages` field. |
 | Meta's test number, +1 555 633 8976 | Inbound reaches staging, and Graph accepts sends. Meta then fails each delivery with 131031: seen at 16:39Z, 4 s after a reply was accepted. Meta's own `hello_world` never arrived either. Business Settings shows the number Connected, with quality High and a limit of 250 customers per 24 hours, and its Messaging account Approved (observed 16:50Z). The reason for the 131031 is not yet known. |
 | Waldo's number, +91 92260 67544 | Verified, not registered. Registration was refused with `ACCOUNT_NOT_APPROVED`. Meta MCP reports its Messaging account as "Restricted" (16:41Z). WhatsApp Manager showed both of Waldo's Messaging accounts as "Account Restricted: Before you can begin messaging, you will need to verify your business" (observed 18 October). |
@@ -181,12 +181,15 @@ reply refused for any reason other than 131047 logs a `send` line with code `unk
   - `WHATSAPP_VERIFY_TOKEN`;
   - the registration PIN.
 - Outside staging, logs carry error names and codes, never phone numbers, message ids, business-scoped user
-  ids or message text. Staging is the exception while testing, by the owner's ruling of 18 October 2026:
+  ids or message text. Staging can be the exception while testing, by the owner's ruling of 18 October 2026:
   with `WHATSAPP_DEBUG_LOG` set to `"true"`, it logs whole webhook payloads, Graph's answers to refused
   webhook replies, and the text of other failures on those paths (`detail`). Together they carry all four,
-  health details a tester types included. `CLAUDE.md` records the
+  health details a tester types included, and for every sender, strangers too. `CLAUDE.md` records the
   exception, which ends before production. The Worker never logs a credential.
-- Tell each tester that staging logs what they send.
+- By the owner's ruling of 22 October 2026 the committed staging value is `"false"`, before new testers join.
+  The owner may turn it on briefly, by explicit choice, for the first smoke test after Meta verification:
+  deploy with `--var WHATSAPP_DEBUG_LOG:true`, run the test, and deploy again without it.
+- While it is on, tell each tester that staging logs what they send.
 - Every Meta write (subscription, registration, access, template) and every secret change or deploy needs the
   owner's yes for that action.
 - Message only people who have written to the number first.

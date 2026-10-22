@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CURATED_SKILLS } from '../src/skills/curated-owner';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { DIAGNOSTIC_RECORDING_WORDING } from '../src/identity/diagnostic-recording';
 
 // The workspace receipt read fails with text that must reach no sink; the turn still answers with the unavailable notice.
 const LEAK = 'workspace-fault-sentinel-7f3a';
@@ -33,12 +34,14 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_context_read') return Response.json(null);
+    if (fn === 'diagnostic_recording_state') return Response.json({ agreed: true, version: DIAGNOSTIC_RECORDING_WORDING.version, agreed_at: '2026-10-22T09:00:00.000Z' });
     return new Response('unexpected', { status: 500 });
   });
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-// Text capture on (staging), so the trace gate passes an error field through untouched: only the producer keeps it out.
+// Text capture on (staging, and the owner agreed to diagnostic recording), so the trace gate passes an error field through
+// untouched: only the producer keeps it out.
 const turn = (name: string) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   state.storage.kv.put('do_name', name);
   const sinks = (['log', 'warn', 'error'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => undefined));

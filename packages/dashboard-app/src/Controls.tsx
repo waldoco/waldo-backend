@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { SignInRequired } from './model';
-import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
+import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type DiagnosticRecording, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
@@ -52,6 +52,19 @@ function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: Proacti
   </div></details>;
 }
 
+const RECORDING_STATES: Readonly<Record<DiagnosticRecording['state'], string>> = { on: 'On', off: 'Off', unknown: 'Unknown' };
+// The wording comes from the Worker, the same text signup shows. An unreadable record offers both choices.
+function DiagnosticRecordingSetting({ recording, busy, onAction }: { recording: DiagnosticRecording } & ActionProps) {
+  return <details name="day-settings" className="disclosure"><summary><Icon name="person"/><span className="label key">Diagnostic recording</span><span className="value">{RECORDING_STATES[recording.state]}</span></summary><div className="disclosure-body"><p>{recording.label}</p><p>{recording.detail}</p>
+    {!recording.recorded_here && <p className="meta">This server doesn’t record chat text, whatever you choose.</p>}
+    {recording.state === 'unknown' && <p className="meta">Waldo couldn’t read your choice just now. Refresh to see it.</p>}
+    <div className="control-actions">
+      {recording.state !== 'on' && <button className="primary" disabled={busy} onClick={() => onAction('diagnostic_recording.set', { value: 'on' })}>Turn on diagnostic recording</button>}
+      {recording.state !== 'off' && <button disabled={busy} onClick={() => onAction('diagnostic_recording.set', { value: 'off' })}>Turn off diagnostic recording</button>}
+    </div>
+  </div></details>;
+}
+
 export function DayControls({ record, busy, onAction }: { record: DayRecord } & ActionProps) {
   const [timezone, setTimezone] = useState(record.data.timezone);
   const [quietStart, setQuietStart] = useState(record.data.proactivity.quiet_start ?? '');
@@ -85,6 +98,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
       </form>
     </div></details>
     {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
+    {record.data.diagnostic_recording && <DiagnosticRecordingSetting recording={record.data.diagnostic_recording} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
   </>;
