@@ -9,6 +9,8 @@ Source read for this note:
 - waldo-app `main` `8e8c73e7`, read-only, to see what the phone sends today.
 - ADR-0081 at waldo-brain `main` `c9219839`.
 
+Decision labels: this note's decisions are AW-1 to AW-8. "D1" to "D7 of 10 October" are the owner's earlier health decisions in `docs/app/HEALTH_INGEST_DESIGN_2026-10-10.md` §6.
+
 Tags:
 - **[verified]**: read in source at those pins.
 - **[documented]**: stated in a platform's own documentation.
@@ -23,14 +25,14 @@ The biggest gains don't come from new HealthKit types. They come from five signa
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | Accept the wellness tier W1 (§3.2): sleep stages, sleeping wrist temperature, walking heart-rate average, VO2 max, one-minute heart-rate recovery, mindful minutes. Also feed the five accepted-but-unused signals. | Yes |
-| D2 | New candidate versions `recovery.candidate.v2` and `weight.candidate.v4` (§4). Form's next version waits for the freshness lane's version (§4.3). | Yes, all labelled `candidate_unaccepted` like today |
-| D3 | Illness-sensitive signals (respiratory rate, wrist temperature, SpO2, awake time, walking heart rate) become **drivers**: descriptive deviations from the owner's own baseline, persisted on the derived row. They are not score weights. The model judges what a deviation means. | Yes |
-| D4 | Clinical-adjacent types (§3.4): AFib burden, ECG, irregular-rhythm, high/low heart-rate, sleep-apnea and hypertension notifications. | **Defer.** Design the seam now as a separate consent purpose. Accept nothing until legal review. |
-| D5 | Consent copy for W1. The in-app copy is generic (§8). | No copy bump for W1, provided the privacy notice draft lists the categories (owner or legal check). If a bump is still wanted, the §8.2 plan keeps old builds safe. |
-| D6 | Per-sample rejection (§6), negotiated at app health contract revision 3. Older builds keep today's all-or-nothing batch. | Yes. It ships first because it unblocks backfill and decouples app and backend release order for every later signal. |
-| D7 | Sleep debt is persisted and served by rebuilding #1127's change on the current writer, not by merging #1127 (§9). | Yes |
-| D8 | Deferred: State of Mind (self-reported mood), walking steadiness, stand time, physical effort (§3.3). | Defer |
+| AW-1 | Accept the wellness tier W1 (§3.2): sleep stages, sleeping wrist temperature, walking heart-rate average, VO2 max, one-minute heart-rate recovery, mindful minutes. Also feed the five accepted-but-unused signals. | Yes |
+| AW-2 | New candidate versions `recovery.candidate.v2` and `weight.candidate.v4` (§4). Form's next version waits for the freshness lane's version (§4.3). | Yes, all labelled `candidate_unaccepted` like today |
+| AW-3 | Illness-sensitive signals (respiratory rate, wrist temperature, SpO2, awake time, walking heart rate) become **drivers**: descriptive deviations from the owner's own baseline, persisted on the derived row. They are not score weights. The model judges what a deviation means. | Yes |
+| AW-4 | Clinical-adjacent types (§3.4): AFib burden, ECG, irregular-rhythm, high/low heart-rate, sleep-apnea and hypertension notifications. | **Defer.** Design the seam now as a separate consent purpose. Accept nothing until legal review. |
+| AW-5 | Consent copy for W1. The in-app copy is generic (§8). | No copy bump for W1, provided the privacy notice draft lists the categories (owner or legal check). If a bump is still wanted, the §8.2 plan keeps old builds safe. |
+| AW-6 | Per-sample rejection (§6), negotiated at app health contract revision 3. Older builds keep today's all-or-nothing batch. | Yes. It ships first because it unblocks backfill and decouples app and backend release order for every later signal. |
+| AW-7 | Sleep debt is persisted and served by rebuilding #1127's change on the current writer, not by merging #1127 (§9). | Yes |
+| AW-8 | Deferred: State of Mind (self-reported mood), walking steadiness, stand time, physical effort (§3.3). | Defer |
 
 ## 1. What exists: the audit, re-verified
 
@@ -101,7 +103,7 @@ Exercise minutes need no new signal: `movement_duration` already carries them (�
 | Type | Why not now |
 |---|---|
 | State of Mind (iOS 18, self-reported mood) | Self-reported mental state. It is Art. 9 data with a higher harm profile than physiology. It needs its own consent analysis before any persistence. |
-| Walking steadiness | iPhone-measured gait, not Watch [cited: Apple walking-quality paper]. Weekly cadence, and low value for planning a day. |
+| Walking steadiness | iPhone-measured gait, not Watch [documented: `appleWalkingSteadiness`]. About weekly, and low value for planning a day. |
 | Stand time and stand hours | Adds little beyond steps and movement for day planning. Revisit with a sedentary-behaviour use case [cited: Bull 2020 gives no numeric sedentary threshold]. |
 | Physical effort (METs), workout effort score | Promising for Weight. Wait for one release of energy-based load (§4.2) before adding a second intensity measure. |
 | Beat-to-beat series, the 24-hour heart-rate stream | Stays on the phone: owner decision D1 of 10 October. |
@@ -201,7 +203,7 @@ Shares are unchanged: sleep 0.5, variability 0.3, pulse 0.2 (`recovery.ts:9`). T
    - v1 takes the night's single `overnight_hrv`, whatever its method, and drops HRV when that method's baseline is immature.
    - v2 takes RMSSD when the night has an RMSSD reading and the owner has a mature RMSSD baseline (at least 14 of the last 30 nights); otherwise SDNN with a mature SDNN baseline; otherwise no HRV component.
    - This needs the phone to send both methods for a night when both exist, as two samples with method-specific ids (app lane, §7.3).
-   - Why: RMSSD and SDNN are different measures, so neither converts to the other. That is owner decision D3 of 10 October, grounded in the HRV standards [cited: Task Force 1996]. No source was found stating "short-term SDNN and RMSSD are not interchangeable" verbatim (UNCONFIRMED); the rule rests on D3 and on their different definitions. Day-to-day HRV is useful only against a stable personal baseline [cited: Plews 2013; Buchheit 2014], and a baseline that restarts for two weeks when iOS 27 adds RMSSD breaks that.
+   - Why: RMSSD and SDNN are different measures, so neither converts to the other. That is owner decision D3 of 10 October, grounded in the HRV standards [cited: Task Force 1996]. No source was found stating "short-term SDNN and RMSSD are not interchangeable" verbatim (UNCONFIRMED); the rule rests on the 10 October D3 and on their different definitions. Day-to-day HRV is useful only against a stable personal baseline [cited: Plews 2013; Buchheit 2014], and a baseline that restarts for two weeks when iOS 27 adds RMSSD breaks that.
 2. **Resting HR: baseline per method.**
    - A night's resting HR is compared only with earlier readings of the same `method`.
    - When two methods exist on one day, the one whose baseline is mature wins, in the order `overnight_resting`, `provider_resting_daily`, `resting_measurement`, `unknown`.
@@ -247,14 +249,25 @@ The health-freshness session (`claude/distracted-pascal-afbce1`, no commits at t
 
 A **driver** says that one of the owner's signals is outside their usual range today, in which direction, and how far. It is computed only against the same source and the same method, with a mature baseline of at least 14 of the last 30 days, using the existing bounded `zScore`, or `logZScore` for HRV (`stats.ts:15-20`).
 
-| Field | Values |
+| Subject (DTO) | Phrase subject (stored, digit-free) |
 |---|---|
-| subject | `sleep_duration`, `sleep_awake`, `overnight_hrv`, `resting_heart_rate`, `respiratory_rate`, `wrist_temperature`, `spo2`, `walking_heart_rate_average`, `physical_load`, `calendar_load` |
-| direction | `above`, `below` |
-| extent | `outside` when abs(z) ≥ 1; `far_outside` when abs(z) ≥ 2. These are candidate band constants, ratified together with the zone bands (decision D7 of 10 October). |
+| `sleep_duration` | `sleep` |
+| `sleep_awake` | `awake time in the night` |
+| `overnight_hrv` | `overnight heart rate variability` |
+| `resting_heart_rate` | `resting heart rate` |
+| `respiratory_rate` | `breathing rate` |
+| `wrist_temperature` | `wrist temperature` |
+| `spo2` | `blood oxygen` |
+| `walking_heart_rate_average` | `walking heart rate` |
+| `physical_load` | `physical load` |
+| `calendar_load` | `calendar load` |
 
-**Stored form.** One digit-free phrase per driver in the existing `drivers` array of the derived row. Examples: `"wrist temperature far above usual"`, `"resting heart rate above usual"`.
-- A closed regex in `waldo.health_context_write` admits only phrases built from the table.
+- **Direction:** `above` or `below`.
+- **Extent:** `outside` when abs(z) ≥ 1, written with no qualifier; `far_outside` when abs(z) ≥ 2, written with the word `far`. These are candidate band constants, ratified together with the zone bands (decision D7 of 10 October).
+
+**Stored form.** One phrase per driver in the existing `drivers` array of the derived row: `<phrase subject> [far ]<above|below> usual`, for example `"wrist temperature far above usual"` or `"resting heart rate above usual"`.
+- The phrase column exists because a phrase holding "SpO2" contains a digit: the prompt's digit filter would drop it and the writer would refuse it. Plain words also read better to the model than abbreviations.
+- A closed regex in `waldo.health_context_write` admits only phrases built from this table. The regex and the shared parser are both generated from this one column.
 - At most 8 are stored, strongest first.
 - The prompt reader already admits digit-free strings and shows the four strongest (`health-context.ts:64-86,150-153`), so drivers reach every turn **with no change to the composer**.
 - The app gets a structured DTO parsed from the phrase by one shared function in the contract, so there is one stored representation and one pure projection.
@@ -279,7 +292,7 @@ Lowering the 14-of-30 rule is not proposed. The relative standard error of a sam
 - `sleep_context.reducer_version` gains the literal `asleep-interval-union.v2`.
 - Under v2, `intervals[].kind` adds `awake`, and an `asleep` interval may carry `stage: 'light' | 'deep' | 'rem'`. No stage means unspecified.
 - A v1 context may carry neither. Today's v1 data keeps its exact meaning: no silent widening.
-- **Mapping.** Apple "core" becomes `light`; Apple's own description of core is light sleep, to be confirmed in §3.5. Health Connect `LIGHT`, `DEEP` and `REM` map directly, `SLEEPING` becomes unspecified, and `AWAKE`, `AWAKE_IN_BED` and `OUT_OF_BED` become `awake`.
+- **Mapping.** Apple `asleepCore` becomes `light`; Apple documents core as AASM N2 including N1 (§3.5). Health Connect `LIGHT`, `DEEP` and `REM` map directly, `SLEEPING` becomes unspecified, and `AWAKE`, `AWAKE_IN_BED` and `OUT_OF_BED` become `awake`.
 - **Totals.** `sleep_duration` (method `asleep_duration`) gains an optional `stages` object `{ light, deep, rem, unspecified, awake }` in minutes. Within a minute, `light + deep + rem + unspecified` equals `value`.
 - **Why this shape.** One sample per night keeps the stages atomic with the duration. A deleted session still needs exactly the three deletions the Health Connect mapping already sends, with no new ids or deletion rules.
 
@@ -341,7 +354,7 @@ export const healthChangeRejectionV1Schema = z.strictObject({
 | 1 | today's device consent, ingest and scores | every build |
 | 2 | WHOOP provider rows (exists) | builds sending `health=2` |
 | 3 | per-sample rejection, W1 signals, stage fields, the `drivers` DTO on `/scores` | builds sending `health=3` |
-| 4 (reserved) | the `clinical_events` purpose and tier-C signals, only if D4 changes | builds sending `health=4` |
+| 4 (reserved) | the `clinical_events` purpose and tier-C signals, only if AW-4 changes | builds sending `health=4` |
 
 ### 7.2 App-lane announcement (before the contract PR merges)
 
@@ -367,6 +380,7 @@ Per the additive-only rule, each new value is announced to the app lane with the
 5. Confirm where Apple `in_bed` samples come from, and whether HealthKit's active energy includes workout energy.
 6. Send `sedentary_mean` and `n_sedentary` on Apple heart-rate windows, from the motion context.
 7. Send the deletion and the replacement when Apple rewrites the current or previous day's resting or walking heart rate.
+8. Confirm the unit the app reads `heartRateRecoveryOneMinute` in. Apple documents count units, and the wire unit is `beats_per_minute`, so the HealthKit query must use a compatible unit.
 
 ## 8. Consent and copy versions
 
@@ -486,7 +500,7 @@ Each PR is small and red-first. Each uses synthetic fixtures only, valid and inv
 | P3 | Worker: per-sample ingest at `health=3`, receipt shaping. Producer: `SIGNALS`, signal groups, `truncated`, `rowOf` (sleep debt, drivers). `recovery.candidate.v2`, `weight.candidate.v4`. `/scores` serves `sleep_debt` and `drivers`. | After P2 is applied | `channels/app-health.ts`, `health/producer.ts`, `health/scores/*` (not Form's partial-day logic) |
 | P4 | `get_health`: signals, units, shared source and method choice, truncation | After P3 | `contracts/src/tools/schemas/reads.ts`, `tools/live/health.ts`, tool snapshots, hook registry |
 | P5 | Form, the version after the freshness lane's: hourly-minimum stress input, compared against the mean | After the freshness lane merges | `scores/form.ts`, with that lane's agreement |
-| P6 | Health trigger: drivers in the trigger's view, and the writer reports a driver set change in `changed` | Owner of `trigger.ts` | `health/trigger.ts`, a small writer migration |
+| P6 | Health trigger: drivers in the trigger's view, and the writer reports a driver set change in `changed` | Owner of `trigger.ts`, most likely the health-freshness session, whose brief includes the trigger | `health/trigger.ts`, a small writer migration |
 
 ## 13. Falsifiers: the first red tests
 
@@ -541,7 +555,7 @@ Each PR is small and red-first. Each uses synthetic fixtures only, valid and inv
 - the semantics of `heartRateVariabilityRMSSD`, `appleSleepingBreathingDisturbances`, `sleepApneaEvent` and `hypertensionEvent`, which Apple's pages list as bare declarations;
 - whether Apple's Sleep Score is exposed anywhere (absence check only).
 
-**Open for the owner:** D1 to D8.
+**Open for the owner:** AW-1 to AW-8.
 
 **Open for legal:** tier C (§3.4), and whether the privacy notice draft lists categories (§8.1).
 
