@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, BrowserWorker, Page, Request, WorkersLaunchOptions } from '@cloudflare/playwright';
-import type { BrowsePageArgs, ToolResult } from '@waldo/contracts';
+import type { BrowsePageArgs, RungBlockedOutcome, ToolResult } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../hooks/egress-policy';
 import { browserBoundedJson } from './browser-bounded-body';
@@ -44,7 +44,7 @@ const diagnostic = async (response: Response) => {
   const request = token(response.headers.get('x-request-id')) ?? token(response.headers.get('cf-ray'));
   return `The Cloudflare browser provider failed (HTTP ${response.status}${code ? `, code ${code}` : ''}${request ? `, request ${request}` : ''}).`;
 };
-const failure = (code: 'rejected' | 'transient' | 'not_found', error: string) => ({ ok: false as const, code, error, source_taint: 'external' as const });
+const failure = (code: 'rejected' | 'transient' | 'not_found', error: string, blocked?: RungBlockedOutcome) => ({ ok: false as const, code, error, source_taint: 'external' as const, ...(blocked ? { blocked } : {}) });
 
 // Same public-read capability and source custody as browse_page. Each invocation
 // owns a fresh private session; no owner profile, credentials or fixture grants.
@@ -187,10 +187,11 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       await admit();
       const url = page.url();
       if (!allowed(url) || new URL(url).hostname !== target.hostname) result = failure('rejected', 'The page moved outside the selected public browser target.');
-      else if (response && response.status() >= 400 && response.headers()['cf-mitigated'] === 'challenge') result = failure('rejected', `The site answered with a bot-verification challenge (verification_challenge, HTTP ${response.status()}). A one-shot read cannot pass it. Read it with retain_session:true and offer the owner owner_login to pass it in the console, or use another source.`);
+      else if (response && response.status() >= 400 && response.headers()['cf-mitigated'] === 'challenge') result = failure('rejected', `The site answered with a bot-verification challenge (verification_challenge, HTTP ${response.status()}). A one-shot read cannot pass it. Read it with retain_session:true and offer the owner owner_login to pass it in the console, or use another source.`, 'challenge');
       // The site's own answer for the main document. A refusal or a missing page is settled for this address; any
-      // other failure, rate limits and server errors included, may change on a retry.
-      else if (response && REFUSED_STATUSES.has(response.status())) result = failure('rejected', `The site refused this reader (HTTP ${response.status()}). Retrying the same address will not help. Use another source or a search result, or, if signing in could help, read it with retain_session:true and offer the owner owner_login.`);
+      // other failure, rate limits and server errors included, may change on a retry. Only a 401 says for certain that the
+      // page wants a sign-in; a 403 or 451 can be a bot block or a region, so it carries no structured block.
+      else if (response && REFUSED_STATUSES.has(response.status())) result = failure('rejected', `The site refused this reader (HTTP ${response.status()}). Retrying the same address will not help. Use another source or a search result, or, if signing in could help, read it with retain_session:true and offer the owner owner_login.`, response.status() === 401 ? 'login_required' : undefined);
       else if (response && GONE_STATUSES.has(response.status())) result = failure('not_found', `The site has no page at this address (HTTP ${response.status()}). Try another page on the site, or another source.`);
       else if (!response || response.status() >= 400) result = failure('transient', `The page did not load${response ? ` (HTTP ${response.status()})` : ''}.`);
       else {

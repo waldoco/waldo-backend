@@ -12,7 +12,8 @@ export const TURN_EVENT_SCHEMA_VERSION = '10';
 export const executionRungSchema = z.enum(['memory', 'connector', 'email', 'fetch', 'browser', 'sandbox', 'mac', 'human']);
 export type ExecutionRung = z.infer<typeof executionRungSchema>;
 
-export const rungBlockedReasonSchema = z.enum(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold']);
+// The last three are a page's own block (rungBlockedOutcomeSchema), which a tool hop reports when its tool returned one.
+export const rungBlockedReasonSchema = z.enum(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required']);
 export type RungBlockedReason = z.infer<typeof rungBlockedReasonSchema>;
 
 export const turnOutcomeSchema = z.enum(['answered', 'completed', 'failed', 'dropped', 'delivery_pending', 'blocked']);
