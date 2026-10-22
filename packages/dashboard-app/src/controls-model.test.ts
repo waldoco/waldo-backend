@@ -128,6 +128,13 @@ describe('revision-bound owner control actions', () => {
     expect(() => readActionResult({ receipt: { state: 'recorded', message: 'Saved', navigation: ticket }, duplicate: false }, 'timezone.set', 'https://w.test')).toThrow('navigation receipt');
     expect(() => readActionResult({ receipt: { state: 'unconfirmed', message: 'Unknown', navigation: ticket }, duplicate: false }, 'google.connect', 'https://w.test')).toThrow();
   });
+
+  it('allows an MCP connect to continue only on this console\'s own start link', () => {
+    const start = `/console/mcp/start/${'A'.repeat(43)}`;
+    expect(readActionResult({ receipt: { state: 'recorded', message: 'Sign in', navigation: start }, duplicate: false }, 'mcp.connect', 'https://w.test').receipt.navigation).toBe(`https://w.test${start}`);
+    for (const target of [`https://foreign.test${start}`, '/console/mcp/start/short', `${start}?next=https://evil.test`, 'https://auth.provider.test/authorize']) expect(() => allowedControlNavigation(target, 'https://w.test')).toThrow();
+    expect(() => readActionResult({ receipt: { state: 'recorded', message: 'Saved', navigation: start }, duplicate: false }, 'mcp.runs', 'https://w.test')).toThrow('navigation receipt');
+  });
 });
 
 describe('iMessage and device setup reads', () => {
