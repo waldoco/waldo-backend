@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, callOwnerProvider, verifiedProviderCall } from '../src/health/providers/provider-route';
-import { handleWhoopCallback, handleWhoopWebhook, whoopConfig, whoopSignature, WHOOP_CALLBACK_PATH, WHOOP_WEBHOOK_PATH } from '../src/health/providers/whoop-routes';
+import { handleWhoopCallback, handleWhoopStart, handleWhoopWebhook, whoopConfig, whoopSignature, WHOOP_CALLBACK_PATH, WHOOP_START_PATH, WHOOP_WEBHOOK_PATH } from '../src/health/providers/whoop-routes';
+import { WHOOP_ATTEMPT_TTL_MS } from '../src/health/providers/whoop-client';
+import { bindBrowser } from '../src/connectors/oauth-browser-binding';
+import { cookieJar, setCookies } from './support/cookie-jar';
+import worker from '../src/index';
 import { harness, newPlane, newWorld } from './helpers/whoop-fakes';
 import { webhookBody } from './fixtures/whoop-synthetic';
 
@@ -157,9 +161,13 @@ describe('the WHOOP webhook', () => {
   });
 });
 
-const callback = async (query: string, over: { env?: Record<string, unknown>; answer?: Response; limited?: boolean } = {}) => {
+// The cookie the start link leaves in the browser that followed it.
+const bound = async (state = 'AbCd1234', at = Date.now()) => (await bindBrowser('whoop', state, WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
+const callback = async (query: string, over: { env?: Record<string, unknown>; answer?: Response; limited?: boolean; cookie?: string | null } = {}) => {
   const { owners, sent } = capture(() => over.answer ?? Response.json({ outcome: 'linked' }));
-  const response = await handleWhoopCallback(new Request(`https://w.test${WHOOP_CALLBACK_PATH}?${query}`, { headers: { 'cf-connecting-ip': '203.0.113.9' } }),
+  const state = new URLSearchParams(query).get('state') ?? '';
+  const cookie = over.cookie === undefined ? await bound(state) : over.cookie;
+  const response = await handleWhoopCallback(new Request(`https://w.test${WHOOP_CALLBACK_PATH}?${query}`, { headers: { 'cf-connecting-ip': '203.0.113.9', ...(cookie ? { cookie } : {}) } }),
     { ...ENV_BASE, OWNER_DO: owners, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !over.limited }) }, ...over.env } as never);
   return { response, sent, html: await response.clone().text() };
 };
@@ -223,5 +231,82 @@ describe('the WHOOP callback', () => {
     expect([limited.response.status, rpcs.length]).toEqual([429, 0]);
     const post = await handleWhoopCallback(new Request(`https://w.test${WHOOP_CALLBACK_PATH}?code=x&state=AbCd1234`, { method: 'POST' }), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners } as never);
     expect(post.status).toBe(404);
+  });
+});
+
+const start = async (path: string, over: { env?: Record<string, unknown>; limited?: boolean; method?: string } = {}) =>
+  handleWhoopStart(new Request(`https://worker.example.invalid${path}`, { method: over.method ?? 'GET', headers: { 'cf-connecting-ip': '203.0.113.9' } }),
+    { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !over.limited }) }, ...over.env } as never);
+
+describe('the WHOOP start link', () => {
+  it('sends the browser to WHOOP\'s own page for a live attempt and binds the attempt to that browser', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+    const response = await start(`${WHOOP_START_PATH}AbCd1234`);
+    expect(response.status).toBe(303);
+    const location = new URL(response.headers.get('location')!), query = location.searchParams;
+    expect([location.origin + location.pathname, query.get('client_id'), query.get('response_type'), query.get('redirect_uri'), query.get('state')]).toEqual(['https://api.prod.whoop.com/oauth/oauth2/auth', 'client-id-fixture', 'code', 'https://worker.example.invalid/oauth/whoop/callback', 'AbCd1234']);
+    expect(query.get('scope')).toBe('offline read:profile read:sleep read:recovery read:workout');
+    expect(response.headers.get('location')).not.toContain(CLIENT_SECRET);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    const [set] = setCookies(response);
+    expect(set!.split('=')[0]).toBe((await bound('AbCd1234')).split('=')[0]);
+    expect(set).toContain(`Path=${WHOOP_CALLBACK_PATH}`);
+    expect(set).toContain('Max-Age=1800');
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve']);
+    expect(JSON.stringify(rpcs)).not.toContain('AbCd1234');
+  });
+
+  it('binds nothing and sends nowhere for a malformed, unknown, expired or spent attempt', async () => {
+    for (const path of [`${WHOOP_START_PATH}short`, `${WHOOP_START_PATH}AbCd1234/x`, WHOOP_START_PATH]) {
+      const response = await start(path);
+      expect([path, response.status >= 400, response.headers.get('location'), setCookies(response)]).toEqual([path, true, null, []]);
+    }
+    expect(rpcs).toEqual([]);
+    for (const [answer, code] of [[null, 400], [{ status: 'expired' }, 410], [{ status: 'completed' }, 400], [{ status: 'revoked' }, 400]] as const) {
+      sessionAnswer = answer;
+      const response = await start(`${WHOOP_START_PATH}AbCd1234`);
+      expect([response.status, response.headers.get('location'), setCookies(response)]).toEqual([code, null, []]);
+    }
+  });
+
+  it('is served by the Worker at the start path', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+    const response = await worker.fetch(new Request(`https://worker.example.invalid${WHOOP_START_PATH}AbCd1234`), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners } as never);
+    expect(response.status).toBe(303);
+    expect(new URL(response.headers.get('location')!).origin).toBe('https://api.prod.whoop.com');
+  });
+
+  it('is absent without its configuration, throttles per address, and takes only GET', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a' };
+    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { env: { WHOOP_REDIRECT_URI: undefined } })).status).toBe(404);
+    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' })).status).toBe(404);
+    const limited = await start(`${WHOOP_START_PATH}AbCd1234`, { limited: true });
+    expect([limited.status, setCookies(limited), rpcs.length]).toEqual([429, [], 0]);
+  });
+});
+
+describe('the WHOOP callback is bound to the browser that followed the start link', () => {
+  it('links nothing for a browser with no binding, another attempt\'s, or one past the attempt lifetime, and asks nothing of the database or the owner', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a' };
+    for (const cookie of [null, await bound('ZzZz9999'), await bound('AbCd1234', Date.now() - WHOOP_ATTEMPT_TTL_MS - 1)]) {
+      const { response, sent, html } = await callback('code=attacker-code&state=AbCd1234', { cookie });
+      expect([response.status, sent.length]).toEqual([403, 0]);
+      expect(html).toContain('Start the connection again');
+      expect(html).not.toContain('attacker-code');
+    }
+    expect(rpcs).toEqual([]);
+  });
+
+  it('completes for the browser that started it, from start link to callback, and refuses the same callback replayed', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+    const jar = cookieJar();
+    const begun = jar.take(await start(`${WHOOP_START_PATH}AbCd1234`));
+    const state = new URL(begun.headers.get('location')!).searchParams.get('state')!;
+    const first = await callback(`code=auth-code-1&state=${state}`, { cookie: jar.header() });
+    jar.take(first.response);
+    expect([first.response.status, first.sent.length, jar.size()]).toEqual([200, 1, 0]);
+    const replay = await callback(`code=auth-code-1&state=${state}`, { cookie: jar.header() || null });
+    expect([replay.response.status, replay.sent.length]).toEqual([403, 0]);
   });
 });

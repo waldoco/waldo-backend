@@ -1,6 +1,9 @@
 // S3 (CONNECT_FLOW_DESIGN): short first-party connect links. Chat carries /c/<ticket>; the
 // provider consent URL is minted at click time inside the owner's Durable Object and travels
 // only in the 302 redirect. The ticket itself is never stored - only its sha256 hash.
+import { GOOGLE_CALLBACK_PATH } from '../connectors/google';
+import { CONSENT_TTL_MS } from '../connectors/google-consent';
+import { bindBrowser } from '../connectors/oauth-browser-binding';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { consentPage } from './google-oauth';
 
@@ -54,12 +57,13 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     const reply = await owners.get(owners.idFromName(session.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {
       method: 'POST', body: JSON.stringify({ ticket_hash: hash }),
     });
-    const { url } = await reply.json() as { url?: string };
-    if (!url) throw new Error('no consent url minted');
+    const { url, nonce } = await reply.json() as { url?: string; nonce?: string };
+    // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.
+    if (!url || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error('no consent url minted');
     hop('ok', hashPrefix);
     return new Response(null, {
       status: 302,
-      headers: { location: url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+      headers: { location: url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) },
     });
   } catch (error) {
     console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: false, error: error instanceof Error ? error.message : String(error) }));

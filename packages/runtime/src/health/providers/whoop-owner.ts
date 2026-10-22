@@ -3,7 +3,7 @@ import { invokeHealth } from '../../channels/app-health';
 import { md5Hex } from '../../channels/md5';
 import { hex } from '../../identity/owner-directory';
 import { OAuthProxyError, type OAuthProxy } from '../../connectors/oauth-proxy-client';
-import { whoopAuthorizeUrl, whoopClient, whoopPins, WhoopError, WHOOP_SCOPES, type EdgeReply, type WhoopCall, type WhoopConfig } from './whoop-client';
+import { whoopClient, whoopStartUrl, whoopPins, WhoopError, WHOOP_ATTEMPT_TTL_MS, WHOOP_SCOPES, type EdgeReply, type WhoopCall, type WhoopConfig } from './whoop-client';
 import { whoopDeletions, whoopNightSamples, whoopWorkoutSamples, type WhoopDeletion, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
 
 // The owner object's side of WHOOP: connect, sync, webhook hints, disconnect. Every token lives at the oauth-proxy Edge
@@ -28,7 +28,6 @@ const LOOKUPS_PER_WINDOW = 10;
 const SEEN_TTL_MS = DAY_MS;
 // The edge reports a token expired this long before it lapses, so a call never leaves with one about to.
 const EXPIRY_SKEW_MS = 120_000;
-const ATTEMPT_TTL_MS = 30 * 60_000;
 const CHANNEL = 'app';
 
 type Rpc = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
@@ -305,7 +304,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const state = newState(), hash = await sha256(state);
       const session = await rpc('connect_session_issue', `connsess.issue.${doName()}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
       if (typeof session !== 'string') return { error: 'unavailable' };
-      return { authorize_url: whoopAuthorizeUrl(config, state), expires_at: deps.now() + ATTEMPT_TTL_MS };
+      return { authorize_url: whoopStartUrl(config, state), expires_at: deps.now() + WHOOP_ATTEMPT_TTL_MS };
     } catch { return { error: 'unavailable' }; }
   };
 

@@ -1,4 +1,5 @@
-import { readConsentState, type ConsentSurface } from '../connectors/google';
+import { readConsentState, GOOGLE_CALLBACK_PATH, type ConsentSurface } from '../connectors/google';
+import { checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
 import { CONSOLE_PATH } from './console';
 import { CONSENT_TTL_MS, type ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -70,6 +71,7 @@ h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}.account{c
 };
 
 const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth', hop: 'oauth_callback', ok: false, error: reason }));
+const UNBOUND = { status: 403, title: 'Start the connection again', body: 'This sign-in came back to a different browser from the one that opened the connect link, or the link is too old, so nothing was connected. Ask Waldo to connect Google again and open the new link in this browser.' };
 
 // Google redirects the owner here after consent. The signed state names the owner's Durable Object and
 // a one-time attempt; that Durable Object settles the attempt, so a reloaded callback never exchanges twice.
@@ -83,16 +85,26 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
     rejected(params.get('state') ? 'bad_state' : 'missing_state');
     return consentPage(error ? { kind: 'denied' } : { kind: 'invalid' }, null);
   }
-  try {
-    const response = await owners.get(owners.idFromName(state.owner)).fetch(`https://telegram-owner${GOOGLE_FINISH_PATH}`, {
-      method: 'POST', body: JSON.stringify({ nonce: state.nonce, code: params.get('code'), error }),
-    });
-    const reply = await response.json() as ConsentReply;
-    return consentPage(reply.outcome, reply.bot, state.surface);
-  } catch (failure) {
-    rejected(`owner unreachable: ${failure instanceof Error ? failure.message : String(failure)}`);
-    // The signed state already proved where this flow started; the failure page must send the
-    // owner back to THAT surface, not drop it and default every failure to the console.
-    return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null, state.surface);
+  // Checked before the owner object wakes, so a forwarded sign-in or an injected code neither links nor settles the attempt.
+  const browser = await checkBrowser(request, 'google', state.nonce, Date.now());
+  if (browser !== 'bound') {
+    rejected(`browser_${browser}`);
+    return callbackPage(false, UNBOUND, '', returnAction(state.surface, null));
   }
+  const page = await (async () => {
+    try {
+      const response = await owners.get(owners.idFromName(state.owner)).fetch(`https://telegram-owner${GOOGLE_FINISH_PATH}`, {
+        method: 'POST', body: JSON.stringify({ nonce: state.nonce, code: params.get('code'), error }),
+      });
+      const reply = await response.json() as ConsentReply;
+      return consentPage(reply.outcome, reply.bot, state.surface);
+    } catch (failure) {
+      rejected(`owner unreachable: ${failure instanceof Error ? failure.message : String(failure)}`);
+      // The signed state already proved where this flow started; the failure page must send the
+      // owner back to THAT surface, not drop it and default every failure to the console.
+      return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null, state.surface);
+    }
+  })();
+  page.headers.append('set-cookie', await releaseBrowser('google', state.nonce, GOOGLE_CALLBACK_PATH));
+  return page;
 };

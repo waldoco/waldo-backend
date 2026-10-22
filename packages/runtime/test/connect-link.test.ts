@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { handleConnectTicket, newTicket, ticketHash, BEGIN_SESSION_PATH } from '../src/channels/connect-link';
+import { GOOGLE_CALLBACK_PATH } from '../src/connectors/google';
+import { checkBrowser } from '../src/connectors/oauth-browser-binding';
+import { setCookies } from './support/cookie-jar';
+
+const NONCE = 'G'.repeat(43);
 
 const TICKET = 'AbCdEfGhIjKlMnOpQrStUv'; // 22 base64url chars
 
-const envWith = (rpcResult: unknown, doReply: { url?: string | null } = { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' }) => {
+const envWith = (rpcResult: unknown, doReply: { url?: string | null; nonce?: string } = { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1', nonce: NONCE }) => {
   const rpcCalls: Array<{ fn: string; message: string; args: Record<string, string> }> = [];
   const doCalls: Array<{ path: string; body: string }> = [];
   const env = {
@@ -32,7 +37,7 @@ const envWith = (rpcResult: unknown, doReply: { url?: string | null } = { url: '
 // in owner-directory, so exercise handleConnectTicket with a fetch-injectable env).
 import { signedRpc } from '../src/identity/owner-directory';
 
-const ticketEnv = (rpcResult: unknown, doReply?: { url?: string | null }) => {
+const ticketEnv = (rpcResult: unknown, doReply?: { url?: string | null; nonce?: string }) => {
   const { env, rpcCalls, doCalls, fetcher } = envWith(rpcResult, doReply);
   // signedRpc(env, fetcher) - but handleConnectTicket calls signedRpc(env) with default fetch.
   // So we test through a wrapped env whose global fetch is stubbed by vitest.
@@ -49,7 +54,7 @@ describe('connect ticket helpers', () => {
 });
 
 describe('handleConnectTicket', () => {
-  const run = async (ticket: string, rpcResult: unknown, doReply?: { url?: string | null }) => {
+  const run = async (ticket: string, rpcResult: unknown, doReply?: { url?: string | null; nonce?: string }) => {
     const { env, rpcCalls, doCalls, fetcher } = ticketEnv(rpcResult, doReply);
     const original = globalThis.fetch;
     globalThis.fetch = fetcher as typeof fetch;
@@ -96,6 +101,23 @@ describe('handleConnectTicket', () => {
     expect(rpcCalls[0]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
     expect(doCalls[0]!.path).toBe(BEGIN_SESSION_PATH);
     expect(JSON.parse(doCalls[0]!.body).ticket_hash).toBe(await ticketHash(TICKET));
+  });
+
+  it('binds the attempt to the browser that followed the link, for the callback path and the attempt lifetime only', async () => {
+    const { response } = await run(TICKET, { status: 'ok', do_name: '5458446350', provider: 'google', session: 's1' });
+    const [set] = setCookies(response);
+    expect(set).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
+    expect(set).toContain('Max-Age=43200');
+    expect(set).toContain('SameSite=Lax');
+    const atCallback = new Request(`https://waldo.example${GOOGLE_CALLBACK_PATH}`, { headers: { cookie: set!.split(';')[0]! } });
+    expect(await checkBrowser(atCallback, 'google', NONCE, Date.now())).toBe('bound');
+    expect(await checkBrowser(atCallback, 'google', 'H'.repeat(43), Date.now())).toBe('missing');
+  });
+
+  it('never redirects to Google without a binding: a mint that names no attempt is a failure', async () => {
+    const { response } = await run(TICKET, { status: 'ok', do_name: '5458446350' }, { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' });
+    expect(response.status).toBe(502);
+    expect(response.headers.get('location')).toBeNull();
   });
 
   it('DO mint failure -> failed page, never a naked 500', async () => {
