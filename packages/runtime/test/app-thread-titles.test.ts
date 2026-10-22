@@ -233,8 +233,9 @@ describe('titles and erasure', () => {
   });
 
   // The redactor and the remaining check share one pattern, so a title still carries the topic after its scrub only when the
-  // marker itself does: a forget of the word "forgotten". The tool must say so, and nothing is forgotten.
-  it('a forget that leaves the topic in a title fails the tool, and nothing is forgotten', async () => {
+  // marker itself does: a forget of the word "forgotten". The scrub keeps what it rewrote, but the tool must fail, and no
+  // claim is forgotten.
+  it('a forget that leaves the topic in a title fails the tool, and no claim is forgotten', async () => {
     await withOwner('titles-forget-incomplete', async ({ call, state, thread, say }) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
       memory.add({ kind: 'fact', text: 'Keeps the forgotten tapes in the loft', source: 'stated', evidence: '"the forgotten tapes"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');

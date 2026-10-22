@@ -119,6 +119,22 @@ describe('the nightly pass with a forget still pending', () => {
       expect(model.promotions.join('\n')).not.toMatch(/green tea/i);
     });
   });
+
+  it('a chunk where every turn is withheld makes no model call, says so, and moves the mark', async () => {
+    await withOwner('nightly-held-topic-all', async (state, fire) => {
+      const sql = state.storage.sql;
+      holdTopic(sql, 'tea', '2026-10-18T08:00:00Z');
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - DAY);
+      episodeIndex(sql).add('app-2', OWNER_SAID, HELD, NOW - 4 * HOUR);
+      const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      let logged: string[] = [];
+      try { await fire(); logged = lines.mock.calls.map(call => String(call[0])); } finally { lines.mockRestore(); }
+      expect(model.nights).toEqual([]);
+      expect(logged.filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { ok: boolean; detail?: string }))
+        .toMatchObject([{ ok: true, detail: '0 turns, 1 withheld while a forget finishes' }]);
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 4 * HOUR);
+    });
+  });
 });
 
 describe('the owner turn with a forget still pending', () => {
