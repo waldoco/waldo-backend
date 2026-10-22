@@ -771,7 +771,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // A WhatsApp presence bound at ingress to this owner's Durable Object, on a deploy that can send WhatsApp messages.
   // The old chat's outbox records ended with the binding change (bindWhatsAppNumber). No WhatsApp pass runs for them again,
   // so their jobs settle now, through the runtime of the surface the change came from; settleEnded sends and sweeps nothing,
-  // so it is safe beside a pass with a send in flight. A failure leaves them to the next transport pass.
+  // so it is safe beside a pass with a send in flight. A failure leaves them to the next transport pass or, for an owner with no
+  // surface left, to the alarm's early return, which settles them and asks again until they are.
   private async settleRetiredWhatsApp(retired: readonly string[], channel?: ChannelKind): Promise<void> {
     if (!retired.length) return;
     try {
@@ -2001,9 +2002,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
         if (whatsappOnly) channel = 'whatsapp';
         if (!telegramBound && whatsappTarget === null && !whatsappOnly) {
+          // No surface is left to run a transport pass, so a record that ended without its job being settled (an unlink whose
+          // own settle failed) is settled here, and asked for again until it is.
+          const owing = (): readonly string[] => new TelegramFinalOutbox(this.ctx.storage.kv).records().filter(r => r.status !== 'pending' && r.status !== 'accepted' && r.status !== 'attempting' && r.settled === false).map(r => r.id);
+          if (owing().length) await this.settleRetiredWhatsApp(owing(), 'whatsapp');
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
-          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' || targets === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' || targets === 'retry' || owing().length ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
       }
