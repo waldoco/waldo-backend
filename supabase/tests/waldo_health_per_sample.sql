@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(31);
+select plan(32);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -88,6 +88,9 @@ select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-allbad-0001','
   'an all-bad batch stores nothing and lists every change');
 select is(pg_temp.anchor(),'a1','an all-bad batch still advances the anchor, with its receipt as the trace');
 select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-empty-00001','e1','[]'))->'rejected','[]'::jsonb,'an empty batch has nothing to reject');
+select is((select jsonb_build_array(r->'accepted',jsonb_array_length(r->'rejected'),r->'rejected'->63->'index') from (select pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-full-000001','f1',
+  (select jsonb_agg(pg_temp.steps('full-'||g,10+g,case when g % 2 = 0 then 10 else -1 end) order by g) from generate_series(0,127) g))) as r) x),
+  '[64,64,127]'::jsonb,'a full batch of 128 with every other reading bad stores the 64 good ones and lists the 64 bad');
 
 -- The request itself is still checked whole.
 select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-epoch-00001','x','[]')||'{"consent_epoch":7}')->>'error','epoch_conflict','a batch at another epoch is refused whole');
