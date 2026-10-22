@@ -8,6 +8,8 @@ import { scriptedGateway } from '../../src/testing/scripted-gateway';
 import { callBudget } from './budget';
 import { assertIndependentJudge, liveJudge, type Judge } from './judge';
 import { liveVoiceJudge } from './voice';
+import { judgeModeOf } from './dimensions';
+import type { MemoryMode } from './world';
 import type { NightlyRun } from './suite';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -37,12 +39,19 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   // WALDO_TOOL_SEARCH=on does for an owner; the scorecard names it so the two menus' results are never mixed up.
   const toolSearch = env.WALDO_EVAL_TOOL_SEARCH === 'on';
   const menu = toolSearch ? { toolSearch: true } : {};
-  const named = (candidate: string) => toolSearch ? `${candidate}+tool_search` : candidate;
+  const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
+  if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
+  // The raw-history baseline's card names its mode, so it is never read as the normal run's.
+  const label = (name: string) => {
+    const menuNamed = toolSearch ? `${name}+tool_search` : name;
+    return memory === 'raw_history' ? `${menuNamed} (raw_history)` : menuNamed;
+  };
+  const memoryMode: Readonly<{ memory?: MemoryMode }> = memory === 'raw_history' ? { memory } : {};
   if (mode === 'recorded') {
     return {
       trials, budget: callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS', '10000')),
       gateway: () => scriptedGateway({ rules: [], unmatchedText: 'Recorded reply.' }),
-      judge: recordedJudge, candidate: named('recorded'), judgeModel: 'recorded', ...menu,
+      judge: recordedJudge, candidate: label('recorded'), judgeModel: 'recorded', ...menu, ...memoryMode,
     };
   }
   const model = modelNameSchema.parse(env.WALDO_EVAL_MODEL ?? WALDO_CHAT_MODEL);
@@ -52,11 +61,12 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   const judgeModel = required(env, 'WALDO_EVAL_JUDGE_MODEL');
   assertIndependentJudge(model, judgeModel);
   const budget = callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS'));
+  const judgeMode = judgeModeOf(env.WALDO_EVAL_JUDGE_MODE);
   return {
-    trials, budget, candidate: named(model), judgeModel, model, ...menu,
+    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, holdState: true, ...menu, ...memoryMode,
     // No client retries: every attempt is one counted call.
     gateway: () => new OpenAIResponsesAdapter({ client: new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 }) }),
-    judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }),
-    voiceJudge: liveVoiceJudge({ apiKey: judgeKey, model: judgeModel, budget }),
+    judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),
+    voiceJudge: liveVoiceJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),
   };
 };

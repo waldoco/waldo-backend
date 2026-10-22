@@ -57,7 +57,7 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     signals: z.array(z.strictObject({
       signal: healthReadSignalSchema,
       unit: healthReadUnitSchema,
-      source: z.enum(['apple', 'samsung', 'health_connect']),
+      source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
       method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.
@@ -158,7 +158,11 @@ export const readThreadArgsSchema = z.strictObject({
   cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
-});
+  // Continue one long message body: the id of a message whose body_next_offset was returned, and that offset.
+  body_message_id: z.string().min(1).max(128).optional(),
+  body_offset: z.int().min(0).max(100_000_000).optional(),
+}).refine(args => (args.body_message_id === undefined) === (args.body_offset === undefined), { error: 'body_message_id and body_offset go together', path: ['body_offset'] })
+  .refine(args => args.body_message_id === undefined || args.cursor === undefined, { error: 'a body continuation does not take a thread cursor', path: ['cursor'] });
 export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives
@@ -332,10 +336,23 @@ export type ReadToolOutputArgs = z.infer<typeof readToolOutputArgsSchema>;
 // dispatch-time server allowlist (ADR-0049), whose shape is deliberately unpinned here.
 export const callMcpToolArgsSchema = z.strictObject({
   server: z.string().min(1).max(100),
-  tool: z.string().min(1).max(100),
+  // MCP tool names run to 128 characters; the server's own list decides which exist.
+  tool: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+  // The owner's answers to a connected server's questions (an input_required result), sent with the same
+  // call: handle names the questions, responses maps each question id to the owner's answer.
+  answers: z.strictObject({ handle: z.string().min(1), responses: z.record(z.string(), z.unknown()) }).optional(),
 });
 export type CallMcpToolArgs = z.infer<typeof callMcpToolArgsSchema>;
+
+// Finds tools on the MCP servers the owner connected: words to match, one server's full list, or the
+// next page of a previous search. All optional: no arguments lists every server and its first tools.
+export const searchMcpToolsArgsSchema = z.strictObject({
+  query: z.string().min(1).optional(),
+  server: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+});
+export type SearchMcpToolsArgs = z.infer<typeof searchMcpToolsArgsSchema>;
 
 // Results of the three general-agent tools are external-origin by construction, so the
 // taint field pins the single owner's (memory/sanitise) non-null arm: an untainted

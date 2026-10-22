@@ -5,20 +5,45 @@ import { z } from 'zod';
 // Readings are window summaries and point records. Beat-to-beat series and the 24 h heart-rate stream
 // stay on the phone. The backend computes the official scores from stored readings; a phone may show
 // a provisional score but never uploads one as canonical.
-// Consent copy 1 named daily aggregates. Copy 2 names intraday window summaries.
+// Consent copy 1 named daily aggregates. Copy 2 names intraday window summaries and is the device sources' copy.
 export const HEALTH_CONSENT_VERSION_V1 = 2;
 export const HEALTH_INGEST_MAX_REQUEST_BYTES_V1 = 98_304;
 export const HEALTH_INGEST_MAX_CHANGES_V1 = 128;
 export const HEALTH_RAW_RETENTION_DAYS_V1 = 90;
 export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
-export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
+// Device sources arrive from the app's uploads. A provider source is a cloud API Waldo syncs for the owner, so it never
+// arrives through the app's ingest route; its consent rows and requests are health contract revision 2, and an older build
+// never sees them (it parses the consent list strictly).
+export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
+export const HEALTH_PROVIDER_REVISION_V1 = 2;
+export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
+export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
+// A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 3 is WHOOP's: it says that
+// Waldo stores the owner's WHOOP data and that an AI model provider, a third party the owner opts into with the
+// model-processing grant, processes it to plan the owner's day, which is the express authorization WHOOP's terms ask for.
+// A new grant carries the current version of its source's copy, never another's, so a stored grant shows which notice it
+// rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
+// had (WHOOP's first grants were written on copy 2). The app owns the wording; a changed notice takes the next number.
+export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 3;
+type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
+const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
+  apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+};
+export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
+const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
+const copyItsSourceHad = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].had.includes(row.version);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
 // owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
 // owner). Model use needs both, so granting model_processing without a live storage grant is consent_required, and an
 // owner who grants only storage gets consent_required for model use. Withdrawing model_processing stops model use only
 // and deletes nothing. Withdrawing storage_compute withdraws both for the source and purges its data. Re-granting
 // storage never restores model use.
+// A provider source adds no purpose. Its express authorization to store the data and use it with AI is these same two
+// grants for that source, recorded against copy that says so; a connection needs both.
 export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
@@ -33,10 +58,10 @@ export const healthConsentGrantV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
   purpose: healthPurposeV1Schema,
-  version: z.literal(HEALTH_CONSENT_VERSION_V1),
+  version: z.int().positive(),
   expected_epoch: epochV1,
   age_attested_18_plus: z.literal(true),
-});
+}).refine(currentCopyOfItsSource, { message: 'a new grant names the current copy version of its source', path: ['version'] });
 export const healthConsentWithdrawV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
@@ -47,14 +72,17 @@ export const healthConsentStateV1Schema = z.strictObject({
   consent_class: z.literal('health_processing'),
   source: healthSourceV1Schema,
   purpose: healthPurposeV1Schema,
-  version: z.literal(HEALTH_CONSENT_VERSION_V1),
+  version: z.int().positive(),
   status: z.enum(['granted', 'withdrawn', 'not_granted']),
   epoch: epochV1,
   granted_at: healthInstantV1Schema.nullable(),
   withdrawn_at: healthInstantV1Schema.nullable(),
   deletion_state: z.enum(['not_required', 'completed']),
-});
+}).refine(copyItsSourceHad, { message: 'a stored grant carries a copy version its source has had', path: ['version'] });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
+// What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
+export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>
+  revision >= HEALTH_PROVIDER_REVISION_V1 ? [...consents] : consents.filter(row => !isHealthProviderSourceV1(row.source));
 export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConsentStateV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 
 // The permission API is not the physiological producer: keep the observed read origin and

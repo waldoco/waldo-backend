@@ -1,4 +1,4 @@
-import { SCHEDULE_KINDS, setSchedulePreferenceArgsSchema, type SetSchedulePreferenceArgs, type ToolHandler } from '@waldo/contracts';
+import { HEALTH_PROPOSAL_MODES, SCHEDULE_KINDS, setSchedulePreferenceArgsSchema, type SetSchedulePreferenceArgs, type ToolHandler } from '@waldo/contracts';
 import type { ScheduleEntry } from '@waldo/contracts';
 import type { Scheduler, ScheduleExecutors } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -10,6 +10,7 @@ import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
 import { armNightly, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from './episodes';
 import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
 import type { LoopBook } from './loops';
+import { HEALTH_TRIGGER_ID, type HealthTriggerSetting } from '../health/trigger';
 
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 export type SchedulePreferences = Readonly<Record<ScheduleKind, boolean>>;
@@ -21,12 +22,14 @@ export const SCHEDULE_LABELS: Readonly<Record<ScheduleKind, string>> = {
   event_briefs: 'prep notes before events',
   nightly: 'overnight memory consolidation',
   heartbeat: 'periodic open-loop check',
+  health_proposals: 'one proposed plan change when a health zone change meets a coming decision',
 };
 
 // Every scheduled behavior is on by default (out of the box) and can be turned off per owner.
 // Followups keep their single source of truth in the proactivity setting; the rest live in one small table.
 export const schedulePreferences = (sql: Sql, loops: LoopBook) => {
   sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
+  sql.exec('CREATE TABLE IF NOT EXISTS schedule_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   const stored = (): Map<string, boolean> =>
     new Map(sql.exec<{ kind: string; enabled: number }>('SELECT kind, enabled FROM schedule_preferences').toArray().map((row) => [row.kind, row.enabled === 1]));
   return {
@@ -35,20 +38,29 @@ export const schedulePreferences = (sql: Sql, loops: LoopBook) => {
       return Object.fromEntries(SCHEDULE_KINDS.map((kind) => [kind, kind === 'followups' ? loops.proactivity().followups !== false : rows.get(kind) ?? true])) as SchedulePreferences;
     },
     enabled(kind: ScheduleKind): boolean { return this.all()[kind]; },
+    // How health proposals behave while they are on; auto until the owner says otherwise.
+    healthMode(): HealthTriggerSetting {
+      const value = sql.exec<{ value: string }>("SELECT value FROM schedule_settings WHERE key = 'health_proposal_mode'").toArray()[0]?.value;
+      return HEALTH_PROPOSAL_MODES.find(mode => mode === value) ?? 'auto';
+    },
+    setHealthMode(mode: HealthTriggerSetting): void {
+      sql.exec("INSERT INTO schedule_settings (key, value) VALUES ('health_proposal_mode', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", mode);
+    },
     set(kind: ScheduleKind, enabled: boolean): void {
       if (kind === 'followups') loops.setProactivity({ ...loops.proactivity(), followups: enabled });
       else sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, ?) ON CONFLICT (kind) DO UPDATE SET enabled = excluded.enabled', kind, enabled ? 1 : 0);
     },
     reset(): void {
       sql.exec('DELETE FROM schedule_preferences');
+      sql.exec('DELETE FROM schedule_settings');
       if (loops.proactivity().followups === false) loops.setProactivity({ ...loops.proactivity(), followups: true });
     },
   };
 };
 export type SchedulePreferenceBook = ReturnType<typeof schedulePreferences>;
 
-export const schedulePreferencesLine = (prefs: SchedulePreferences): string =>
-  `Scheduled behaviors (owner can change any with set_schedule_preference): ${SCHEDULE_KINDS.map((kind) => `${kind} (${SCHEDULE_LABELS[kind]}) ${prefs[kind] ? 'on' : 'off'}`).join('; ')}`;
+export const schedulePreferencesLine = (prefs: SchedulePreferences, healthMode: HealthTriggerSetting = 'auto'): string =>
+  `Scheduled behaviors (owner can change any with set_schedule_preference): ${SCHEDULE_KINDS.map((kind) => `${kind} (${SCHEDULE_LABELS[kind]}) ${prefs[kind] ? (kind === 'health_proposals' ? `on, ${healthMode}` : 'on') : 'off'}`).join('; ')}`;
 
 // `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
 export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean }>;
@@ -60,6 +72,8 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
   if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await scheduler.cancelReadable(id); }
   if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else await scheduler.cancelReadable(HEARTBEAT_ID); }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else await scheduler.cancelReadable(BRIEF_SWEEP_ID); }
+  // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
+  if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
   if (want('daily_brief')) {
     if (prefs.daily_brief) await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS), true, true);
     else for (const card of DAY_CARDS) await scheduler.cancelReadable(card.id);
@@ -83,6 +97,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
   if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await cancelIf(id);
   if (!prefs.heartbeat) await cancelIf(HEARTBEAT_ID);
   if (!prefs.event_briefs) await cancelIf(BRIEF_SWEEP_ID);
+  if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
 };
 
@@ -91,6 +106,7 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
   if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID)) return 'nightly';
   if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
+  if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';
   if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';
   return null;
 };
@@ -123,6 +139,7 @@ export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context
     async handle(args: SetSchedulePreferenceArgs) {
       if (args.action !== 'reset' && args.kind === undefined) return { ok: false, code: 'invalid_args', error: 'kind is required for on and off', source_taint: null };
       if (args.action === 'reset') book.reset(); else book.set(args.kind!, args.action === 'on');
+      if (args.mode) book.setHealthMode(args.mode);
       await applySchedulePreferences(book.all(), context(), args.action === 'reset' ? undefined : args.kind);
       return { ok: true, data: { preferences: book.all() }, source_taint: null };
     },

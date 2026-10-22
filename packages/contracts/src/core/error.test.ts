@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TOOL_ERRORS, errorCodeSchema, iso8601Schema, toolError, toolErrorCodeSchema, toolErrorSchema } from './error';
+import { RUNG_BLOCKED_FIX, TOOL_ERRORS, errorCodeSchema, iso8601Schema, rungBlockedOutcomeSchema, toolError, toolErrorCodeSchema, toolErrorSchema } from './error';
 
 describe('toolError', () => {
   it('admits every adapter ErrorCode, so a tool result needs no translation', () => {
@@ -14,6 +14,24 @@ describe('toolError', () => {
   it('overrides only the cause; the fix and retryability stay the catalogue\'s', () => {
     expect(toolError('transient', 'provider timed out')).toEqual({ code: 'transient', cause: 'provider timed out', fix: TOOL_ERRORS.transient.fix, retryable: true });
     expect(toolError('invalid_args').cause).toBe(TOOL_ERRORS.invalid_args.cause);
+  });
+});
+
+describe('a structured block', () => {
+  it('names one of three blocks, each with a fix naming the next rung, and is never retryable as is', () => {
+    expect(rungBlockedOutcomeSchema.options).toEqual(['challenge', 'login_required', 'js_required']);
+    expect(Object.keys(RUNG_BLOCKED_FIX).sort()).toEqual([...rungBlockedOutcomeSchema.options].sort());
+    for (const blocked of rungBlockedOutcomeSchema.options) {
+      const error = toolError('transient', 'The site asked for something.', blocked);
+      expect(error).toEqual({ code: 'transient', cause: 'The site asked for something.', fix: RUNG_BLOCKED_FIX[blocked], retryable: false, blocked });
+      expect(toolErrorSchema.safeParse(error).success).toBe(true);
+    }
+    expect(RUNG_BLOCKED_FIX.js_required).toContain('browse_page');
+    expect(RUNG_BLOCKED_FIX.login_required).toMatch(/Never ask for a password/);
+  });
+
+  it('rejects a block outside the vocabulary', () => {
+    expect(toolErrorSchema.safeParse({ ...toolError('rejected'), blocked: 'captcha' }).success).toBe(false);
   });
 });
 

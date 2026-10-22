@@ -17,6 +17,16 @@ describe('modern owner controls read', () => {
     expect(JSON.stringify(readControls({ ...connections, data: { ...connections.data, sessions: { ...connections.data.sessions, items: [{ ...connections.data.sessions.items[0], token: 'never-retain' }] } } }, 'connections'))).not.toContain('never-retain');
   });
 
+  it('keeps each MCP tool\'s shown digest, which a grant sends back, and refuses a server record without one', () => {
+    const server = { id: 'c1', name: 'notion', host: 'mcp.notion.com', server_url: 'https://mcp.notion.com/mcp', auth: 'oauth', status: 'active', scopes: [], wants_scopes: [], tools: 1, hidden_tools: 0, runs_without_asking: 0, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64), tool_list: [{ tool: 'search', runs: 'asks_first', read_only_hint: true, digest: 'a'.repeat(64) }] };
+    const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
+    expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
+    expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+      expect(() => readControls(withServer(broken), 'connections')).toThrow();
+    }
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);
@@ -127,6 +137,13 @@ describe('revision-bound owner control actions', () => {
     for (const target of ['javascript:alert(1)', 'https://foreign.test/c/ABCDEFGHIJKLMNOPQRSTUV', 'http://w.test/c/ABCDEFGHIJKLMNOPQRSTUV', 'https://w.test/c/short', `${ticket}?next=https://evil.test`, 'https://accounts.google.com.evil.test/o/oauth2/v2/auth', 'https://accounts.google.com:444/o/oauth2/v2/auth', 'https://user:password@accounts.google.com/o/oauth2/v2/auth', 'https://accounts.google.com/other']) expect(() => allowedControlNavigation(target, 'https://w.test')).toThrow();
     expect(() => readActionResult({ receipt: { state: 'recorded', message: 'Saved', navigation: ticket }, duplicate: false }, 'timezone.set', 'https://w.test')).toThrow('navigation receipt');
     expect(() => readActionResult({ receipt: { state: 'unconfirmed', message: 'Unknown', navigation: ticket }, duplicate: false }, 'google.connect', 'https://w.test')).toThrow();
+  });
+
+  it('allows an MCP connect to continue only on this console\'s own start link', () => {
+    const start = `/console/mcp/start/${'A'.repeat(43)}`;
+    expect(readActionResult({ receipt: { state: 'recorded', message: 'Sign in', navigation: start }, duplicate: false }, 'mcp.connect', 'https://w.test').receipt.navigation).toBe(`https://w.test${start}`);
+    for (const target of [`https://foreign.test${start}`, '/console/mcp/start/short', `${start}?next=https://evil.test`, 'https://auth.provider.test/authorize']) expect(() => allowedControlNavigation(target, 'https://w.test')).toThrow();
+    expect(() => readActionResult({ receipt: { state: 'recorded', message: 'Saved', navigation: start }, duplicate: false }, 'mcp.runs', 'https://w.test')).toThrow('navigation receipt');
   });
 });
 
