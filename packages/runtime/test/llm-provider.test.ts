@@ -901,6 +901,49 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests).toHaveLength(1);
   });
 
+  describe('a model that refuses the tool search request shape', () => {
+    const searchTurn = {
+      trigger: 'brief' as const,
+      renderRequest: () => ({
+        system: 'brief', messages: [{ role: 'user' as const, content: 'brief' }], max_tokens: 512, temperature: 0.3,
+        tools: [
+          { name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } },
+          { name: 'query_availability', description: 'Free and busy time', parameters: { type: 'object', properties: {} }, namespace: 'calendar', defer_loading: true },
+        ],
+        tool_search: { namespaces: { calendar: 'Calendar changes and free time.' } },
+      }),
+      renderTemplate: () => 'template fallback',
+    };
+
+    it('resends the same step once without tool search, with every tool still offered', async () => {
+      const gateway = new ScriptedGateway((request) => request.request.tool_search
+        ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
+        : { ok: true, data: response(request.request.model, 'answered') });
+      const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(result.ok).toBe(true);
+      expect(gateway.requests).toHaveLength(2);
+      expect(gateway.requests[1]!.step).toEqual(gateway.requests[0]!.step);
+      expect(gateway.requests[1]!.request.tool_search).toBeUndefined();
+      expect(gateway.requests[1]!.request.tools!.map((tool) => tool.name)).toEqual(['get_context', 'query_availability']);
+      if (result.ok) expect(result.attempts.map((attempt) => attempt.outcome)).toEqual(['failure', 'success']);
+    });
+
+    it('fails as before when the resend is refused too, after one resend only', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
+      const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(gateway.requests).toHaveLength(2);
+    });
+
+    it('does not resend a refused request that carried no tool search', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
+      const { tool_search: _none, ...plain } = searchTurn.renderRequest();
+      const result = await new RuntimeLLMProvider({ gateway }).complete({ ...searchTurn, renderRequest: () => plain }, runtimeCtx());
+      expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(gateway.requests).toHaveLength(1);
+    });
+  });
+
   it('clamps a capped route to the primary before L1 and excludes cross-provider fallback', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
