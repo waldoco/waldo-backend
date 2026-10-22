@@ -60,59 +60,62 @@ export const forgetPurge = ({ sql, store, stores, now, arm, log }: Readonly<{
     }
   };
 
+  const run = async (): Promise<Readonly<{ settled: number; pending: number }>> => {
+    // Claims a nightly pass or the console marked for removal join as texts in custody; the claims go now.
+    const purging = store.claims('purging').map((claim) => claim.id);
+    if (purging.length) {
+      const purged = store.purge(purging, iso());
+      track(purged.texts, 'everywhere');
+      if (purged.ready) store.settle(purging);
+    }
+    const rows = held();
+    for (const row of rows) for (const each of stores) sql.exec("INSERT OR IGNORE INTO forget_purge_steps (fingerprint, store, state, updated_at) VALUES (?, ?, 'pending', ?)", row.fingerprint, each.name, now());
+    const longestFirst = (texts: readonly string[]) => [...texts].sort((a, b) => b.length - a.length);
+    // Each store runs once with every text it still owes, longest first: redacting a shorter text first would cut a longer
+    // one that contains it into a fragment the longer one no longer matches.
+    for (const each of stores) {
+      const owed = rows.filter((row) => steps(row.fingerprint).some((step) => step.store === each.name && step.state === 'pending'));
+      if (!owed.length) continue;
+      let code: string | null = null;
+      try { if (await each.run(longestFirst(owed.map((row) => row.topic))) > 0) code = 'remaining'; } catch { code = 'failed'; }
+      for (const row of owed) {
+        if (code === null) sql.exec("UPDATE forget_purge_steps SET state = 'done', last_code = NULL, updated_at = ? WHERE fingerprint = ? AND store = ?", now(), row.fingerprint, each.name);
+        else sql.exec('UPDATE forget_purge_steps SET attempts = attempts + 1, last_code = ?, updated_at = ? WHERE fingerprint = ? AND store = ?', code, now(), row.fingerprint, each.name);
+      }
+    }
+    // The claims table and its derived rows, likewise once and longest first; then each text is read back on its own, so one
+    // text that cannot be cleaned does not hold the others.
+    const everywhere = longestFirst(rows.filter((row) => row.scope === 'everywhere').map((row) => row.topic));
+    if (everywhere.length) store.purge([], iso(), everywhere);
+    let settled = 0, pending = 0, attempts = 0;
+    for (const row of rows) {
+      const open = steps(row.fingerprint).filter((entry) => entry.state === 'pending');
+      if (open.length === 0 && (row.scope === 'history' || store.purge([], iso(), [row.topic]).ready)) {
+        store.settle([], [row.topic]);
+        sql.exec('DELETE FROM forget_purge_steps WHERE fingerprint = ?', row.fingerprint);
+        settled += 1;
+      } else {
+        pending += 1;
+        attempts = Math.max(attempts, ...open.map((entry) => entry.attempts), 1);
+      }
+    }
+    if (settled) log?.({ hop: 'forget_settled', detail: `topics=${settled}` });
+    if (pending) {
+      log?.({ hop: 'forget_pending', detail: `topics=${pending}` });
+      await arm(now() + forgetPurgeDelay(attempts));
+    }
+    return { settled, pending };
+  };
+
   return {
-    // Keep custody of what a forget must still clean, then wake the job. Nothing is cleaned here.
-    async track(texts: readonly string[], scope: ForgetScope = 'history'): Promise<void> {
+    // Keep custody of what a forget must still clean, then clean it now: a waiting card or message that carries it must not
+    // leave in the gap before the job's own wake. What this pass cannot clean, the job retries.
+    async track(texts: readonly string[], scope: ForgetScope = 'history'): Promise<Readonly<{ settled: number; pending: number }>> {
       track(texts, scope);
-      await arm(now());
+      return run();
     },
 
-    async run(): Promise<Readonly<{ settled: number; pending: number }>> {
-      // Claims a nightly pass or the console marked for removal join as texts in custody; the claims go now.
-      const purging = store.claims('purging').map((claim) => claim.id);
-      if (purging.length) {
-        const purged = store.purge(purging, iso());
-        track(purged.texts, 'everywhere');
-        if (purged.ready) store.settle(purging);
-      }
-      const rows = held();
-      for (const row of rows) for (const each of stores) sql.exec("INSERT OR IGNORE INTO forget_purge_steps (fingerprint, store, state, updated_at) VALUES (?, ?, 'pending', ?)", row.fingerprint, each.name, now());
-      const longestFirst = (texts: readonly string[]) => [...texts].sort((a, b) => b.length - a.length);
-      // Each store runs once with every text it still owes, longest first: redacting a shorter text first would cut a longer
-      // one that contains it into a fragment the longer one no longer matches.
-      for (const each of stores) {
-        const owed = rows.filter((row) => steps(row.fingerprint).some((step) => step.store === each.name && step.state === 'pending'));
-        if (!owed.length) continue;
-        let code: string | null = null;
-        try { if (await each.run(longestFirst(owed.map((row) => row.topic))) > 0) code = 'remaining'; } catch { code = 'failed'; }
-        for (const row of owed) {
-          if (code === null) sql.exec("UPDATE forget_purge_steps SET state = 'done', last_code = NULL, updated_at = ? WHERE fingerprint = ? AND store = ?", now(), row.fingerprint, each.name);
-          else sql.exec('UPDATE forget_purge_steps SET attempts = attempts + 1, last_code = ?, updated_at = ? WHERE fingerprint = ? AND store = ?', code, now(), row.fingerprint, each.name);
-        }
-      }
-      // The claims table and its derived rows, likewise once and longest first; then each text is read back on its own, so one
-      // text that cannot be cleaned does not hold the others.
-      const everywhere = longestFirst(rows.filter((row) => row.scope === 'everywhere').map((row) => row.topic));
-      if (everywhere.length) store.purge([], iso(), everywhere);
-      let settled = 0, pending = 0, attempts = 0;
-      for (const row of rows) {
-        const open = steps(row.fingerprint).filter((entry) => entry.state === 'pending');
-        if (open.length === 0 && (row.scope === 'history' || store.purge([], iso(), [row.topic]).ready)) {
-          store.settle([], [row.topic]);
-          sql.exec('DELETE FROM forget_purge_steps WHERE fingerprint = ?', row.fingerprint);
-          settled += 1;
-        } else {
-          pending += 1;
-          attempts = Math.max(attempts, ...open.map((entry) => entry.attempts), 1);
-        }
-      }
-      if (settled) log?.({ hop: 'forget_settled', detail: `topics=${settled}` });
-      if (pending) {
-        log?.({ hop: 'forget_pending', detail: `topics=${pending}` });
-        await arm(now() + forgetPurgeDelay(attempts));
-      }
-      return { settled, pending };
-    },
+    run,
 
     status(): readonly ForgetHold[] {
       return held().map((row) => ({

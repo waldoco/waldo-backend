@@ -235,16 +235,19 @@ describe('titles and erasure', () => {
   // The redactor and the remaining check share one pattern, so a title still carries the topic after its scrub only when the
   // marker itself does: a forget of the word "forgotten". The scrub keeps what it rewrote, but the tool must fail, and no
   // claim is forgotten.
-  it('a forget that leaves the topic in a title fails the tool, and no claim is forgotten', async () => {
+  it('a forget that leaves the topic in a title still forgets, and keeps the topic held while the title stays unclean', async () => {
     await withOwner('titles-forget-incomplete', async ({ call, state, thread, say }) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
       memory.add({ kind: 'fact', text: 'Keeps the forgotten tapes in the loft', source: 'stated', evidence: '"the forgotten tapes"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');
       const tapes = await thread('Forgotten tapes');
       await say('/chat/main', 'title-client-13', 'Please forget forgotten.');
       const answered = model.turnRequests.find(request => request.includes('"tool_turns"'))!;
-      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"The tool threw while running.\",\"error_code\":\"handler_failed\"`);
+      expect(answered).toContain(String.raw`\"ok\":true`);
+      // The marker carries the topic, so the title never reads back clean: the claim is gone, and the topic stays in custody,
+      // behind the barrier, for the purge job to retry and the console to show.
       expect((await listed(call, tapes))!.title).toBe(`${FORGOTTEN} tapes`);
-      expect(memory.claims().map(claim => claim.text)).toEqual(['Keeps the forgotten tapes in the loft']);
+      expect(memory.claims()).toEqual([]);
+      expect(memory.pendingTopics()).toContain('forgotten');
     });
   });
 

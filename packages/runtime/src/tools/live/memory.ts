@@ -16,7 +16,8 @@ type Dependencies = Readonly<{
   conversationRef: string;
   now?: () => Date;
   transaction?<T>(work: () => T): T;
-  hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
+  // Resolves with how many texts are still being cleaned, when it knows.
+  hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<Readonly<{ pending: number }> | void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
@@ -118,11 +119,13 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
           const counts = store.purge([...selected.keys()], now(), purged, evidence).receipt;
-          touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
+          // The episode index mirrors the transcript, which always holds the owner's own request, so it is not memory touched.
+          touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
-        await deps.hideHistory([...texts], ctx); await ready(ctx);
+        const cleaning = await deps.hideHistory([...texts], ctx); await ready(ctx);
+        const cleaned = cleaning?.pending === 0;
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
@@ -130,7 +133,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const history = swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: 'running', scope: `removed from memory and recall now; ${history} in the background, and hidden from Waldo until that finishes; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running', scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
       } },
   ];
 };

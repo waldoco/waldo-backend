@@ -209,7 +209,8 @@ export const barrierMemory = (store: ClaimStore, held: () => readonly string[]):
       const kept = new Set(nodes(topics).map((node) => node.id));
       return store.edges().filter((edge) => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge)));
     },
-    claims: (status) => store.claims(status).filter((claim) => !claimHolds(holdsIn(held()))(claim)),
-    recall: (query, limit) => store.recall(query, limit).filter((claim) => !claimHolds(holdsIn(held()))(claim)),
+    // The held set is read once per call, not once per claim.
+    claims: (status) => { const holds = claimHolds(holdsIn(held())); return store.claims(status).filter((claim) => !holds(claim)); },
+    recall: (query, limit) => { const holds = claimHolds(holdsIn(held())); return store.recall(query, limit).filter((claim) => !holds(claim)); },
   };
 };

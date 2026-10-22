@@ -68,6 +68,19 @@ it('forget my favourite coffee returns a tool receipt and removes history recall
     expect(seen.inputs.at(-1)).not.toContain('espresso');
   });
 });
+it('the receipt says cleanup is done only when the forget\'s cleaning pass left nothing pending', async () => {
+  for (const pending of [0, 1]) {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`memory-loop-cleanup-${pending}`)), async (_i, state) => {
+      const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      store.add({ kind: 'preference', text: 'Favourite coffee is espresso', evidence: 'espresso', source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-22T08:00:00Z');
+      const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => ({ pending }) });
+      const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
+      seen.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'coffee', scope_note: 'favourite coffee' }) }], []);
+      await responder.respond(ownerTyped({ traceId: `tg-forget-${pending}`, conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }), timer);
+      expect(seen.inputs.at(-1)).toContain(pending ? String.raw`\"cleanup\":\"running\"` : String.raw`\"cleanup\":\"done\"`);
+    });
+  }
+});
 it('a forged tool quote fails and cannot earn a successful memory receipt', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-forged')), async (_i, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
