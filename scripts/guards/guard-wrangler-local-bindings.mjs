@@ -31,6 +31,9 @@ for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
   if (observability?.logs?.invocation_logs !== false) {
     bad.push(`${name} must disable full-URL invocation logs until #205`);
   }
+  if (observability?.redact_query_string !== true) {
+    bad.push(`${name} must redact request query strings in logs and traces`);
+  }
   if (observability?.traces?.enabled !== false) {
     bad.push(`${name} must disable automatic traces until #205`);
   }
