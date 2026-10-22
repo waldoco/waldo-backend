@@ -3,6 +3,9 @@
 // Waldo: the page names whose Waldo the account joins, by a masked hint only, and the browser goes on only when the
 // person presses Continue. Continue is a same-origin POST, so a link unfurler or prefetcher that GETs the link never
 // redirects, binds or spends the ticket.
+import { bindBrowser, checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import type { signedRpc } from '../identity/owner-directory';
+
 const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 
 // The directory masks the owner's email; anything that is not that exact shape is dropped rather than shown, so a full
@@ -31,3 +34,33 @@ h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}strong{col
     'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' ${input.providerOrigin}`,
   } });
 };
+
+// A connect link handed to a surface that holds the owner's session (the app) carries a one-time code in ?handoff=. The
+// first GET that presents it redeems it and binds that browser to this hop; every later step of the hop needs that
+// binding. So the link copied out before it was opened, the spent link afterwards, or the bare start address, opened in
+// any other browser, binds nothing and redirects nowhere. Chat links carry no code, because no owner session exists there.
+export const HANDOFF_PARAM = 'handoff';
+const HANDOFF = /^[A-Za-z0-9_-]{22}$/;
+const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+export const handoffHash = async (code: string): Promise<string> => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code)));
+// Only the hash is stored; the code goes to the session holder alone, inside the link it opens.
+export const newHandoff = async (): Promise<Readonly<{ code: string; hash: string }>> => {
+  const code = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  return { code, hash: await handoffHash(code) };
+};
+
+type Rpc = NonNullable<ReturnType<typeof signedRpc>>;
+// setCookie: redeemed by this request, so its answer must carry the binding. ok alone: this browser was bound earlier.
+export type HandOff = Readonly<{ ok: true; setCookie?: string }> | Readonly<{ ok: false }>;
+export const handOff = async (request: Request, call: Rpc, ticketHash: string, ttlMs: number): Promise<HandOff> => {
+  const url = new URL(request.url), code = url.searchParams.get(HANDOFF_PARAM), now = Date.now();
+  if ((await checkBrowser(request, 'handoff', ticketHash, now)) === 'bound') return { ok: true };
+  if (request.method !== 'GET' || code === null || !HANDOFF.test(code)) return { ok: false };
+  const hash = await handoffHash(code);
+  if ((await call('connect_session_hand_off', `connsess.handoff.${ticketHash}.${hash}`, { p_ticket_hash: ticketHash, p_handoff_hash: hash })) !== true) return { ok: false };
+  return { ok: true, setCookie: await bindBrowser('handoff', ticketHash, url.pathname, ttlMs, now) };
+};
+// Continue spent the ticket, so the hop's own binding goes with it.
+export const releaseHandOff = (request: Request, ticketHash: string): Promise<string> => releaseBrowser('handoff', ticketHash, new URL(request.url).pathname);
+export const UNHANDED = { status: 403, title: 'Start the connection again', body: 'This link works once, in the browser Waldo first opened it in, so nothing was connected. Start the connection again from the Waldo app.' } as const;

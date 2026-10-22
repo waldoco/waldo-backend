@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleConnectTicket, newTicket, ticketHash, BEGIN_SESSION_PATH } from '../src/channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from '../src/connectors/google';
 import { checkBrowser } from '../src/connectors/oauth-browser-binding';
-import { setCookies } from './support/cookie-jar';
+import { handoffHash } from '../src/channels/connect-confirm';
+import { cookieJar, setCookies } from './support/cookie-jar';
 
 const NONCE = 'G'.repeat(43);
 const TICKET = 'AbCdEfGhIjKlMnOpQrStUv'; // 22 base64url chars
@@ -153,5 +154,95 @@ describe('handleConnectTicket', () => {
     const response = await proceed(env);
     expect(response.status).toBe(502);
     expect(await response.text()).toContain('could not be connected');
+  });
+});
+
+// A ticket the app holds carries a one-time handoff code; the directory redeems the code once, for that ticket only.
+describe('a /c/ link handed to the app binds only the browser the app opened it in', () => {
+  const CODE = 'HaNdOfFcOdE0123456789_';
+  const handoffTicket = async () => {
+    const expected = await handoffHash(CODE);
+    let spent = false;
+    answers.connect_session_resolve = { ...LIVE, handoff: true };
+    vi.stubGlobal('fetch', async (url: unknown, init?: RequestInit) => {
+      const fn = String(url).split('/rpc/')[1]!, args = JSON.parse(String(init?.body ?? '{}'));
+      rpcCalls.push({ fn, args });
+      if (fn === 'connect_session_hand_off') { const ok = !spent && args.p_handoff_hash === expected && args.p_ticket_hash === await ticketHash(TICKET); if (ok) spent = true; return Response.json(ok); }
+      if (fn === 'connect_session_begin' && answers[fn] === undefined) { answers[fn] = null; return Response.json({ status: 'ok', do_name: LIVE.do_name }); }
+      return Response.json(answers[fn] ?? null);
+    });
+  };
+  const browser = () => {
+    const jar = cookieJar();
+    return {
+      jar,
+      get: async (env: unknown, query = '') => jar.take(await open(env, TICKET, { headers: jar.size() ? { cookie: jar.header() } : {} }, query)),
+      post: async (env: unknown, query = '') => jar.take(await open(env, TICKET, { method: 'POST', headers: { origin: ORIGIN, ...(jar.size() ? { cookie: jar.header() } : {}) } }, query)),
+    };
+  };
+
+  it('redeems the code on the first GET, binds that browser to the hop, and shows whose Waldo it joins', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    const app = browser();
+    const page = await app.get(env, `?handoff=${CODE}`);
+    expect([page.status, page.headers.get('location')]).toEqual([200, null]);
+    expect(await page.text()).toContain('a•••@example.com');
+    const [bound] = setCookies(page);
+    expect(bound).toContain(`Path=/c/${TICKET}`);
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_hand_off']);
+    expect(JSON.stringify(rpcCalls)).not.toContain(CODE);
+    expect(doCalls).toEqual([]);
+  });
+
+  it('continues from that browser: spends the ticket, binds the callback, goes to Google and lets go of the hop', async () => {
+    await handoffTicket();
+    const { env } = owner();
+    const app = browser();
+    await app.get(env, `?handoff=${CODE}`);
+    const continued = await app.post(env, `?handoff=${CODE}`);
+    expect(continued.status).toBe(303);
+    expect(new URL(continued.headers.get('location')!).origin).toBe('https://accounts.google.com');
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_hand_off', 'connect_session_resolve', 'connect_session_begin']);
+    expect(await checkBrowser(new Request(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`, { headers: { cookie: app.jar.header() } }), 'google', NONCE, Date.now())).toBe('bound');
+    expect(app.jar.size()).toBe(1);
+  });
+
+  it('binds nothing and redirects nowhere for the link without its code, in a browser the app did not hand it to', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    const other = browser();
+    for (const query of ['', '?handoff=', '?handoff=short', `?handoff=${'x'.repeat(22)}`]) {
+      for (const send of [other.get, other.post]) {
+        const response = await send(env, query);
+        expect([query, response.status, response.headers.get('location'), setCookies(response)]).toEqual([query, 403, null, []]);
+        expect(await response.text()).toContain('Start the connection again');
+      }
+    }
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
+    expect(doCalls).toEqual([]);
+    // The owner's app browser can still take its own link.
+    expect((await browser().get(env, `?handoff=${CODE}`)).status).toBe(200);
+  });
+
+  it('refuses the code a second time in another browser, and lets the browser that redeemed it reload', async () => {
+    await handoffTicket();
+    const { env } = owner();
+    const app = browser();
+    expect((await app.get(env, `?handoff=${CODE}`)).status).toBe(200);
+    const forwarded = await browser().get(env, `?handoff=${CODE}`);
+    expect([forwarded.status, forwarded.headers.get('location'), setCookies(forwarded)]).toEqual([403, null, []]);
+    const forwardedContinue = await browser().post(env, `?handoff=${CODE}`);
+    expect([forwardedContinue.status, setCookies(forwardedContinue)]).toEqual([403, []]);
+    expect((await app.get(env, `?handoff=${CODE}`)).status).toBe(200);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
+  });
+
+  it('leaves a chat link a bearer link behind the confirm step: no code asked, none redeemed', async () => {
+    answers.connect_session_resolve = LIVE;
+    const { env } = owner();
+    expect((await open(env)).status).toBe(200);
+    expect((await proceed(env)).status).toBe(303);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_hand_off');
   });
 });

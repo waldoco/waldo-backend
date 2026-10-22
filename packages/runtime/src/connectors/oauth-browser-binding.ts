@@ -10,7 +10,8 @@ import { constantTimeEqual } from './constant-time';
 // One cookie per attempt, so two connects started side by side in one browser both finish. It is path-scoped to the
 // callback so it rides no other request, which rules out the __Host- prefix (that requires Path=/). It is
 // SameSite=Lax because the provider's redirect back is a cross-site top-level GET, which a Strict cookie does not ride.
-export type BoundProvider = 'google' | 'mcp' | 'whoop';
+// handoff binds the start hop itself, for a link a session-holding surface opened (channels/connect-confirm.ts).
+export type BoundProvider = 'google' | 'mcp' | 'whoop' | 'handoff';
 export type BrowserCheck = 'bound' | 'missing' | 'expired' | 'mismatch';
 
 const PREFIX = '__Secure-waldo-oauth-';
@@ -34,6 +35,12 @@ export const checkBrowser = async (request: Request, provider: BoundProvider, no
   if (!expires || !mac || !/^\d{1,16}$/.test(expires) || !constantTimeEqual(mac, await digest(`${key}|${expires}`))) return 'mismatch';
   return Number(expires) > now ? 'bound' : 'expired';
 };
+
+// The start hop's answer: the browser goes to the provider and carries the binding for that attempt's callback.
+export const startRedirect = async (provider: BoundProvider, nonce: string, location: string, callbackPath: string, ttlMs: number): Promise<Response> => new Response(null, {
+  status: 303,
+  headers: { location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': await bindBrowser(provider, nonce, callbackPath, ttlMs, Date.now()) },
+});
 
 // Sent with every callback answer that reached the owner object: the attempt is settled there, so its binding is spent.
 export const releaseBrowser = async (provider: BoundProvider, nonce: string, callbackPath: string): Promise<string> =>

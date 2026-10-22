@@ -1,15 +1,16 @@
 import { APP_RETURN_DEEP_LINK } from '../../channels/google-oauth';
 import { constantTimeEqual } from '../../connectors/constant-time';
-import { confirmedHere, confirmPage, ownerHint } from '../../channels/connect-confirm';
-import { bindBrowser, checkBrowser, releaseBrowser } from '../../connectors/oauth-browser-binding';
+import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from '../../channels/connect-confirm';
+import { checkBrowser, releaseBrowser, startRedirect } from '../../connectors/oauth-browser-binding';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../../identity/owner-directory';
 import { callOwnerProvider } from './provider-route';
 import { whoopAuthorizeUrl, WHOOP_ATTEMPT_TTL_MS, WHOOP_CALLBACK_PATH, WHOOP_START_PATH, type WhoopConfig } from './whoop-client';
 
 // The public edges of WHOOP's connection: the start link the app opens, the page WHOOP sends the owner back to, and the
-// webhook WHOOP calls. None carries an owner session, so each is proved another way: the start link and the callback by
-// a single-use state that only an attempt the owner's own app started can match, the callback also by the binding the
-// start link left in that browser, and the webhook by WHOOP's signature over the exact bytes it sent.
+// webhook WHOOP calls. None carries an owner session, so each is proved another way: the start link by the one-time
+// handoff code only the owner's app received and the binding it leaves in the browser the app opened, the callback by a
+// single-use state and the binding the start link's Continue left in that browser, and the webhook by WHOOP's signature
+// over the exact bytes it sent.
 export { WHOOP_CALLBACK_PATH, WHOOP_START_PATH };
 export const WHOOP_WEBHOOK_PATH = '/events/whoop';
 const MAX_WEBHOOK_BYTES = 8_192;
@@ -33,6 +34,7 @@ const PAGES = {
   expired: { status: 410, title: 'This link has expired', body: 'Connect links last 30 minutes. Start the connection again from Waldo.' },
   used: { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Start the connection again from the Waldo app.' },
   cancelled: { status: 200, title: 'WHOOP was not connected', body: 'Nothing was connected. You can go back to the app.' },
+  unhanded: UNHANDED,
   unbound: { status: 403, title: 'Start the connection again', body: 'This sign-in came back to a different browser from the one that started it, or it took too long, so nothing was connected. Connect WHOOP again from the Waldo app.' },
   consent_required: { status: 403, title: 'WHOOP was not connected', body: 'Waldo needs your consent to store your WHOOP data and use it with AI to plan your day. Give both in Waldo, then connect again.' },
   invalid: { status: 400, title: 'This link is not valid', body: 'It may have been copied incompletely. Start the connection again from Waldo.' },
@@ -65,7 +67,7 @@ const STATE = /^[A-Za-z0-9]{8}$/;
 const slowDown = () => new Response('slow down', { status: 429, headers: { 'cache-control': 'no-store' } });
 const throttled = async (env: WhoopRoutesEnv, request: Request, route: string): Promise<boolean> =>
   Boolean(env.RESPONSIBILITY_RATE_LIMITER) && !(await env.RESPONSIBILITY_RATE_LIMITER!.limit({ key: `${route}:${request.headers.get('cf-connecting-ip') ?? 'unknown'}` })).success;
-type Session = { status?: string; do_name?: string; begun?: boolean; owner_hint?: unknown } | null;
+type Session = { status?: string; do_name?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown } | null;
 const resolveSession = (call: NonNullable<ReturnType<typeof signedRpc>>, hash: string) => call('connect_session_resolve', `connsess.resolve.${hash}`, { p_ticket_hash: hash }) as Promise<Session>;
 
 // The app opens this link, never WHOOP's page directly. GET shows whose Waldo the WHOOP account joins and changes nothing
@@ -85,16 +87,24 @@ export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): P
   if (session?.status === 'expired') return whoopPage('expired');
   if (session?.status !== 'ok') { log('unknown_state'); return whoopPage('invalid'); }
   if (session.begun) { log('used'); return whoopPage('used'); }
-  if (request.method === 'GET') return confirmPage({ provider: 'WHOOP', providerOrigin: new URL(whoopAuthorizeUrl(config, state)).origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+  let handed: HandOff = { ok: true };
+  if (session.handoff) {
+    try { handed = await handOff(request, call, hash, WHOOP_ATTEMPT_TTL_MS); } catch { log('handoff_failed'); return whoopPage('failed'); }
+    if (!handed.ok) { log('unhanded'); return whoopPage('unhanded'); }
+  }
+  if (request.method === 'GET') {
+    const page = confirmPage({ provider: 'WHOOP', providerOrigin: new URL(whoopAuthorizeUrl(config, state)).origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+    if (handed.setCookie) page.headers.append('set-cookie', handed.setCookie);
+    return page;
+  }
   if (!confirmedHere(request)) { log('cross_site'); return whoopPage('invalid'); }
   let begun: Session;
   try { begun = await call('connect_session_begin', `connsess.begin.${hash}`, { p_ticket_hash: hash }) as Session; } catch { log('begin_failed'); return whoopPage('failed'); }
   if (begun?.status !== 'ok') { log('used'); return whoopPage('used'); }
   log('started', true);
-  return new Response(null, { status: 303, headers: {
-    location: whoopAuthorizeUrl(config, state), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
-    'set-cookie': await bindBrowser('whoop', state, WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS, Date.now()),
-  } });
+  const redirect = await startRedirect('whoop', state, whoopAuthorizeUrl(config, state), WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS);
+  if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
+  return redirect;
 };
 
 // WHOOP sends the owner back here. The state names one attempt, started by that owner's own app and valid for 30 minutes;

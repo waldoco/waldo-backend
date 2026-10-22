@@ -3,9 +3,9 @@
 // only in the redirect. The ticket itself is never stored - only its sha256 hash.
 import { GOOGLE_AUTH_ORIGIN, GOOGLE_CALLBACK_PATH } from '../connectors/google';
 import { CONSENT_TTL_MS } from '../connectors/google-consent';
-import { bindBrowser } from '../connectors/oauth-browser-binding';
+import { startRedirect } from '../connectors/oauth-browser-binding';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { confirmedHere, confirmPage, ownerHint } from './connect-confirm';
+import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from './connect-confirm';
 import { callbackPage, consentPage } from './google-oauth';
 
 export const CONNECT_LINK_PREFIX = '/c/';
@@ -20,7 +20,7 @@ export const newTicket = (): string => b64url(crypto.getRandomValues(new Uint8Ar
 export const ticketHash = async (ticket: string): Promise<string> =>
   hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ticket)));
 
-type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; owner_hint?: unknown }>;
+type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown }>;
 const USED = { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Ask Waldo to connect Google for a fresh one.' };
 const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Google was not connected. You can close this tab.' };
 
@@ -67,9 +67,19 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     hop('used', hashPrefix);
     return callbackPage(false, USED, '', '');
   }
+  let handed: HandOff = { ok: true };
+  if (session.handoff) {
+    try { handed = await handOff(request, call, hash, CONSENT_TTL_MS); } catch (error) { return failed(error, 'handoff failed'); }
+    if (!handed.ok) {
+      hop('unhanded', hashPrefix);
+      return callbackPage(false, UNHANDED, '', '');
+    }
+  }
   if (request.method === 'GET') {
     hop('confirm', hashPrefix);
-    return confirmPage({ provider: 'Google', providerOrigin: GOOGLE_AUTH_ORIGIN, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+    const page = confirmPage({ provider: 'Google', providerOrigin: GOOGLE_AUTH_ORIGIN, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+    if (handed.setCookie) page.headers.append('set-cookie', handed.setCookie);
+    return page;
   }
   if (!confirmedHere(request)) {
     hop('cross_site', hashPrefix);
@@ -93,10 +103,9 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.
     if (!consent || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error('no consent url minted');
     hop('ok', hashPrefix);
-    return new Response(null, {
-      status: 303,
-      headers: { location: consent, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': await bindBrowser('google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) },
-    });
+    const redirect = await startRedirect('google', nonce, consent, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS);
+    if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
+    return redirect;
   } catch (error) {
     return failed(error, 'mint failed');
   }

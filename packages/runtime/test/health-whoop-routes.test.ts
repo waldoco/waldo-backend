@@ -3,6 +3,7 @@ import { dispatchProviderCall, HEALTH_PROVIDER_PATH, callOwnerProvider, verified
 import { handleWhoopCallback, handleWhoopStart, handleWhoopWebhook, whoopConfig, whoopSignature, WHOOP_CALLBACK_PATH, WHOOP_START_PATH, WHOOP_WEBHOOK_PATH } from '../src/health/providers/whoop-routes';
 import { WHOOP_ATTEMPT_TTL_MS } from '../src/health/providers/whoop-client';
 import { bindBrowser } from '../src/connectors/oauth-browser-binding';
+import { handoffHash } from '../src/channels/connect-confirm';
 import { cookieJar, setCookies } from './support/cookie-jar';
 import worker from '../src/index';
 import { harness, newPlane, newWorld } from './helpers/whoop-fakes';
@@ -84,11 +85,14 @@ const rpcs: Rpc[] = [];
 let routeRows: unknown = [];
 let sessionAnswer: unknown = null;
 let beginAnswer: unknown = null;
+// The one handoff code the directory would redeem, once, for the attempt the start link names.
+let handoffHashLive: string | null = null;
 beforeEach(() => {
-  rpcs.length = 0; routeRows = []; sessionAnswer = null; beginAnswer = { status: 'ok', do_name: 'owner-a' };
+  rpcs.length = 0; routeRows = []; sessionAnswer = null; beginAnswer = { status: 'ok', do_name: 'owner-a' }; handoffHashLive = null;
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     const fn = url.split('/rpc/')[1]!;
     rpcs.push({ fn, body: JSON.parse(String(init.body)) });
+    if (fn === 'connect_session_hand_off') { const ok = handoffHashLive !== null && rpcs.at(-1)!.body.p_handoff_hash === handoffHashLive; if (ok) handoffHashLive = null; return Response.json(ok); }
     if (fn === 'connect_session_begin') { const answer = beginAnswer; beginAnswer = null; return Response.json(answer); }
     return Response.json(fn === 'health_provider_route' ? routeRows : fn === 'connect_session_resolve' ? sessionAnswer : true);
   });
@@ -359,5 +363,55 @@ describe('the WHOOP callback is bound to the browser that followed the start lin
     expect([first.response.status, first.sent.length, jar.size()]).toEqual([200, 1, 0]);
     const replay = await callback(`code=auth-code-1&state=${state}`, { cookie: jar.header() || null });
     expect([replay.response.status, replay.sent.length]).toEqual([403, 0]);
+  });
+});
+
+describe('the WHOOP start link the app opens with its one-time code', () => {
+  const CODE = 'WhOoPhAnDoFf0123456789';
+  const HANDED = { ...LIVE, handoff: true };
+  const browser = () => {
+    const jar = cookieJar();
+    const send = async (query: string, method = 'GET') => jar.take(await handleWhoopStart(new Request(`${ORIGIN}${WHOOP_START_PATH}AbCd1234${query}`, { method, headers: {
+      'cf-connecting-ip': '203.0.113.9', ...(method === 'POST' ? { origin: ORIGIN } : {}), ...(jar.size() ? { cookie: jar.header() } : {}),
+    } }), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as never));
+    return { jar, send };
+  };
+
+  it('binds the app\'s browser on the code, then continues to WHOOP from it and on to a linked callback, once', async () => {
+    sessionAnswer = HANDED; handoffHashLive = await handoffHash(CODE);
+    const app = browser();
+    const page = await app.send(`?handoff=${CODE}`);
+    expect([page.status, page.headers.get('location')]).toEqual([200, null]);
+    expect(setCookies(page)[0]).toContain(`Path=${WHOOP_START_PATH}AbCd1234`);
+    expect(JSON.stringify(rpcs)).not.toContain(CODE);
+    const begun = await app.send(`?handoff=${CODE}`, 'POST');
+    expect(begun.status).toBe(303);
+    expect(new URL(begun.headers.get('location')!).origin).toBe('https://api.prod.whoop.com');
+    expect(app.jar.size()).toBe(1);
+    sessionAnswer = { status: 'ok', do_name: 'owner-a' };
+    const first = await callback('code=auth-code-1&state=AbCd1234', { cookie: app.jar.header() });
+    app.jar.take(first.response);
+    expect([first.response.status, first.sent.length]).toEqual([200, 1]);
+    const replay = await callback('code=auth-code-1&state=AbCd1234', { cookie: app.jar.header() || null });
+    expect([replay.response.status, replay.sent.length]).toEqual([403, 0]);
+  });
+
+  it('binds nothing and redirects nowhere for the start link without the code, or with it spent, in another browser', async () => {
+    sessionAnswer = HANDED; handoffHashLive = await handoffHash(CODE);
+    for (const query of ['', '?handoff=', `?handoff=${'y'.repeat(22)}`]) {
+      for (const method of ['GET', 'POST']) {
+        const response = await browser().send(query, method);
+        expect([query, method, response.status, response.headers.get('location'), setCookies(response)]).toEqual([query, method, 403, null, []]);
+      }
+    }
+    const app = browser();
+    expect((await app.send(`?handoff=${CODE}`)).status).toBe(200);
+    for (const method of ['GET', 'POST']) {
+      const forwarded = await browser().send(`?handoff=${CODE}`, method);
+      expect([method, forwarded.status, forwarded.headers.get('location'), setCookies(forwarded)]).toEqual([method, 403, null, []]);
+    }
+    expect(rpcs.map(r => r.fn)).not.toContain('connect_session_begin');
+    // A reload in the browser that redeemed it still shows the confirm step.
+    expect((await app.send(`?handoff=${CODE}`)).status).toBe(200);
   });
 });
