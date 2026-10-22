@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { traceBook } from '../src/channels/harness';
 import { reminderBook } from '../src/channels/reminders';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
+import { loopBook } from '../src/channels/loops';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -69,7 +71,12 @@ const drive = async (name: string, script: (steps: Readonly<{
   reply(from?: string): Promise<void>;
   windowKeys(): string[];
   cancel(): Promise<void>;
+  // Runs the step with the clock moved forward, as when the owner next writes much later.
+  later<T>(ms: number, step: () => Promise<T>): Promise<T>;
+  reminderRuns(): { status: string; summary: string | null }[];
   refuse(id: string, at?: number): Promise<number>;
+  // Meta reports that a message reached the phone; answers the owner's status code.
+  arrive(id: string): Promise<number>;
   unlink(): Promise<void>;
   sendNowOnly(text: string): Promise<unknown>;
   hold(texts: string[]): void;
@@ -78,6 +85,8 @@ const drive = async (name: string, script: (steps: Readonly<{
   settled(): Promise<void>;
   held(): string[];
   ledger(): Readonly<{ runs: { outcome: string; delivery: string | null }[]; outbox: Outbox; notes: number; notices: number; scheduled: { status: string; attempts: number }[] }>;
+  // Meta reports that every message it accepted reached the owner's phone.
+  arrived(): Promise<void>;
 }>) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -86,6 +95,10 @@ const drive = async (name: string, script: (steps: Readonly<{
     const clockBack = (ms: number) => () => new Date(Date.now() - ms);
     const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
+    // The owner's own schedule (day cards, heartbeat, nightly, brief sweep) is off: it is planned on the real date, so a step
+    // run with the clock moved forward would find those entries due and add records these tests do not make.
+    const preferences = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }));
+    for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) preferences.set(kind, false);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
     // The owner last wrote 30 hours ago, so WhatsApp's 24-hour window is closed.
@@ -108,6 +121,12 @@ const drive = async (name: string, script: (steps: Readonly<{
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         },
         cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
+        later: async (ms, step) => {
+          const now = Date.now;
+          Date.now = () => now() + ms;
+          try { return await step(); } finally { Date.now = now; }
+        },
+        reminderRuns: () => state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder' ORDER BY started_at").toArray(),
         hold: texts => texts.forEach((text, index) => state.storage.kv.put(`wa_held:${String(index + 1).padStart(12, '0')}`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text } })),
         // The owner's message is admitted and its turn's work starts in the background, as after the webhook's ack.
         stall: text => {
@@ -156,6 +175,9 @@ const drive = async (name: string, script: (steps: Readonly<{
         refuse: async (id, at = Date.now()) => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
           method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
         }))).status,
+        arrive: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: [{ id, at: Date.now() }] }),
+        }))).status,
         ledger: () => ({
           runs: state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', reminder.id).toArray(),
           outbox: (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).map(({ id, status, reason, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
@@ -163,6 +185,14 @@ const drive = async (name: string, script: (steps: Readonly<{
           notices: (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('schedule-failed:')).length,
           scheduled: state.storage.sql.exec<{ status: string; attempts: number }>('SELECT status, attempts FROM schedule WHERE id = ?', reminder.id).toArray(),
         }),
+        arrived: async () => {
+          const ids = (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(record => record.status === 'accepted')
+            .flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        },
       });
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
   });
@@ -170,8 +200,19 @@ const drive = async (name: string, script: (steps: Readonly<{
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
+  it('a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent', async () => {
+    await drive('whatsapp-only-reminder-lapsed', async ({ alarms, later, ledger, reminderRuns }) => {
+      await alarms(3);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+      await later(31 * 24 * 60 * 60_000, () => alarms(2));
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
+      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
+      expect(ledger().runs).toEqual([expect.objectContaining({ delivery: 'failed' })]);
+    });
+  });
+
   it('holds a due reminder with one template knock, never retries or reports it, and delivers it on the reply before that turn', async () => {
-    await drive('whatsapp-only-reminder', async ({ alarms, reply, ledger }) => {
+    await drive('whatsapp-only-reminder', async ({ alarms, reply, arrived, ledger }) => {
       await alarms(3);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
       expect(model.reminders).toBe(1);
@@ -188,6 +229,13 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
 
       await reply();
       expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REMINDER_TEXT}`, 'turn']);
+      // Meta accepted it; the reminder is recorded sent once Meta reports it reached the phone.
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'running', delivery: 'pending' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'accepted', providerMessageIds: ['wamid.out.2'] }],
+        notes: 1,
+      });
+      await arrived();
       expect(ledger()).toMatchObject({
         runs: [{ outcome: 'ok', delivery: 'sent' }],
         outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.2'] }],
@@ -221,11 +269,13 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
   });
 
   it('sends a due reminder at once while the window is open, with an honest WhatsApp receipt', async () => {
-    await drive('whatsapp-only-open-window', async ({ alarms, reply, ledger }) => {
+    await drive('whatsapp-only-open-window', async ({ alarms, reply, arrived, ledger }) => {
       await reply();
       wire.events = [];
       await alarms(3);
       expect(wire.events).toEqual([`text:${REMINDER_TEXT}`]);
+      expect(ledger()).toMatchObject({ runs: [{ outcome: 'running', delivery: 'pending' }], outbox: [{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }] });
+      await arrived();
       expect(ledger()).toMatchObject({
         runs: [{ outcome: 'ok', delivery: 'sent' }],
         outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.1'] }],
@@ -306,17 +356,18 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
     });
   });
 
-  it('a late refusal of each part of a split reminder holds every refused part, and the reply delivers them in order', async () => {
+  it('a late refusal of each part of a split reminder keeps both parts in the outbox, and the reply delivers them in order', async () => {
     const parts = ['a'.repeat(3000), 'b'.repeat(3000)];
     model.reminderText = parts.join('\n\n');
-    await drive('whatsapp-only-split-refusal', async ({ alarms, reply, refuse, settled, held }) => {
+    await drive('whatsapp-only-split-refusal', async ({ alarms, reply, refuse, settled, held, ledger }) => {
       await reply();
       await alarms(3);
       expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(parts.map(part => `text:${part}`));
       expect(await refuse('wamid.out.1')).toBe(200);
       expect(await refuse('wamid.out.2')).toBe(200);
       await settled();
-      expect(held()).toEqual(parts);
+      expect(held()).toEqual([]);
+      expect(ledger().outbox).toMatchObject([{ status: 'pending', reason: 'window_refused', providerMessageIds: [null, null] }]);
       wire.events = [];
       await reply();
       expect(wire.events).toEqual([...parts.map(part => `text:${part}`), 'turn']);
@@ -335,10 +386,42 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       // A status callback for the old number is refused, so it neither knocks nor delivers held text.
       expect(await refuse('wamid.out.1')).toBe(403);
       expect(wire.events).toEqual([]);
-      // What was held for the old chat was discarded with the unlink.
+      // What was held for the old chat was discarded with the unlink, and the reminder waiting for it ended unsent with it.
       expect(held()).toEqual([]);
-      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
-      expect(ledger().runs).toEqual([{ outcome: 'running', delivery: 'pending' }]);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
+      // Never sent, so it settles as work that stopped before any delivery, not as an unconfirmed one.
+      expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+    });
+  });
+
+  it('a reminder Meta took before the unlink ends unconfirmed with it; a later report for the old number changes nothing', async () => {
+    await drive('whatsapp-unlink-accepted', async ({ alarms, reply, unlink, arrive, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`]);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      await unlink();
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+      // Meta's report of arrival comes in for the old number: it no longer routes here, and the record is already terminal.
+      expect(await arrive('wamid.out.1')).toBe(403);
+      await alarms(2);
+      expect(ledger().outbox).toMatchObject([{ status: 'quarantined', reason: 'surface_unlinked' }]);
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual([`text:${REMINDER_TEXT}`]);
+    });
+  });
+
+  it('a reminder Meta took before the owner\'s number changed ends unconfirmed with the change, and its run settles then', async () => {
+    await drive('whatsapp-rebind-accepted', async ({ alarms, reply, settled, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      // A different number the directory has as this owner's writes: admission rebinds to it, retiring the old chat's records.
+      await reply('15550002222');
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      // Settled after the ack, in the serial work the rebind queued, before any alarm pass.
+      await settled();
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
     });
   });
 
