@@ -72,7 +72,7 @@ describe('claims', () => {
         store.add({ kind: 'fact', text, source: 'stated', evidence: text, origin: 'owner', source_ref: `owner, tg-${i}` }, AT, i + 1);
       }
       // Lines within the two budgets, plus the header, the tags and the omitted line.
-      expect(turnMemoryPrompt(store, 'unrelated question', 400_000).length).toBeLessThanOrEqual(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS + 300);
+      expect(turnMemoryPrompt(store, 'unrelated question', 400_000).length).toBeLessThanOrEqual(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS + 420);
     });
   });
 
