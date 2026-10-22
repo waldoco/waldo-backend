@@ -9,7 +9,7 @@ import { forgottenAfter, lastInputCarries, memoryReplyOmits, notificationsOmit, 
 import { at, CALENDAR, START, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedClaim } from './world';
 
-type ClaimRow = Readonly<{ id: number; text: string; status: string; origin: string | null; supersedes_id: number | null; seeded: boolean }>;
+type ClaimRow = Readonly<{ id: number; text: string; status: string; origin: string | null; supersedes_id: number | null; created_at: string; seeded: boolean }>;
 const claimsOf = (trial: TrialEvidence) => ((trial.final_state as { memory?: ClaimRow[] }).memory ?? []);
 const active = (trial: TrialEvidence) => claimsOf(trial).filter((claim) => claim.status === 'active' || claim.status === 'promoted');
 // Claims the model wrote this trial, as against the ones the world started with.
@@ -29,8 +29,16 @@ const holdsNo = (renderings: readonly string[]) => (trial: TrialEvidence) => cla
 const requestSaved: Receipt = { why: 'the owner\'s request was saved as an active claim of their own', memory_store: true, holds: (trial) => active(trial).some((claim) => !claim.seeded && claim.origin === 'owner') };
 // An ask that needed no memory neither writes a claim nor retires one: a recipe or a channel name is no fact about the owner.
 const claimsUntouched: Receipt = { why: 'no claim was written or retired by an ask that needed none', memory_store: true, holds: (trial) => written(trial).length === 0 && claimsOf(trial).every((claim) => claim.status === 'active' || claim.status === 'promoted') };
-// A later claim replaced an earlier one through the correction link, rather than sitting beside it as a second current fact.
-const supersession: Receipt = { why: 'the earlier city claim is superseded by a later one, not left beside it', memory_store: true, holds: (trial) => claimsOf(trial).some((old) => !old.seeded && old.status === 'superseded' && active(trial).some((fresh) => fresh.supersedes_id === old.id)) };
+// The end state of a fact that changed, however the store got there (a correction link, a retirement or a dismissal): nothing
+// the model wrote before the update is still current, and a claim of the owner's written after it is. It does not ask what
+// the claims say, and it does not fail a model that chose not to save the earlier by-the-way fact.
+const CITY_UPDATE_AT = Date.parse(at('25', '08:00'));
+const cityUpdated: Receipt = {
+  why: 'nothing written before the update is still current, and an owner claim written after it is',
+  memory_store: true,
+  holds: (trial) => written(trial).filter((claim) => Date.parse(claim.created_at) < CITY_UPDATE_AT).every((claim) => claim.status !== 'active' && claim.status !== 'promoted')
+    && active(trial).some((claim) => !claim.seeded && claim.origin === 'owner' && Date.parse(claim.created_at) >= CITY_UPDATE_AT),
+};
 
 export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
   {
@@ -66,7 +74,7 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The last reply says Pune, without asking again and without offering Bengaluru as current.',
       must_not: ['say Bengaluru is where the owner lives now', 'ask which city the owner lives in'],
     },
-    receipts: [supersession],
+    receipts: [cityUpdated],
   },
   {
     id: 'm03-unrelated-memory', title: 'A remembered fact that has no place in the answer', pain: 'judgment', start: START, world: { memory: [SISTER] },
