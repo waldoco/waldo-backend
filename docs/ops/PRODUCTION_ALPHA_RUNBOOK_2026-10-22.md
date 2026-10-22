@@ -1,0 +1,567 @@
+# Production alpha runbook, 22 October 2026
+
+This document plans the stand-up of a production backend for an invite-only alpha of 50 owners: what production needs, the order to stand it up, what must be true before the first invite, and which gaps need code first. It authorises nothing. Every hosted step below needs the owner's explicit yes for that action. Deploys and migrations to production are never batched under an earlier approval.
+
+Source pin: `origin/beta-mvp` at `c5e44093`. This work was read-only on every hosted system. Nothing was deployed, migrated, set or sent. The only network reads were GitHub, and public documentation from Supabase, Cloudflare and Langfuse.
+
+Labels:
+- **[source]**: read in source at `c5e44093` in this session.
+- **[staging, recorded]**: staging evidence that another session recorded; the record is named.
+- **[cited]**: a primary external document read this session, linked.
+- **[unverified]**: not checked.
+- **[inference]**: a conclusion drawn from the above.
+
+## 0. The answer
+
+1. **No production backend exists.**
+   - The 21 Oct read-only Cloudflare check found no `waldo-runtime` Worker (recorded in #1400).
+   - No production Supabase project is named anywhere in the repo, and every migration and gate script refuses any project but staging [source].
+   - There is no production Google client, no production domain and no production Langfuse project [source; `docs/research/GOOGLE_INTEGRATION_2026-10-21.md:27-31`].
+2. **Production is not staging, so the 22 Oct staging E2E proves little about it.** The top-level (production) Worker in `packages/runtime/wrangler.jsonc` differs from `env.staging` in these ways [source]:
+   - it uses a different entry file;
+   - it has no browser, no egress (`WALDO_EGRESS_ALLOWLIST` empty) and no MCP servers;
+   - it keeps the default CPU limit and has no cron, so the health retention sweep never runs;
+   - four feature flags are `"0"`;
+   - it has no Workers AI or Vectorize binding, and no source file reads either one.
+
+   A production console E2E on a seeded test owner (step S11) comes before the first invite.
+3. **Hard blockers, in the order they bite:**
+   - **Account choices.** Choose the Cloudflare account, the Supabase region and the domain first; each is expensive to undo.
+   - **Sign-in email.** Supabase's built-in email sends only to project team members, at 2 messages an hour [cited], so invitees could not sign in.
+   - **Migration route.** The existing preflight and apply scripts cannot target a second project [source].
+   - **Config separation.** The production Worker shares its R2 bucket name and its rate-limit namespace with staging, and the bindings guard forbids separating them [source].
+   - **Account deletion.**
+     - Provider grants are never revoked.
+     - The device and iMessage bridge objects keep state.
+     - One failure window strands the owner's whole Durable Object with no retry path.
+     - The receipt names no residue.
+     - ADR-0055 requires the full cascade to be walked on a test user before any external user.
+   - **The ADR-0073 §1 floor.** It is accepted and binds "before any external user". Data export does not exist. The DPIA, the processor DPAs with zero retention, the crisis pack per geography, the breach plan and the retention schedule are not in this repo.
+   - **Spend.** The per-owner spend ceiling is off unless `WALDO_COST_LEDGER_SYNC=on`. No limit covers all owners together.
+   - **Alerting.** No alerting is configured in the repo, and none is recorded anywhere else [source; hosted consoles not read].
+4. **What already holds in production by code [source]:**
+   - Text capture to Langfuse is forced off when `WALDO_ENVIRONMENT=production` (`observability/trace-privacy.ts:83-87`).
+   - The WhatsApp debug log works only on staging (`channels/whatsapp-webhook.ts:23`).
+   - The synthetic probe route returns 404 outside staging (`channels/probe-turn.ts:82`).
+   - Production binds no browser (`scripts/guards/guard-wrangler-local-bindings.mjs`).
+   - The production bundle starts without Node compatibility (`scripts/tests/runtime-bundle-startup.test.mjs`).
+
+`node scripts/production-alpha-dryrun.mjs` turns the config half of this document into a check that runs offline. It reads `wrangler.jsonc` and the committed migrations, prints each gap, and exits 1 while any gap or open decision remains. It runs no command and reads no secret.
+
+## 1. Environment matrix
+
+Secret names only. No value appears in this repo, in this document or in any command below.
+
+### 1.1 Cloudflare Worker and bindings
+
+| Item | Staging (`env.staging`) | Production (top level) today | Production needs for the alpha |
+| --- | --- | --- | --- |
+| Cloudflare account | The personal testing account (`docs/ops/TEARDOWN.md`) | No Worker deployed (recorded in #1400) | An organisation-owned account (decision D1). Durable Object data lives in the account that created it, so choose before the first deploy. |
+| Worker name | `waldo-runtime-staging` | `waldo-runtime` | Same, or `waldo-runtime-production` under `env.production` (P2) |
+| Entry | `src/staging-browser.ts` (adds the Playwright SDK, re-exports `index`) | `src/index.ts` | Keep `index.ts` |
+| `compatibility_flags` | `nodejs_compat` | none | none; the bundle startup test asserts production needs none |
+| `limits.cpu_ms` | 300000 | default (30 s) | 300000. The staging comment says long owner turns pass 30 s (P3). |
+| Cron | `17 3 * * *` (health retention sweep) | none | The same cron (P3). Without it, raw health is never swept on schedule. |
+| Durable Objects | `OWNER_DO`, `DEVICE_BRIDGE_DO`, `IMESSAGE_BRIDGE_DO`, three retired classes; migrations v1–v7 | identical | identical. Open PRs #1334 and #1355 change DO migration tags; freeze before stand-up. |
+| `WALDO_OWNER_DO_NAMESPACE` | the staging `OWNER_DO` namespace id | `""`, so the workspace and files answer `unavailable` (`channels/workspace-host.ts:59-60`) | The production namespace id. It exists only after the first deploy (S5). |
+| R2 `ARTIFACTS` | bucket `waldo-artifacts` | bucket `waldo-artifacts`, the same name | Its own bucket (P2). On one account the name is the same bucket. |
+| Rate limiter `RESPONSIBILITY_RATE_LIMITER` | namespace `1001`, 120 per 60 s | namespace `1001` | Its own namespace (P2). Same id on one account means shared counters across Workers [cited: [Cloudflare rate limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)]. |
+| Browser Rendering `BROWSER` | bound | forbidden by guard | none (owner ruling) |
+| Workers AI `AI`, Vectorize `VECTORIZE` (`waldo-recall`) | bound | none (guard forbids top level) | none. No source file reads them [source]. |
+| Assets | `../dashboard-app/dist` | same | same |
+| Observability | logs on, invocation logs off, query strings redacted, traces off | same | same (guarded) |
+| Routes / custom domain | none (`workers.dev`) | none | One host only, plus `workers_dev: false` (S6, P2). The owner DO stores the last request's origin and builds every link and OAuth redirect from it, so two live hosts flip it (`owner-do.ts:1219-1221`, `:2695`). |
+| Deploy path | `scripts/deploy-runtime.sh --env staging` from the Mac | **The same script with no flag deploys production** (`scripts/deploy-runtime.sh:5`) | An explicit `--env production`, with no argument refused (P2) |
+
+### 1.2 Worker vars
+
+| Var | Staging | Production today | Production for the alpha |
+| --- | --- | --- | --- |
+| `WALDO_ENVIRONMENT` | `staging` | `production` | `production`. It forces Langfuse text off. |
+| `WALDO_RELEASE` | restamped by the deploy wrapper | same | same |
+| `WALDO_OWNER_TELEGRAM_ID` | the owner's Telegram id | `""` | `""`. The single-owner fallback stays off. |
+| `LANGFUSE_CAPTURE_TEXT` | `true` | `false` | `false` (code forces it off in any case) |
+| `WHATSAPP_DEBUG_LOG` | `true` (#1398 commits `false`) | `false` | `false` |
+| `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
+| `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
+| `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
+| `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
+| `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
+| `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
+| `WHATSAPP_ONBOARDING_URL`, `WHATSAPP_REENGAGE_TEMPLATE`, `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` | onboarding URL set; templates empty | empty | empty until Meta verification and a production number (D5) |
+| `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_SEARCH`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, tool search off, offload on. |
+
+### 1.3 Worker secrets (names only)
+
+There is no authoritative list of staging secrets in the repo. Before copying the shape, the owner runs `npx wrangler secret list --name waldo-runtime-staging`, which prints names only. Production values are always created fresh and never copied from staging (`docs/planning/waldo-agent-mvp/PRODUCTION_DEPLOYMENT_2026-09-24.md:47`).
+
+| Secret | Read at | Missing in production means | Alpha |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | `owner-do.ts:2518` | every owner turn fails | **required**: a separate production project with a spend limit |
+| `ANTHROPIC_API_KEY` | `owner-do.ts:3210` | the fallback model fails with `auth_failed` | **required**: a separate workspace with a spend limit |
+| `SUPABASE_PROJECT_URL`, `SUPABASE_PUBLISHABLE_KEY` | `identity/owner-directory.ts:64`, `identity/console-auth.ts:77` | no directory, no sign-in | **required** |
+| `WALDO_ROUTER_HMAC_SECRET` | `identity/owner-directory.ts:64` | every signed database call fails; the console ticket returns 403 | **required**. One fresh value, held identically in three places: this Worker secret, the Vault secret `waldo_router_hmac`, and the `connector-proxy` and `oauth-proxy` function secrets. |
+| `TELEGRAM_WEBHOOK_SECRET` | `channels/google-oauth.ts:77`, `channels/mcp-oauth-routes.ts:26` | **the Google and MCP OAuth callbacks return 404**, because this secret also signs their OAuth state | **required even with no Telegram bot**, until P8 gives OAuth state its own secret |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `channels/google-oauth.ts:77` | no Google connect | **required**: the production client (S7) |
+| `BRAVE_SEARCH_API_KEY` | `owner-do.ts:3243` | `web_search` says it is not set up | recommended |
+| `ELEVENLABS_API_KEY` or `SMALLEST_AI_API_KEY` | `llm/transcriber.ts:17-18` | voice notes go untranscribed | optional |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | `observability/otlp-turns.ts:36-43` | no trace export | decision D7 |
+| `TELEGRAM_BOT_TOKEN` | `channels/telegram-webhook.ts:116` | Telegram off | **not set**. Telegram is retiring, and ADR-0055/ADR-0073 item 7 treat it as a privacy residual. If it is ever set, use a new bot: the owner DO re-registers the webhook whenever its origin changes (`owner-do.ts:1219-1228`), so two Workers sharing one bot steal it back and forth. |
+| `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | `channels/whatsapp-webhook.ts:173-212` | WhatsApp off | not set until Meta verification and P5 (D5) |
+| `IMESSAGE_CREDENTIAL_WRAPPING_KEY` | `channels/imessage/bridge-do.ts:35` | iMessage off | not set (D5) |
+| `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REDIRECT_URI` | `health/providers/whoop-routes.ts:21` | WHOOP off | not set. WHOOP comes later (owner ruling, 22 Oct). |
+| `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
+| `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
+| `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
+
+One more secret is in an open PR: #1393 adds `WALDO_OAUTH_STATE_SECRET` for MCP, fail-closed. Freeze the secret list on the stand-up SHA (S0).
+
+### 1.4 Supabase
+
+| Item | Staging | Production today | Production needs |
+| --- | --- | --- | --- |
+| Project | `togdshayyxycitzckpqv` ("Waldo-MVP") | none in the repo | A new project (S1). Region is fixed at creation (D2). |
+| `supabase/config.toml` `project_id` | `oqcjjcytjvrckvylagsl` is the HEY-125 spike project; it only names local containers | n/a | nothing. `db push` does not push config. Every auth and function setting is a dashboard or Management API step. |
+| Exposed schemas | `public`, `graphql_public`, `waldo` (set by hand) | n/a | expose `waldo` in the API settings (no migration does it) |
+| Vault `waldo_router_hmac` | exists | n/a | create by hand with a fresh value. No migration creates it; every signed RPC fails closed with 42501 without it (`20261003000000_waldo_router_signed_fail_closed.sql:8`). |
+| Auth: Email OTP, Site URL, redirect URLs | set by hand. On 24 Sep the Site URL was `localhost:3000` and the hosted template lacked `{{ .Token }}` (`CONNECT_FLOW_DESIGN_2026-09-24.md:197-204`) | n/a | Email OTP on; Site URL and redirect URLs = the production origin; the Magic Link template from `supabase/templates/magic_link.html` (it carries `{{ .Token }}`, guarded by `guard-otp-template`) |
+| Auth email delivery | **[unverified]** whether staging has custom SMTP | n/a | **custom SMTP with a sender domain**. The built-in provider sends only to team members, 2 an hour, "not meant for production use"; custom SMTP starts at 30 an hour, adjustable [cited: [Supabase SMTP](https://supabase.com/docs/guides/auth/auth-smtp)]. |
+| Extensions | `pgcrypto` (in `extensions`), `supabase_vault`, assumed present | n/a | check both on the new project before the apply. No migration creates an extension. |
+| Migrations | 68 committed; staging history was a prefix up to the last recorded apply | none | all 68 from zero, through the reviewed route (S2, after P1) |
+| PITR and backups | **[unverified]** plan and PITR state | n/a | PITR on (ADR-0058, proposed: RPO ≤ 5 min, RTO ≤ 1 h; it needs a compute add-on), and one restore drill before the first invite (S10) |
+| Legacy `public.*` tables (0001–0005) | present | n/a | created by the from-zero apply; `delete_owner` covers them by cascade |
+
+### 1.5 Edge functions
+
+| Function | Purpose | Secrets it reads | Production |
+| --- | --- | --- | --- |
+| `connector-proxy` | The only holder of Google tokens | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (injected by the platform, **[unverified]**), `WALDO_ROUTER_HMAC_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Deploy with `--no-verify-jwt`. `config.toml` has no entry for it, so the default JWT check would reject every call; this already happened once (`KEY_VERIFICATION_RUNBOOK_2026-09-24.md:44`). |
+| `oauth-proxy` | Tokens for MCP servers and health providers | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `WALDO_ROUTER_HMAC_SECRET` | Deploy. `verify_jwt = false` is in `config.toml`. |
+| `mint-agent-jwt` | The ADR-0066 proof issuer | hard-coded to the spike project's issuer and kid; throws on any other `SUPABASE_URL` (`supabase/functions/mint-agent-jwt/index.ts:9-22`) | **Do not deploy** |
+
+### 1.6 Third parties and channels
+
+| Item | Staging | Production needs | Status |
+| --- | --- | --- | --- |
+| Google Cloud project | `waldo-dev-492217`: Testing, External, 7 of 100 lifetime users, no organisation, branding links empty, one Web client with only the staging redirect | A separate production project. Google recommends separating test and production. It needs branding (home, privacy and terms pages on the owned domain) and a Web client whose only redirect is `https://<domain>/oauth/google/callback` (S7). | source doc, read-only GCP facts recorded 21 Oct |
+| Gmail push | Pub/Sub in `waldo-dev-492217`, **hard-coded** (`connectors/google-push.ts:96`) | per-environment project and topic (P6) | gap |
+| Langfuse | one project; text captured for every tester (#1398 gates it on agreement) | decision D7: none, or a separate production project with capture off, identifiers hashed (P5) and a retention period (Pro plan only) [cited: [Langfuse retention](https://langfuse.com/docs/data-retention)] | gap |
+| WhatsApp | Meta app callback is the staging webhook; system user `waldo-staging`; business verification in review (ECOFRESH GREENSYNC LLP, 22 Oct) | its own number, system user and callback, or a callback move; billing; a utility template (`docs/channels/whatsapp/NUMBER_SETUP_AND_SMOKE_TEST.md`) | blocked on Meta |
+| iMessage | connector on; host profile is fixtures-only | a real Apple Account, a dedicated host Mac, the number on iMessage | not started |
+| Telegram | team test bot | none (see 1.3) | by design |
+| App push | not built: no APNs, Expo or FCM sender; `app_push_register` has no runtime caller | nothing for the alpha, or build it | gap (outside this runbook) |
+| App build | `EXPO_PUBLIC_WALDO_APP_API_ORIGIN` = the staging origin | a production build pinned to the production origin (waldo-app repo) | cross-repo |
+| CI | `deploy-staging.yml` dispatch only, `--env staging` and the staging ref hard-coded; Actions dispatch returned 422 for the account | no production workflow exists; production stays a Mac-lane run | by design |
+
+## 2. Stand-up runbook
+
+Each step lists the owner action, the blast radius and the rollback. A step starts only after the one before it has passed its check. The P-numbers are the code gaps in §4, and each must be merged before the step that names it.
+
+### S0. Decide and freeze (no hosted change)
+
+- **Owner action.** Answer D1 to D10 (§5). Name the stand-up SHA: the `beta-mvp` commit that carries P1, P2 and P3. Hold #1388 and #1398 (new migrations), #1393 (new secret) and #1334 and #1355 (DO migration tags) until they land on that SHA or after the stand-up.
+- **Check.** `node scripts/production-alpha-dryrun.mjs` at that SHA reports no `GAP` lines. `DECIDE` lines remain only for decisions the owner has answered in writing.
+- **Blast radius.** None.
+- **Rollback.** n/a.
+
+### S1. Create the production Supabase project
+
+- **Owner action.**
+  - Create the project in the chosen organisation and region (D2), with PITR enabled.
+  - In the dashboard:
+    - expose `waldo`;
+    - turn Email OTP on;
+    - set the Site URL and redirect URLs to the D3 production origin (the domain goes live at S6);
+    - set the Magic Link template from `supabase/templates/magic_link.html`;
+    - configure custom SMTP and raise its hourly limit to cover a batch of invites;
+    - check that `pgcrypto` and `supabase_vault` are present.
+  - Create the Vault secret `waldo_router_hmac` with a fresh 32-byte hex value (for example `openssl rand -hex 32`), typed into the SQL editor; it never passes through chat or a file.
+  - **Never run `scripts/owner_wire_supabase.sh` for production.** It runs an unpinned CLI with the database password in argv, pushes with no dry run, and writes secrets to `--name waldo-runtime-staging`, which is hard-coded (`scripts/owner_wire_supabase.sh:22-39`).
+- **Check.** Project ref recorded in the stand-up note; the dashboard shows PITR on; a test OTP email reaches a non-team address.
+- **Blast radius.** A new, empty project. No staging effect.
+- **Rollback.** Delete the project. Nothing depends on it yet.
+
+### S2. Apply migrations from zero (needs P1)
+
+- **Owner action.** From a clean, detached checkout of the stand-up SHA, run the production preflight with the production ref, then review the pending list: 68 files at `c5e44093`. The digest `node scripts/production-alpha-dryrun.mjs` prints is the from-zero `pendingManifestSha256` at that SHA only; it is a preview, not an approval value. Apply with the reviewed digest, then preflight again and require 0 pending.
+- **Check.** History equals the committed manifest. A read-only count shows zero rows in `waldo.owners`.
+- **Unverified.**
+  - What `GET /v1/projects/{ref}/database/migrations` returns on a project that has never had a migration: `[]`, 404 or an error. P1 must handle each.
+  - Whether `delete_owner` may delete from `auth.users` on a hosted project as security definer. No recorded run on a hosted project proves it.
+- **Blast radius.** The production database only. Migrations are forward-only.
+- **Rollback.** Before any owner exists: delete and recreate the project (S1). After: a new reviewed forward migration (`docs/ops/REVIEWED_STAGING_MIGRATION_ROUTE.md`).
+
+### S3. Edge functions
+
+- **Owner action.**
+  - Set the function secret `WALDO_ROUTER_HMAC_SECRET` (the S1 value) with `supabase secrets set --project-ref <prod-ref>`, the value typed at the prompt or read from a file outside the repo. The Google function secrets follow at S7, once the client exists.
+  - Deploy `connector-proxy` with `--no-verify-jwt`, then `oauth-proxy`. Do not deploy `mint-agent-jwt`.
+- **Check.** An unsigned `POST /functions/v1/connector-proxy` returns 401 (the same probe as the staging gate).
+- **Blast radius.** The production project's functions.
+- **Rollback.** Supabase keeps no restorable earlier function version: redeploy from the previous reviewed SHA.
+
+### S4. Cloudflare account, resources and Worker secrets
+
+- **Owner action.**
+  - In the D1 account: Workers Paid (needed for `cpu_ms` 300000), the production R2 bucket named in P2, and a rate-limit namespace id unused on the account.
+  - Set each **required** secret in §1.3 except the Google pair, which follows at S7, with `npx wrangler secret put <NAME> --name <production worker>`, value typed at the prompt.
+  - Set OpenAI and Anthropic project spend limits before the key exists in the Worker (S9).
+- **Check.** `npx wrangler secret list --name <production worker>` shows exactly the required names and nothing from the "not set" rows.
+- **Blast radius.** The production Worker's secrets only. Never use a command without an explicit Worker name: an unflagged command targets the top-level Worker.
+- **Rollback.** `wrangler secret delete <NAME>`; rotate at the provider if a value may have leaked (`PRODUCTION_DEPLOYMENT_2026-09-24.md`, rotation procedure).
+
+### S5. First Worker deploy and smoke
+
+- **Owner action.**
+  - From a clean, detached checkout of the stand-up SHA, deploy with the explicit production target (P2).
+  - Read the `OWNER_DO` namespace id: `npx wrangler durable-objects namespace list` [unverified command shape on the pinned wrangler; check with `--help` first].
+  - Merge a one-line config PR that sets `WALDO_OWNER_DO_NAMESPACE`, and redeploy.
+- **Smoke.** These are unauthenticated, content-free probes against the production origin. A production gate script (P7) replaces this list.
+
+  | Probe | Expect |
+  | --- | --- |
+  | `GET /healthz` | 200, `release` = the stand-up SHA |
+  | `GET /app/v1/session` | 401 |
+  | `GET /console` | 303 when signed out |
+  | `POST /probe/turn` with a body | 404 (staging-only route) |
+  | `POST /telegram/webhook` | 404 (not configured) |
+  | `POST /events/gmail` without a bearer | 403 or 404 |
+  | unsigned `POST /functions/v1/connector-proxy` | 401 |
+
+- **Blast radius.** A new Worker with no owners. DO data created from here on lives in this account.
+- **Rollback.** `wrangler rollback <previous-version-id>` restores code and bindings only, not DO state, secrets or migrations. Before any owner exists: delete the Worker.
+
+### S6. Domain
+
+- **Owner action.** Attach one custom domain to the production Worker in the D1 account (decision D3). Set `workers_dev: false` in the P2 config so only that host is live. Rebuild the app with `EXPO_PUBLIC_WALDO_APP_API_ORIGIN` set to that origin (waldo-app). Update the Supabase Site URL and redirect URLs if S1 used a placeholder.
+- **Check.** The S5 smoke passes on the domain; `workers.dev` no longer answers.
+- **Blast radius.** Every link Waldo builds, and the Google redirect URI. Adding a redirect URI after Google verification restarts verification (Google research doc §1).
+- **Rollback.** Detach the domain. Owner DOs that stored the old origin rebuild links on their next request.
+
+### S7. Google OAuth production client
+
+- **Owner action.**
+  - Create the production GCP project, in an organisation if one exists (D4).
+  - Enable the Calendar, Gmail, Tasks, People and Drive APIs.
+  - Fill in branding: home, privacy and terms links on the domain, plus authorised domains.
+  - Create one Web client whose only redirect is `https://<domain>/oauth/google/callback`.
+  - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` twice: as Worker secrets (`wrangler secret put … --name <production worker>`) and as `connector-proxy` function secrets (`supabase secrets set --project-ref <prod-ref>`). Values are typed at the prompt.
+  - Choose Testing (each invitee added as a test user, at most 100 for the project's lifetime, refresh tokens expiring every 7 days) or publishing unverified (the unverified-app screen, a 100-new-user cap, no 7-day expiry [inference in the research doc]). The research doc recommends Testing for the alpha and restricted verification with CASA for production (`docs/research/GOOGLE_INTEGRATION_2026-10-21.md:96-110`).
+  - Gmail push for production waits on P6; until then, production gets no Gmail push. Mail reads still work.
+- **Check.** A test owner connects Google on production and a Calendar read returns.
+- **Blast radius.** Google access for production owners only.
+- **Rollback.** Delete the client; owners re-link.
+
+### S8. Langfuse production (capture off)
+
+- **Owner action, per D7.**
+  - **Option A (no Langfuse in production for the first batch).** Set no Langfuse keys. Worker logs stay content-free.
+  - **Option B.** A separate Langfuse project, keys set as Worker secrets, and a retention period (Pro plan). Before any WhatsApp owner, land P5, because trace `sessionId` is `${channel}-dm:${owner}` and for WhatsApp the owner value is the phone number in digits (`owner-do.ts:2511-2525`). Text capture stays off by code.
+- **Check.** Option B: one test-owner turn shows a trace with `environment=production`, no input or output text, and no phone number.
+- **Blast radius.** Trace metadata leaves to Langfuse (a processor, in the DPA inventory).
+- **Rollback.** Delete the three secrets; delete the project's traces (`DELETE /api/public/traces` exists [cited: Langfuse OpenAPI `trace_deleteMultiple`]).
+
+### S9. Cost ledger on, provider spend limits
+
+- **Owner action.**
+  - Set `WALDO_COST_LEDGER_SYNC=on` for production, as a committed var or `--var` at deploy.
+  - Set hard monthly limits on the production OpenAI project and the Anthropic workspace, sized for 50 owners. At the code ceiling of USD 25 per owner per month, the upper bound is about USD 1,250 a month before background work, which the ceiling does not gate [inference from `docs/ops/OBSERVABILITY.md:85-89`].
+- **Check.** After one test-owner turn, `waldo.cost_ledger_daily` has a row for that owner (service-role read in the SQL editor).
+- **Blast radius.** A turn past the ceiling degrades to the auxiliary route and refuses browse and execute tools. The provider limit stops every owner at once.
+- **Rollback.** Unset the var. Raise the provider limit.
+
+### S10. Alerting, backups and the incident path
+
+- **Owner action.**
+  - Configure Cloudflare notifications for the production Worker's error rate, an external uptime check on `/healthz`, provider budget alerts at 50% and 80%, and Supabase usage alerts.
+  - Name who is paged (D9; ADR-0073 item 11 says both founders).
+  - Run one Supabase PITR restore drill into a scratch project and one DO point-in-time restore on the test owner (ADR-0058 names `getBookmarkForTime` and `onNextSessionRestoreBookmark`).
+  - Adopt the incident steps in §3.3.
+- **Check.** A deliberate failed `/healthz` (a paused uptime target) pages the named people.
+- **Blast radius.** None.
+- **Rollback.** n/a.
+
+### S11. Test owner, then invites in batches
+
+- **Owner action.**
+  - Seed the first admin by hand in the SQL editor: one `waldo.owners` row with the owner's email, `bootstrap_claimable = true` and `is_admin = true`. No migration seeds an owner. The owner then signs in by emailed code and issues admin invites from the console, copying each link to its recipient; Waldo emails nothing.
+  - Invite one test owner (not an admin) from the console. Run the production console E2E on that account: chat; calendar and Gmail reads; a reminder; an honest health reply with and without data; the forget flow; the spend ledger row; account deletion. Account deletion follows ADR-0055 and checks every store in §3.2 by a read afterwards.
+  - Then invite 5, then 20, then the rest, with a day of logs and ledger read between batches.
+- **Check.** Every §3 item marked as a gate is closed.
+- **Blast radius.** Real owners' data from the first invite onward.
+- **Rollback.** Pause invites. Per-owner deletion per §3.2.
+
+## 3. Alpha readiness checklist
+
+Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, **unverified**, or **gate** (an accepted ADR or owner ruling requires it before any external user, and it is not met).
+
+### 3.1 The checklist
+
+| Item | Status | Evidence | Closes it |
+| --- | --- | --- | --- |
+| **Invite flow capacity for 50** | source; **gate** on email | See the notes after this table. | Custom SMTP and its limit (S1); the first admin row (S11); D-ruling or P13 on member invites |
+| **Account deletion end to end** | source; **gate** | The path and store table are in §3.2. No full-cascade run on a real account is recorded on staging [unverified]. ADR-0055 requires the walk on a test user before any external user. | P4 (at least P4a), then the S11 walk with a read-back of every store |
+| **Per-owner cost ceiling** | source | See the notes after this table. | S9, D10, P12 |
+| **Rate limits** | source | See the notes after this table. | P2. D5 keeps the unlimited channels off. |
+| **Abuse limits** | source | See the notes after this table. | Acceptable for the alpha with D6 [inference]. Reminder limits are a follow-up. |
+| **Backups and point-in-time recovery** | unverified; **gate** | Staging's plan and PITR state were not read. ADR-0058 (proposed) sets RPO ≤ 5 min and RTO ≤ 1 h. ADR-0055's post-restore re-deletion and tombstone ledger are not built [source: no tombstone code]. | PITR on at S1; the drills at S10; the tombstone ledger is part of the ADR-0055 gate |
+| **Alerts and who gets paged** | source: **none in the repo** | No Sentry, PagerDuty, uptime monitor, alert webhook or Cloudflare notification config in code, scripts or workflows. `/healthz` is probed only by the manual staging gate. | S10, D9 |
+| **Incident runbook** | none before this document | `RCA_OWNER_DO_CPU_RESET_2026-10-09.md` was found by a human E2E, not an alert | §3.3 |
+| **Support and feedback into eval cases** | source: no path | §3.4 | §3.4 now; P9 later |
+| **Privacy-notice dependencies** | **gate** | §3.5 | Legal items, linked, not drafted here |
+| **Data export** | source: **none**; **gate** (ADR-0073 §1 item 3) | No data-subject export in the app, console or tools. Artifact exports (`artifacts/exports/by-owner/`) are file downloads, not an account export. | P10 |
+| **Crisis guidance per geography** | source: India only; **gate** (ADR-0073 §1 item 10) | `prompt/messaging-behavior.ts:104` | Clinical-reviewed pack, then P11 |
+| **18+ gate** | source: partial; **gate** (ADR-0073 §1 item 13) | Health consent v2 requires `age_attested_18_plus` (`20261021150000_health_wearables_zone_change.sql:182`). No age step at sign-up was found [unverified beyond grep]. | An age attestation at sign-up (#1356 owns onboarding [inference]) |
+
+**Invite flow.**
+- **Who can sign in** [source]. A code is sent only to:
+  - an active owner's email;
+  - a bootstrap-claimable owner row;
+  - an address that holds a live invite (`20260928190000_waldo_invite_chain.sql:13-23`).
+- **Admin invites** are uncapped (`20261014060000_waldo_admin_invite_uncapped.sql`). Each code works once, only for its email, and lasts 14 days. Waldo never emails invites; the issuer copies the link (`channels/console.ts:137-138`).
+- **Member invites** are capped at 5 each (`20260928190000:80-82`), so 50 members can admit 250 more people with no admin step. No overall owner cap exists [source].
+- **The admin flag** (`is_admin`) is set by hand in the database (`20260924150000_waldo_admin.sql:2`).
+- **Throttles on sign-in** [source; `console-signin.ts:23-26,218-283`, `20261017100000`]:
+  - 5 code sends per email per 15 minutes;
+  - 10 verifies per email per 15 minutes;
+  - 30 attempts per IP per 15 minutes.
+
+  A group onboarding behind one office network will meet the IP limit [inference].
+- **Sessions last 12 hours** (`console-signin.ts:306`, `app-api.ts:87`), so 50 daily users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4).
+
+**Cost ceiling.**
+- **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
+- **Not gated: background work.** Heartbeat, the nightly memory pass, briefs, reminders and standing orders never consult the ceiling. `spendPosture`, which would skip background work, is called only from `test/cost-ceiling.test.ts`, although its comment says background work is limited (`cost-ledger.ts:72`).
+- **Not attributed.** No producer sets `cost_kind`, so every row files as `turn` (`cost-rollup.ts:39,46`).
+- **Not priced.** Browser, sandbox, search, speech-to-text and cache writes count as 0.
+- **No overall limit.** Nothing caps all owners together, and no per-owner daily cap exists.
+
+**Rate limits.**
+- **The binding.** `RESPONSIBILITY_RATE_LIMITER` allows 120 per 60 s per key per Cloudflare location. It keys sign-in, app auth, app and console chat (per owner), approvals, health, the Telegram link and the iMessage host (`app-api.ts:68-146`, `console-chat.ts:89-92`).
+- **The durable sign-in throttles** above add to it.
+- **No per-owner limit on chat channels.** Telegram, WhatsApp and iMessage turns are bounded only by inbox capacity: 512 rows for Telegram, 256 in flight for the app (`telegram-owner-inbox.ts:6`, `app-inbox.ts:61`). A full inbox answers 503 and the owner is told nothing.
+- **Webhook checks.** Telegram uses a constant-time secret and de-duplicates for 25 hours. WhatsApp checks an HMAC signature and de-duplicates by message id, with no freshness window. Router RPCs must be signed within 300 s.
+
+**Abuse limits** [source]:
+- **Inputs.** Messages are capped at 4000 characters (`contracts/src/app/core.ts:54`) and media at 20 MiB.
+- **Turns.** At most 150 tool rounds a turn (`llm/time-budget.ts:34-35,68`), a 14–15 minute turn deadline, and 5 subagents a turn.
+- **Tools.**
+  - Egress fails closed in production.
+  - `send_message` only proposes; the owner approves before anything is sent (`owner-turn.ts:60-65`).
+  - `execute_code` has no handler.
+- **Not bounded.** Reminders and standing orders have no count limit [source], and each firing can cost a model call [inference]. `docs/planning/TOOL_LOOP_BUDGET.md` still says 25 rounds, which is stale.
+
+### 3.2 Account deletion, store by store
+
+The path [source]:
+1. `POST /app/v1/actions` or the dashboard JSON action runs `ownerControlsAction` (`channels/dashboard-owner-controls.ts:51-115`).
+2. It requires `confirmation: DELETE`, a `request_id` and a fresh read.
+3. It writes an "unconfirmed" receipt.
+4. It purges the owner's R2 prefixes. If that fails, it stops with nothing deleted.
+5. It calls `delete_owner` over the signed rail. The SQL is one function, so it commits or rolls back whole (`20261011230000_delete_owner_identity.sql`).
+6. Last, `ctx.storage.deleteAll()` empties the Durable Object.
+
+| Store | Deleted | Evidence | Test |
+| --- | --- | --- | --- |
+| Owner DO SQLite, KV and alarm | yes, on the normal path | `owner-do.ts:1095,1777`; `dashboard-owner-controls.ts:108-110` | `test/app-account-delete.test.ts` |
+| R2 artifacts, exports, workspace prefix | yes, up to 10 pages of 1000 objects per prefix per attempt | `channels/owner-files-purge.ts:7-44` | artifacts and exports tested; workspace prefix untested |
+| `waldo.owners`, connections, sessions, health logs, auth users, sessions and refresh tokens | yes | `20261011230000_delete_owner_identity.sql:17-41` | `supabase/tests/waldo_delete_owner*.sql` |
+| Vault secrets for connections (Google, MCP, WHOOP) and push devices | yes | same, `:20-26` | no MCP-specific case |
+| Health samples, scopes, consents, basis; devices; cost ledger; iMessage rows; presences | yes, by cascade from `waldo.owners` | migration FKs | health samples, scopes, consents and devices tested; anchors, requests, cost ledger, iMessage and push operations untested |
+| Redeemed invite | partial: the email is nulled, the row stays | `:31` | tested |
+| `workspace_owner_mappings`, the Auth audit log | no, on purpose | `:8-9` | n/a |
+| `whatsapp_onboarding_replies` (hashed number), `console_auth_attempts` (expire on a window) | no | `20261017090000:5-6`; `console-signin.ts:232` | none |
+| `DeviceBridgeDO`, `IMessageBridgeDO` state | **no**. Never contacted; iMessage keeps held bodies up to 30 days [unverified whether pruned] | `devices/device-bridge-do.ts:163-206`; `imessage/bridge-store.ts:41-43` | none |
+| Google, WHOOP and MCP grants at the provider; Gmail and Calendar watches | **no**. No revoke call exists anywhere (no `oauth2.googleapis.com/revoke`) | `owner-do.ts:2811-2820` runs only on disconnect | none |
+| Langfuse traces | **no** | export only | none |
+| DO point-in-time recovery (30 days), Supabase backups and PITR | **no**, and not disclosed | ADR-0058; ADR-0055 requires a tombstone ledger and re-deletion after restore, not built | none |
+
+Three deletion failures matter beyond the table [source; the consequence is inference]:
+- **The stranded Durable Object.** If `delete_owner` commits but its response is lost, the action returns `unknown` with the DO intact (`dashboard-owner-controls.ts:106`). The same happens if `deleteAll` throws (`:112-113`). Every later request needs a directory session that no longer exists, so the owner cannot retry, and no sweeper exists.
+- **The legacy console form** (`owner-do.ts:1930-1936`) has no receipt and no confirmation field, and says "Everything Waldo held for you is gone", which is false by the table above.
+- **The receipt names no residue.** That covers Langfuse, model providers, provider grants, backups and point-in-time recovery.
+
+### 3.3 Incident runbook (minimum for the alpha)
+
+These steps hold until ADR-0062 or an owner-approved runbook replaces them. Each step names its tool, and none of them sends anything on an owner's behalf.
+
+1. **Detect.**
+   - An uptime, Cloudflare or provider-budget alert pages the D9 people.
+   - So does an owner report through the support path (§3.4).
+2. **Triage, within 15 minutes.**
+   - Run the S5 smoke.
+   - Check `npx wrangler deployments list --name <production worker>`.
+   - Tail the logs with `npx wrangler tail <production worker> --format json`. The logs are content-free: hops, codes and trace keys.
+   - Read the cost ledger for today.
+   - Read the OpenAI and Anthropic status pages.
+3. **Contain.**
+   - **Bad deploy.** Run `wrangler rollback` to the previous version. It restores code only, so check that no migration in between was destructive.
+   - **Provider outage.** The breaker and the fallback model carry turns. Nothing else to do.
+   - **Runaway spend.** Lower the provider limit; the ceiling is per owner.
+   - **Data exposure.** Rotate the affected secret by the rotation procedure in `PRODUCTION_DEPLOYMENT_2026-09-24.md`, and start the breach clock: 72 hours, and the named owner of the notification call (ADR-0073 item 11). The breach plan itself is a legal item.
+4. **Tell owners** only through the app or console, in words the owner approved for that incident.
+5. **Close.** Write a blameless note in `docs/ops/`. Add the failing case as a regression eval in the same PR as the fix (BUILD_DIRECTION, "How we prove it").
+
+### 3.4 Support and feedback into eval cases
+
+What exists [source]:
+- Useful and Not useful buttons on Telegram update cards only (`owner-do.ts:3814-3815`).
+- Hand-written eval fixtures (`packages/runtime/evals/fixtures/`, `evals/nightly/*`).
+- The rule that each failure becomes a regression case (`docs/planning/BUILD_DIRECTION_2026-10-21.md`), with no procedure behind it.
+
+What does not exist: no in-product report, no support address in code, and no trace-to-fixture export. Production traces carry no text, so a report must carry the owner's own words.
+
+The minimum for the alpha, with no code:
+1. A support email address, named in the privacy notice (a legal item).
+2. Each report is logged as a GitHub issue labelled `alpha-report`. The issue holds the trace key or time, the surface, and the owner's own description, given with their consent to use it for debugging. It holds no health values and no third-party content.
+3. The fix PR adds an eval case from that issue, with synthetic values.
+
+P9 replaces steps 1 and 2 with an in-product path.
+
+### 3.5 Privacy-notice and legal dependencies (links only)
+
+| Item | Where it is tracked | Blocks |
+| --- | --- | --- |
+| Privacy Policy and Terms (draft, unpublished, ECOFRESH GREENSYNC LLP) | owner's private Claude Doc (privacy-terms draft, 19 Oct); open rows: grievance officer, fees, DPAs, retention, effective date | Google branding (S7), Meta, first invite |
+| Diagnostic recording agreement (staging only) | #1398 | publishing the privacy draft |
+| ADR-0073 §1: DPIA, DPA inventory with zero retention (Anthropic and OpenAI), retention schedule, breach plan, crisis pack per geography, 18+ gate, data export, privacy copy | `Pin4sf/waldo-brain` ADR-0073; `docs/planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md:99-101` | first invite (ADR text: "before any external user") |
+| ADR-0055: the deletion cascade walked on a test user, per-store latency, tombstone ledger | `Pin4sf/waldo-brain` ADR-0055 | first invite |
+| Beta geography: ADR-0073 §2 excludes EU/EEA/UK at beta; BUILD_DIRECTION says global-first | both documents | decision D8 |
+| Google Limited Use statement, in-app disclosure before consent, CASA for restricted scopes | `docs/research/GOOGLE_INTEGRATION_2026-10-21.md:57,96-110` | publishing the Google app |
+| Owner look-up disclosure (GDPR Art. 14, DPDP notice) | `BUILD_DIRECTION_2026-10-21.md`, "Owner look-up" | the look-up skill (#1356) |
+| WhatsApp AI-provider terms and the India exclusion | `docs/channels/whatsapp/NUMBER_SETUP_AND_SMOKE_TEST.md:196-204` | WhatsApp in production |
+
+## 4. Gaps that need code
+
+Each item is one small PR against `beta-mvp`, proposed here and not implemented. Each names its files and the tests that prove it.
+
+**P1. Production migration route.**
+- **Change.** Allow exactly two refs: staging, and a production constant added in this PR once S1 records the ref. Production requires an extra `--confirm <ref>`. Preflight, apply and gate stop importing a staging-only constant.
+- **Handle an empty history.** Accept `[]`, and treat 404 and other errors on a fresh project as `history_unavailable`, never as "nothing applied".
+- **Files.** `scripts/staging-migration-preflight.mjs`, `scripts/staging-migration-apply.mjs`, `scripts/staging-gate.mjs`, their tests, and `docs/ops/REVIEWED_STAGING_MIGRATION_ROUTE.md`.
+- **Tests.** An unknown ref is rejected. Production without the confirmation is rejected. A from-zero history gives all files pending with the digest `production-alpha-dryrun` prints. The existing staging tests stay green.
+
+**P2. Separate the production Worker config.**
+- **Choose one of two options:**
+  - (a) the guard mirrors bindings by name rather than value, as vars already do;
+  - (b) production moves to `env.production`, and the top level becomes a local-dev default.
+
+  Option (b) also makes the unflagged deploy harmless. Either way: give production its own R2 bucket and rate-limit namespace id, set `workers_dev: false` and the D3 route, and make `deploy-runtime.sh` refuse to run without `--env`.
+- **Files.** `packages/runtime/wrangler.jsonc`, `scripts/guards/guard-wrangler-local-bindings.mjs`, `scripts/guards/guards-selftest.mjs`, `scripts/deploy-runtime.sh`, `scripts/tests/runtime-bundle-startup.test.mjs` (it builds with `--env ''`), `scripts/guards/guard-runtime-preview-config.mjs`, and `scripts/production-alpha-dryrun.mjs` (point it at the new block).
+- **Tests.**
+  - The guard rejects a production bucket or namespace equal to staging's.
+  - The bundle startup test builds the production target.
+  - `deploy-runtime.sh` without `--env` exits non-zero before building.
+
+**P3. Production runtime parity.** Add the retention cron and `limits.cpu_ms: 300000` to the production block.
+- **Files.** `wrangler.jsonc`, the bindings guard (require both in production), and the `index.ts` comment at `:197`.
+- **Tests.** The guard fails when either is missing, and the scheduled handler test runs against the production config.
+
+**P4. Account deletion that finishes.**
+1. **Erase the DO even when the directory call fails or is unknown.** Write an erase-pending marker first. On a lost or failed `delete_owner`, retry it from the DO's alarm with the same request id, and make the retry return a distinct "already gone" result instead of `false`.
+2. **Revoke at providers before the Vault delete.** Google `oauth2.googleapis.com/revoke`, WHOOP `DELETE user/access`, MCP RFC 7009, and stopping the Gmail and Calendar watches. Each is best-effort, and the receipt names it.
+3. **Clear the device and iMessage bridge objects.**
+4. **Delete or fix the legacy console form and its copy.**
+5. **Name every store outside reach in the receipt:** Langfuse until P5's purge, model providers, backups and PITR, and copies the owner shared.
+
+- **Files.** `channels/dashboard-owner-controls.ts`, `channels/owner-do.ts` (delete branch only; a hot file, one writer), `identity/console-auth.ts`, `connectors/google.ts`, `health/providers/whoop-owner.ts`, `connectors/mcp-connections.ts`, `devices/device-bridge-do.ts`, `channels/imessage/bridge-do.ts`, `channels/console.ts`, and a new migration only if `delete_owner` needs the "already gone" result.
+- **Tests.**
+  - Fault injection on each step: a lost SQL response, `deleteAll` throwing, a revoke 500.
+  - A read-back of every store in §3.2.
+  - pgTAP cases for the untested cascades.
+
+  Split this into P4a (items 1, 4 and 5) and P4b (items 2 and 3) if review prefers.
+
+**P5. Trace identity without personal data.**
+- **Change.**
+  - Langfuse `userId` and `sessionId` carry a keyed hash of the owner principal, never a phone number or Telegram id.
+  - `resolveCaptureText` allows capture only when `WALDO_ENVIRONMENT === 'staging'` (an allowlist; today it is `!== 'production'`).
+  - A per-owner Langfuse purge on account deletion: list traces by the hashed user id, then `DELETE /api/public/traces`.
+- **Files.** `channels/owner-do.ts:2520-2526`, `observability/trace-privacy.ts:83-87`, `observability/otlp-turns.ts`, `docs/ops/OBSERVABILITY.md`; this needs a `TRACE_SCHEMA_VERSION` bump.
+- **Tests.**
+  - No E.164 string reaches any exported attribute.
+  - Capture stays off for `prod`, `production`, unset and `preview`.
+  - The purge is called on deletion.
+
+**P6. Gmail push per environment.**
+- **Change.** `GMAIL_PUSH_PROJECT` and its topic become config. Production without it skips `watch` and logs `push_unconfigured` instead of publishing to the staging project.
+- **Files.** `connectors/google-push.ts:96-103`, `wrangler.jsonc`, the bindings guard's var mirror.
+- **Tests.** Unset means no watch call. A set value builds the topic name.
+
+**P7. Production gate.**
+- **Change.** `staging-gate.mjs` takes a pinned target (staging or production), with the production origin and ref as constants added after S1 and S6. The production probe list is §2 S5.
+- **Files.** `scripts/staging-gate.mjs` (or a new `scripts/production-gate.mjs` sharing its functions), its tests, and `docs/ops/STAGING_DEPLOY_GATE.md`.
+- **Tests.** The probe expectations per target, and that an unknown target is refused.
+
+**P8. A dedicated OAuth state secret.**
+- **Change.** Google and MCP state are signed with their own secret, not `TELEGRAM_WEBHOOK_SECRET`. Coordinate with #1393's `WALDO_OAUTH_STATE_SECRET` so there is one secret, not two.
+- **Files.** `channels/google-oauth.ts`, `channels/mcp-oauth-routes.ts`, `owner-do.ts:2694`, `connectors/mcp-oauth.ts`.
+- **Tests.** The callbacks work with the Telegram secret unset. A state signed under the old secret is rejected after rotation.
+
+**P9. Report a problem.**
+- **Change.** A tool the model can call when the owner says something went wrong. It records the trace key, the surface and the owner's own words in the owner's DO, and shows an approval card before anything leaves. Sending the report to the support address is an approved effect with a receipt. The console lists the owner's reports.
+- **Files.** `tools/live/*` (a new tool), `channels/owner-do.ts`, `packages/contracts` tool lists, the console, and an eval scenario. It needs an owner decision on the destination (D9).
+- **Tests.** Tool schema valid and invalid pairs. The card shows the frozen content. No send happens without approval.
+
+**P10. Data export (ADR-0073 §1 item 3).**
+- **Change.** An authenticated in-app download of the owner's DO and Supabase records, machine-readable and human-readable, over a short-lived signed URL. It is never sent by email or chat.
+- **Files.** A design note first. This is larger than the others and is a gate before the first invite.
+
+**P11. Emergency guidance per locale.** The prompt names only "112 in India" (`prompt/messaging-behavior.ts:104`), and the cohort is global. The numbers come from the clinical-reviewed crisis pack (a legal and clinical item); the code reads the owner's locale.
+- **Files.** `prompt/messaging-behavior.ts`, a small locale table, voice and safety eval cases.
+- **Tests.** The eval cases pass for India, the US and the UK.
+
+**P12. Make the spend ceiling cover background work and attribute it.**
+- **Change.** Call `spendPosture` at the background entry points: heartbeat, nightly memory, briefs, reminders and standing orders. Past the ceiling, skip or defer the work, and never the owner's own turns. Set `cost_kind` at each producer so the ledger tells turn from background from worker.
+- **Files.** `channels/owner-do.ts` (the background entry points; hot file), `observability/cost-rollup.ts`, `llm/cost-ledger.ts` (fix the comment at `:72` to match), and `docs/ops/OBSERVABILITY.md`.
+- **Tests.**
+  - A machine turn past the ceiling is skipped, with a `spend_hold` hop.
+  - An owner turn past the ceiling still runs on the auxiliary route.
+  - Ledger rows carry each `cost_kind`.
+  - Each of these fails with the wiring removed.
+
+**P13. Hold the cohort size.**
+- **Change.** An admission policy row (`member_invites_enabled`, `max_active_owners`), read by `issue_member_invite` and by owner creation at sign-up. The owner sets it per environment through SQL, and production starts with member invites off and a cap of 50.
+- **Files.** One new migration, `supabase/tests/waldo_invite_*.sql`, `channels/console-invites.ts` (show "invites are closed"), and the `verify-supabase-migrations.mjs` manifest.
+- **Tests.** pgTAP: member issuance refused when disabled; the 51st sign-up refused; the admin path unchanged.
+
+## 5. Owner decisions
+
+| # | Decision | Recommendation | Why |
+| --- | --- | --- | --- |
+| D1 | Which Cloudflare account hosts production | An account owned by the LLP, not the personal testing account | DO data stays in the creating account; moving later means moving every owner's state |
+| D2 | Supabase organisation, region, plan | The LLP's organisation; a region near the cohort; a plan with PITR | Region is fixed at creation; PITR needs a compute add-on (ADR-0058) |
+| D3 | Production host | One subdomain of heywaldo.in, for example `api.heywaldo.in` [inference]. The contracts also name `api.heywaldo.com` for problem-type URIs (`packages/contracts/src/public/morning-brief.ts:104-141`), so pick one. | Google redirects, links and the app origin all hang off it |
+| D4 | Google project and publishing state | A separate production project; Testing for the first batch | Testing costs a weekly re-link and a manual test-user add per invitee, up to 100 in the project's lifetime |
+| D5 | Channels in production | App and console only for the alpha. WhatsApp after Meta verification and P5. iMessage after a host Mac exists. No Telegram. | Each channel adds a processor and residue |
+| D6 | Feature flags and egress in production | Match staging (flags `1`, egress `*`) after the production E2E, or keep them off for the first batch | The 22 Oct E2E ran with them on |
+| D7 | Langfuse in production | Option A (none) for the first batch; Option B after P5 | Phone numbers in trace ids; retention needs the Pro plan |
+| D8 | Beta geography | Use the invite list to follow ADR-0073 §2 (no EU, EEA or UK invitees) until the ADR is amended | An accepted ADR and the 21 Oct build direction disagree |
+| D9 | Who is paged, and where reports go | Both founders (ADR-0073 item 11); one support address | Nothing pages anyone today |
+| D10 | Provider spend limits | Hard monthly caps on the production OpenAI and Anthropic projects | The only limit that covers all owners together |
+
+## 6. Evidence
+
+**Observed this session.**
+- Files read at `c5e44093`:
+  - `packages/runtime/wrangler.jsonc`, `scripts/deploy-runtime.sh`;
+  - `scripts/staging-migration-preflight.mjs`, `scripts/staging-migration-apply.mjs`, `scripts/staging-gate.mjs`;
+  - `scripts/guards/guard-wrangler-local-bindings.mjs`, `scripts/owner_wire_supabase.sh`, `supabase/config.toml`;
+  - `channels/dashboard-owner-controls.ts:51-115`, `owner-do.ts:1215-1230,1925-1937,2505-2535`, `channels/google-oauth.ts:70-80`, `channels/mcp-oauth-routes.ts:22-30`, `channels/proactive-gate.ts:14`, `channels/probe-turn.ts:81-86`, `observability/trace-privacy.ts:55-87`;
+  - the docs under `docs/ops/`, `BUILD_DIRECTION_2026-10-21.md`, the #1400 verdict, and `docs/research/GOOGLE_INTEGRATION_2026-10-21.md`;
+  - ADR-0055, ADR-0058 and ADR-0073 from `Pin4sf/waldo-brain`.
+- Four read-only subagent sweeps covered the env inventory, Supabase, deletion, ops and channels. Their claims cited above were re-read at the named lines before being labelled [source].
+- `node scripts/production-alpha-dryrun.mjs`: 9 open items (6 gaps, 3 decisions); from zero, 68 migrations.
+
+**Inference.** The stranded-DO consequence, the spend upper bound, the domain suggestion, and two Workers fighting over one Telegram webhook.
+
+**Unverified.**
+- The staging secret list.
+- Whether staging has custom SMTP.
+- Supabase plan and PITR state on staging.
+- Whether `delete_owner` may delete `auth.users` on a hosted project.
+- The migrations endpoint on an empty project.
+- Platform injection of function secrets.
+- The `wrangler durable-objects namespace list` shape on the pinned version.
+- Whether iMessage held events are pruned after deletion.
+- Whether publishing the Google app unverified ends the 7-day expiry.
