@@ -33,23 +33,25 @@ This is the wording the app shows on the WHOOP consent screen. The app reads it 
 >
 > **1. Store it.** Waldo stores your WHOOP data in its health store and works out your Form, Recovery and Load from it, so you can see them. Readings are kept for 90 days and daily summaries for 24 months.
 >
-> **2. Let Waldo's AI model use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the company that provides its AI model. That company is a third party. This happens only if you give this second yes. Waldo never uses your WHOOP data to train any model.
+> **2. Let Waldo's AI models use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the companies that provide its AI models, today OpenAI and Anthropic. They are third parties. This happens only if you give this second yes. Waldo never uses your WHOOP data to create, develop, test, train, fine-tune or improve any model, prompt or eval.
 >
-> Waldo's replies that draw on your WHOOP data appear wherever you talk to Waldo: in the app and in any chat channel you have linked, such as iMessage, WhatsApp or Telegram. Waldo's notes about your WHOOP data are not medical advice.
+> **Who else sees it.** Your WHOOP data, and Waldo's replies drawn from it, are shown only to you, on the surfaces you choose, unless you ask Waldo to share a specific item. A reply on WhatsApp, Telegram or iMessage passes through that channel's provider (Meta, Telegram, Apple). Waldo's notes about your WHOOP data are not medical advice.
 >
 > To stop: taking back the first yes stops the sync, deletes the WHOOP data Waldo stored and ends AI use. Taking back the second stops the sync and AI use and deletes nothing. Disconnecting WHOOP in Settings ends Waldo's access at WHOOP. If you agree again later, Waldo asks you again.
 
+While staging trace capture (Langfuse) stays on, a further line names it as a recipient of WHOOP-derived turns; the owner accepted that on 22 October 2026, and the line goes when capture goes. The providers named are whichever an owner turn can route to; the list changes with a new copy version.
+
 What the wording is built to keep true:
-- **Who gets the data.** It says the model provider is a third party and that it receives the data only under the second yes, because WHOOP's terms bar exposing WHOOP data to a third party without the owner's explicit opt-in. It does not say the data is "shown or sent to no one else": replies that draw on it travel through the owner's linked chat channels, and the notice says so.
-- **No promise the provider has not made.** It says nothing about the provider keeping nothing or never training on the data. Waldo's own promise ("Waldo never uses your WHOOP data to train any model") is true today and stays. Once zero-retention and no-training terms with the provider exist, add one sentence saying so, as a new copy version.
+- **Who gets the data.** It names every model provider a turn can route to (today OpenAI and Anthropic) as third parties that receive the data only under the second yes, because WHOOP's terms bar exposing WHOOP data to a third party without the owner's explicit opt-in. It names the channel providers (Meta, Telegram, Apple) because replies drawn from the data travel through them. It does not say the data is "shown or sent to no one else".
+- **No promise the providers have not made.** It says nothing about the providers keeping nothing or never training on the data. Waldo's own promise (never to use the data to create, develop, test, train, fine-tune or improve any model, prompt or eval) is true today and stays. Once zero-retention and no-training terms exist with every one of those providers, add one sentence saying so, as a new copy version.
 - **The withdrawal effects** match the health plane: withdrawing `storage_compute` withdraws both grants for the source and purges what was stored; withdrawing `model_processing` stops the sync and model use and deletes nothing.
 - **Retention** is the health contract's own constants (90 days of readings, 24 months of daily summaries).
 
-Gates before this notice ships (the owner's, not the app's):
-1. **The provider's terms.** WHOOP's §4 also bars others acting on Waldo's behalf from training on the data, so zero-retention and no-training terms with the AI model provider are a precondition for shipping WHOOP, not optional wording. They are a launch gate beside the trace-capture decision below.
-2. **Trace capture.** Staging trace capture (Langfuse) would be a further recipient of WHOOP-derived turns. The owner's decision on excluding them is open; the notice must name any recipient that remains.
-3. **Where replies go.** The notice names the chat channels as places the data can appear. If a channel's own provider (Meta for WhatsApp, Telegram, the iMessage host) should be named as a recipient, that wording is the owner's call.
-4. **The legal reading.** Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
+Set no WHOOP secret and enter no client for the edge until all of these hold, none of which the app can settle:
+1. **The providers' terms.** WHOOP's §4 also binds anyone acting for Waldo, so zero-retention and no-training terms with every model provider an owner turn can route to are a precondition for WHOOP, not optional wording.
+2. **Trace capture.** Staging trace capture (Langfuse) is a further recipient of WHOOP-derived turns; the owner accepted that on 22 October 2026, and the notice names it for as long as staging capture stays on.
+3. **The legal reading.** Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
+4. **The notice shipped.** The app ships this notice (copy version 3) and the health plane's copy-version migration is applied. The runbook `WHOOP_AND_OURA_2026-10-21.md` holds the same conditions.
 
 ## The chat-channel step
 
