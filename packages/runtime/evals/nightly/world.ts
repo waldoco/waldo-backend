@@ -3,7 +3,7 @@
 // everything that would leave the owner object (cards, drafts, reminders, standing orders).
 // Nothing here reaches Google, a search engine or a real owner. A fresh world per trial.
 import { DatabaseSync } from 'node:sqlite';
-import { TOOL_PERMISSIONS, type HealthRowZone, type ProposeCalendarChangeArgs, triggerTypeSchema, webSearchArgsSchema, type SetReminderArgs, type SetStandingOrderArgs, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, formZoneOf, toRowZone, type HealthRowZone, type ProposeCalendarChangeArgs, triggerTypeSchema, webSearchArgsSchema, type SetReminderArgs, type SetStandingOrderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { IsolatedSourceWorld } from '../../scenarios/isolated-source-world';
 import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
@@ -287,12 +287,14 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
   ];
 
-  // Synthetic zone-level context only, as the owner object's health book supplies it.
+  // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
+  // its score, as the producer writes a day's first row.
   const day = seed.health ?? MODERATE_DAY;
+  const formWord = toRowZone('form', formZoneOf(day.form_score));
   const sharedHealth = (): HealthContextRow => ({
     context: {
       id: 'eval-health', day: localIso(now(), TIMEZONE).slice(0, 10),
-      form: { score: day.form_score, zone: day.recovery, drivers: day.drivers, confidence: 0.8 },
+      form: { score: day.form_score, zone: formWord, drivers: day.drivers, confidence: 0.8 },
       recovery: { score: day.form_score, zone: day.recovery }, weight: { score: 70, zone: day.load },
       drivers: day.drivers, confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(now() - 3_600_000).toISOString(),
     },
@@ -306,7 +308,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const triggerRow = () => {
     const today = localIso(now(), TIMEZONE).slice(0, 10), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: today, compiled_at: new Date(now() - 3_600_000).toISOString(), basis, form: { score: day.form_score }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      context: { id: 'eval-health', day: today, compiled_at: new Date(now() - 3_600_000).toISOString(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
       previous: seed.health_before ? { day: shift(today, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
@@ -348,7 +350,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
-      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
     }),
   };
 };
