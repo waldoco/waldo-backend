@@ -144,9 +144,12 @@ const drive = async (name: string, script: (steps: Readonly<{
           }));
           expect(response.status).toBe(200);
         },
+        // The wake that work armed is cleared, as after an alarm pass: it would run on the platform's own instance of this object,
+        // which shares this storage, and could move a record while a later step of the test is reading it.
         settled: async () => {
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
           await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+          await state.storage.deleteAlarm();
         },
         // The owner runtime's own call stack (routing, link redaction, egress gate, window layer, shim).
         sendNowOnly: async text => {
@@ -172,9 +175,13 @@ const drive = async (name: string, script: (steps: Readonly<{
             expect(await response.json()).toMatchObject({ receipt: { state: 'recorded' } });
           } finally { settings.TELEGRAM_BOT_TOKEN = undefined; }
         },
-        refuse: async (id, at = Date.now()) => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
-          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
-        }))).status,
+        refuse: async (id, at = Date.now()) => {
+          const { status } = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
+          }));
+          await state.storage.deleteAlarm();
+          return status;
+        },
         arrive: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
           method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: [{ id, at: Date.now() }] }),
         }))).status,
@@ -200,14 +207,33 @@ const drive = async (name: string, script: (steps: Readonly<{
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
+  // Nothing was attempted, so the run stopped rather than failed: the same outcome an order's lapsed report and an unlinked
+  // reminder get, and the schedule's run is not counted against the job.
   it('a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent', async () => {
     await drive('whatsapp-only-reminder-lapsed', async ({ alarms, later, ledger, reminderRuns }) => {
       await alarms(3);
       expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
       await later(31 * 24 * 60 * 60_000, () => alarms(2));
       expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
-      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
-      expect(ledger().runs).toEqual([expect.objectContaining({ delivery: 'failed' })]);
+      expect(reminderRuns()).toEqual([{ status: 'stopped', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+    });
+  });
+
+  // Meta refused the head after taking both parts, so the tail is on the owner's phone and the window never reopens.
+  it('a split reminder whose tail Meta took ends quarantined when the window stays closed for 30 days, and its run does not say it was not sent', async () => {
+    model.reminderText = ['a'.repeat(3000), 'b'.repeat(3000)].join('\n\n');
+    await drive('whatsapp-only-split-lapsed', async ({ alarms, reply, refuse, settled, later, ledger, reminderRuns }) => {
+      await reply();
+      await alarms(3);
+      expect(await refuse('wamid.out.1')).toBe(200);
+      await settled();
+      expect(ledger().outbox).toMatchObject([{ status: 'pending', providerMessageIds: [null, 'wamid.out.2'] }]);
+      await later(31 * 24 * 60 * 60_000, () => alarms(2));
+      // The record's text is scrubbed a day after it ends unconfirmed, so its reason by now is that scrub's.
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined' }]);
+      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder partly sent; the rest was not sent' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
     });
   });
 

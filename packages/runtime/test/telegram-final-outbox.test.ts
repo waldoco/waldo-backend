@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY } from '../src/channels/telegram-final-outbox';
+import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY, dayCardFinalId, standingOrderFinalId } from '../src/channels/telegram-final-outbox';
 import { TelegramRejection } from '../src/channels/telegram-api';
 import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 const fixture = () => {
@@ -149,4 +149,11 @@ it('idle maintenance scrubs delivered and ambiguous text independently of enqueu
   const rows = f.outbox.records(); rows[0]!.status = 'delivered'; rows[0]!.settled = true; rows[0]!.createdAt = -90000000;
   f.kv.put(FINAL_OUTBOX_KEY, rows); await f.outbox.maintain();
   expect(f.outbox.records()[0]?.payload.text).toBe(''); expect(f.kv.get(FINAL_OUTBOX_DUE_KEY)).toBeNull();
+});
+
+describe('the ids a producer and the scheduler both find a queued record by', () => {
+  it('names a day card by its day and card, and a standing order\'s report by its order and occurrence', () => {
+    expect(dayCardFinalId('2026-10-03', 'card:brief')).toBe('day-card:2026-10-03:card:brief');
+    expect(standingOrderFinalId('order:ord1', 7)).toBe('standing-order:order:ord1:7');
+  });
 });

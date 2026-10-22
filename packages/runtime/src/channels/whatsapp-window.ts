@@ -158,7 +158,7 @@ export const whatsappReceipt = (ack: unknown, subject: string, now: number = Dat
 // custody: one the window refuses, by our clock or Meta's, goes back to pending in the outbox rather than into the held
 // store, and a sent record settles only on Meta's report that it arrived (observeSurfaceStatuses). The knock waits for the
 // route's checks too: a record the route itself still holds or would refuse never knocks. A record still waiting after
-// Meta's 30-day retention is refused. releaseWhatsAppOutbox sends what waited once the owner writes again.
+// Meta's 30-day retention ends as lapsed, blocked if nothing went out and quarantined if any part did. releaseWhatsAppOutbox sends what waited once the owner writes again.
 export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null;
   knock: (template: WhatsAppTemplate) => Promise<unknown>; now?: () => number; log: Log }>): OutboxRoute => {
   const { kv, subject, template, knock, log } = options;

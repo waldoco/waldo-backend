@@ -459,10 +459,12 @@ describe('falling back to the app', { timeout: 20_000 }, () => {
 
   // A text long enough that WhatsApp's shim sends it in two parts. Meta takes both and then refuses the tail for the window, so
   // the head is on the owner's phone and the record waits in the outbox for the tail.
+  // After a switch the record stays WhatsApp's, waiting for the owner's next message there; after an unlink nothing will reach it,
+  // so it ends unconfirmed. Either way the app never gets the tail alone.
   it.each([
-    ['the owner switches to the app', 'setting'],
-    ['WhatsApp is unlinked', 'unlink'],
-  ] as const)('a split reminder whose head WhatsApp took is not sent to the app as its tail alone when %s', async (_how, change) => {
+    ['the owner switches to the app', 'setting', { status: 'pending' }, { outcome: 'running', delivery: 'pending' }],
+    ['WhatsApp is unlinked', 'unlink', { status: 'quarantined' }, { outcome: 'quarantined', delivery: 'failed' }],
+  ] as const)('a split reminder whose head WhatsApp took is not sent to the app as its tail alone when %s', async (_how, change, record, run) => {
     const parts = ['a'.repeat(3000), 'b'.repeat(3000)];
     fixture.reminderText = parts.join('\n\n');
     await withOwner(`surface-split-${change}`, async (owner, state, ctx) => {
@@ -479,8 +481,8 @@ describe('falling back to the app', { timeout: 20_000 }, () => {
       else state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'app');
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(await said(owner, ctx)).toEqual([]);
-      expect(outbox(state)).toMatchObject([{ status: 'quarantined', providerMessageIds: ['wamid.out.1', null] }]);
-      expect(reminderRuns(state, reminder.id)).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+      expect(outbox(state)).toMatchObject([{ ...record, providerMessageIds: ['wamid.out.1', null] }]);
+      expect(reminderRuns(state, reminder.id)).toEqual([run]);
     }, { surface: 'whatsapp', window: 'open' });
   });
 
