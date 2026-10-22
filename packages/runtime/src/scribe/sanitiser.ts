@@ -144,7 +144,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
 ];
 
 // The numeric health floor for long-term memory and stored summaries, where a match refuses the write: the structured
-// sensor shapes the contracts own (`hrv_ms: 48`, `"weightKg": 80`) and the owner-prose readings above. It is narrower than
+// sensor shapes the contracts own (an `hrv_ms` or `weightKg` key with its number) and the owner-prose readings above. It is narrower than
 // the egress scans, which may over-redact; here a false match loses an ordinary fact. Through the non-global matcher, so a
 // shared `g` pattern never carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean =>
