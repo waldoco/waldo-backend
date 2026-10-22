@@ -26,13 +26,13 @@ export const whatsappLinkConfirmPage = async (path: string, doName: string, csrf
   return page(`<h1>Link this WhatsApp number?</h1><p class="number">${escape(number)}</p><p>Messages from this number will reach your Waldo, and Waldo will answer there with what it knows about you. Only continue if this is your own number. If another WhatsApp number is linked, this one replaces it.</p><form method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="action" value="${WHATSAPP_LINK_CONFIRM_ACTION}"><input type="hidden" name="token" value="${escape(token)}"><input type="hidden" name="subject" value="${escape(subject)}"><button>Yes, link ${escape(number)}</button></form><p><a href="${CONSOLE_PATH}">This is not my number</a></p>`);
 };
 
-export const whatsappLinkConfirmAction = async (form: FormData, csrf: string, doName: string, directory: WhatsAppLinkDirectory | null, onLinked: (subject: string) => void): Promise<Response> => {
+export const whatsappLinkConfirmAction = async (form: FormData, csrf: string, doName: string, directory: WhatsAppLinkDirectory | null, onLinked: (subject: string) => void | Promise<void>): Promise<Response> => {
   if (!doName || !csrf || form.get('csrf') !== csrf) return new Response('invalid', { status: 403, headers: { 'cache-control': 'no-store' } });
   const token = form.get('token'), subject = form.get('subject');
   if (typeof token !== 'string' || typeof subject !== 'string' || !whatsappLinkToken(`/console/whatsapp/link/${token}`) || !/^[1-9]\d{5,14}$/.test(subject) || !directory) return notFound();
   const outcome = await directory.consume(doName, await whatsappLinkTokenHash(token), subject);
   if (outcome === 'claimed') return page(`<h1>Already linked elsewhere</h1><p>${escape(`+${subject}`)} is linked to another Waldo account, so nothing changed.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`, 409);
   if (outcome !== 'linked') return notFound();
-  onLinked(subject);
+  await onLinked(subject);
   return page(`<h1>WhatsApp linked</h1><p>${escape(`+${subject}`)} now talks to your Waldo. Head back to WhatsApp and say hello.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`);
 };

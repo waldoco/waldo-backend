@@ -41,6 +41,7 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapte
 
 export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start);
+  await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
   const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
