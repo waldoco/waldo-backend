@@ -501,6 +501,22 @@ function visitStrings(
   return { matched: false };
 }
 
+// What the canary and secret check finds in one string view: this session's canary first, then a secret pattern.
+const canaryOrSecretIn = (text: string, canaries: readonly string[]): 'canary' | 'secret' | null => {
+  if (canaries.some((token) => text.toLowerCase().includes(token))) return 'canary';
+  return SECRET_PATTERNS.some((pattern) => matches(pattern, text)) ? 'secret' : null;
+};
+
+// Whether the scribe would refuse this text for a canary or a secret, in any decoded view. A caller that builds a payload
+// from material it does not control uses it to leave that piece out, so one hidden token cannot make the scribe refuse the
+// whole result. Text the decoder cannot read counts as refused, because the scribe refuses it too.
+export const carriesSecretOrCanary = (text: string, canaries: readonly string[] = []): boolean => {
+  const tokens = canaries.map((token) => token.toLowerCase());
+  let found = false;
+  const result = visitStrings(text, 'internal_context', (view) => { found = canaryOrSecretIn(view, tokens) !== null; return found; });
+  return found || result.invalid !== undefined;
+};
+
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
@@ -512,10 +528,9 @@ function containsCanaryOrSecret(
   let canaryFound = false;
   let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
-    if (canaries.some((token) => text.toLowerCase().includes(token))) {
-      canaryFound = true;
-    }
-    if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
+    const hit = canaryOrSecretIn(text, canaries);
+    if (hit === 'canary') canaryFound = true;
+    else if (hit === 'secret') secretFound = true;
     return false;
   });
   if (result.invalid !== undefined) return denyInvalid(result.invalid);
