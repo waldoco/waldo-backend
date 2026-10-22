@@ -1910,13 +1910,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_GOOGLE_PATH) return new Response(null, { status: 303, headers: { location: CONSOLE_PATH } });
     if (url.pathname.startsWith(MCP_START_PATH) && request.method === 'GET') {
       // Behind the console session: only the signed-in owner can turn a connect attempt into a provider redirect.
-      const target = await this.serial(() => this.mcp().start(url.pathname.slice(MCP_START_PATH.length)));
-      return target ? mcpStartRedirect(url.pathname.slice(MCP_START_PATH.length), target) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
+      const bindingSecret = oauthStateSecret(this.env);
+      const target = bindingSecret ? await this.serial(() => this.mcp().start(url.pathname.slice(MCP_START_PATH.length))) : null;
+      return target && bindingSecret ? mcpStartRedirect(bindingSecret, url.pathname.slice(MCP_START_PATH.length), target) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
     }
     if (url.pathname.startsWith(CONSOLE_GOOGLE_START_PATH) && request.method === 'GET') {
-      const nonce = url.pathname.slice(CONSOLE_GOOGLE_START_PATH.length);
-      const target = /^[A-Za-z0-9_-]{43}$/.test(nonce) ? await this.serial(() => google.takeStart(nonce)) : null;
-      return target ? startRedirect('google', nonce, target, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
+      const nonce = url.pathname.slice(CONSOLE_GOOGLE_START_PATH.length), bindingSecret = oauthStateSecret(this.env);
+      const target = bindingSecret && /^[A-Za-z0-9_-]{43}$/.test(nonce) ? await this.serial(() => google.takeStart(nonce)) : null;
+      return target && bindingSecret ? startRedirect(bindingSecret, 'google', nonce, target, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS) : resultPage('This connect link has expired or was already used. Start again from Connections.', false);
     }
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');

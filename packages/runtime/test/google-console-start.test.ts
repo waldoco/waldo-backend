@@ -13,13 +13,13 @@ const root = 'https://telegram-owner';
 
 // An owner signed in to the console, with Google configured and no connect-session directory: the console start must not
 // need one, because it never mints a bearer link.
-const open = async (name: string) => {
+const open = async (name: string, over: Record<string, unknown> = {}) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   const token = await runInDurableObject(stub, async (instance, state) => {
     Object.assign((instance as unknown as { env: Record<string, unknown> }).env, {
       TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', WALDO_OAUTH_STATE_SECRET: STATE_SECRET,
       GOOGLE_CLIENT_ID: 'fictional-client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'fictional-client-secret',
-      SUPABASE_PROJECT_URL: undefined, WALDO_ROUTER_HMAC_SECRET: undefined,
+      SUPABASE_PROJECT_URL: undefined, WALDO_ROUTER_HMAC_SECRET: undefined, ...over,
     });
     state.storage.kv.put('do_name', name);
     await state.storage.put('origin', 'https://waldo.example');
@@ -64,7 +64,7 @@ describe('Google connect from the console starts behind the console session', ()
     expect(bound).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
     expect(start.headers.get('referrer-policy')).toBe('no-referrer');
     const callback = new Request(`https://waldo.example${GOOGLE_CALLBACK_PATH}?state=x`, { headers: { cookie: jar.header() } });
-    expect(await checkBrowser(callback, 'google', nonce, Date.now())).toBe('bound');
+    expect(await checkBrowser(callback, STATE_SECRET, 'google', nonce, Date.now())).toBe('bound');
 
     const replay = await stub.fetch(`${root}${path}`, { headers: { cookie }, redirect: 'manual' });
     expect([replay.status, replay.headers.get('location'), setCookies(replay)]).toEqual([400, null, []]);
@@ -78,6 +78,17 @@ describe('Google connect from the console starts behind the console session', ()
     expect(setCookies(forwarded).filter((line) => line.startsWith('__Secure-waldo-oauth-'))).toEqual([]);
     // The owner's own browser still finishes the attempt the forwarded copy could not.
     expect((await stub.fetch(`${root}${path}`, { headers: { cookie }, redirect: 'manual' })).status).toBe(303);
+  });
+
+  it('without the OAuth state secret starts nothing: Google connect is not offered, and a held start path redirects nowhere and binds nothing', async () => {
+    const { stub, cookie } = await open('google-console-start-e');
+    const path = (await dashboardConnect(stub, cookie)).navigation!;
+    await runInDurableObject(stub, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { WALDO_OAUTH_STATE_SECRET: undefined }); });
+    const held = await stub.fetch(`${root}${path}`, { headers: { cookie }, redirect: 'manual' });
+    expect([held.headers.get('location'), setCookies(held)]).toEqual([null, []]);
+    expect(await held.text()).not.toContain(STATE_SECRET);
+    const unset = await open('google-console-start-f', { WALDO_OAUTH_STATE_SECRET: undefined });
+    expect(await dashboardConnect(unset.stub, unset.cookie)).toBeUndefined();
   });
 
   it('sends the classic console form straight on to the same start path', async () => {

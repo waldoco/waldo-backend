@@ -2,6 +2,7 @@ import { APP_RETURN_DEEP_LINK } from '../../channels/google-oauth';
 import { constantTimeEqual } from '../../connectors/constant-time';
 import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from '../../channels/connect-confirm';
 import { checkBrowser, releaseBrowser, startRedirect } from '../../connectors/oauth-browser-binding';
+import { oauthStateSecret, type OAuthStateEnv } from '../../connectors/oauth-state-secret';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../../identity/owner-directory';
 import { callOwnerProvider } from './provider-route';
 import { whoopAuthorizeUrl, WHOOP_ATTEMPT_TTL_MS, WHOOP_CALLBACK_PATH, WHOOP_START_PATH, type WhoopConfig } from './whoop-client';
@@ -16,7 +17,7 @@ export const WHOOP_WEBHOOK_PATH = '/events/whoop';
 const MAX_WEBHOOK_BYTES = 8_192;
 
 type OwnerNamespace = Parameters<typeof callOwnerProvider>[0];
-export type WhoopRoutesEnv = OwnerDirectoryEnv & Readonly<{
+export type WhoopRoutesEnv = OwnerDirectoryEnv & OAuthStateEnv & Readonly<{
   WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string;
   OWNER_DO?: OwnerNamespace; RESPONSIBILITY_RATE_LIMITER?: Readonly<{ limit(options: { key: string }): Promise<{ success: boolean }> }>;
 }>;
@@ -74,8 +75,8 @@ const resolveSession = (call: NonNullable<ReturnType<typeof signedRpc>>, hash: s
 // a later visit would notice; only the Continue POST spends the attempt, binds this browser and hands it to WHOOP, so
 // the callback accepts only the browser that pressed Continue.
 export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): Promise<Response> => {
-  const config = whoopConfig(env), call = signedRpc(env);
-  if (!['GET', 'POST'].includes(request.method) || !config || !call) return notFound();
+  const config = whoopConfig(env), call = signedRpc(env), bindingSecret = oauthStateSecret(env);
+  if (!['GET', 'POST'].includes(request.method) || !config || !call || !bindingSecret) return notFound();
   const url = new URL(request.url);
   const state = url.pathname.slice(WHOOP_START_PATH.length);
   if (!STATE.test(state)) { log('bad_state'); return whoopPage('invalid'); }
@@ -89,7 +90,7 @@ export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): P
   if (session.begun) { log('used'); return whoopPage('used'); }
   let handed: HandOff = { ok: true };
   if (session.handoff) {
-    try { handed = await handOff(request, call, hash, WHOOP_ATTEMPT_TTL_MS); } catch { log('handoff_failed'); return whoopPage('failed'); }
+    try { handed = await handOff(request, call, bindingSecret, hash, WHOOP_ATTEMPT_TTL_MS); } catch { log('handoff_failed'); return whoopPage('failed'); }
     if (!handed.ok) { log('unhanded'); return whoopPage('unhanded'); }
   }
   if (request.method === 'GET') {
@@ -102,7 +103,7 @@ export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): P
   try { begun = await call('connect_session_begin', `connsess.begin.${hash}`, { p_ticket_hash: hash }) as Session; } catch { log('begin_failed'); return whoopPage('failed'); }
   if (begun?.status !== 'ok') { log('used'); return whoopPage('used'); }
   log('started', true);
-  const redirect = await startRedirect('whoop', state, whoopAuthorizeUrl(config, state), WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS);
+  const redirect = await startRedirect(bindingSecret, 'whoop', state, whoopAuthorizeUrl(config, state), WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS);
   if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
   return redirect;
 };
@@ -110,13 +111,13 @@ export const handleWhoopStart = async (request: Request, env: WhoopRoutesEnv): P
 // WHOOP sends the owner back here. The state names one attempt, started by that owner's own app and valid for 30 minutes;
 // the owner's object does the exchange, so the token never passes through this Worker.
 export const handleWhoopCallback = async (request: Request, env: WhoopRoutesEnv): Promise<Response> => {
-  const secret = env.WALDO_ROUTER_HMAC_SECRET, owners = env.OWNER_DO, call = signedRpc(env);
-  if (request.method !== 'GET' || !whoopConfig(env) || !secret || !owners || !call) return notFound();
+  const secret = env.WALDO_ROUTER_HMAC_SECRET, owners = env.OWNER_DO, call = signedRpc(env), bindingSecret = oauthStateSecret(env);
+  if (request.method !== 'GET' || !whoopConfig(env) || !secret || !owners || !call || !bindingSecret) return notFound();
   const params = new URL(request.url).searchParams;
   const state = params.get('state') ?? '', error = params.get('error'), code = params.get('code');
   if (!STATE.test(state)) { log('bad_state'); return whoopPage(error ? 'denied' : 'invalid'); }
   // Checked before anything else is asked, so a forwarded sign-in or an injected code neither links nor settles the attempt.
-  const browser = await checkBrowser(request, 'whoop', state, Date.now());
+  const browser = await checkBrowser(request, bindingSecret, 'whoop', state, Date.now());
   if (browser !== 'bound') { log(`browser_${browser}`); return whoopPage('unbound'); }
   try { if (await throttled(env, request, 'whoop-callback')) return slowDown(); } catch { return whoopPage('failed'); }
   const page = await settleCallback(state, error, code, call, owners, secret);

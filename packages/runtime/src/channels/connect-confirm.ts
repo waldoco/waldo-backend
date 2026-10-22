@@ -53,13 +53,13 @@ export const newHandoff = async (): Promise<Readonly<{ code: string; hash: strin
 type Rpc = NonNullable<ReturnType<typeof signedRpc>>;
 // setCookie: redeemed by this request, so its answer must carry the binding. ok alone: this browser was bound earlier.
 export type HandOff = Readonly<{ ok: true; setCookie?: string }> | Readonly<{ ok: false }>;
-export const handOff = async (request: Request, call: Rpc, ticketHash: string, ttlMs: number): Promise<HandOff> => {
+export const handOff = async (request: Request, call: Rpc, secret: string, ticketHash: string, ttlMs: number): Promise<HandOff> => {
   const url = new URL(request.url), code = url.searchParams.get(HANDOFF_PARAM), now = Date.now();
-  if ((await checkBrowser(request, 'handoff', ticketHash, now)) === 'bound') return { ok: true };
+  if ((await checkBrowser(request, secret, 'handoff', ticketHash, now)) === 'bound') return { ok: true };
   if (request.method !== 'GET' || code === null || !HANDOFF.test(code)) return { ok: false };
   const hash = await handoffHash(code);
   if ((await call('connect_session_hand_off', `connsess.handoff.${ticketHash}.${hash}`, { p_ticket_hash: ticketHash, p_handoff_hash: hash })) !== true) return { ok: false };
-  return { ok: true, setCookie: await bindBrowser('handoff', ticketHash, url.pathname, ttlMs, now) };
+  return { ok: true, setCookie: await bindBrowser(secret, 'handoff', ticketHash, url.pathname, ttlMs, now) };
 };
 // Continue spent the ticket, so the hop's own binding goes with it.
 export const releaseHandOff = (request: Request, ticketHash: string): Promise<string> => releaseBrowser('handoff', ticketHash, new URL(request.url).pathname);

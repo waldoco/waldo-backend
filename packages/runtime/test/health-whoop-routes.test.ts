@@ -5,13 +5,15 @@ import { WHOOP_ATTEMPT_TTL_MS } from '../src/health/providers/whoop-client';
 import { bindBrowser } from '../src/connectors/oauth-browser-binding';
 import { handoffHash } from '../src/channels/connect-confirm';
 import { cookieJar, setCookies } from './support/cookie-jar';
+import { forgedBinding } from './support/forged-binding';
 import worker from '../src/index';
 import { harness, newPlane, newWorld } from './helpers/whoop-fakes';
 import { webhookBody } from './fixtures/whoop-synthetic';
 
 const SECRET = 'fictional-router-secret-00000000000000000';
 const CLIENT_SECRET = 'whoop-client-secret-fixture';
-const ENV_BASE = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: CLIENT_SECRET, WHOOP_REDIRECT_URI: 'https://worker.example.invalid/oauth/whoop/callback' };
+const STATE_SECRET = 'fictional-oauth-state-secret';
+const ENV_BASE = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: CLIENT_SECRET, WHOOP_REDIRECT_URI: 'https://worker.example.invalid/oauth/whoop/callback', WALDO_OAUTH_STATE_SECRET: STATE_SECRET };
 
 // The Worker's call to an owner's object, captured instead of sent.
 type Sent = { request: Request; text: string };
@@ -168,7 +170,7 @@ describe('the WHOOP webhook', () => {
 });
 
 // The cookie the start link leaves in the browser that followed it.
-const bound = async (state = 'AbCd1234', at = Date.now()) => (await bindBrowser('whoop', state, WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
+const bound = async (state = 'AbCd1234', at = Date.now()) => (await bindBrowser(STATE_SECRET, 'whoop', state, WHOOP_CALLBACK_PATH, WHOOP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
 const callback = async (query: string, over: { env?: Record<string, unknown>; answer?: Response; limited?: boolean; cookie?: string | null } = {}) => {
   const { owners, sent } = capture(() => over.answer ?? Response.json({ outcome: 'linked' }));
   const state = new URLSearchParams(query).get('state') ?? '';
@@ -353,6 +355,24 @@ describe('the WHOOP callback is bound to the browser that followed the start lin
     expect(rpcs).toEqual([]);
   });
 
+  it('links nothing for a binding built from the authorize address alone', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a' };
+    const { response, sent, html } = await callback('code=attacker-code&state=AbCd1234', { cookie: await forgedBinding('whoop', 'AbCd1234') });
+    expect([response.status, sent.length, rpcs.length]).toEqual([403, 0, 0]);
+    expect(html).not.toContain(STATE_SECRET);
+  });
+
+  it('runs no WHOOP start or callback without the OAuth state secret, and binds nothing', async () => {
+    sessionAnswer = LIVE;
+    for (const method of ['GET', 'POST']) {
+      const response = await start(`${WHOOP_START_PATH}AbCd1234`, { method, env: { WALDO_OAUTH_STATE_SECRET: undefined } });
+      expect([method, response.status, response.headers.get('location'), setCookies(response)]).toEqual([method, 404, null, []]);
+    }
+    const { response, sent } = await callback('code=x&state=AbCd1234', { env: { WALDO_OAUTH_STATE_SECRET: undefined }, cookie: null });
+    expect([response.status, sent.length, setCookies(response)]).toEqual([404, 0, []]);
+    expect(rpcs).toEqual([]);
+  });
+
   it('completes for the browser that pressed Continue, from start link to callback, and refuses the same callback replayed', async () => {
     sessionAnswer = LIVE;
     const jar = cookieJar();
@@ -413,5 +433,15 @@ describe('the WHOOP start link the app opens with its one-time code', () => {
     expect(rpcs.map(r => r.fn)).not.toContain('connect_session_begin');
     // A reload in the browser that redeemed it still shows the confirm step.
     expect((await app.send(`?handoff=${CODE}`)).status).toBe(200);
+  });
+
+  it('refuses a Continue from a browser that built the hop binding from the link, after the app redeemed the code', async () => {
+    sessionAnswer = HANDED; handoffHashLive = await handoffHash(CODE);
+    expect((await browser().send(`?handoff=${CODE}`)).status).toBe(200);
+    const hopNonce = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('AbCd1234')))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const forged = await handleWhoopStart(new Request(`${ORIGIN}${WHOOP_START_PATH}AbCd1234`, { method: 'POST', headers: { 'cf-connecting-ip': '203.0.113.9', origin: ORIGIN, cookie: await forgedBinding('handoff', hopNonce) } }),
+      { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as never);
+    expect([forged.status, forged.headers.get('location'), setCookies(forged)]).toEqual([403, null, []]);
+    expect(rpcs.map(r => r.fn)).not.toContain('connect_session_begin');
   });
 });
