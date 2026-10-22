@@ -36,7 +36,7 @@ import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-obje
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
 import { photonCallback } from './channels/imessage/photon-routes';
-import { PHOTON_CALLBACK_PATH } from './channels/imessage/photon';
+import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
 import { photonKeepAlive } from './channels/imessage/enrollment';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
@@ -206,7 +206,7 @@ export default {
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
-    ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
+    if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
 } satisfies ExportedHandler<Env>;
