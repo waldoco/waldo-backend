@@ -47,11 +47,23 @@ export type ConversationReceipt = Readonly<{
   more: number;
 }>;
 
+// The one rule every forget redactor and verifier matches by: the literal as a whole word, in any Unicode case. A letter,
+// number or combining mark right before or after it ends the match, so forgetting "tea" leaves "team" and "steady" whole.
+// Stored text can be raw JSON: an escape (\n, \t, \u00a0) before the literal separates it like the character it decodes to,
+// and a match never starts on the letter of an escape, which would leave a broken escape behind. `openEnd` drops the end
+// boundary, for a literal cut short of its end.
+const WORD_CHAR = String.raw`[\p{L}\p{N}\p{M}]`;
+const ESCAPING_BACKSLASH = String.raw`(?<!\\)(?:\\\\)*\\`;
+export const literalTextPattern = (text: string, openEnd = false): RegExp => new RegExp(
+  `(?<!${ESCAPING_BACKSLASH})(?:(?<!${WORD_CHAR})|(?<=${ESCAPING_BACKSLASH}(?:[bfnrt]|u[0-9A-Fa-f]{4})))`
+    + text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (openEnd ? '' : `(?!${WORD_CHAR})`),
+  'giu');
+
 // Privacy redaction uses literal text only; it never decides what the owner meant.
 export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
   const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
     .sort((a, b) => b.length - a.length)
-    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+    .map(text => literalTextPattern(text));
   return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
 };
 

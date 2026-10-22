@@ -1,3 +1,6 @@
+import { literalTextPattern } from '@waldo/contracts';
+import type { ClaimStore } from './claims';
+
 // One predicate for "this stored text cannot be proven clean of the forgotten topic", shared by the
 // inventory, the readback, the cleanup projections and the tool-output ledger so coverage cannot drift.
 // It is a hard safety line, not a parser: nothing here decides a row is clean from a JSON parse.
@@ -23,5 +26,16 @@ export const hidesTopic = (value: string, topic: string): boolean => {
   return escaped && carriesTopic(decoded + value.slice(from), topic) && (unicode || !carriesTopic(value, topic));
 };
 
-// Full JS string, NUL-safe (SQLite LIKE can stop at a NUL), case-insensitive literal.
-export const carriesTopic = (value: string, topic: string): boolean => value.toLowerCase().includes(topic.toLowerCase());
+// Full JS string, NUL-safe (SQLite LIKE can stop at a NUL), the topic as a whole word in any case: the same pattern every
+// forget redactor rewrites by, so redaction and readback cannot disagree.
+export const carriesTopic = (value: string, topic: string): boolean => value.search(literalTextPattern(topic)) !== -1;
+// The topic's first characters as the start of a word, for a check that only sees a cut prefix: its end stays open
+// unless the prefix is the whole topic.
+export const startsTopic = (value: string, prefix: string, topic: string): boolean => value.search(literalTextPattern(prefix, prefix.length < topic.length)) !== -1;
+
+// What an unfinished forget still holds: the words of claims mid-purge and the topics whose purge has not settled. Recall,
+// the nightly pass and promotion withhold whatever carries one of them, and nothing else.
+export const heldTopicsOf = (store: Pick<ClaimStore, 'claims' | 'pendingTopics'>): string[] =>
+  [...store.claims('purging').flatMap(claim => [claim.text, claim.evidence]), ...store.pendingTopics()];
+export const holdsIn = (held: readonly string[]) => (...values: readonly (string | null | undefined)[]): boolean =>
+  values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));

@@ -1,4 +1,5 @@
 import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import { carriesTopic } from '../memory/forget-guard';
 import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
@@ -497,7 +498,7 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     };
     if (scope) scope.commit(write); else write();
   }
-  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => value.toLowerCase().includes(needle.toLowerCase())))).length;
+  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => carriesTopic(value, needle)))).length;
   return { rewritten, remaining };
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);

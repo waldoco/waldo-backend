@@ -1,5 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, literalTextPattern, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
+
+describe('forget matches whole words', () => {
+  const forget = (topics: readonly string[], text: string) => literalTextRedactor(topics, '[forgotten]')(text);
+  it('leaves words that only contain the topic alone', () => {
+    expect(forget(['tea'], 'residency banglore team. Steady the rest instead, at the steam room')).toBe('residency banglore team. Steady the rest instead, at the steam room');
+    expect(forget(['tea'], 'teapot and teas')).toBe('teapot and teas');
+    expect(forget(['2026'], 'DLD-20261002 and 12026')).toBe('DLD-20261002 and 12026');
+  });
+  it('still removes the topic in any case, next to punctuation, and as a phrase', () => {
+    expect(forget(['tea'], "Tea, tea's (tea) TEA tea.")).toBe("[forgotten], [forgotten]'s ([forgotten]) [forgotten] [forgotten].");
+    expect(forget(['green tea'], 'Green Tea at four, green teapot at five')).toBe('[forgotten] at four, green teapot at five');
+    expect(forget(['sam'], 'mail sam@example.com or @sam')).toBe('mail [forgotten]@example.com or @[forgotten]');
+  });
+  it('folds non-ASCII case and never matches into a combining mark', () => {
+    expect(forget(['Café Zürich'], 'Lunch at CAFÉ ZÜRICH, not Café Zürichsee')).toBe('Lunch at [forgotten], not Café Zürichsee');
+    expect(forget(['οδος'], 'ΟΔΟΣ 5')).toBe('[forgotten] 5');
+    expect(forget(['cafe'], 'café and cafe')).toBe('café and [forgotten]');
+  });
+  it('reads raw JSON escapes: an escape ends a word, and a match never starts inside one', () => {
+    expect(forget(['tea'], String.raw`{"t":"x\ntea y","u":"\u0020Tea"}`)).toBe(String.raw`{"t":"x\n[forgotten] y","u":"\u0020[forgotten]"}`);
+    expect(forget(['tea'], String.raw`"\tea for two"`)).toBe(String.raw`"\tea for two"`);
+    expect(forget(['tea'], String.raw`"\\tea"`)).toBe(String.raw`"\\[forgotten]"`);
+    expect(forget(['tea'], String.raw`"\\\tea"`)).toBe(String.raw`"\\\tea"`);
+  });
+  it('builds one pattern the verifiers share, with an open end for a cut prefix', () => {
+    expect('a team'.search(literalTextPattern('tea'))).toBe(-1);
+    expect('a TEA.'.search(literalTextPattern('tea'))).toBe(2);
+    expect('a teapot'.search(literalTextPattern('tea', true))).toBe(2);
+    expect('a steapot'.search(literalTextPattern('tea', true))).toBe(-1);
+  });
+  it('redacts JSON values and keys by whole word too', () => {
+    const redact = literalJsonTextRedactor(['tea'], '[forgotten]');
+    expect(JSON.parse(redact(JSON.stringify({ team: 'tea time', note: 'steady' })))).toEqual({ team: '[forgotten] time', note: 'steady' });
+    expect(redact('{"team":"tea time"...')).toBe('{"team":"[forgotten] time"...');
+  });
+});
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,

@@ -2,7 +2,7 @@ import { createOwnerTurnContext, type OwnerContextCapability } from '../context-
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
-import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -336,10 +336,8 @@ export const createOwnerResponder = (
     return Object.entries(value).flatMap(([key, child]) => [key, ...structuredStrings(child, depth + 1)]);
   };
   const removedTopics = new Set<string>();
-  const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? []];
+  const heldTopics = () => [...removedTopics, ...(forgettingState ? heldTopicsOf(forgettingState) : [])];
   const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
-  const holdsIn = (held: readonly string[]) => (...values: readonly (string | null | undefined)[]): boolean =>
-    values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
   const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => holdsIn(heldTopics())(...values);
   // Retained reads drop only the list items that carry a held topic. A held string or key outside a list withholds the whole read (undefined).
   const withholdHeldItems = <T,>(value: T, tally: { dropped: number }, depth = 0): T | undefined => {
@@ -933,9 +931,11 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
+      const visible = promptMemory()!;
+      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(visible), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
-      return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
+      return applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
         code: receipt.reason ?? receipt.outcome,
         detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,

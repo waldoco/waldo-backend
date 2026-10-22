@@ -102,6 +102,7 @@ import { redactConversationEntries, durableConversationStore, scrubConversationH
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
+import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
@@ -3537,7 +3538,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     // Memory learns from the conversation since the last pass that finished, oldest first and a bounded chunk at a time, so
-    // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark.
+    // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark. A turn that carries a
+    // topic an unfinished forget still holds never reaches the model; the pass learns from the rest, and the withheld turn
+    // is not consolidated later either.
     const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
       const dayMs = 24 * 60 * 60_000;
       const marked = storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, floor = now - NIGHTLY_BACKLOG_DAYS * dayMs;
@@ -3547,13 +3550,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       for (let chunk = 0; chunk < NIGHTLY_CHUNKS; chunk += 1) {
         const rows = episodes.after(through, 40_000);
         if (rows.length === 0) { if (chunk === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' }); return 'done'; }
-        const day = consolidationDay(rows);
+        const held = holdsIn(heldTopicsOf(memory));
+        const turns = consolidationDay(rows), day = turns.filter(episode => !held(episode.text));
+        const withheld = turns.length - day.length ? `, ${turns.length - day.length} withheld while a forget finishes` : '';
+        if (day.length === 0 && withheld) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: `0 turns${withheld}` });
         if (day.length > 0) {
           const started = Date.now();
           try {
             const sides = consolidationSides(day);
             const { done, detail } = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
-            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: done, detail: `${day.length} turns; ${detail}` });
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: done, detail: `${day.length} turns${withheld}; ${detail}` });
             if (!done) return 'failed';
           } catch (error) {
             log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
