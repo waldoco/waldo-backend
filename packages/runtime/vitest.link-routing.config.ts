@@ -11,6 +11,7 @@ export default defineConfig({
       RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
       TELEGRAM_BOT_TOKEN: '7:hermetic-test-bot-token',
       TELEGRAM_WEBHOOK_SECRET: 'hermetic-test-webhook-secret',
+      WALDO_OAUTH_STATE_SECRET: 'hermetic-test-oauth-state-secret',
       OPENAI_API_KEY: 'hermetic-test-model-key',
       GOOGLE_CLIENT_ID: 'hermetic-google-id',
       GOOGLE_CLIENT_SECRET: 'hermetic-google-secret',

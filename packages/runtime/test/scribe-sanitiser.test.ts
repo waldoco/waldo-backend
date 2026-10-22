@@ -5,7 +5,7 @@ import type {
 } from '@waldo/contracts';
 import { MODEL_CONTEXT_MAX_CHARS, ROSTER } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
+import { carriesSecretOrCanary, guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
 
@@ -1486,4 +1486,18 @@ it('owner-authored and external text are both admitted past the former keyword s
   const base = { payload, destination: 'internal_context' as const, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'] };
   expect(sanitise({ ...base, source_taint: null } as never).ok).toBe(true);
   expect(sanitise({ ...base, source_taint: 'external' } as never).ok).toBe(true);
+});
+
+describe('carriesSecretOrCanary', () => {
+  const jwt = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljc2lnbmF0dXJl';
+  it('flags what the scribe refuses, in any decoded view, and this session\'s canary', () => {
+    expect(carriesSecretOrCanary(`https://example.test/v?t=${jwt}`)).toBe(true);
+    expect(carriesSecretOrCanary(`https://example.test/v?t=%65${jwt.slice(1).replace(/\./g, '%2E')}`)).toBe(true);
+    expect(carriesSecretOrCanary('key AKIAABCDEFGHIJKLMNOP')).toBe(true);
+    expect(carriesSecretOrCanary('see 1111111111111111 here', ['1111111111111111'])).toBe(true);
+  });
+  it('leaves ordinary text and links alone', () => {
+    expect(carriesSecretOrCanary('Join the meeting: https://zoom.example.test/j/123')).toBe(false);
+    expect(carriesSecretOrCanary('see 1111111111111111 here')).toBe(false);
+  });
 });

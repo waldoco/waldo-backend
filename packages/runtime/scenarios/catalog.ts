@@ -419,6 +419,32 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // A site's bot check is a structured block: the model reads why and the next rung in the refusal's fix, and switches
+    // source instead of retrying the same page. The stable prompt names the rungs in order.
+    id: 'rung-challenge-switches-source',
+    category: 'fetch',
+    turns: ['what does the ferry to Elephanta cost today?'],
+    fixtures: { browse: 'challenge', web: [{ title: 'Elephanta ferry fares', url: 'https://ferry.example/fares', snippet: 'Return ticket 300 rupees, first boat 9:00.' }] },
+    llm: [
+      { match: /ferry to Elephanta/, rounds: [
+        { toolCalls: [{ name: 'browse_page', arguments: { url: 'https://ferry-operator.example/fares', instruction: 'Read the fare' } }] },
+        { toolCalls: [{ name: 'web_search', arguments: { query: 'Elephanta ferry fare today' } }] },
+        { text: 'A return ticket is 300 rupees, from a search result (ferry.example); the operator\'s site blocked reading.' },
+      ] },
+    ],
+    assert: {
+      hops: [
+        { hop: 'tool_browse_page', ok: false, note: /rejected/ },
+        { hop: 'tool_web_search', ok: true, after: 'tool_browse_page' },
+      ],
+      modelInput: [{ turn: 1, mustContain: [
+        'Use the cheapest way that can do the job',
+        '"blocked":"challenge"',
+        'The site answered with a bot check, which a read cannot pass.',
+      ] }],
+    },
+  },
+  {
     // Past the monthly ceiling a paid tool is held before it runs; the model reads the one refusal shape, with what
     // still works and when the ceiling resets, and degrades the task on the reads that remain.
     id: 'spend-ceiling-holds-browsing',
