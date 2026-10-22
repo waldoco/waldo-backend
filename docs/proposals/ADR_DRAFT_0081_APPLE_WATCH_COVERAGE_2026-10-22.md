@@ -26,7 +26,7 @@ The biggest gains don't come from new HealthKit types. They come from five signa
 | # | Decision | Recommendation |
 |---|---|---|
 | AW-1 | Accept the wellness tier W1 (§3.2): sleep stages, sleeping wrist temperature, walking heart-rate average, VO2 max, one-minute heart-rate recovery, mindful minutes. Also feed the five accepted-but-unused signals. | Yes |
-| AW-2 | New candidate versions `recovery.candidate.v2` and `weight.candidate.v4` (§4). Form's next version waits for the freshness lane's version (§4.3). | Yes, all labelled `candidate_unaccepted` like today |
+| AW-2 | New candidate versions `recovery.candidate.v2` and `weight.candidate.v4` (§4). Form's change becomes `form.candidate.v5`, after the freshness lane's `form.candidate.v4` (§4.3). | Yes, all labelled `candidate_unaccepted` like today |
 | AW-3 | Illness-sensitive signals (respiratory rate, wrist temperature, SpO2, awake time, walking heart rate) become **drivers**: descriptive deviations from the owner's own baseline, persisted on the derived row. They are not score weights. The model judges what a deviation means. | Yes |
 | AW-4 | Clinical-adjacent types (§3.4): AFib burden, ECG, irregular-rhythm, high/low heart-rate, sleep-apnea and hypertension notifications. | **Defer.** Design the seam now as a separate consent purpose. Accept nothing until legal review. |
 | AW-5 | Consent copy for W1. The in-app copy is generic (§8). | No copy bump for W1, provided the privacy notice draft lists the categories (owner or legal check). If a bump is still wanted, the §8.2 plan keeps old builds safe. |
@@ -227,9 +227,9 @@ Only the `physical_load` input changes. Its share is unchanged at 0.2 (`weight.t
 - **Why only within-person change:** wrist energy estimates have large absolute error [cited: Shcherbina 2017]. A per-owner z-score is insensitive to a stable per-device bias [inference].
 - **Why not a TRIMP or acute:chronic ratio:** heart-rate impulse needs time in zones, which hourly means can't give. The acute:chronic ratio has no causal support for injury [cited: Impellizzeri 2020]. Banister's TRIMP citation was not verified (UNCONFIRMED).
 
-### 4.3 Form: the next version after the freshness lane's [proposed]
+### 4.3 `form.candidate.v5` [proposed]
 
-The health-freshness session (`claude/distracted-pascal-afbce1`, no commits at this note's pin) owns Form's partial-day logic and will likely mint the next Form version. This note does not take a Form number. The candidate change for the version after it:
+The health-freshness lane (branch `health/fresh-understanding`) takes `form.candidate.v4` for partial-day matching. It owns Form's partial-day logic. This change stacks on that version as v5:
 
 - **What changes:** the stress input today uses each awake, non-workout hour's mean heart rate (`form.ts:30-36`), and that mean includes walking about inside the hour.
 - **Why:** smartwatch illness work computed resting heart rate only in step-free minutes for exactly this reason [cited: Mishra 2020].
@@ -274,7 +274,9 @@ A **driver** says that one of the owner's signals is outside their usual range t
 
 **Why this is not a judgment rule.** A z-band is a fixed description of a statistic, like the zone bands Waldo already ships. Nothing decides that a deviation is illness, or that it matters today. Apple's Vitals feature uses the same idea: a personal typical range per overnight metric [documented: Apple support 120142]. Its notification rule (two or more metrics out of range) is a decision this proposal deliberately leaves to the model.
 
-**Waking the trigger is a separate step.** The health trigger wakes on zone changes only (`trigger.ts:12-16`). Letting a new `far_outside` driver wake it needs `trigger.ts`, which this lane does not own. It is listed as PR P6 for its owner (§12). Until then, drivers reach the model on every turn and in every scheduled run that reads the health row.
+**Waking the trigger is a separate step.** The health trigger wakes on zone changes only (`trigger.ts:12-16`). Letting a new `far_outside` driver wake it needs `trigger.ts`, which this lane does not own. That is PR P6, which belongs to the health-freshness lane (§12). Until then, drivers reach the model on every turn and in every scheduled run that reads the health row.
+
+A driver whose z sits near a band edge would flicker between `outside` and `far_outside` from one recompute to the next. When P6 lets driver changes wake the trigger, drivers should therefore use the same hold-until-it-really-moves rule the freshness lane added for zone words (`heldZone`, `STEADY_SCORE_MOVE`), so `changed` fires only on a real crossing.
 
 ### 4.6 Baseline speed: backfill, not a lower bar [proposed]
 
@@ -497,10 +499,10 @@ Each PR is small and red-first. Each uses synthetic fixtures only, valid and inv
 |---|---|---|---|
 | P1 | Contract, health revision 3: rejection DTOs and envelope, W1 signals, units and methods, the sedentary heart-rate fields, reducer v2 and its refine, the `stages` field, the driver DTO and phrase parser, the `drivers` key on scores | §7.2 announced to the app lane; orchestrator review | `contracts/src/app/health-ingest.ts` (+ test). Conflicts with #1159/#1161, which also edit this file. Whoever merges second rebases. |
 | P2 | M1 and M2 | Owner applies on staging after review | `supabase/migrations/*`, pgTAP, migration registry |
-| P3 | Worker: per-sample ingest at `health=3`, receipt shaping. Producer: `SIGNALS`, signal groups, `truncated`, `rowOf` (sleep debt, drivers). `recovery.candidate.v2`, `weight.candidate.v4`. `/scores` serves `sleep_debt` and `drivers`. | After P2 is applied | `channels/app-health.ts`, `health/producer.ts`, `health/scores/*` (not Form's partial-day logic) |
+| P3 | Worker: per-sample ingest at `health=3`, receipt shaping. Producer: `SIGNALS`, signal groups, `truncated`, `rowOf` (sleep debt, drivers), keeping the steadied zones `rowOf` receives from the freshness lane's hysteresis. `recovery.candidate.v2`, `weight.candidate.v4`. `/scores` serves `sleep_debt` and `drivers`. The recompute is driven by the owner DO's `health-recompute` entry (freshness lane), so the truncation fix covers that path too. | After P2 is applied, and after the freshness lane's PR merges (both edit `producer.ts`) | `channels/app-health.ts`, `health/producer.ts`, `health/scores/*` (not Form's partial-day logic) |
 | P4 | `get_health`: signals, units, shared source and method choice, truncation | After P3 | `contracts/src/tools/schemas/reads.ts`, `tools/live/health.ts`, tool snapshots, hook registry |
-| P5 | Form, the version after the freshness lane's: hourly-minimum stress input, compared against the mean | After the freshness lane merges | `scores/form.ts`, with that lane's agreement |
-| P6 | Health trigger: drivers in the trigger's view, and the writer reports a driver set change in `changed` | Owner of `trigger.ts`, most likely the health-freshness session, whose brief includes the trigger | `health/trigger.ts`, a small writer migration |
+| P5 | `form.candidate.v5`: the sedentary-context stress input, with the hourly minimum as fallback, compared against the v4 input | After the freshness lane merges | `scores/form.ts`, with that lane's agreement |
+| P6 | Health trigger: drivers in the trigger's view, and the writer reports a driver set change in `changed` | The health-freshness lane (it confirmed this on 22 October), in a later PR | `health/trigger.ts`, a small writer migration |
 
 ### 12.1 Open health PRs from 13 October
 
@@ -552,7 +554,6 @@ None of the three is on the critical path for Apple Watch coverage. #1159 and #1
 **Not observed:**
 - No device or staging run supports any statement here about Watch cadence, interval counts, point density, or how much Health Connect covers.
 - The staging database was not inspected.
-- The health-freshness lane's eventual Form version is not known.
 
 **Not found in a primary source (UNCONFIRMED):**
 - SDNN and RMSSD being non-interchangeable, stated verbatim;
