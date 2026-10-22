@@ -4119,53 +4119,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
+            // The claim goes to purging and its texts into custody now; the forget purge job cleans every other store and
+            // settles it. A claim already purging is the owner's retry, so the job runs again now.
             const result = memory.purge([spotId], new Date(now).toISOString());
-            let kvRemaining = 0;
-            if (result.texts.length) {
-              // KV stores are part of the verdict: the SQL stores being clean is not the whole
-              // settlement. The tool-output ledger collapses any surviving summary to the
-              // marker, so a touched row is a redacted row there.
-              kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
-              kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
-              kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
-              kvRemaining += redactJobReportEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
-              forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
-              kvRemaining += forgetWaitingCards(this.ctx.storage.sql, result.texts, now).remaining;
-              kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
-              await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
-            }
-            if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
-              const detail = [...result.failed, ...Object.keys(result.remaining), ...(kvRemaining ? ['conversation'] : [])].join(',');
-              log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${detail}` });
-              // NOT settled: the claim row stays 'purging' with its marker, so this stated
-              // try-again path can select it and resume from the intact source text.
-              return 'spot.forget.incomplete';
-            }
-            // SQL and KV both verified clean: settle removes the source row and marker.
-            memory.settle([spotId]);
+            await this.forgetPurgeJob().track(result.texts);
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
           if (!node) return false;
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
-          let remaining = 0;
-          const clean = async (work: () => { remaining: number } | void | Promise<{ remaining: number } | void>) => {
-            try { const result = await work(); remaining += result?.remaining ?? 0; }
-            catch { remaining += 1; }
-          };
-          await clean(() => redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN));
-          await clean(() => redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN).then(() => undefined));
-          await clean(() => redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
-          await clean(() => forgetWaitingCards(this.ctx.storage.sql, [node.label], now));
-          await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          if (remaining > 0) {
-            log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });
-            return 'node.forget.incomplete';
-          }
+          // The label goes the way of any forget: custody and the claims table now, every other store through the job.
+          memory.purge([], new Date(now).toISOString(), [node.label]);
+          await this.forgetPurgeJob().track([node.label]);
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
