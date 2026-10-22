@@ -62,6 +62,7 @@ describe('the where Waldo writes control', () => {
     expect(shown).toMatch(/<option value="app_imessage" selected="">The app and iMessage<\/option>/);
     expect(shown).not.toContain('iMessage only');
     expect(setting(shown)).toContain('The app keeps each one, and iMessage gets a copy.');
+    expect(setting(shown)).toContain('If the Mac that sends your iMessages can’t take a copy within 10 minutes, because it is asleep or offline, that copy isn’t sent; the app still has the message.');
     expect(setting(html(surface({ value: 'app_imessage', imessage_linked: false })))).toContain('Write to Waldo on iMessage first');
   });
 

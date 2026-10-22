@@ -657,6 +657,30 @@ it('with the app and iMessage chosen, the app takes a due reminder and settles i
   expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: REMINDER, binding: { subject: SUBJECT, chatGuid: CHAT } });
 });
 
+it('an iMessage copy keeps the alarm for the next reminder, and the copy goes out on the next pass', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await answered(w, 'Morning');
+  await dueReminder(w, 'app_imessage');
+  const laterDue = await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'rem-2')
+      .set({ note: 'book the dentist', at: new Date(Date.now() + 119 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+    return state.storage.sql.exec<{ due: number }>("SELECT MAX(due_at) AS due FROM schedule WHERE kind = 'reminder'").one().due;
+  });
+  await fireDue(w);
+  await w.pump();
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the copy reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: REMINDER });
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(reminderRuns(state)).toEqual(['completed']);
+    const alarm = await state.storage.getAlarm();
+    expect(alarm, 'the next reminder still has its wake').not.toBeNull();
+    expect(alarm!).toBeLessThanOrEqual(laterDue);
+  });
+});
+
 it('once the owner unlinks iMessage, proactive work goes to the app alone and iMessage reads as not linked', async () => {
   const w = await world();
   await w.pairAndActivate();

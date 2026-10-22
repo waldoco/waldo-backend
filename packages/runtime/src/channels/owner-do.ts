@@ -959,8 +959,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!latest) throw new Error('imessage_unbound');
     const commandId = `wpc_${(await sha256Hex(id)).slice(0, 40)}`;
     new IMessageFinalOutbox(this.ctx.storage).freezeProactive(id, commandId, targetOf(latest), redactSecretUrls(text).text);
-    this.ctx.waitUntil(drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0)
-      .then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now())).catch(() => { console.error('imessage outbox drain deferred'); }));
   }
   // How each surface takes a copy of a message the app already has: under that message's id, behind the surface's prefix.
   private readonly copyQueues: Readonly<Record<ProactiveTarget, Readonly<{ prefix: string; queue(id: string, text: string, appAt: number): Promise<void> }> | null>> = {
