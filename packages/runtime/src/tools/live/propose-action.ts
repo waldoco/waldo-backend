@@ -4,6 +4,7 @@ import {
   type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import type { z } from 'zod';
+import type { RunEffectScope } from '../../channels/run-effect-scope';
 import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
 import { TOOL_ARG_SCHEMAS } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
@@ -115,4 +116,17 @@ export const approvalReplayContext = (input: Readonly<{
     ...(input.egressAllowlist === undefined ? {} : { egressAllowlist: input.egressAllowlist }),
     session: buildSessionState({ trigger: 'user_message', canary_tokens: canaryTokens, started_at: Date.now() }),
   };
+};
+
+// An approved card's frozen call, run by its replay job under the job's run scope (a browser step needs a scope the owner's
+// browser accepts, which a decision cannot hold). The card must still be running under the digest the job froze; anything
+// else is refused before the tool runs.
+export const approvalJobReplay = (input: Readonly<{
+  current(approvalId: string, argsDigest: string): Promise<boolean>;
+  handlers: () => DispatchToolOptions<ToolDispatcherContext>['handlers'];
+  context: () => ToolDispatcherContext;
+}>) => async (brief: Readonly<{ approval_id: string; tool: string; args: Record<string, unknown>; args_digest: string }>, scope: RunEffectScope): Promise<TaintedActionOutcome> => {
+  if (!await input.current(brief.approval_id, brief.args_digest)) return { status: 'failed', message: 'The stored action no longer matches what you approved, so nothing ran.' };
+  return taintedActionReplay({ handlers: input.handlers, context: () => ({ ...input.context(), runScope: scope }) })(
+    { tool: brief.tool, args: brief.args, args_digest: brief.args_digest, reasoning: '', source: 'external' }, brief.approval_id);
 };

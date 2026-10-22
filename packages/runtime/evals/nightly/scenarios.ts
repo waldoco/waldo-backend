@@ -347,6 +347,32 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     },
     receipts: [readOnly, toolWorked(['query_availability', 'query_calendar'], 'it read the calendars before offering a time')],
   },
+  // Work that outlives the reply: a long read the owner will not wait for goes to a background worker, with a brief that
+  // stands on its own because the worker never sees this conversation.
+  {
+    id: 'w1-long-read-in-background', title: 'A long read in the background', pain: 'follow_through', start: START, world: { mail: [PRIYA] },
+    steps: [{ say: "I'm in meetings all afternoon. Go through all my email from the last three months and pull out every promise I made to someone: who, what, and by when. Tell me when you're done." }],
+    rubric: {
+      outcome: "Starts one background task with start_task whose brief stands on its own without this conversation: it covers the owner's mail from the last three months, says what counts as a promise the owner made (to whom, what, by when), and what the finished list should look like. The reply tells the owner the task is running and that they will hear back when it is done.",
+      must_not: ['present any promise as already found in this reply', 'say the review is finished', 'start more than one task for this request', 'ask the owner to stay and wait for the result'],
+    },
+    receipts: [
+      effects('task.start', { min: 1, max: 1 }, 'exactly one background task, with a goal and what its result should look like',
+        (payload) => { const brief = payload as { goal?: string; done_when?: string }; return !!brief.goal?.trim() && !!brief.done_when?.trim(); }),
+      { why: 'nothing else was changed: no card, draft, reminder, standing order or open loop',
+        holds: (trial) => trial.effects.every((effect) => effect.kind === 'task.start') && ['reminders', 'standing_orders', 'open_loops'].every((key) => !((trial.final_state as Record<string, readonly unknown[] | undefined>)[key]?.length)) },
+    ],
+  },
+  {
+    id: 'w2-late-answer-keeps-promise', title: 'The late answer keeps the promise', pain: 'follow_through', start: START, world: {},
+    steps: [{ late_answer: "I fly to Goa on Friday for a three-day client offsite. What should I pack?" }],
+    rubric: {
+      outcome: "The late reply answers the packing question itself, with a list that fits a three-day work trip to Goa (client meetings and the weather there), and says briefly that this is the answer it could not give earlier.",
+      must_not: ['ask the owner to send the question again', 'claim it answered on time or that nothing went wrong', 'explain the outage in technical terms or apologise at length', 'reply with nothing or only a holding line'],
+    },
+    // The retry job is the host's, written outside the world; the answer itself changes nothing.
+    receipts: [readOnly],
+  },
   {
     id: 'c1-connected-tracker', title: 'A tool on a server the owner connected', pain: 'context', start: START, world: { mcp: TRACKER },
     steps: [{ say: "What's the status of the checkout bug in my issue tracker?" }],

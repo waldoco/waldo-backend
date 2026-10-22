@@ -176,6 +176,7 @@ export const createOwnerResponder = (
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
+  let backgroundOwnerModel = false;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   // Before an effect or a published reply: authority read now, never a recent match.
   const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await skills?.admission?.assertFresh(); await backgroundCurrent?.(); privateRunScope?.admit(); };
@@ -224,6 +225,18 @@ export const createOwnerResponder = (
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
+  let ownerTurnStartedAt = 0;
+  // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
+  // out), else the plain line.
+  const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
+    if (typeof floor !== 'object' || !activeOwnerTurn) return MODEL_UNREACHABLE_REPLY;
+    const turn = activeOwnerTurn;
+    // The same view and taint the live turn ran under: others' words stay in their labelled blocks, and a reply to someone
+    // else's message keeps its tool arguments tainted.
+    return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: renderForModel(turn.parts).text,
+      taint: turnReplyContext && !turnReplyOwnAuthored ? 'external' : null,
+      ...(turn.messageRef ? { messageRef: turn.messageRef.id } : {}), receivedAt: ownerTurnStartedAt });
+  };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
@@ -282,7 +295,7 @@ export const createOwnerResponder = (
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
-      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => MODEL_UNREACHABLE_REPLY } : {}),
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
     await assertCurrent();
     privateRunScope?.admit();
@@ -643,7 +656,8 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
-          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
+          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
+          // to it, gets the chat model.
           return complete(trace, 'reply',
           { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections },
           entries,
@@ -651,7 +665,7 @@ export const createOwnerResponder = (
           attachments.length ? attachments : undefined,
           tools,
           withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
-          ownerTurnActive ? undefined : auxiliaryModel,
+          ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel,
           );
         },
         onTool: (event) => {
@@ -881,6 +895,7 @@ export const createOwnerResponder = (
       try {
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };
+        ownerTurnStartedAt = Date.now();
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const received = receivedView(turn.parts);
@@ -900,10 +915,11 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, reminderCheckBackText(note), time, false, surface, CHECK_BACK_TOOLS);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), conversationRef);
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
+      backgroundOwnerModel = ownerModel === true;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const messageChars = deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
       const said = fitPromptToBudget(jobText, Math.floor(messageChars / 2));
@@ -938,7 +954,7 @@ export const createOwnerResponder = (
         }
         promptContext = turnContext ?? '';
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; }
     },
     async consolidate(trace, day, sides) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));

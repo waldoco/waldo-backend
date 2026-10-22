@@ -47,8 +47,8 @@ describe('nightly eval gate', () => {
       .toEqual(['pass rate 0.7 required but nothing was graded']);
   });
 
-  it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set, the runnable errands, the connector case, the health trigger case and the state and memory set', () => {
-    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 60, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
+  it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set, the runnable errands, the connector case, the health trigger case, the state and memory set and the two worker scenarios', () => {
+    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 62, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
   });
 
   it('renders a marked, text-free comment with the verdict, totals and each scenario', () => {

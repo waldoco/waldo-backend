@@ -9,6 +9,7 @@ import {
   triggerTypeSchema,
   type ToolName,
 } from '@waldo/contracts';
+import { retryTurnText } from '../src/tasks/retry-turn';
 import { createOwnerResponder, spendHold, type OwnerSpend } from '../src/channels/owner-turn';
 import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
 import { modelCost } from '../src/llm/pricing';
@@ -107,6 +108,21 @@ it('a Brief still goes out past the ceiling, on the auxiliary model', async () =
   const reply = await responder(gateway, at(40)).prompt('brief-1', 'telegram-1', 'Write the morning brief.', time);
   expect(reply).toContain('two meetings');
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
+});
+
+it('a retried owner turn (R-4) runs on the owner turn\'s model, and past the ceiling on the auxiliary route', async () => {
+  const text = retryTurnText({ message_ref: 'tg-1', text: 'What should I pack for Goa?', conversation_ref: 'telegram-1', said_at: NOW - 600_000, promised_by: NOW + 1_200_000 }, 'Asia/Kolkata');
+  const under = scripted([{ text: 'Late answer: light cottons.' }]);
+  await responder(under.gateway, at(3)).prompt('retry:job_1', 'telegram-1', text, time, undefined, undefined, undefined, undefined, undefined, undefined, true);
+  const capped = scripted([{ text: 'Late answer: light cottons.' }]);
+  await responder(capped.gateway, at(40)).prompt('retry:job_1', 'telegram-1', text, time, undefined, undefined, undefined, undefined, undefined, undefined, true);
+  // Under the ceiling the late answer gets the model the owner's own turn would have; past it, the cheap route.
+  expect(under.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(capped.models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
+  // A job Waldo starts itself stays on the auxiliary model either way.
+  const own = scripted([{ text: 'Brief.' }]);
+  await responder(own.gateway, at(3)).prompt('brief-2', 'telegram-1', 'Write the morning brief.', time);
+  expect(own.models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
 });
 
 it('past the ceiling a paid tool is refused before it runs, in the one refusal shape, and the ledger counts the hold', async () => {

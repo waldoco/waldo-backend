@@ -10,7 +10,7 @@ export const BRAIN_NAMESPACES = {
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, memory about one topic with its evidence, past conversations, stored tool output and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
-  reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, and tracked responsibilities.',
+  reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
   skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
@@ -128,6 +128,10 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   cancel_standing_order: { brain: 'settings', scope: 'allow', claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
   call_mcp_tool: { brain: 'web', scope: 'deny', claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown') },
+  // core: a task the model cannot see is a task it never starts, so start_task loads every round. scope deny: its worker
+  // reads mail, files and the web for the brief. Started is not done: the owner hears the result from the apply turn.
+  start_task: { brain: 'core', scope: 'deny', claim: 'task_started', replay: { replay: 'provider_idempotent', basis: 'the job key is turn+toolCall and the job book keeps one job per key; a replay returns the job already made', evidence: { file: 'tasks/tools.ts', needle: 'idempotencyKey: key' } } },
+  cancel_task: { brain: 'reminders', scope: 'allow', claim: 'task_cancelled', replay: { replay: 'provider_idempotent', basis: 'cancels by job id; a second cancel finds the job settled and changes nothing', evidence: { file: 'tasks/jobs.ts', needle: 'WHERE id = ? AND status IN (${placeholders(OPEN)})' } } },
   // scope allow: the source guard is applied to the child's handlers too. claim null: it runs a read-only subagent.
   delegate_task: { brain: 'actions', scope: 'allow', claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
   remember: { brain: 'core', scope: 'allow', claim: 'memory_stored', replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },

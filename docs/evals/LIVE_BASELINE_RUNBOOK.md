@@ -29,7 +29,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
 | `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
-| `WALDO_EVAL_MAX_CALLS` | required for live | `2400`: `pnpm eval:plan` suggests 2000 in split mode and 1500 in joint mode for 3 trials of today's catalogue, and the workflow sets 2400 so a scenario or two more does not exhaust the budget, which fails the gate |
+| `WALDO_EVAL_MAX_CALLS` | required for live | `2400`: `pnpm eval:plan` suggests 2100 in split mode and 1500 in joint mode for 3 trials of today's catalogue, and the workflow sets 2400 so a scenario or two more does not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
 | `WALDO_EVAL_TRIALS` | optional | `3`, which pass^k needs |
@@ -67,18 +67,18 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 2. **Schedule it from `main`, with the job checking out `beta-mvp` explicitly.** A schedule always runs the default branch's latest commit, so without an explicit checkout it tests `main`'s code.
 3. **Make `beta-mvp` the default branch.**
 
-The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,200 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together.
+The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,260 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together.
 
 ## Calls and cost per run
 
-`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 61 scenarios, 58 of them runnable, at 3 trials:
+`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 65 scenarios, 62 of them runnable, at 3 trials:
 
 | | Split (default) | Joint |
 | --- | --- | --- |
-| Owner turns and fired reminders | 243 | 243 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 486 to 1,215 | 486 to 1,215 |
-| Judge calls | 780 | 216 |
-| Suggested `WALDO_EVAL_MAX_CALLS` | 2000 | 1500 |
+| Owner turns and fired reminders | 252 | 252 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 504 to 1,260 | 504 to 1,260 |
+| Judge calls | 816 | 228 |
+| Suggested `WALDO_EVAL_MAX_CALLS` | 2100 | 1500 |
 
 A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 

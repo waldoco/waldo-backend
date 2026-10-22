@@ -119,6 +119,8 @@ describe('toolName', () => {
       'search_contacts',
       'send_progress_note',
       'attach_file',
+      'start_task',
+      'cancel_task',
     ]);
   });
 
@@ -315,6 +317,8 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'start_task',
+      'cancel_task',
       ],
       dreaming_mode: ['read_memory', 'search_episodes'],
       pre_activity_spot: [

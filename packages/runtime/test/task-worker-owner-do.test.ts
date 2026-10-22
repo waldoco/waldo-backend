@@ -1,0 +1,130 @@
+import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
+import { persistInboxWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import type { JobRow } from '../src/tasks/jobs';
+import { taskWorkerName } from '../src/tasks/worker-do';
+
+// The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
+// worker's alarm runs the attempt and reports over RPC, and the owner's next alarm tells the owner once. The model and
+// Telegram are the only fakes.
+const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0 }));
+vi.mock('../src/channels/telegram-api', async load => ({
+  ...await load<typeof import('../src/channels/telegram-api')>(),
+  createTelegramCaller: () => async (method: string, params?: unknown) => {
+    if (method === 'sendMessage') seen.sent.push(JSON.stringify(params));
+    return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: seen.sent.length } : true;
+  },
+}));
+vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
+  seen.bodies.push(JSON.stringify(body));
+  if (seen.down > 0) { seen.down -= 1; throw Object.assign(new Error('provider down'), { status: 503 }); }
+  const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
+  return { id: 'fixture', output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [] };
+} }; } }));
+beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; });
+
+const NAME = 'task-worker-e2e';
+const owner = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(NAME));
+const fn = (name: string, args: unknown) => [{ type: 'function_call', call_id: `call-${name}`, name, arguments: JSON.stringify(args) }];
+const BRIEF = { profile: 'reader', title: 'Inbox since Monday', goal: 'Find client mail that still needs a reply.', context: 'Clients write from company domains.', done_when: 'A list of threads with who is waiting.' };
+const RESULT = { status: 'done', summary: 'Two client threads wait on you.', findings: [{ text: 'Asha asked for the quote on Tuesday.' }], proposals: [], left: [] };
+// Polls up to about 5 s, so each case sets its own timeout above the config's 5 s default.
+const until = async <T,>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
+  for (let tries = 0; tries < 100; tries += 1) { const value = await read(); if (done(value)) return value; await new Promise(resolve => setTimeout(resolve, 50)); }
+  return read();
+};
+const jobs = (sql: SqlStorage) => sql.exec<JobRow>('SELECT * FROM task_jobs').toArray();
+
+it('an owner turn starts a task; the worker runs with no authority and the result reaches the owner exactly once', async () => {
+  seen.outputs.push(fn('start_task', BRIEF), []);
+  await runInDurableObject(owner(), async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: NAME, origin: 'https://fixture.invalid' });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: NAME }, 1,
+      JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: 1, text: 'Go through my inbox since Monday and tell me who is waiting on me' } }));
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    const [job] = jobs(state.storage.sql);
+    expect(job).toMatchObject({ kind: 'task', profile: 'reader', status: 'queued', surface: 'telegram' });
+    expect(JSON.parse(job!.brief_json)).toMatchObject({ goal: BRIEF.goal, timezone: expect.any(String) });
+    expect(await state.storage.get<number>(TASK_JOBS_DUE_KEY)).toBeLessThanOrEqual(Date.now());
+  });
+  // The owner turn's tool list offered start_task, chosen by the model, not routed by any rule.
+  expect(seen.bodies.some(body => body.includes('"start_task"'))).toBe(true);
+
+  // The owner's alarm starts attempt 1 on a worker of its own; the worker's alarm, and the owner's wake after the report,
+  // fire on their own in workerd. The worker's model finishes at once; the apply turn answers plain text.
+  seen.outputs.push(fn('finish_task', RESULT), []);
+  const before = seen.bodies.length;
+  await runDurableObjectAlarm(owner());
+  const settled = await until(() => runInDurableObject(owner(), (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'applied');
+  expect(settled).toMatchObject({ status: 'applied', attempt: 1, outcome: 'done', checkpoint_json: null });
+  const jobId = settled.id;
+  const workerBody = seen.bodies.slice(before).find(body => body.includes(BRIEF.goal) && body.includes('finish_task'))!;
+  // The worker's model sees the brief and the profile's tools, never the conversation or a send, approve or memory tool.
+  expect(workerBody).toBeDefined();
+  expect(workerBody).not.toContain('tell me who is waiting on me');
+  for (const tool of ['send_message', 'send_email', 'remember', 'forget_memory', 'raise_approval', 'start_task', 'delegate_task']) expect(workerBody).not.toContain(`"name":"${tool}"`);
+
+  // One record under the job's key, however many alarms run.
+  await runDurableObjectAlarm(owner());
+  await runInDurableObject(owner(), async (_instance, state) => {
+    const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
+    expect(outbox.filter(record => record.id === `task:${jobId}`)).toHaveLength(1);
+    expect(jobs(state.storage.sql)[0]!.status).toBe('applied');
+  });
+  const workers = (env as unknown as TelegramWebhookEnv).TASK_WORKER_DO!;
+  const ticket = { jobId, attempt: 1, token: 'any' };
+  // The worker cleared its own storage when its attempt ended.
+  await runInDurableObject(workers.get(workers.idFromName(taskWorkerName(owner().id.toString(), ticket))), async (_instance, state) => {
+    expect([...(await state.storage.list()).keys()]).toEqual([]);
+  });
+  const applyBody = seen.bodies.find(body => body.includes('A background task you started has finished'));
+  expect(applyBody).toContain('Asha asked for the quote on Tuesday.');
+  // A late second report from the same attempt is a duplicate: it changes nothing.
+  await runInDurableObject(owner(), async (instance, state) => {
+    const rpc = instance as unknown as { taskReport(...args: unknown[]): Promise<string> };
+    expect(await rpc.taskReport(ticket, { kind: 'result', result: { ...RESULT, summary: 'forged' } }, [], { rounds: 0, costUsd: 0 })).toBe('duplicate');
+    expect(JSON.parse(jobs(state.storage.sql)[0]!.result_json!).summary).toBe(RESULT.summary);
+  });
+}, 30_000);
+
+it('R-4: when no model answers the owner, the floor reply promises a time and the retry keeps it, once', async () => {
+  const name = 'retry-turn-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  seen.down = 1_000;
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: name }, 1,
+      JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: 1, text: 'What should I pack for Goa?' } }));
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    seen.down = 0;
+    const [job] = jobs(state.storage.sql);
+    expect(job).toMatchObject({ kind: 'retry_turn', status: 'queued', surface: 'telegram' });
+    expect(JSON.parse(job!.brief_json)).toMatchObject({ text: 'What should I pack for Goa?' });
+    expect(job!.due_at).toBeGreaterThan(Date.now());
+    // The floor reply the owner gets names the promised time; the job holding that promise was written first.
+    const queued = (state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
+    expect(queued.some(text => /^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/.test(text))).toBe(true);
+    // The first try is due; the owner's alarm runs it.
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), job!.id);
+    await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+  });
+  // Providers come back later. The object is evicted meanwhile (its provider breaker, still open from the outage, goes
+  // with it); the promise lives in the job row and survives.
+  await evictDurableObject(stub);
+  seen.outputs.push([]);
+  await runDurableObjectAlarm(stub);
+  const settled = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), row => row.status === 'applied');
+  expect(settled.status).toBe('applied');
+  const retried = seen.bodies.find(body => body.includes('this is the late answer'));
+  expect(retried).toContain('What should I pack for Goa?');
+  await runDurableObjectAlarm(stub);
+  await runInDurableObject(stub, (_instance, state) => {
+    const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
+    expect(outbox.filter(record => record.id === `retry:${settled.id}`)).toHaveLength(1);
+  });
+}, 30_000);

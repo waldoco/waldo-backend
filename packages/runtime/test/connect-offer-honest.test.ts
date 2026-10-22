@@ -9,6 +9,8 @@ const READ = 'what is on my calendar';
 const SENT_CLAIM = 'connect button is in the chat';
 const model = vi.hoisted(() => ({ requests: [] as { tool_turns?: unknown; messages: { content: string }[]; response_format?: unknown }[] }));
 const telegram = vi.hoisted(() => ({ deliver: true, sent: [] as unknown[] }));
+// How many times the dead grant reports invalid_grant per read: concurrent reports must still notice the owner once.
+const grant = vi.hoisted(() => ({ reports: 1 }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; reply_markup?: unknown }) => {
@@ -37,7 +39,7 @@ vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health: (error: string) => void, account: unknown) => ({
     account, events: async () => [],
-    calendarPage: async () => { health('invalid_grant'); throw new original.GoogleError(401, 'invalid_grant'); },
+    calendarPage: async () => { for (let n = 0; n < grant.reports; n += 1) health('invalid_grant'); throw new original.GoogleError(401, 'invalid_grant'); },
   }) };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
@@ -47,7 +49,7 @@ const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'sy
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const rpcs: string[] = [];
 beforeEach(() => {
-  model.requests = []; telegram.sent = []; telegram.deliver = true; rpcs.length = 0;
+  model.requests = []; telegram.sent = []; telegram.deliver = true; rpcs.length = 0; grant.reports = 1;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -112,6 +114,28 @@ describe('connecting Google from a chat turn', () => {
         expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);
         expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
         expect(await state.storage.get('google:reauth-noticed')).toBeUndefined();
+      } finally { await state.storage.deleteAlarm(); }
+    });
+  });
+
+  it('two failures reported at once on one grant notice the owner once: Google health bookkeeping runs one at a time', async () => {
+    const name = 'connect-app-reauth-concurrent';
+    grant.reports = 2;
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      claimStore(state.storage.sql); ensureSchema(state.storage);
+      state.storage.kv.put('do_name', name);
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      try {
+        const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-reauth-0002', text: READ }) }));
+        expect(sent.status).toBe(202);
+        const { message_id: id } = await sent.json() as { message_id: string };
+        await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice_skipped:1'), { timeout: 5_000, interval: 20 });
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(traceHops(state).filter(hop => hop === 'google_reauth_notice_skipped:1')).toHaveLength(1);
+        expect(await state.storage.get('google:health')).toEqual({ 'local:owner@example.test': 'invalid_grant' });
       } finally { await state.storage.deleteAlarm(); }
     });
   });

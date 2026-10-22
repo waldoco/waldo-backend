@@ -6,6 +6,8 @@ import type { Judge } from '../evals/nightly/judge';
 import { nightlyConfig } from '../evals/nightly/config';
 import { SCENARIOS, type NightlyScenario } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
+import { failedReceipts } from '../evals/nightly/receipts';
+import { runTrial } from '../evals/nightly/trial';
 import { evalWorld } from '../evals/nightly/world';
 
 const quick = (id: string, extra: Partial<NightlyScenario> = {}): NightlyScenario => ({
@@ -76,19 +78,80 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the health trigger case, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(27);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the health trigger case, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(29);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(29);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      // Something happens to the owner: they speak, or the health trigger runs on a change in their health.
-      expect(scenario.steps.some((step) => 'say' in step || 'health_change' in step)).toBe(true);
+      // Something happens to the owner: they speak, an answer comes late, or the health trigger runs on a change in their health.
+      expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step || 'health_change' in step)).toBe(true);
     }
+  });
+
+  it('gives the background-task scenario the production start_task, which records the brief once per call', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const world = evalWorld(scenario.world, scenario.start);
+    const start = world.handlers.find((handler) => handler.name === 'start_task')!;
+    expect(start.description).toContain('never this conversation');
+    const args = { profile: 'reader', title: 'Promises', goal: 'List promises the owner made.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' };
+    const ctx = { turnId: 'turn-1', toolCallId: 'call-1' } as never;
+    const first = await start.handle(args as never, ctx);
+    expect(first).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    expect(await start.handle(args as never, ctx)).toEqual(first);
+    expect(world.effects()).toEqual([{ kind: 'task.start', payload: expect.objectContaining({ profile: 'reader', goal: args.goal, timezone: 'Asia/Kolkata' }) }]);
+  });
+
+  it('runs the late-answer scenario as R-4 does: the floor promise, then one retry turn on the owner model that quotes the message', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Sorry for the wait: linen shirts, one blazer, sunscreen.' }] }] });
+    const record = await runTrial(scenario, { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    expect(record.transcript.map((line) => line.role)).toEqual(['owner', 'waldo', 'world', 'waldo']);
+    expect(record.transcript[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+    expect(record.transcript[3]!.text).toBe('Sorry for the wait: linen shirts, one blazer, sunscreen.');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    expect(JSON.stringify(retry)).toContain('What should I pack?');
+    expect(retry.model).toBe(WALDO_CHAT_MODEL);
+    // The owner's turn wrote its message and the floor reply into the conversation, which the retry reads first.
+    const history = retry.messages.slice(0, -1).map((message) => `${message.role}:${JSON.stringify(message.content)}`).join('\n');
+    expect(history).toContain('What should I pack?');
+    expect(history).toMatch(/assistant:.*I can't answer properly right now/);
+  });
+
+  it('holds the background-task and late-answer scenarios to state asserted in code', async () => {
+    const w1 = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const w2 = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const brief = (title: string) => ({ name: 'start_task', arguments: { profile: 'reader', title, goal: 'Find every promise the owner made in mail from the last three months.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' } });
+    const w1Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w1, { gateway: scriptedGateway({ rules: [{ match: /every promise I made/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises')] }, { text: 'On it; I will tell you when it is done.' }]))).toEqual([]);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ text: 'Here are your promises.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), brief('Promises, again')] }, { text: 'Started twice.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    const reminder = { name: 'set_reminder', arguments: { note: 'check the promises list', at: '2026-09-24T18:00', repeat: 'none' } };
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), reminder] }, { text: 'On it.' }]))).toEqual(['nothing else was changed: no card, draft, reminder, standing order or open loop']);
+
+    const w2Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w2, { gateway: scriptedGateway({ rules: [{ match: /this is the late answer/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ text: 'Late, sorry: linen shirts, one blazer, sunscreen.' }]))).toEqual([]);
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ toolCalls: [reminder] }, { text: 'Late, sorry. I set a reminder.' }])).join()).toContain('nothing was changed');
+  });
+
+  it('a late answer to a message with health values reads it from the conversation, never from the retry brief', async () => {
+    const said = 'My resting heart rate was 72 bpm this morning, should I still run tonight?';
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Late, sorry: an easy run is fine.' }] }] });
+    const record = await runTrial(quick('health-late', { steps: [{ late_answer: said }] }), { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    const prompt = JSON.stringify(retry.messages.at(-1)!.content);
+    expect(prompt).toContain('Its text was not kept, because it held health details');
+    expect(prompt).not.toContain('72 bpm');
+    expect(JSON.stringify(retry.messages.slice(0, -1))).toContain('72 bpm');
   });
 
   it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {

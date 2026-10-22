@@ -102,7 +102,9 @@ describe('the brain tool surface', () => {
   it('places every tool once: about a dozen core tools, the rest in namespaces of fewer than ten', () => {
     expect(Object.keys(TOOL_RECORDS).sort()).toEqual([...toolNameSchema.options].sort());
     const core = Object.entries(TOOL_RECORDS).filter(([, record]) => record.brain === 'core').map(([name]) => name);
-    expect(core.length).toBeLessThanOrEqual(13);
+    expect(core.length).toBeLessThanOrEqual(14);
+    // A background task the model cannot see is one it never starts.
+    expect(core).toContain('start_task');
     for (const namespace of Object.keys(BRAIN_NAMESPACES)) {
       const members = Object.values(TOOL_RECORDS).filter((record) => record.brain === namespace).length;
       expect(members, namespace).toBeGreaterThan(0);

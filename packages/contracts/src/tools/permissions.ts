@@ -106,6 +106,9 @@ export const toolNameSchema = z.enum([
   'send_progress_note',
   // attach_file: queue one of the owner's workspace files to go out with this turn's reply, where the surface carries files.
   'attach_file',
+  // start_task/cancel_task: hand long, parallel or untrusted work to a task worker that holds no authority, and stop one.
+  'start_task',
+  'cancel_task',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -281,6 +284,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_install',
     'skills_disable',
     'skills_load',
+    'start_task',
+    'cancel_task',
   ],
   dreaming_mode: ['read_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).

@@ -100,14 +100,16 @@ const notices = (messages: Shown) => messages.filter(message => message.role ===
 const record = (state: DurableObjectState, id: string) => state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${id}`)!;
 
 describe('an app turn that does not finish', () => {
+  // No model reachable mid-turn: the owner's reply is the floor's promise of a later answer (a retry job keeps it), and it
+  // still says what the turn's tools already did. The did-not-finish reply stays for a run that never ends (below).
   it('keeps what its tools already did on the record, so the next turn sees it', async () => {
     const name = 'app-did-not-finish-ledger';
     await withOwner(name, {}, async (owner, state) => {
       model.effectThenFail = true;
       const unfinished = await send(owner(), state, name, 'ledger-client-01', 'Set quiet hours from 9pm to 7am.');
-      expect(unfinished.outcome).toBe('interrupted');
-      // The reply that says the run did not finish also says what its tools already did; the inbox keeps no copy.
-      expect(notices(await shown(owner(), name))[0]!.text).toMatch(/^[^\n]+\n\nDone: proactivity set\n\nRequest received: /);
+      expect(unfinished.outcome).toBe('completed');
+      const [, promise] = await shown(owner(), name);
+      expect(promise!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.\n\nDone: proactivity set$/);
       expect(record(state, unfinished.id).landed).toBeUndefined();
       model.effectThenFail = false; model.requests = [];
       expect((await send(owner(), state, name, 'ledger-client-02', 'Are my quiet hours set?')).outcome).toBe('completed');
@@ -117,25 +119,23 @@ describe('an app turn that does not finish', () => {
     });
   });
 
-  it('leaves one "did not finish" reply under the owner\'s message, and the next turn sees it', async () => {
+  it('a provider outage leaves one promise under the owner\'s message, kept by a retry job, and the next turn sees it', async () => {
     const name = 'did-not-finish-in-process';
     await withOwner(name, {}, async (owner, state) => {
       model.fail = true;
       const failed = await send(owner(), state, name, 'client-fails-0001', 'Move my 4pm to 5pm.');
-      expect(failed.outcome).toBe('interrupted');
+      expect(failed.outcome).toBe('completed');
       const messages = await shown(owner(), name);
       expect(messages.map(message => [message.role, message.parent_id])).toEqual([['user', null], ['assistant', failed.id]]);
-      expect(notices(messages)).toHaveLength(1);
-      expect(notices(messages)[0]!.text).toMatch(/\n\nRequest received: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/);
-      const notice = notices(messages)[0]!;
-      expect(notice.parts).toEqual([{ type: 'text', text: notice.text }, { type: 'operation', operation_id: failed.id, state: 'interrupted', message: notice.text }]);
+      expect(notices(messages)).toHaveLength(0);
+      expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.$/);
+      expect(state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM task_jobs').toArray()).toEqual([{ kind: 'retry_turn', status: 'queued' }]);
       model.fail = false;
       const next = await send(owner(), state, name, 'client-next-0001', 'Did that happen?');
       expect(next.outcome).toBe('completed');
-      expect(model.requests.at(-1)).toContain(NOTICE);
+      expect(model.requests.at(-1)).toContain("I'll come back to you by");
       const after = await shown(owner(), name);
-      expect(after.map(message => message.parent_id)).toEqual([null, failed.id, `${failed.id}-did-not-finish`, next.id]);
-      expect(after.at(-1)!.parts.map(part => (part as { type: string }).type)).toEqual(['text']);
+      expect(after.map(message => message.parent_id)).toEqual([null, failed.id, after[1]!.id, next.id]);
     });
   });
 
@@ -266,10 +266,12 @@ describe('transcript rows carry the time they were stored', () => {
 
   it('the "did not finish" reply carries created_at too', async () => {
     const name = 'created-at-notice';
-    await withOwner(name, {}, async (owner, state) => {
-      model.fail = true;
+    const admittedAt = Date.now() - 60_000, id = `app-${APP_UPDATE_BASE + 1}`;
+    const stored = { ...history([user(id, 'Book the dentist for Friday.', null)], id), [`app:inbox-record:${id}`]: running(id, admittedAt), app_seq: 1 };
+    await withOwner(name, stored, async (owner, state) => {
       const before = Date.now();
-      await send(owner(), state, name, 'client-fails-0002', 'Move my 4pm to 5pm.');
+      await owner().alarm();
+      expect(record(state, id).state).toBe('interrupted');
       const [notice] = notices(await shown(owner(), name));
       expect(notice!.created_at).toBeGreaterThanOrEqual(before);
     });

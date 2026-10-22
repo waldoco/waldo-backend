@@ -18,6 +18,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { jobBook } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
@@ -110,6 +111,9 @@ type Steps = Readonly<{
   claims(status?: 'purging'): string[];
   // Forget topics still waiting for a verified purge.
   heldTopics(): string[];
+  // A background task whose brief carries the text, and the status of every task.
+  task(text: string): void;
+  tasks(): { status: string; cancel_reason: string | null }[];
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -207,6 +211,12 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
         cancel: async id => { expect(await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').cancel(id)).toBe(true); },
         claims: status => memory.claims(status).map(claim => claim.text),
         heldTopics: () => memory.pendingTopics(),
+        task: text => {
+          const brief = { title: 'Quarterly numbers', goal: `Find the latest mail about the ${text}.`, context: `The owner asked about the ${text} draft.`, done_when: 'The newest mail, summarised.', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+          jobBook(state.storage.sql, { now: Date.now, newId: () => 'c0ffee000001', newToken: () => 'token' })
+            .create({ kind: 'task', profile: 'reader', idempotencyKey: 'forget-task', origin: 'turn', surface: 'whatsapp', brief, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR });
+        },
+        tasks: () => state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray(),
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -414,6 +424,16 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       expect(job('reminder').run).toEqual([{ status: 'stopped', summary: STOPPED_REMINDER }]);
       expect(note(id)).toBe('send the quarterly numbers');
       expect(armed(id)).toBe(true);
+    });
+  });
+});
+
+describe('owner forget reaches an open background task', { timeout: 30_000 }, () => {
+  it.each(['node', 'spot'] as const)('cancels it from the console (%s), so its worker cannot report the text back', async kind => {
+    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, forget }) => {
+      task(SECRET);
+      expect(await forget(kind, SECRET)).toBe(true);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
     });
   });
 });
