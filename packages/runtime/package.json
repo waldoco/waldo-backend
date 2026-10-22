@@ -14,6 +14,7 @@
     "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
     "eval:nightly": "tsx evals/nightly/main.ts",
     "eval:voice-agreement": "tsx evals/nightly/voice-agreement.ts",
+    "eval:plan": "tsx evals/nightly/plan.ts",
     "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts && vitest run --config vitest.imessage.config.ts && vitest run --config vitest.mac-closeout.config.ts",
     "test:imessage": "vitest run --config vitest.imessage.config.ts"
   },
