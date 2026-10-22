@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { traceBook } from '../src/channels/harness';
 import { reminderBook } from '../src/channels/reminders';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
+import { loopBook } from '../src/channels/loops';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -93,6 +95,10 @@ const drive = async (name: string, script: (steps: Readonly<{
     const clockBack = (ms: number) => () => new Date(Date.now() - ms);
     const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
+    // The owner's own schedule (day cards, heartbeat, nightly, brief sweep) is off: it is planned on the real date, so a step
+    // run with the clock moved forward would find those entries due and add records these tests do not make.
+    const preferences = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }));
+    for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) preferences.set(kind, false);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
     // The owner last wrote 30 hours ago, so WhatsApp's 24-hour window is closed.
