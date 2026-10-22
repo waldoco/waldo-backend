@@ -19,9 +19,9 @@ begin transaction isolation level repeatable read read only;
 \echo '== 0. Server clock and whether this role sees every row'
 select now() as server_now, current_user as role, (select rolsuper or rolbypassrls from pg_roles where rolname = current_user) as sees_every_row;
 
-\echo '== 1. Health migrations applied (per-sample ingest is 20261022120000)'
+\echo '== 1. Health migrations applied (per-sample ingest is 20261022150000)'
 select version, name from supabase_migrations.schema_migrations
-where version >= '20261011000000' and (name like '%health%' or version = '20261022120000') order by version;
+where version >= '20261011000000' and (name like '%health%' or version = '20261022150000') order by version;
 
 -- One row always, so an unknown email reads 'not found' instead of stopping the script.
 with found as (select o.id, o.auth_user_id, o.state from waldo.owners o where lower(o.email) = lower(:'owner_email') order by (o.state = 'active') desc limit 1)

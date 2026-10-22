@@ -4,7 +4,8 @@ import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
-import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
+import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
+import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
 import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
@@ -52,7 +53,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, runClaimDead
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -674,8 +675,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       });
     }finally{
-      const {rearmSharedAlarm}=await import('../scheduler/alarm-slot');
-      await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+      await this.rearmEveryWake();
     }
   }
   private readonly appAttempts = new Set<string>();
@@ -733,7 +733,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       finally { clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
     }
     await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
-    await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+    await this.rearmEveryWake();
   }
   private async appAuthority(name: string, hash: string) {
     if (!name || this.env.OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
@@ -1345,9 +1345,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
-  // Every wake the owner keeps, with the schedule's next entry. A routing object has no schedule.
+  // Every wake the owner keeps, with the schedule's next entry. Work outside the schedule (an app, iMessage, WhatsApp or Mac
+  // step) re-arms through here, or its re-arm would drop the alarm for the owner's next scheduled job. A routing object has no
+  // schedule.
   private async rearmEveryWake(): Promise<void> {
-    if (this.ctx.storage.kv.get(LINK_MODE)) await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+    if (this.ctx.storage.kv.get(LINK_MODE)) await rearmSharedAlarm(this.ctx.storage, NO_SCHEDULE_WAKE, Date.now());
     else await this.rearmWithSchedule();
   }
 
@@ -1536,7 +1538,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       changed = observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
         ...failed.map(({ id, at }) => ({ id, kind: 'failed' as const, at: at ?? now }))], addressed, now);
     });
-    await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+    await this.rearmEveryWake();
     // An arrival for a direct reply, or a repeat, changes nothing: the common case needs no follow-up.
     if (!refused.length && !changed) return new Response('ok');
     this.ctx.waitUntil(this.serial(async () => {
@@ -1710,6 +1712,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response(renderDevices(rows, session.csrf, nonce), { headers: devicePageHeaders(nonce) });
       } catch { return new Response('Devices unavailable.', { status: 503, headers: DEVICE_PAGE_HEADERS }); }
     }
+    if (url.pathname === CONSOLE_PHOTON_START_PATH && request.method === 'GET') return photonStart(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', url.origin);
     if (url.pathname === CONSOLE_IMESSAGE_PATH && request.method === 'GET') return iMessageConsolePage(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf);
     if (url.pathname.startsWith(`${WHATSAPP_LINK_PATH}/`) && request.method === 'GET') return whatsappLinkConfirmPage(url.pathname, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf, whatsappLinkDirectory(this.env));
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
@@ -2108,7 +2111,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (owing().length) await this.settleRetiredWhatsApp(owing(), 'whatsapp');
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
-          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' || targets === 'retry' || owing().length ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' || targets === 'retry' || owing().length ? Date.now() + APP_ADMISSION_RETRY_MS : NO_SCHEDULE_WAKE, Date.now(), 30_000);
           return;
         }
       }
@@ -2180,7 +2183,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const owner = await this.scheduledOwner();
           if (owner.kind !== 'admitted') {
             log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: owner.kind });
-            await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+            await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : NO_SCHEDULE_WAKE, Date.now(), 30_000);
             return;
           }
           if (channel === 'telegram' && owner.authority) {
@@ -2277,7 +2280,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const auth=await deviceDirectory(this.env).deviceForAuth(value.device_id);
     if(!auth || auth.owner_id!==value.owner_id || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString() || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name || this.ctx.storage.kv.get<boolean>('telegram_unlinked')===true)return false;
     const admitted=await macInbox(this.ctx.storage).admit(value);
-    if(admitted){await rearmSharedAlarm(this.ctx.storage,null,Date.now());this.ctx.waitUntil(this.serial(()=>this.drainMacDeliveries()).catch(()=>console.warn(JSON.stringify({module:'device_bridge',code:'followup_pending'}))));}
+    if(admitted){await this.rearmEveryWake();this.ctx.waitUntil(this.serial(()=>this.drainMacDeliveries()).catch(()=>console.warn(JSON.stringify({module:'device_bridge',code:'followup_pending'}))));}
     return admitted;
   }
   private async drainMacDeliveries(): Promise<void> {
@@ -2307,7 +2310,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         break;
       }
     }
-    await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+    await this.rearmEveryWake();
   }
   private async deliverMacRow(rowId: string, delivery: MacDelivery, current: () => Promise<void>, runtime: OwnerRuntime, inbox: ReturnType<typeof macInbox>): Promise<void> {
     await current();
@@ -3347,7 +3350,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!turn.runScope || !record || record.id !== turn.runScope.runId || record.attempt !== turn.runScope.attempt || record.updateId !== turn.updateId) throw new ClosedRunError();
         const text = redactSecretUrls(payload.text).text;
         turn.runScope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, text); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });
-        this.ctx.waitUntil(this.serial(() => drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0).then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now()))).catch(() => { console.error('imessage outbox drain deferred'); }));
+        this.ctx.waitUntil(this.serial(() => drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0).then(() => this.rearmEveryWake())).catch(() => { console.error('imessage outbox drain deferred'); }));
       } } : {}),
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
         // Capture probes remain inert and exercise the original immediate mock path.
