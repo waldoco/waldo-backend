@@ -208,6 +208,16 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (prior) return prior.result ? { kind: 'terminal', result: prior.result } : { kind: 'queued' };
     const environment = store.meta('environment'), bridgeId = store.meta('bridge_id'), accountId = store.meta('account_id');
     if (!environment || !bridgeId || !accountId) return { kind: 'retry' };
+    // A turn's progress note never follows its reply: refused once the reply is here, and withdrawn by the reply while the
+    // host has not pulled it. One the host already pulled goes out first, since the mailbox sends in order. Turn ids are per
+    // owner, so every match is within this owner's deliveries.
+    const [kind, turn] = input.replyRef.split(':');
+    const progress = kind === 'progress';
+    const ownNote = (d: DeliveryRow) => d.state === 'queued' && d.ownerDoName === input.ownerDoName && d.replyRef.startsWith(`progress:${turn}:`);
+    // The slot is read before any directory or signing work, so a reply waiting on it costs no lookup per retry. A note that
+    // cannot go now is stale by the time it could; a reply waits for the slot unless its own turn's note holds it.
+    const holder = store.outstanding();
+    if (holder && !(kind === 'reply' && ownNote(holder))) return progress ? { kind: 'terminal', result: replyNotStarted(input.commandId, null, 'progress_busy') } : { kind: 'busy' };
     let found: SenderAuthority | null;
     try {
       found = input.subject !== undefined ? await this.directory().senderAuthority(environment, bridgeId, accountId, input.subject)
@@ -225,10 +235,6 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (!store.online() || !caps || caps.readiness !== 'ready' || !caps.features.text.send || !caps.features.text.verified || !caps.features.text.exactTarget) return { kind: 'retry' };
     const key = await this.key(authority, environment, c.wrappingKey);
     if (!key) return { kind: 'retry' };
-    // A turn's progress note never follows its reply: refused once the reply is here, and withdrawn by the reply while the
-    // host has not pulled it. One the host already pulled goes out first, since the mailbox sends in order.
-    const [kind, turn] = input.replyRef.split(':');
-    const progress = kind === 'progress';
     let command: IMessageCommand;
     try { command = buildTextReply(binding, input.commandId, input.text); }
     catch { return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'reply_invalid') }; }
@@ -236,14 +242,13 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
     const commitment = await signCommitment({ bridgeId, accountId, deliveryId, commandId: command.commandId, commandDigest, expiresAtMs: now + c.policy.commitmentMaxAgeMs }, key);
     // Checked with no await before the enqueue, so a reply that landed during this call's awaits is seen.
-    if (progress && store.deliveriesFor(`reply:${turn}`).length) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_superseded') };
+    if (progress && store.deliveriesFor(input.ownerDoName, `reply:${turn}`).length) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_superseded') };
     try {
-      if (kind === 'reply') for (const note of store.deliveriesFor(`progress:${turn}:`)) if (note.state === 'queued') store.withdraw(note.deliveryId, 'progress_superseded');
+      if (kind === 'reply') for (const note of store.deliveriesFor(input.ownerDoName, `progress:${turn}:`)) if (ownNote(note)) store.withdraw(note.deliveryId, 'progress_superseded');
       store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: input.ownerDoName, replyRef: input.replyRef });
     } catch (error) {
       if (error instanceof BridgeStoreError && error.code === 'lane_quarantined') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'mutation_lane_poisoned') };
       if (error instanceof BridgeStoreError && error.code === 'command_conflict') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'command_conflict') };
-      // A note that cannot go now is stale by the time it could; a reply waits for the slot.
       if (error instanceof BridgeStoreError && error.code === 'outstanding_command') return progress ? { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_busy') } : { kind: 'busy' };
       return { kind: 'retry' };
     }

@@ -9,6 +9,9 @@ import { redactSecretUrls } from './egress-guard';
 // Silence counted from the later of the owner's message and Waldo's last message on that chat.
 export const PROGRESS_FIRST_AFTER_MS = 20_000;
 export const PROGRESS_SECOND_AFTER_MS = 75_000;
+// No note before the turn itself has run this long, so a send time the host reports late or skewed cannot land a note on a
+// quick turn.
+export const PROGRESS_MIN_TURN_MS = 10_000;
 // A note the model takes longer than this to write would arrive stale; it is dropped.
 export const PROGRESS_WRITE_MAX_MS = 15_000;
 // What the reply waits, at most, for a note already on its way out, so the two cannot cross.
@@ -16,7 +19,7 @@ export const PROGRESS_CLOSE_WAIT_MS = 3_000;
 // The first note goes out even when the model could not write it.
 export const PROGRESS_FALLBACK = 'Still working on this one. It is taking a little longer than usual.';
 
-export type ProgressTiming = Readonly<{ firstMs: number; secondMs: number }>;
+export type ProgressTiming = Readonly<{ firstMs: number; secondMs: number; minTurnMs: number }>;
 export type ProgressDraft = Readonly<{ index: 1 | 2; ask: string; waitedMs: number; steps: readonly string[]; earlier: string | null }>;
 // sent: the surface queued it. unsent: the surface refused it or could not take it now. declined: the model had nothing
 // new to say, or could not write the second note. closed: the reply or the turn's end came first.
@@ -57,7 +60,8 @@ export const progressInput = (draft: ProgressDraft): string => [
   draft.earlier === null ? 'This is the first note.' : `This is the second note. Your first one said: ${JSON.stringify(draft.earlier)}`,
 ].join('\n');
 
-// One pacer per turn. At most two notes: the first once the wait passes firstMs, the second once it passes secondMs.
+// One pacer per turn. At most two notes: the first once the wait passes firstMs, the second once it passes secondMs, and
+// neither before the turn has run minTurnMs.
 export class ProgressPacer {
   private readonly steps: string[] = [];
   private readonly writing = new AbortController();
@@ -66,15 +70,16 @@ export class ProgressPacer {
   // Set only while a note is with the surface; the model writing one is never waited on.
   private sending: Promise<boolean> | null = null;
   private earlier: string | null = null;
+  private startedAt = 0;
   private readonly now: () => number;
   private readonly timing: ProgressTiming;
 
   constructor(private readonly ask: string, private readonly deps: ProgressDeps) {
     this.now = deps.now ?? Date.now;
-    this.timing = deps.timing ?? { firstMs: PROGRESS_FIRST_AFTER_MS, secondMs: PROGRESS_SECOND_AFTER_MS };
+    this.timing = deps.timing ?? { firstMs: PROGRESS_FIRST_AFTER_MS, secondMs: PROGRESS_SECOND_AFTER_MS, minTurnMs: PROGRESS_MIN_TURN_MS };
   }
 
-  start(): void { this.arm(1); }
+  start(): void { this.startedAt = this.now(); this.arm(1); }
 
   // A tool the turn finished, by name only: what the note may describe, never what it returned.
   saw(tool: string): void { if (!this.closed && !this.steps.includes(tool)) this.steps.push(tool); }
@@ -93,7 +98,7 @@ export class ProgressPacer {
 
   private arm(index: 1 | 2): void {
     if (this.closed) return;
-    const at = this.deps.since + (index === 1 ? this.timing.firstMs : this.timing.secondMs);
+    const at = Math.max(this.deps.since + (index === 1 ? this.timing.firstMs : this.timing.secondMs), this.startedAt + this.timing.minTurnMs);
     this.timer = setTimeout(() => { void this.note(index); }, Math.max(0, at - this.now()));
   }
 

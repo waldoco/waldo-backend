@@ -6,6 +6,7 @@ import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName, LINK_REPLIES, onboardingReply, SYSTEM_OWNER_ID } from '../src/channels/imessage/bridge-do';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { handOffIMessageProgress } from '../src/channels/imessage/owner-runtime';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 
@@ -321,3 +322,32 @@ it('a forged unlink form naming another owner only ever unlinks the signed-in ow
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
 });
+
+// Turn ids are each owner's own sequence, so two owners on the shared number reuse them. A progress note's fences match
+// only its own owner's deliveries: another owner's reply neither refuses it nor withdraws it.
+it('progress-note fences on the shared number stay within each owner, though both owners reuse the same turn ids', async () => {
+  const w = await world();
+  await w.sharedLive();
+  for (const [o, handle] of [[w.alice, ALICE], [w.bob, BOB]] as const) expect(await w.linkVia(o, handle)).toMatchObject({ chatGuid: `iMessage;-;${handle}` });
+  const turn = async (handle: string, text: string) => { await w.host.send(w.host.message(text, { senderHandle: handle })); await w.pump(); return w.deliverNext(); };
+  await turn(ALICE, 'Alice one'); await turn(ALICE, 'Alice two');
+  await turn(BOB, 'Bob one');
+  const [aliceTwo] = (await w.inbox(w.alice)).slice(1), [bobOne] = await w.inbox(w.bob);
+  expect(aliceTwo!.id).toBe('imsg-9000000000002');
+  // Bob's notes, frozen and handed over through his own Waldo's outbox, for turn ids Alice has already used.
+  const bobNote = (id: string) => runInDurableObject(w.bob.stub, async (_i, state) => {
+    new IMessageFinalOutbox(state.storage).freezeProgress({ ...bobOne!, id, commandId: `wrc_bob_${id}` }, 1, `Bob's note for ${id}.`);
+    return handOffIMessageProgress({ storage: state.storage, id: state.id, env: env as never, ownerNamespace: env.OWNER_DO }, `progress:${id}:1`);
+  });
+  expect(await bobNote('imsg-9000000000002')).toBe(true); // Alice's reply:imsg-9000000000002 does not refuse it
+  expect(await w.deliverNext()).toMatchObject({ text: 'Bob\'s note for imsg-9000000000002.', chatGuid: `iMessage;-;${BOB}` });
+  expect(await bobNote('imsg-9000000000003')).toBe(true);
+  // Alice's third turn has the same id. Her reply waits for the slot Bob's note holds; it does not withdraw his note.
+  await w.host.send(w.host.message('Alice three', { senderHandle: ALICE })); await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ text: 'Bob\'s note for imsg-9000000000003.', chatGuid: `iMessage;-;${BOB}` });
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ text: 'Scripted owner reply.', chatGuid: `iMessage;-;${ALICE}` });
+  expect((await w.outbox(w.bob)).filter(r => r.replyRef.startsWith('progress:')).map(r => r.result?.state)).toEqual(['local_recorded', 'local_recorded']);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);

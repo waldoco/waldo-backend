@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROGRESS_NOTE_MAX_CHARS } from '@waldo/contracts';
 import { PROGRESS_CLOSE_WAIT_MS, PROGRESS_FALLBACK, ProgressPacer, progressInput, type ProgressDeps, type ProgressDraft, type ProgressEvent } from '../src/channels/progress-pacer';
 
-const timing = { firstMs: 20_000, secondMs: 75_000 };
+const timing = { firstMs: 20_000, secondMs: 75_000, minTurnMs: 10_000 };
 
 const pacerWith = (over: Partial<ProgressDeps> = {}) => {
   const drafts: ProgressDraft[] = [], sent: { index: number; text: string }[] = [], events: ProgressEvent[] = [];
@@ -50,11 +50,22 @@ describe('progress pacer timing', () => {
     await pacer.close();
   });
 
-  it('counts the wait from when it began, so a turn that waited in the queue gets its note at once', async () => {
+  it('counts the wait from when it began, but sends nothing before the turn itself has run its minimum', async () => {
     const { pacer, sent } = pacerWith({ since: Date.now() - 30_000 });
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(timing.minTurnMs - 1);
+    expect(sent).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
     expect(sent.map(note => note.index)).toEqual([1]);
     await pacer.close();
+  });
+
+  it('a quick turn whose send time came in late still sends no note', async () => {
+    const { pacer, sent, drafts } = pacerWith({ since: Date.now() - 60_000 });
+    await vi.advanceTimersByTimeAsync(6_000);
+    await pacer.close();
+    await vi.advanceTimersByTimeAsync(10 * timing.secondMs);
+    expect(drafts).toEqual([]);
+    expect(sent).toEqual([]);
   });
 });
 

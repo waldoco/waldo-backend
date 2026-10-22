@@ -869,12 +869,13 @@ it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes o
 // Progress notes. The pacer's marks shrink to test scale; the wait still counts from the message's send time, which the
 // simulated host puts a second before it posts the event.
 const progressTiming = (stub: DurableObjectStub, firstMs: number, secondMs: number) => runInDurableObject(stub, async instance => {
-  (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = { firstMs, secondMs };
+  (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = { firstMs, secondMs, minTurnMs: 0 };
 });
-// The host pulls the next command once it is there and sends it, as the real host's poll does.
+// The host pulls the next command once it is there and sends it, as the real host's poll does. Polling stays well inside
+// the bridge's edge limit (120 requests a minute per host address); the real host pulls every 2 s.
 const sendNext = async (w: Awaited<ReturnType<typeof world>>): Promise<Delivery> => {
   let delivery: Delivery | null = null;
-  await vi.waitFor(async () => { delivery = (await w.host.pull()).delivery; expect(delivery).not.toBeNull(); }, { timeout: 8_000, interval: 25 });
+  await vi.waitFor(async () => { const pulled = await w.host.pull(); expect(pulled.status).toBe(200); delivery = pulled.delivery; expect(delivery).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
   await w.host.postResult(delivery!, await w.host.execute(delivery!));
   return delivery!;
 };
@@ -913,7 +914,7 @@ it('a very long iMessage turn sends two notes at most, each written from the ste
   const w = await world();
   await w.pairAndActivate();
   await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true); });
-  await progressTiming(w.ownerStub, 1_200, 3_000);
+  await progressTiming(w.ownerStub, 1_200, 7_000);
   proof.notes.push('Checking your reminders first.', 'Still comparing a few places against your evening.');
   // The first model call asks for a tool; the second holds the turn while both notes go out.
   proof.outputs.push([{ type: 'function_call', call_id: 'reminders', name: 'list_reminders', arguments: '{}' }], []);
@@ -975,7 +976,7 @@ it('a reply behind a note the host already pulled waits for that one send and re
     if (ref.startsWith('reply:')) retries.push(delay); return retryLater.call(this, ref, maxAge, delay);
   });
   let note: Delivery | null = null;
-  proof.hold = async () => { await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 8_000, interval: 25 }); };
+  proof.hold = async () => { await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 }); };
   await replyFor(w, 'Find me a dentist near work');
   expect(retries[0]).toBe(1_000);
   await w.host.postResult(note!, await w.host.execute(note!));
@@ -1026,14 +1027,17 @@ it('the bridge refuses a note once its reply is in the mailbox, and a note never
   const turn = reply!.replyRef.split(':')[1];
   const handoff = (replyRef: string, commandId: string) => w.bridgeStub().enqueueReply({ replyRef, commandId, text: 'A note that came too late.', ownerDoName: reply!.ownerDoName,
     revision: reply!.revision, bindingDigest: reply!.bindingDigest, ...(reply!.subject !== undefined ? { subject: reply!.subject } : {}) });
-  expect(await handoff(`progress:${turn}:1`, 'wpn1_late')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
-  expect(await handoff('progress:imsg-other:1', 'wpn1_other')).toMatchObject({ kind: 'terminal', result: { reason: 'progress_busy' } });
+  // While the reply holds the slot, a note is refused at once and another reply waits.
+  expect(await handoff(`progress:${turn}:1`, 'wpn1_early')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_busy' } });
   expect(await handoff('reply:imsg-other', 'wrc_other')).toEqual({ kind: 'busy' });
   await sendNext(w);
+  // Once the reply is sent the slot is free, and a note for that turn is still refused: it would follow its reply.
+  expect(await handoff(`progress:${turn}:1`, 'wpn1_late')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
+  expect((await w.host.pull()).delivery).toBeNull();
   expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
 }, 20_000);
 
-it('a note the bridge fails to take is settled unsent on the spot and the reply goes out as before', async () => {
+it('a note whose handoff threw is settled as possibly sent, never retried, and the reply goes out as before', async () => {
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 60_000);
@@ -1050,6 +1054,6 @@ it('a note the bridge fails to take is settled unsent on the spot and the reply 
   expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
   expect(attempts.filter(ref => ref.startsWith('progress:'))).toHaveLength(1);
   const [note, reply] = await outbox(w.ownerStub);
-  expect(note).toMatchObject({ state: 'settled', result: { disposition: 'not_started', reason: 'progress_unsent' } });
+  expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
   expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
 }, 20_000);

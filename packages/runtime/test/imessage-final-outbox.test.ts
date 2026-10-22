@@ -135,7 +135,7 @@ it('during an app-lane streak of 10, an iMessage reply reaches the bridge at the
   }
 }, 20_000);
 
-it('a progress note wakes nothing: drains skip it, and dropping it settles only that turn\'s unsent notes as not_started', async () => {
+it('a progress note wakes nothing: drains skip it, and dropping one settles only that turn\'s frozen notes', async () => {
   await runInDurableObject(stub(), async (_i, state) => {
     let now = 5_000;
     const outbox = new IMessageFinalOutbox(state.storage, () => now);
@@ -147,11 +147,12 @@ it('a progress note wakes nothing: drains skip it, and dropping it settles only 
     expect(state.storage.kv.get('imessage_final_outbox_due_v1')).toBeNull();
     outbox.freeze(turn('a'), 'the reply');
     expect(outbox.due().map(r => r.replyRef)).toEqual(['reply:a']);
+    // A frozen note's handoff had started, so dropping it claims no proof that it was not sent.
     outbox.dropProgress('progress_superseded', 'a');
-    expect(outbox.get('progress:a:1')).toMatchObject({ state: 'settled', text: '', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
+    expect(outbox.get('progress:a:1')).toMatchObject({ state: 'settled', text: '', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_superseded' } });
     expect(outbox.get('progress:b:1')?.state).toBe('frozen');
-    outbox.dropProgress('progress_stale');
-    expect(outbox.get('progress:b:1')?.result).toMatchObject({ reason: 'progress_stale' });
+    outbox.dropProgress('progress_unsent', 'b', true);
+    expect(outbox.get('progress:b:1')?.result).toMatchObject({ state: 'rejected', disposition: 'not_started', reason: 'progress_unsent' });
     expect(outbox.get('reply:a')?.state).toBe('frozen');
   });
 });
@@ -164,7 +165,7 @@ it('the last message sent on the chat is the newest record not proved unsent', a
     outbox.freeze(turn('a'), 'the reply');
     now = 2_000; outbox.freezeProgress(turn('b', 'hello', 'running'), 1, 'Checking your calendar now.');
     expect(outbox.lastSentAt()).toBe(2_000);
-    outbox.dropProgress('progress_unsent', 'b');
+    outbox.dropProgress('progress_unsent', 'b', true);
     expect(outbox.lastSentAt()).toBe(1_000);
   });
 });

@@ -16,8 +16,9 @@ export const IMESSAGE_BUSY_RETRY_MS = 1_000;
 // evicted turn is settled not_started at the next drain.
 const PROGRESS = 'progress:';
 export const isProgressNote = (replyRef: string) => replyRef.startsWith(PROGRESS);
-const notStarted = (commandId: string, reason: string): IMessageResult =>
-  ({ version: 1, commandId, target: { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' }, state: 'rejected', disposition: 'not_started', reason });
+const UNBOUND = { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' };
+const notStarted = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'rejected', disposition: 'not_started', reason });
+const mayHaveSent = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'unknown', disposition: 'may_have_completed', reason });
 /** Telegram's final-outbox bound: only settled records are evicted, oldest first; live replies are never dropped. */
 export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
@@ -68,11 +69,14 @@ export class IMessageFinalOutbox {
     const sent = this.records().filter((r) => r.result?.state !== 'rejected');
     return sent.length ? Math.max(...sent.map((r) => r.frozenAt)) : null;
   }
-  /** Settles every progress note not yet handed to the bridge, or only the given turn's, as not_started. */
-  dropProgress(reason: string, recordId?: string): void {
+  /**
+   * Settles the progress notes still frozen: every one, or only the given turn's. A note's handoff starts as it freezes, so
+   * the bridge may hold a frozen one: it settles may_have_completed, unless `refused` says the bridge did not take it.
+   */
+  dropProgress(reason: string, recordId?: string, refused = false): void {
     for (const r of this.records()) {
       if (r.state !== 'frozen' || !isProgressNote(r.replyRef) || (recordId !== undefined && !r.replyRef.startsWith(`${PROGRESS}${recordId}:`))) continue;
-      this.update(r.replyRef, (row) => { if (row.state === 'frozen') { row.state = 'settled'; row.text = ''; row.result = notStarted(row.commandId, reason); } });
+      this.update(r.replyRef, (row) => { if (row.state === 'frozen') { row.state = 'settled'; row.text = ''; row.result = (refused ? notStarted : mayHaveSent)(row.commandId, reason); } });
     }
   }
 

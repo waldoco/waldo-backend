@@ -71,7 +71,7 @@ const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
 /** Hands frozen replies to their bridge mailbox; the bridge rechecks authority before publication. */
 export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Promise<void> => {
   const outbox = new IMessageFinalOutbox(host.storage);
-  // A drain runs only between turns, so a progress note still frozen here lost its turn and is never sent.
+  // A drain runs only between turns, so a progress note still frozen here lost its turn and is never handed over again.
   outbox.dropProgress('progress_stale');
   for (const row of outbox.due()) {
     let outcome;
@@ -83,16 +83,17 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
 };
 
 /**
- * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it
- * not_started on the spot: a note is never retried, so it wakes nothing and cannot land after the reply.
+ * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
+ * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
+ * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
  */
 export const handOffIMessageProgress = async (host: OwnerHost, replyRef: string): Promise<boolean> => {
-  const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef);
+  const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef), turn = replyRef.split(':')[1];
   if (!row || row.state !== 'frozen') return false;
   let outcome;
-  try { outcome = await handOff(host, row); } catch { outcome = { kind: 'retry' } as const; }
+  try { outcome = await handOff(host, row); } catch { outbox.dropProgress('progress_handoff_uncertain', turn); return false; }
   if (outcome.kind === 'queued') { outbox.markQueued(replyRef); return true; }
   if (outcome.kind === 'terminal') outbox.settle(replyRef, row.commandId, outcome.result);
-  else outbox.dropProgress('progress_unsent', replyRef.split(':')[1]);
+  else outbox.dropProgress('progress_unsent', turn, true);
   return false;
 };
