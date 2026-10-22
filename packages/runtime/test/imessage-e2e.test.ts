@@ -5,7 +5,7 @@ import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { sha256Hex } from '../src/channels/imessage/crypto';
-import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
@@ -20,6 +20,12 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours } from './helpers/reminder-wake';
+import { dayPlanBook } from '../src/channels/day-cards';
+import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
+import { loopBook } from '../src/channels/loops';
+import { ensureSchema } from '../src/tracer/schema';
+import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
+import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
@@ -38,7 +44,7 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; forbiddenEgress.length = 0; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
@@ -52,6 +58,8 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     const handled = await fx.fetcher(input as RequestInfo, init);
     if (handled) return handled;
     const url = String(input instanceof Request ? input.url : input);
+    // Google is down here: the scheduled watch upkeep of an owner with a seeded account fails closed without leaving the isolate.
+    if (url === 'https://oauth2.googleapis.com/token') return Response.json({ error: 'temporarily_unavailable' }, { status: 503 });
     forbiddenEgress.push(url);
     throw new Error(`forbidden egress ${new URL(url).origin}`);
   });
@@ -733,38 +741,6 @@ it('a follow-up that reached the app is copied to iMessage once as it settles; m
   });
 });
 
-// Outside a turn, iMessage has a send only while a scheduled pass bound one: a reminder fired with none is not delivered,
-// so it is never recorded as sent. The note stays for the next pass and its run says it failed.
-it('a reminder fired on iMessage with no delivery bound is never reported as sent', async () => {
-  const w = await world();
-  await w.pairAndActivate();
-  await replyFor(w, 'Morning');
-  await runInDurableObject(w.ownerStub, async (instance, state) => {
-    const runtime = (instance as unknown as { setup(channel: 'imessage'): { ready: Promise<void>; fire(entry: ScheduleEntry): Promise<unknown>; reminders: ReturnType<typeof reminderBook>; scheduler: Scheduler } }).setup('imessage');
-    await runtime.ready;
-    const reminder = await runtime.reminders.set({ note: 'call Sam', at: new Date(Date.now() + 3_600_000).toISOString().slice(0, 16), repeat: 'none' });
-    proof.reply = 'Time to call Sam, as you asked.';
-    try { await expect(runtime.fire(runtime.scheduler.read(reminder.id)!)).rejects.toThrow(); } finally { proof.reply = 'Scripted owner reply.'; }
-    expect(runtime.reminders.note(reminder.id)).toBe('call Sam');
-    expect(state.storage.sql.exec<{ status: string; summary: string }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder'").toArray()).toEqual([{ status: 'failed', summary: 'reminder failed' }]);
-    expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:'))).toEqual([]);
-  });
-});
-
-// An owner who writes only on iMessage, without the app, has no surface that takes proactive work, so Waldo refuses to
-// schedule a reminder and says why instead of promising one that never comes.
-it('an iMessage-only owner asking for a reminder is told it cannot be sent, and nothing is scheduled', async () => {
-  const w = await world();
-  await w.pairAndActivate();
-  const at = new Date(Date.now() + 3_600_000).toISOString().slice(0, 16);
-  proof.outputs.push([{ type: 'function_call', call_id: 'remind', name: 'set_reminder', arguments: JSON.stringify({ note: 'call Sam', at, repeat: 'none' }) }], []);
-  await replyFor(w, 'Remind me to call Sam in an hour');
-  expect(proof.turns.join('\n')).toContain('Waldo cannot message this owner first here');
-  await runInDurableObject(w.ownerStub, async (_i, state) => {
-    expect(state.storage.sql.exec("SELECT id FROM schedule WHERE kind = 'reminder'").toArray()).toEqual([]);
-  });
-});
-
 // iMessage work re-arms the owner's one alarm, and each re-arm keeps the schedule's next entry: a reminder two hours out keeps
 // its wake. These read the alarm once the owner's serial queue has run everything queued, the reply's drain included.
 const ownerIdle = (stub: DurableObjectStub) => runInDurableObject(stub, async instance => {
@@ -834,9 +810,8 @@ it('an iMessage drain that finds no turn left keeps the reminder\'s alarm', asyn
 });
 
 // A turn the alarm pass runs queues its reply's drain behind the pass, so that drain is the last re-arm, after the pass has
-// ended. This fixture's owner has no app binding, so the pass arms no schedule wake of its own (an owner no surface admits
-// runs no scheduled work); the drain's re-arm is what keeps the reminder's. The message is admitted straight into the
-// owner's inbox, as the bridge's handoff does, so the pass runs it.
+// ended. This fixture's owner has only iMessage, so the pass runs on it, and the drain's re-arm, last, keeps the reminder's
+// wake. The message is admitted straight into the owner's inbox, as the bridge's handoff does, so the pass runs it.
 it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes out', async () => {
   const w = await world();
   await afterOneReply(w);
@@ -858,3 +833,174 @@ it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes o
     expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);
+
+// An owner whose only surface is iMessage: no app, Telegram or WhatsApp binding. Scheduled work reaches them on iMessage,
+// through the delivery outbox: a job settles only once the bridge reports what became of its message.
+const iMessageOnly = async (w: Awaited<ReturnType<typeof world>>) => {
+  await afterOneReply(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true); });
+};
+const DAY = () => new Date().toISOString().slice(0, 10);
+// One alarm pass runs the due job; once the outbox's quarter-second hold on a new record passes, the next passes hand it to the
+// bridge. Answers what the host pulled.
+const scheduledOnIMessage = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
+  proof.reply = text;
+  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await w.pump();
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the message reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  return delivery!;
+};
+const hostReports = async (w: Awaited<ReturnType<typeof world>>, delivery: NonNullable<Awaited<ReturnType<SimulatedHost['pull']>>['delivery']>, at?: number) => {
+  await w.host.postResult(delivery, await w.host.execute(delivery, at === undefined ? {} : { now: at }));
+  await w.pump(2);
+};
+const deliveryRecords = (state: DurableObjectState) => new TelegramFinalOutbox(state.storage.kv).records();
+const runsOf = (state: DurableObjectState, kind: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM background_runs WHERE kind = ?', kind).toArray().map((row) => row.status);
+const seedDueReminder = (state: DurableObjectState) => {
+  ensureSchema(state.storage);
+  return reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-1')
+    .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+};
+
+it('an iMessage-only owner who asks for a reminder two hours out keeps the alarm at it', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  proof.outputs.push([{ type: 'function_call', call_id: 'remind', name: 'set_reminder',
+    arguments: JSON.stringify({ note: 'water plants', at: new Date(Date.now() + 2 * 3_600_000).toISOString().slice(0, 16), repeat: 'none' }) }], []);
+  try {
+    await handedTurn(w, 'Remind me to water the plants in two hours');
+    expect(proof.turns.join('\n')).not.toContain('Waldo cannot message this owner first here');
+    const { alarm, due } = await ownerAlarm(w.ownerStub);
+    expect(due).toBeGreaterThan(Date.now() + 110 * 60_000);
+    expect(alarm).toBe(due);
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 15_000);
+
+it('an iMessage-only owner\'s due reminder goes out on iMessage and settles once the bridge reports it', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  const delivery = await scheduledOnIMessage(w, REMINDER);
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(reminderRuns(state)).toEqual(['running']));
+  // The bridge's report, which it makes on its own once the host posts the result, ends the delivery record and wakes the
+  // owner to settle the job.
+  await w.host.postResult(delivery, await w.host.execute(delivery));
+  await w.settle();
+  await vi.waitFor(async () => expect(await runInDurableObject(w.ownerStub, async (_i, state) =>
+    deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status))).toEqual(['delivered']), { timeout: 5_000, interval: 50 });
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + 1_000));
+  await w.pump(2);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(reminderRuns(state)).toEqual(['completed']);
+    expect(state.storage.sql.exec("SELECT id FROM schedule WHERE kind = 'reminder'").toArray()).toEqual([]);
+  });
+});
+
+it('an iMessage-only owner\'s reminder that the bridge proves it never sent fails its run and keeps its note', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  const delivery = await scheduledOnIMessage(w, REMINDER);
+  await hostReports(w, delivery, Date.now() + 24 * 3_600_000);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(reminderRuns(state)).toEqual(['failed']);
+    expect(state.storage.sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().map((row) => row.note)).toEqual(['call Sam']);
+  });
+});
+
+it('an iMessage-only owner\'s morning brief goes out on iMessage and counts as sent only once the bridge reports it', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    dayPlanBook(state.storage.sql).save(DAY(), { card: 'card:brief', time: '00:00', reason: 'planned' });
+    await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: null });
+  });
+  const brief = 'Morning. Two things on today.';
+  const delivery = await scheduledOnIMessage(w, brief);
+  const sent = (state: DurableObjectState) => dayPlanBook(state.storage.sql).read(DAY()).find((row) => row.card === 'card:brief')?.sent;
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(sent(state)).toBeFalsy());
+  await hostReports(w, delivery);
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(sent(state)).toBeTruthy());
+});
+
+it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => Date.now() - 3 * 3_600_000 }).open({ title: 'Send the invoice', due: new Date(Date.now() - 3_600_000).toISOString().slice(0, 16) });
+    state.storage.sql.exec("DELETE FROM schedule WHERE kind = 'heartbeat'");
+    await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - HEARTBEAT_EVERY_MS - 60_000);
+  });
+  const followUp = 'Did the invoice go out?';
+  const delivery = await scheduledOnIMessage(w, followUp);
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['running']));
+  await hostReports(w, delivery);
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed']));
+});
+
+// An owner with no surface at all runs no scheduled work and keeps no wake for it. So does one whose iMessage sender the
+// directory no longer binds: the pass asks the directory, finds no owner, and sleeps; and Waldo refuses to promise them a
+// message first.
+it('an owner with no surface keeps no schedule wake and runs nothing that is due', async () => {
+  const w = await world();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', 'UTC'); await seedDueReminder(state); });
+  await runDurableObjectAlarm(w.ownerStub); await w.settle();
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM schedule WHERE kind = 'reminder'").toArray().map((row) => row.status)).toEqual(['armed']);
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
+});
+
+it('once an iMessage-only owner unlinks, their due reminder does not run, nothing wakes for it, and a new one is refused', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  expect((await w.action('imessage.unlink')).status).toBe(303);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  await runDurableObjectAlarm(w.ownerStub); await w.settle();
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    expect(reminderRuns(state)).toEqual([]);
+    expect(await state.storage.getAlarm()).toBeNull();
+    expect(await (instance as unknown as { proactiveReachable(): Promise<boolean> }).proactiveReachable()).toBe(false);
+  });
+});
+
+// Outside a scheduled pass no owner job is named, so a reminder fired there reaches no responder: nothing is written or queued.
+it('a reminder fired on iMessage outside a scheduled pass runs nothing', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    const runtime = (instance as unknown as { setup(channel: 'imessage'): { ready: Promise<void>; fire(entry: ScheduleEntry): Promise<unknown>; reminders: ReturnType<typeof reminderBook>; scheduler: Scheduler } }).setup('imessage');
+    await runtime.ready;
+    const reminder = await runtime.reminders.set({ note: 'call Sam', at: new Date(Date.now() + 3_600_000).toISOString().slice(0, 16), repeat: 'none' });
+    await expect(runtime.fire(runtime.scheduler.read(reminder.id)!)).rejects.toThrow();
+    expect(runtime.reminders.note(reminder.id)).toBe('call Sam');
+    expect(deliveryRecords(state).filter((row) => row.reminder)).toEqual([]);
+  });
+});
+
+// The iMessage outbox's own results reach the delivery records waiting on them, whoever settled them: the bridge's report, or
+// the owner side proving a hand-off never went. Sent arrives; not_started fails; an unknown result leaves the record waiting.
+it('iMessage results reach the delivery records waiting on them: sent arrives, not_started fails, unknown waits', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const subject = state.storage.kv.get<string>('imessage_subject')!, outbox = new IMessageFinalOutbox(state.storage), latest = new IMessageOwnerInbox(state.storage).latest()!;
+    const frozen = (id: string) => outbox.freezeProactive(id, `wpc_${id}`, targetOf(latest), 'Time to call Sam.');
+    const target = { bridgeId: latest.binding.bridgeId, accountId: latest.binding.accountId, chatGuid: latest.binding.chatGuid };
+    const results = {
+      sent: { version: 1, commandId: 'wpc_sent', target, state: 'local_recorded', messageGuid: 'guid-1', evidence: { kind: 'local_database', reference: 'row-1' } },
+      lost: { version: 1, commandId: 'wpc_lost', target, state: 'rejected', disposition: 'not_started', reason: 'bridge_unavailable' },
+      unsure: { version: 1, commandId: 'wpc_unsure', target, state: 'unknown', disposition: 'may_have_completed', reason: 'mutation_deadline' },
+    } as const;
+    for (const [id, result] of Object.entries(results)) { frozen(id); outbox.settle(`proactive:${id}`, `wpc_${id}`, result); }
+    const now = Date.now();
+    state.storage.kv.put('telegram_final_outbox_v1', Object.keys(results).map((id) => ({ id: `reminder:${id}`, trace: id, payload: { chat_id: Number(subject), text: 'Time to call Sam.' }, digest: id,
+      ownerSubject: subject, doName: w.ownerName, status: 'accepted', dueAt: now + 3_600_000, createdAt: now, attempts: 1, deliveredParts: 1, providerMessageIds: [`wpc_${id}`], arrivalBy: now + 3_600_000 })));
+    expect(observeIMessageReports(state.storage, subject, now)).toBe(2);
+    expect(Object.fromEntries(deliveryRecords(state).map((row) => [row.id, row.status]))).toEqual({ 'reminder:sent': 'delivered', 'reminder:lost': 'blocked', 'reminder:unsure': 'accepted' });
+    expect(observeIMessageReports(state.storage, subject, now)).toBe(0);
+  });
+});
