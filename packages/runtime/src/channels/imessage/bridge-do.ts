@@ -454,7 +454,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         return outcome.kind === 'redeemed' ? 'link_redeemed' : outcome.kind === 'claimed' ? 'link_claimed' : 'link_failed';
       }
       // A number its owner enrolled on Photon but has not linked: point them at their console, never at a Waldo.
-      const finish = onboardingUrl(this.env.IMESSAGE_CONSOLE_URL);
+      // Only Photon enrolls numbers: without it there is nothing to look up (and no enrollment table to depend on).
+      const finish = photonConfig(this.env) ? onboardingUrl(this.env.IMESSAGE_CONSOLE_URL) : null;
       if (finish && ready !== 'unavailable' && await directory.enrolledHandle(environment, event.senderHandle)) {
         const enrolledHash = await sha256Hex(JSON.stringify([bridgeId, 'enrolled', event.senderHandle]));
         if (!(await directory.onboardingAllowed(environment, bridgeId, accountId, enrolledHash))) return 'stranger_throttled';
