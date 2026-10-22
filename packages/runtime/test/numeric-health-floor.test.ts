@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 
-// The one floor that keeps measurements out of long-term memory and stored summaries. A match drops the write for good on
-// the background writers, so precision wins over recall: it must not fire on ordinary life that puts a number near a word
-// a metric also uses. Synthetic values only.
+// The one floor that keeps measurements from outside content out of memory, and out of stored summaries. A match drops the
+// write, so precision wins over recall: it must not fire on ordinary life that puts a number near a word a metric also
+// uses. Synthetic values only.
 describe('the numeric health floor', () => {
   it.each([
     'Needs to file Form 16 by July',
@@ -43,6 +43,7 @@ describe('the numeric health floor', () => {
     'Blood pressure check at 9am',
     'Baggage weight is 23 kg',
     'The suitcase weighs 23 kg',
+    'The laptop weighs 1.4 kg',
     'Do steps 3 and 4 of the visa form',
     'Motion 2 passed at the board meeting',
     'Next steps: 1. Book the flights',

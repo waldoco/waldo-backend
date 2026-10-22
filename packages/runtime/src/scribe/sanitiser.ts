@@ -138,7 +138,8 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A systolic of 60 to 249 over a diastolic of 30 to 149, so a date ("12/10") or "24/7" is not a pressure.
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
   reading(String.raw`\b(?:blood\s+pressure|systolic|diastolic)\b${BARE_GAP}${BARE_VALUE}`),
-  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}${READING_NUMBER}\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
+  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
   reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*(?:h|hr|hrs|hours?|m|min|mins|minutes?)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:h|hrs?|hours?)\s+(?:of\s+)?(?:sleep|asleep)\b`),
@@ -164,8 +165,9 @@ const SERIALIZED_FIELD = /["'=_]|[a-z][A-Z]/;
 const serializedSensorField = (text: string): boolean =>
   RAW_SENSOR_PATTERNS.some((pattern) => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].some(([field]) => SERIALIZED_FIELD.test(field)));
 
-// The one numeric health floor for long-term memory and stored summaries, where a match drops the write. Precision wins over recall here: a false match loses an ordinary fact for good on a background
-// writer, so it is narrower than the egress scans, which may over-redact. It decides only whether text carries a reading,
+// The one numeric health floor for memory written from outside content and for stored summaries, where a match drops the
+// write. What the owner says goes into memory without it. Precision wins over recall here: a false match loses an ordinary
+// fact, so it is narrower than the egress scans, which may over-redact. It decides only whether text carries a reading,
 // never whether text is about health; that is the model's judgment. Fresh regexes per call, so a shared `g` pattern never
 // carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean =>
@@ -834,7 +836,7 @@ function containsForbiddenHealth(
   return invalid === undefined ? { matched: visited.matched } : { invalid, matched: visited.matched };
 }
 
-const HEALTH_SPAN_MARKER = '[health value withheld]';
+export const HEALTH_SPAN_MARKER = '[health value withheld]';
 
 // ADR-0081 free-text scan on external content headed to the model (internal_context): the span
 // is withheld and the read continues. Every other destination still denies in containsForbiddenHealth.
