@@ -16,8 +16,8 @@
     "eval:voice-agreement": "tsx evals/nightly/voice-agreement.ts",
     "eval:voice-labelling-sheet": "tsx evals/nightly/voice-labelling-sheet.ts",
     "eval:plan": "tsx evals/nightly/plan.ts",
-    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts && vitest run --config vitest.imessage.config.ts && vitest run --config vitest.mac-closeout.config.ts",
-    "test:imessage": "vitest run --config vitest.imessage.config.ts"
+    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts && vitest run --config vitest.imessage.config.ts && vitest run --config vitest.imessage-photon.config.ts && vitest run --config vitest.mac-closeout.config.ts",
+    "test:imessage": "vitest run --config vitest.imessage.config.ts && vitest run --config vitest.imessage-photon.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.135.0",
