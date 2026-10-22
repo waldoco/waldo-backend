@@ -4,7 +4,7 @@ import { executeMcp } from '../src/tools/live/mcp';
 
 const view = (name: string, status: McpConnectionView['status']): McpConnectionView => ({
   id: `id-${name}`, name, host: `mcp.${name}.example`, server_url: `https://mcp.${name}.example/mcp`, auth: 'oauth', registration: 'cimd', risk: 'unreviewed', issuer: 'https://auth.example',
-  scopes: ['read'], wants_scopes: [], status, tools: 3, hidden_tools: 0, runs_without_asking: 1, marked_read_only: 1, tools_changed: false, connected_at: 1,
+  scopes: ['read'], wants_scopes: [], status, tools: 3, hidden_tools: 0, tools_capped: false, runs_without_asking: 1, marked_read_only: 1, tools_changed: false, connected_at: 1,
 });
 
 describe('MCP connector entries and the per-turn host fact', () => {

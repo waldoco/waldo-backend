@@ -18,7 +18,7 @@ export default defineConfig({
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
       RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
       RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
-      TELEGRAM_BOT_TOKEN: 'fictional-smoke-bot', TELEGRAM_WEBHOOK_SECRET: 'fictional-smoke-secret',
+      TELEGRAM_BOT_TOKEN: 'fictional-smoke-bot', TELEGRAM_WEBHOOK_SECRET: 'fictional-smoke-secret', WALDO_OAUTH_STATE_SECRET: 'fictional-smoke-oauth-state',
       OPENAI_API_KEY: key, GOOGLE_CLIENT_ID: 'fictional-smoke-google', GOOGLE_CLIENT_SECRET: 'fictional-smoke-google',
     } }, wrangler: { configPath: './wrangler.jsonc' },
   })],
