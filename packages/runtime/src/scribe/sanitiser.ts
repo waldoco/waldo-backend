@@ -110,45 +110,66 @@ const HEALTH_FREE_TEXT_QUALITATIVE: readonly RegExp[] = [
 const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEALTH_FREE_TEXT_QUALITATIVE];
 
 // What may sit between a metric and its number in a reading: a separator or a reading word ("was", "about", "of").
-// Anything else ("check meeting at", "week") means the number is not that metric's value.
-const READING_GAP = String.raw`(?:\s*(?:[:=~]|\b(?:is|was|were|are|of|at|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to)\b))*\s*`;
+// Anything else ("check meeting at", "week") means the number is not that metric's value. A metric whose value is a bare
+// number does not take "at", which before a bare number is mostly a clock time (a meeting with HR at ten).
+const READING_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
+const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
+const BARE_GAP = gapOf(READING_WORDS);
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
+// A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
+const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
+// A weight that follows a bag or a parcel is the luggage's.
+const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
-// Readings in an owner's own words: a metric tied to its number through READING_GAP, or a number carrying a unit only a
-// health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse) count only with
-// a score, a unit or a reading word, so "Form 16", "Laundry load at 6" or "Pulse check meeting at 7" are not readings.
+// Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
+// health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
+// count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
+// clock time are not readings.
 const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b${READING_NUMBER}\s*(?:bpm|beats\s+per\s+minute)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*mm\s*hg\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:mg\s*\/\s*dl|mmol\s*\/\s*l)\b`),
-  reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:hr|pulse)\b${READING_GAP}\d{2,3}\b(?!\s*(?:people|staff|employees|members|%))`),
-  reading(String.raw`\b(?:hrv|heart\s+rate\s+variability)\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}\d{2,3}\s*(?:\/|over)\s*\d{2,3}\b`),
-  reading(String.raw`\bblood\s+pressure\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}${READING_NUMBER}\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
+  // "1 hr 30" is an hour, and "HR of 12 people" a team.
+  reading(String.raw`(?<!\d\s?)\b(?:hr|pulse)\b${BARE_GAP}${BARE_VALUE}(?!\s*(?:people|staff|employees|members|%))`),
+  reading(String.raw`\b(?:hrv|heart\s+rate\s+variability)\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${BARE_GAP}${BARE_VALUE}`),
+  // A systolic of 60 to 249 over a diastolic of 30 to 149, so a date ("12/10") or "24/7" is not a pressure.
+  reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
+  reading(String.raw`\b(?:blood\s+pressure|systolic|diastolic)\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}${READING_NUMBER}\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
   reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*(?:h|hr|hrs|hours?|m|min|mins|minutes?)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:h|hrs?|hours?)\s+(?:of\s+)?(?:sleep|asleep)\b`),
   reading(String.raw`\b(?:\d{1,3}(?:,\d{3})+|\d{4,}|${READING_NUMBER}\s*k)\s*steps\b`),
   reading(String.raw`\bsteps\b${READING_GAP}(?:\d{1,3}(?:,\d{3})+|\d{4,})\b`),
-  reading(String.raw`\b(?:fever|temp(?:erature)?|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
+  // A plain "temperature" is as often the weather or an oven, so only a fever or a body temperature, or a value in the
+  // range a body has, is a reading.
+  reading(String.raw`\b(?:fever|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
   reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*°?\s*c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*°?\s*f\b`),
-  reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:respiratory|breathing)\s+rate\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+energy)\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${BARE_GAP}\d+(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
+  reading(String.raw`\b(?:respiratory|breathing)\s+rate\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+energy)\b${BARE_GAP}\d`),
   reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
-  reading(String.raw`\bcrs\b${READING_GAP}\d`),
-  reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${READING_GAP}\d`),
+  reading(String.raw`\bcrs\b${BARE_GAP}\d`),
+  reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:recovery|readiness|strain)\b${READING_GAP}${READING_NUMBER}\s*%`),
 ];
 
-// The numeric health floor for long-term memory and stored summaries, where a match refuses the write: the structured
-// sensor shapes the contracts own (an `hrv_ms` or `weightKg` key with its number) and the owner-prose readings above. It is narrower than
-// the egress scans, which may over-redact; here a false match loses an ordinary fact. Through the non-global matcher, so a
-// shared `g` pattern never carries lastIndex from one call into the next.
+// The contracts' sensor shapes take a key and a number on any separator, which in prose catches "Next steps: 1" or
+// "Motion 2". Here a match counts only as a serialized field: a quoted key, an `=`, or a snake or camel key
+// (a quoted `"steps"`, `heartRate=`, `hrv_ms:`); prose readings are OWNER_HEALTH_READINGS' job.
+const SERIALIZED_FIELD = /["'=_]|[a-z][A-Z]/;
+const serializedSensorField = (text: string): boolean =>
+  RAW_SENSOR_PATTERNS.some((pattern) => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].some(([field]) => SERIALIZED_FIELD.test(field)));
+
+// The one numeric health floor for long-term memory and stored summaries, where a match drops the write. Precision wins over recall here: a false match loses an ordinary fact for good on a background
+// writer, so it is narrower than the egress scans, which may over-redact. It decides only whether text carries a reading,
+// never whether text is about health; that is the model's judgment. Fresh regexes per call, so a shared `g` pattern never
+// carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean =>
-  [...RAW_SENSOR_PATTERNS, ...OWNER_HEALTH_READINGS].some((pattern) => matches(pattern, text));
+  OWNER_HEALTH_READINGS.some((pattern) => matches(pattern, text)) || serializedSensorField(text);
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
