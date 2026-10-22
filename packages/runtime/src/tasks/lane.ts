@@ -154,7 +154,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   let leftOver = false, slotsFull = false;
   for (const row of book.due()) {
     if (topics.length && heldTopicIn(row, topics)) {
-      if (book.cancel(row.id, 'forgotten')) { deps.host.fence(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
+      if (book.cancel(row.id, 'forgotten')) { deps.host.cancelled(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
       continue;
     }
     // A task's report and a retried message each take a model turn; a parked retry's notice and a worker start do not.
@@ -179,7 +179,12 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const due = noteDue(row);
     if (due === null) continue;
     if (due > deps.now()) { nextNote = Math.min(nextNote ?? due, due); continue; }
-    await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row), () => book.noteSent(row.id));
+    try {
+      await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row), () => book.noteSent(row.id));
+    } catch (error) {
+      if (!(error instanceof ClosedRunError)) throw error;
+      continue;
+    }
     nextNote = Math.min(nextNote ?? Infinity, deps.now() + TASK_NOTE_EVERY_MS);
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }

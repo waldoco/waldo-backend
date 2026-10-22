@@ -87,7 +87,8 @@ it('an owner turn starts a task; the worker runs with no authority and the resul
   await runInDurableObject(owner(), async (instance, state) => {
     const rpc = instance as unknown as { taskReport(...args: unknown[]): Promise<string> };
     expect(await rpc.taskReport(ticket, { kind: 'result', result: { ...RESULT, summary: 'forged' } }, [], { rounds: 0, costUsd: 0 })).toBe('duplicate');
-    expect(JSON.parse(jobs(state.storage.sql)[0]!.result_json!).summary).toBe(RESULT.summary);
+    // Applied rows keep no result (only the apply turn reads it), and the duplicate wrote none back.
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'applied', result_json: null });
   });
 }, 30_000);
 

@@ -22,7 +22,7 @@ const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'fr
 const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.stringify(VALID_ARGS[name] ?? {}) });
 
 type Harness = Readonly<{
-  book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[];
+  book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[];
   ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
@@ -36,7 +36,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     let n = 0;
     const clock = { at: T0 };
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
-    const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [];
+    const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [], withdrawn: string[] = [];
     let spend: { spentUsd: number; ceilingUsd: number } | undefined;
     const hold: Harness['hold'] = {};
     let queue: Promise<unknown> = Promise.resolve();
@@ -52,13 +52,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
-      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined,
+      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler });
   });
 
 describe('the task brain host', () => {
@@ -226,6 +226,63 @@ describe('the task brain host', () => {
     });
   });
 
+  it('a rejoin of the same attempt while its browser step waits in the serial lane fences both: the step never runs twice', async () => {
+    await withHost(async ({ host, ticket, book, hold, ran, log }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      let release!: () => void;
+      hold.waiting = new Promise<void>(resolve => { release = resolve; });
+      const queued = host.tool(t, call('browse_act'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(await host.claim(t)).toBe('fenced');
+      expect(log.some(entry => entry.hop === 'task_rejoin_fenced')).toBe(true);
+      const second = host.tool(t, call('browse_act'), CANARIES);
+      release();
+      expect(await queued).toBe('fenced');
+      expect(await second).toBe('fenced');
+      expect(ran).toEqual([]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 1, lease_token: null, inflight_json: null });
+    });
+  });
+
+  it('a rejoin while the step is running parks the job as an uncertain effect, and the running step returns nothing', async () => {
+    await withHost(async ({ host, ticket, book, browse, ran }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      browse.ms = 30;
+      const running = host.tool(t, call('browse_act'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(await host.claim(t)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect', lease_token: null });
+      expect(await running).toBe('fenced');
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+    });
+  });
+
+  it('a busy job past its deadline still ends: its running call is then fenced', async () => {
+    await withHost(async ({ ticket, book, clock }) => {
+      const t = ticket('errand');
+      clock.at += 2 * 3_600_000;
+      expect(book.lapse(new Set([t.jobId]))).toEqual([{ id: t.jobId, parked: true }]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'deadline' });
+    });
+  });
+
+  it('a cancel withdraws the cards its errand raised and fences the attempt; a report leaves them for the owner', async () => {
+    await withHost(async ({ host, ticket, book, withdrawn, released }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      expect(book.cancel(t.jobId, 'owner')).toBe(true);
+      host.cancelled(t.jobId);
+      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(released).toHaveLength(1);
+      const reported = ticket('errand');
+      await host.claim(reported);
+      await host.report(reported, { kind: 'result', result: { status: 'done', summary: 'A card waits for you.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 });
+      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+    });
+  });
+
   it('an owner message during an errand waits for one browser step at most: the lane yields between steps', async () => {
     await withHost(async ({ host, ticket, ran, serial, browse }) => {
       const t = ticket('errand');
@@ -296,6 +353,13 @@ describe('task profiles', () => {
     tasks: ['start_task', 'cancel_task'],
     health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
   };
+
+  // Whatever list a tool is missing from, a profile can only read: every tool a worker holds is a safe read, except the
+  // browser's act step (it stops before a submit, which becomes an owner card) and the code profile's refused tool.
+  const MAY_ACT: readonly ToolName[] = ['browse_act', 'execute_code'];
+  it.each(Object.keys(TASK_PROFILE_SPECS) as (keyof typeof TASK_PROFILE_SPECS)[])('%s holds only safe reads, beside the browser act step', (profile) => {
+    expect(TASK_PROFILE_SPECS[profile].tools.filter(tool => !MAY_ACT.includes(tool) && TOOL_RECORDS[tool].replay.replay !== 'safe_read')).toEqual([]);
+  });
 
   it.each(Object.keys(TASK_PROFILE_SPECS) as (keyof typeof TASK_PROFILE_SPECS)[])('%s holds no send, approve, memory, delegation, task or health tool', (profile) => {
     for (const [group, tools] of Object.entries(forbidden)) {

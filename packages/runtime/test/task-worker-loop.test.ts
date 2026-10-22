@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ANTHROPIC_PROVIDER, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
+import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, taskModel, TaskProviderUnavailable, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { checkpointTurns, DROPPED_STEPS_NOTE, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, taskModel, TaskProviderUnavailable, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -162,5 +162,34 @@ describe('the production task model step', () => {
     expect(failure).toBeInstanceOf(TaskProviderUnavailable);
     expect((failure as TaskProviderUnavailable).event).toMatchObject({ ok: false, cost_kind: 'worker' });
     expect((failure as TaskProviderUnavailable).event).not.toHaveProperty('usage');
+  });
+});
+
+describe('checkpoint trimming', () => {
+  // One round per turn, so every turn can start the kept window.
+  const turn = (i: number, name: string, args: Record<string, unknown> = { query: `q${i}` }): LLMToolTurn =>
+    ({ call: { call_id: `c${i}`, name, arguments: JSON.stringify(args) }, output: `{"ok":true,"n":${i}}`, prior_items: [] });
+
+  it('keeps the newest turns and notes the dropped ones, naming each step that cannot be replayed with its arguments', () => {
+    const turns = [turn(0, 'browse_act', { url: 'https://example.com/book', task: 'Book a table for two at 8pm.' }), ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))];
+    const kept = checkpointTurns(turns);
+    expect(kept).toHaveLength(LLM_TOOL_TURNS_MAX);
+    expect(kept.at(-1)!.call.call_id).toBe('c70');
+    expect(kept[0]!.output.startsWith(DROPPED_STEPS_NOTE)).toBe(true);
+    expect(kept[0]!.output).toContain('browse_act {"url":"https://example.com/book","task":"Book a table for two at 8pm."} (already run; do not run it again)');
+    expect(kept[0]!.output).toContain('web_search x6');
+    expect(kept[0]!.output.endsWith(`{"ok":true,"n":7}`)).toBe(true);
+  });
+
+  it('carries the note forward when the turn holding it is dropped in turn', () => {
+    const first = checkpointTurns([turn(0, 'browse_act', { url: 'https://example.com/book' }), ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))]);
+    const again = checkpointTurns([...first, ...Array.from({ length: 10 }, (_, i) => turn(100 + i, 'read_thread'))]);
+    expect(again).toHaveLength(LLM_TOOL_TURNS_MAX);
+    expect(again[0]!.output).toContain('browse_act {"url":"https://example.com/book"} (already run; do not run it again)');
+  });
+
+  it('leaves a checkpoint within the limit untouched', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => turn(i, 'browse_act'));
+    expect(checkpointTurns(turns)).toBe(turns);
   });
 });

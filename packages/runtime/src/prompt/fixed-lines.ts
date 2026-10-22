@@ -25,12 +25,13 @@ export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   brief_changed: 'its instructions changed after it started',
 };
 
-// A task's report when no model can write it.
+// A task's report when no model can write it. A settled job keeps neither its result nor its progress, so the words promise
+// nothing that could be read back later.
 export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>): string => {
   const title = (JSON.parse(row.brief_json) as TaskBrief).title;
   return row.park_reason
-    ? `Your background task "${title}" stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Ask me and I'll tell you what it got through.`
-    : `Your background task "${title}" has finished. I can't write it up right now; ask me about it when you're ready.`;
+    ? `Your background task "${title}" stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Start it again if you still need it.`
+    : `Your background task "${title}" finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
 };
 
 // A long task's progress note.

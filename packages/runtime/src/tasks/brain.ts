@@ -32,6 +32,8 @@ export type TaskHostDeps = Readonly<{
   spend?(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
   // Arms the jobs lane's wake.
   wake(due: number): Promise<void>;
+  // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
+  withdrawCards?(runRef: string): void;
 }>;
 
 // After a provider outage a task waits before its next attempt: 2, 5, 10, then every 20 minutes until its deadline.
@@ -85,10 +87,23 @@ export const taskHost = (deps: TaskHostDeps) => {
 
   return {
     fence,
+    // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
+    // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
+    cancelled: (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); },
     busy: (): ReadonlySet<string> => new Set(busy.keys()),
     // The worker keeps its lease while a model call runs.
     heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
+      // The same attempt rejoining while the brain still serves a call of its earlier invocation (a worker alarm that fired
+      // again): that call may still be waiting for the serial lane, with no intent written yet. Both are fenced, so neither
+      // invocation runs a step the other may also run; the lease then lapses and a new attempt resumes from the checkpoint.
+      if (busy.has(ticket.jobId)) {
+        const ended = deps.book.abandon(ticket);
+        fence(ticket.jobId);
+        const row = deps.book.get(ticket.jobId);
+        if (row && ended !== 'fenced') hop(row, 'task_rejoin_fenced', { ok: false, ...(row.park_reason ? { code: row.park_reason } : {}) });
+        return 'fenced';
+      }
       const row = deps.book.claim(ticket);
       if (row === 'parked') {
         fence(ticket.jobId);
@@ -144,6 +159,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         // The intent is written once the call can start, after any wait for the serial lane, with a fresh lease: a job that
         // waited behind a long turn did nothing yet and must not look like an interrupted effect.
         const run = async () => {
+          scope.admit();
           if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
           return dispatchLoopTool(call, { handlers, ctx });
         };

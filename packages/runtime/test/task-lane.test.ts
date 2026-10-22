@@ -28,7 +28,7 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const sent = new Map<string, string>(), turns: string[] = [], started: TaskTicket[] = [], fenced: string[] = [], log: TurnLogEntry[] = [];
     const busy = new Set<string>();
-    const host = { fence: (id: string) => { fenced.push(id); }, busy: () => busy } as unknown as TaskHost;
+    const host = { fence: (id: string) => { fenced.push(id); }, cancelled: (id: string) => { fenced.push(id); }, busy: () => busy } as unknown as TaskHost;
     const deps = (over: Partial<JobsLaneDeps> = {}): JobsLaneDeps => ({
       book, host, now: () => clock.at, timezone: 'UTC', log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket); },
@@ -60,7 +60,7 @@ describe('the jobs lane', () => {
       await runJobsLane(deps());
       expect(turns).toEqual([`task:${id}:apply`]);
       expect([...sent.keys()]).toEqual([`task:${id}`]);
-      expect(book.get(id)).toMatchObject({ status: 'applied', checkpoint_json: null });
+      expect(book.get(id)).toMatchObject({ status: 'applied', checkpoint_json: null, result_json: null });
       expect(log.filter(entry => entry.hop === 'task_applied')).toHaveLength(1);
       expect(log.find(entry => entry.hop === 'task_applied')).toMatchObject({ job_id: id, job_profile: 'reader', outcome: 'completed' });
     });
@@ -97,7 +97,7 @@ describe('the jobs lane', () => {
       expect(sent.size).toBe(0);
       clock.at += 61 * 60_000;
       await runJobsLane(down);
-      expect(sent.get(`task:${id}`)).toBe('Your background task "Inbox since Monday" has finished. I can\'t write it up right now; ask me about it when you\'re ready.');
+      expect(sent.get(`task:${id}`)).toBe('Your background task "Inbox since Monday" finished, but I couldn\'t write it up and haven\'t kept what it found. Start it again when you need it.');
       expect(book.get(id)!.status).toBe('applied');
     });
   });
@@ -121,7 +121,7 @@ describe('the jobs lane', () => {
       expect(said).toContain('in the middle of a step that cannot safely be repeated');
       expect(said).toContain('Do not start it again yourself.');
       expect(sent.get(`task:${job.id}`)).toBe('It stopped partway.');
-      expect(book.get(job.id)!.status).toBe('parked');
+      expect(book.get(job.id)).toMatchObject({ status: 'parked', result_json: null });
     });
   });
 
@@ -190,7 +190,7 @@ describe('the jobs lane', () => {
       const lane = deps();
       await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { book.cancel(id, 'owner'); await lane.deliver(key, trace, text, commit); } });
       expect(sent.size).toBe(0);
-      expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+      expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner', result_json: null });
       expect(log.find(entry => entry.hop === 'task_apply_dropped')).toMatchObject({ ok: false, code: 'owner', job_id: id });
       expect(log.some(entry => entry.hop === 'task_applied')).toBe(false);
     });
@@ -216,6 +216,18 @@ describe('the jobs lane', () => {
       expect(book.get(job.id)!.status).toBe('running');
       busy.delete(job.id);
       expect(book.nextDue()).toBe(T0 + TASK_LEASE_MS);
+    });
+  });
+
+  it('a progress note for a task that stopped while the note was being queued is not sent', async () => {
+    await withLane(async ({ book, sent, clock, deps }) => {
+      const { job } = book.create(task('k1'));
+      book.startAttempt(job.id);
+      clock.at += 3 * 60_000;
+      const lane = deps();
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { book.cancel(job.id, 'owner'); await lane.deliver(key, trace, text, commit); } });
+      expect(sent.size).toBe(0);
+      expect(book.get(job.id)).toMatchObject({ status: 'cancelled', notes_sent: 0 });
     });
   });
 

@@ -3,6 +3,7 @@ import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { FORGOTTEN } from '../memory/claims';
 import { md5Hex } from '../channels/md5';
+import { ClosedRunError } from '../channels/run-effect-scope';
 
 // The job book: the owner object's record of every task it handed to a worker and every turn it retries itself. The owner
 // object is its only writer and the single retry owner. Every transition compares (id, attempt, lease_token, status), so a
@@ -60,6 +61,7 @@ export type CreateJob = Readonly<{
 export type Fenced = 'fenced';
 
 const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
+type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>;
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string }>) => {
@@ -74,6 +76,18 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     `UPDATE task_jobs SET lease_until = ?, updated_at = ?${extra} WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?`,
     deps.now() + TASK_LEASE_MS, deps.now(), ...values, ticket.jobId, ticket.attempt, ticket.token,
   ).rowsWritten > 0;
+  // An attempt lost while an effect that cannot be replayed was in flight parks at once: the effect may or may not have
+  // happened, and running it again blind could do it twice. Answers whether the job parked.
+  const endAttempt = ({ id, crashes, deadline_at, inflight_json }: LostAttempt, now: number): boolean => {
+    const reason: ParkReason | null = inflight_json !== null ? 'uncertain_effect' : now >= deadline_at ? 'deadline' : crashes + 1 >= TASK_MAX_CRASHES ? 'crashed' : null;
+    sql.exec(
+      reason !== null
+        ? `UPDATE task_jobs SET status = 'reported', outcome = 'failed', park_reason = ?, crashes = crashes + 1, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`
+        : `UPDATE task_jobs SET status = 'queued', crashes = crashes + 1, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`,
+      ...(reason !== null ? [reason] : []), now, now, id,
+    );
+    return reason !== null;
+  };
   const park = (id: string, reason: ParkReason, outcome: JobOutcome = 'failed'): boolean => {
     const now = deps.now();
     return sql.exec(
@@ -177,22 +191,21 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // `busy` names jobs whose tool call the brain is running now: their worker is waiting on it, not lost.
     lapse(busy: ReadonlySet<string> = new Set()): readonly Readonly<{ id: string; parked: boolean }>[] {
       const now = deps.now();
-      const lapsed = sql.exec<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>(
+      // A busy job past its deadline ends too: its call then finds the attempt gone and is fenced.
+      const lapsed = sql.exec<LostAttempt>(
         "SELECT id, crashes, deadline_at, inflight_json FROM task_jobs WHERE status = 'running' AND lease_until < ?", now,
-      ).toArray().filter(({ id }) => !busy.has(id));
-      return lapsed.map(({ id, crashes, deadline_at, inflight_json }) => {
-        // An attempt lost while an effect that cannot be replayed was in flight parks at once: the effect may or may not
-        // have happened, and running it again blind could do it twice.
-        const reason: ParkReason | null = inflight_json !== null ? 'uncertain_effect' : now >= deadline_at ? 'deadline' : crashes + 1 >= TASK_MAX_CRASHES ? 'crashed' : null;
-        const parked = reason !== null;
-        sql.exec(
-          parked
-            ? `UPDATE task_jobs SET status = 'reported', outcome = 'failed', park_reason = ?, crashes = crashes + 1, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`
-            : `UPDATE task_jobs SET status = 'queued', crashes = crashes + 1, lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`,
-          ...(parked ? [reason] : []), now, now, id,
-        );
-        return { id, parked };
-      });
+      ).toArray().filter(({ id, deadline_at }) => !busy.has(id) || now >= deadline_at);
+      return lapsed.map((row) => ({ id: row.id, parked: endAttempt(row, now) }));
+    },
+    // The attempt's own worker came back while an earlier invocation of it may still be served (a re-fired alarm). The
+    // attempt ends as if lost, so every later call from either invocation is fenced and a new attempt resumes from the
+    // checkpoint; a step already recorded in flight parks it.
+    abandon(ticket: TaskTicket): boolean | Fenced {
+      const row = sql.exec<LostAttempt>(
+        "SELECT id, crashes, deadline_at, inflight_json FROM task_jobs WHERE id = ? AND status = 'running' AND attempt = ? AND lease_token = ?",
+        ticket.jobId, ticket.attempt, ticket.token,
+      ).toArray()[0];
+      return row ? endAttempt(row, deps.now()) : 'fenced';
     },
     // A job the brain itself parks (a retry whose promised time came, an effect that cannot be replayed, a changed brief).
     park,
@@ -201,21 +214,24 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     cancel(id: string, reason: CancelReason): boolean {
       const now = deps.now();
       return sql.exec(
-        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, checkpoint_json = NULL, settled_at = ?, updated_at = ?
+        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
          WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, now, now, id, ...OPEN,
       ).rowsWritten > 0;
     },
     // A reported job that the owner heard about. Parked jobs settle as parked; the rest as applied. The checkpoint, which
-    // only a resumed attempt needs, is dropped once the job is settled.
+    // only a resumed attempt needs, and the result, which only the apply turn reads, are dropped once the job is settled:
+    // they hold what the worker read, and a settled row is kept for the console and audit.
     settle(id: string): boolean {
       const now = deps.now();
       return sql.exec(
-        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, checkpoint_json = NULL, settled_at = ?, updated_at = ?
+        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
          WHERE id = ? AND status = 'reported'`, now, now, id,
       ).rowsWritten > 0;
     },
+    // Runs as the commit of a progress note's delivery: a job that stopped running since writes no row, and the throw rolls
+    // the queued note back with it.
     noteSent(id: string): void {
-      sql.exec('UPDATE task_jobs SET notes_sent = notes_sent + 1, last_note_at = ?, updated_at = ? WHERE id = ?', deps.now(), deps.now(), id);
+      if (sql.exec("UPDATE task_jobs SET notes_sent = notes_sent + 1, last_note_at = ?, updated_at = ? WHERE id = ? AND status = 'running'", deps.now(), deps.now(), id).rowsWritten === 0) throw new ClosedRunError();
     },
     open: (): readonly JobRow[] => sql.exec<JobRow>(`SELECT * FROM task_jobs WHERE status IN (${placeholders(OPEN)}) ORDER BY created_at`, ...OPEN).toArray(),
     running: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'running' ORDER BY created_at").toArray(),

@@ -10,6 +10,7 @@ import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
+import { unreplayable } from './profiles';
 
 // One attempt of a task, as a worker runs it. The worker holds no handler, owner credential or memory, only the model
 // provider access its own calls need: the brain sends the tool definitions of the job's profile when the worker claims its
@@ -77,12 +78,29 @@ export const taskBriefText = (brief: TaskBrief, resumedFrom: number): string => 
   ...(resumedFrom > 0 ? [`[This task was interrupted and resumed: the ${resumedFrom} tool results shown below are from before the interruption and are not run again. Continue from them.]`] : []),
 ].join('\n\n');
 
-// Checkpoints keep the turns a resumed loop would show the model: the newest whole rounds within the replay limit.
+// Checkpoints keep the turns a resumed loop would show the model: the newest whole rounds within the replay limit. The
+// first kept turn carries a note of the calls that no longer fit, each step that cannot be replayed with its arguments, so
+// a resumed attempt knows it already acted and does not act again. A note on a dropped turn is carried into the new one.
+export const DROPPED_STEPS_NOTE = '[Earlier steps of this task, no longer shown: ';
+const NOTE_END = ']\n\n';
+const NOTE_MAX = 4_000;
+const TOOL_OUTPUT_MAX = 32_768;
+const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {
+  const acted: string[] = [], carried: string[] = [], counts = new Map<string, number>();
+  for (const turn of dropped) {
+    if (turn.output.startsWith(DROPPED_STEPS_NOTE)) carried.push(turn.output.slice(DROPPED_STEPS_NOTE.length, turn.output.indexOf(NOTE_END)));
+    if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
+    else counts.set(turn.call.name, (counts.get(turn.call.name) ?? 0) + 1);
+  }
+  const listed = [...carried, ...acted, ...[...counts].map(([name, count]) => `${name} x${count}`)].join('; ');
+  return `${DROPPED_STEPS_NOTE}${listed.length > NOTE_MAX ? `${listed.slice(0, NOTE_MAX)}…` : listed}${NOTE_END}`;
+};
 export const checkpointTurns = (turns: readonly LLMToolTurn[]): readonly LLMToolTurn[] => {
   if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
   const starts = turns.flatMap((turn, index) => turn.prior_items !== undefined ? [index] : []);
   const start = starts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? turns.length - LLM_TOOL_TURNS_MAX;
-  return turns.slice(start);
+  const [first, ...rest] = turns.slice(start);
+  return [{ ...first!, output: `${droppedSteps(turns.slice(0, start))}${first!.output}`.slice(0, TOOL_OUTPUT_MAX) }, ...rest];
 };
 
 const fallbackResult = (exit: LoopExit, text: string): TaskResult => ({
