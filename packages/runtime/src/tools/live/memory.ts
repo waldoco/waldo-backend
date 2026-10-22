@@ -1,7 +1,9 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
 import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
+import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
+import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // Supplied by the authenticated conversation host, never by model arguments. Each text is
@@ -47,13 +49,17 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act.'), schema: rememberArgsSchema, mutates_state: true,
+    { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => part.includes(args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         if (!source) return fail('Evidence quote is not grounded in an owner-authored message.');
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
+        // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected
+        // tool), a reading may have come from there, so none is stored from this turn: neither one the scribe left in these
+        // arguments nor the marker of one it withheld. The evidence and aliases sit beside the text.
+        if (ctx.toolArgSourceTaint === 'external' && [args.text, args.evidence_quote, ...(args.aliases ?? [])].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
         const claims = store.claims();
         const previous = args.replaces_id === undefined ? undefined : claims.find(claim => claim.id === args.replaces_id);
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');
