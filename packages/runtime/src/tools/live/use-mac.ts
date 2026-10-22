@@ -16,7 +16,7 @@ export function macAction(args:UseMacArgs):{class:Capability;payload:MacPayload}
 }
 export type MacDesk={request(input:Pick<CommandInput,'class'|'payload'|'request_id'>,ctx:ToolDispatcherContext):Promise<EnqueueResult>};
 export const useMacHandler=(desk:MacDesk):ToolHandler<UseMacArgs,unknown,ToolDispatcherContext>=>({
- name:'use_mac',description:'Request a command or coding-session operation on your paired Mac. Commands, starts, messages and stops require a native Mac approval every time. Queries and interrupts need no dialog. Chat replies cannot approve. Returns immediately; the result arrives separately.',
+ name:'use_mac',description:'Request a command or coding-session operation on your paired Mac: the last resort, for what no connected service, web tool or browser can do. Commands, starts, messages and stops require a native Mac approval every time. Queries and interrupts need no dialog. Chat replies cannot approve. Returns immediately; the result arrives separately.',
  schema:useMacArgsSchema,trigger_allowlist:['user_message'],autonomy_gated:false,mutates_state:true,
  handle:async(args,ctx):Promise<ToolResult<unknown>>=>{
   if(ctx?.ownerInitiated!==true || !ctx?.turnId||!ctx.toolCallId||ctx.trigger!=='user_message'||taintGateBlocksDirectExecution('use_mac',ctx.toolArgSourceTaint))return {ok:false,code:'forbidden',error:'Mac requests require an untainted owner turn.'};

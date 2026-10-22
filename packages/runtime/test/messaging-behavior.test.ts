@@ -73,8 +73,10 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).not.toContain('memory line for this turn');
   });
 
-  it('tells the model to pick search or browsing itself, never ask the owner for a link and never make one up', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('Pick web_search or browse_page yourself; never ask the owner for a link you can find.');
+  it('tells the model to pick the way itself, cheapest first, never ask the owner for a link and never make one up', () => {
+    expect(MESSAGING_BEHAVIOR).toContain("Use the cheapest way that can do the job, and climb only when it can't: memory, a connected service's tool or MCP server, mail, web_search, browse_page, browse_act, their Mac last.");
+    expect(MESSAGING_BEHAVIOR).toContain('A refusal marked blocked says why and what to try next; follow its fix.');
+    expect(MESSAGING_BEHAVIOR).toContain('Never ask the owner for a link you can find.');
     expect(MESSAGING_BEHAVIOR).toContain('A stable fact needs only a search');
     expect(MESSAGING_BEHAVIOR).toContain("Open a URL the owner gave you, one a search returned or a site's own search page; never make one up.");
   });
@@ -204,9 +206,11 @@ describe('the rules that pulled against each other are gone', () => {
   // included; without them the largest surface's block is about 15,060. The blocked-site search fallback adds about
   // 410 bytes, to 15,475. The turn-context rule then took the clock and connection instructions out of the per-turn
   // tail (sent every turn already, about 830 bytes), and voice version 2 merged the personality north star (about
-  // 2,500 bytes), to 18,803. Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 18,900 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(18_900);
+  // 2,500 bytes), to 18,803. The cheapest-rung lines (which way to try first, and what a blocked refusal means) add
+  // about 230 bytes net of the line they replace, to 19,033. Rule pruning against the eval gate is where the next cuts
+  // come from.
+  it('keeps every delivered behaviour text under 19,050 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_050);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
@@ -215,7 +219,7 @@ describe('the rules that pulled against each other are gone', () => {
     for (const [surface, prompt] of prompts()) {
       const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(18_900 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_050 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });

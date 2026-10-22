@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
-  healthConsentListV1Schema, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
+  appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
+  healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
 } from './health-ingest';
 
@@ -18,12 +18,29 @@ describe('health consent', () => {
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: '*' }, { ...grant, source: 'oura' }, { ...grant, purpose: 'all' }, { ...grant, version: String(HEALTH_CONSENT_VERSION_V1) }, { ...grant, version: HEALTH_CONSENT_VERSION_V1 - 1 }, { ...grant, age_attested_18_plus: false }, { ...grant, owner_id: 'other-owner' }, { ...grant, expected_epoch: -1 }, { ...grant, request_id: 'short' }]);
     expect(healthConsentWithdrawV1Schema.safeParse({ request_id: 'withdraw-health-1', source: 'samsung', purpose: 'model_processing', expected_epoch: 1 }).success).toBe(true);
   });
-  it('takes every source the app can read, and no server-side vendor', () => {
-    for (const source of ['apple', 'samsung', 'health_connect']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source }).success, source).toBe(true);
-    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'whoop' }]);
+  it('takes every source the app can read and the one provider the backend syncs, and no other vendor', () => {
+    for (const source of ['apple', 'samsung', 'health_connect', 'whoop'] as const) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source, version: healthConsentVersionV1(source) }).success, source).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'oura' }]);
   });
-  it('carries the copy version that names intraday window summaries', () => {
-    expect(HEALTH_CONSENT_VERSION_V1).toBe(2);
+  it('carries the copy version that names intraday window summaries for a device source and the WHOOP-specific notice for WHOOP', () => {
+    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1]).toEqual([2, 3]);
+    expect((['apple', 'samsung', 'health_connect', 'whoop'] as const).map(healthConsentVersionV1)).toEqual([2, 2, 2, 3]);
+  });
+  it('ties a grant to the copy of its own source: WHOOP on the device copy, or a device source on the WHOOP copy, is refused', () => {
+    expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }).success).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'whoop' }, { ...grant, source: 'whoop', version: HEALTH_CONSENT_VERSION_V1 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, { ...grant, source: 'whoop', version: 4 }]);
+  });
+  // A stored grant keeps the version it was written on. After a copy change, reading it back must still work (the list, a
+  // withdraw's answer, a replayed grant), while a new grant must name the current version.
+  it('reads back every version its source has had, and still writes only the current one', () => {
+    const row = { consent_class: 'health_processing', source: 'whoop', purpose: 'storage_compute', version: HEALTH_PROVIDER_CONSENT_VERSION_V1, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' };
+    for (const version of [2, 3]) expect(healthConsentListV1Schema.safeParse({ consents: [{ ...row, version }] }).success, `whoop ${version}`).toBe(true);
+    expect(healthConsentListV1Schema.safeParse({ consents: [{ ...row, source: 'apple', version: 2 }] }).success).toBe(true);
+    expect(healthConsentChangeV1Schema.safeParse({ consent: { ...row, version: 2 }, replayed: true, deletion_routed: false }).success).toBe(true);
+    // Never a version the source has not had: not the next one, not another source's, not an invalid one.
+    rejected(healthConsentListV1Schema, [{ consents: [{ ...row, version: 4 }] }, { consents: [{ ...row, source: 'apple', version: 3 }] }, { consents: [{ ...row, version: 1 }] }, { consents: [{ ...row, version: 2.5 }] }]);
+    // New writes stay strict: a WHOOP grant on its earlier version is refused.
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'whoop', version: 2 }]);
   });
   it('reports state, list and change receipts strictly', () => {
     const state = { consent_class: 'health_processing', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' };
@@ -113,6 +130,37 @@ describe('health ingest batch', () => {
     const receipt = { request_id: batch.request_id, source: 'apple', consent_epoch: 1, accepted: 1, deleted: 0, ignored: 0, anchor_after: 'opaque-anchor-1', replayed: false };
     expect(healthIngestReceiptV1Schema.safeParse(receipt).success).toBe(true);
     rejected(healthIngestReceiptV1Schema, [{ ...receipt, accepted: -1 }, { ...receipt, replayed: 'no' }, { ...receipt, extra: 1 }]);
+  });
+});
+
+// Health Connect on Android, mapped per docs/app/HEALTH_CONNECT_MAPPING_2026-10-21.md. The wire is the same as HealthKit's;
+// these pin the HC shapes the app sends so a change that refuses one fails here first.
+describe('health connect uploads', () => {
+  const hc = { read_api: 'health_connect', source_bundle_id: null, source_package_name: 'com.example.ringapp', source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic', manufacturer: 'Example', product_type: 'RING', client_record_version: 3 };
+  const hcBatch = { ...batch, source: 'health_connect', timezone: 'Europe/Berlin' };
+  const night = { ...common, day: '2026-10-10', start_at: '2026-10-09T23:10:00+02:00', end_at: '2026-10-10T06:40:00+02:00', utc_offset_minutes: 120 };
+  const stages = { source_ref: 'hc:session-9', session_ref: 'hc:session-9', waking_day: '2026-10-10', reducer_version: 'asleep-interval-union.v1', contributor_ids: ['hc:session-9'],
+    intervals: [{ contributor_id: 'hc:session-9', start_at: '2026-10-09T23:10:00+02:00', end_at: '2026-10-09T23:25:00+02:00', kind: 'in_bed' }, { contributor_id: 'hc:session-9', start_at: '2026-10-09T23:25:00+02:00', end_at: '2026-10-10T06:40:00+02:00', kind: 'asleep' }] };
+
+  it('takes a staged sleep session, an RMSSD reading, resting heart rate and an hour of steps with their HC origin', () => {
+    const samples = [
+      { ...night, sample_id: 'hc:session-9:sleep_duration', origin: hc, sleep_context: stages, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 435 },
+      { ...night, sample_id: 'hc:session-9:overnight_hrv', origin: hc, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: 42 },
+      { ...common, sample_id: 'hc:rhr-4', origin: { ...hc, recording_method: 'unknown' }, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'unknown', value: 58 },
+      { ...hour, sample_id: 'hc:steps:2026-10-10T06', revision: 1_790_000_000, origin: { ...hc, recording_method: 'active' }, signal: 'steps_window', unit: 'count', value: 830 },
+    ];
+    expect(healthIngestV1Schema.safeParse({ ...hcBatch, samples }).success).toBe(true);
+    // A deleted record names the signal each derived reading carried; the app keeps the record type beside the id.
+    expect(healthIngestV1Schema.safeParse({ ...hcBatch, deletions: ['sleep_duration', 'sleep_efficiency', 'sleep_midpoint'].map(signal => ({ sample_id: `hc:session-9:${signal}`, signal, revision: 1_790_000_100 })) }).success).toBe(true);
+  });
+
+  it('refuses HC values the app must map first: an integer recording method, a bare deletion id and an unlabelled HRV', () => {
+    rejected(healthIngestV1Schema, [
+      { ...hcBatch, samples: [{ ...sleep, origin: { ...hc, recording_method: 2 } }] },
+      { ...hcBatch, deletions: [{ sample_id: 'hc:session-9:sleep_duration', revision: 1 }] },
+      { ...hcBatch, samples: [{ ...night, sample_id: 'hc:hrv-1', origin: hc, signal: 'overnight_hrv', unit: 'milliseconds', value: 42 }] },
+      { ...hcBatch, source: 'google_fit' },
+    ]);
   });
 });
 
