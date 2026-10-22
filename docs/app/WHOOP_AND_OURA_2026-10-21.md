@@ -62,18 +62,20 @@ WHOOP's terms (§3 and §4 above):
 1. Waldo stores the owner's WHOOP data (sleep, recovery and workouts, with WHOOP's scores) in its health store.
 2. AI models process that data to plan the owner's day. The notice must say who does it: the data goes to Waldo's AI model
    provider, a third party, and only under the model-processing grant, which is the owner's explicit opt-in that WHOOP's §4 asks for
-   before WHOOP data is exposed to a third party. The notice may say the provider keeps nothing and never uses the data to create,
-   train, fine-tune or improve any model only once zero-retention and no-training terms with that provider are in place; until then
-   it must not promise it.
-3. Beyond that provider it is shown or sent to no one else, and Waldo's notes about it are not medical advice. Staging trace capture
-   (Langfuse) would be a further recipient; the owner's decision on excluding WHOOP-derived turns from capture is open, so the
-   notice must not ship, and no WHOOP secret is set, until that is settled and the notice names any recipient that remains.
-4. How to stop: withdrawing storage stops the sync and deletes what was stored; withdrawing AI use stops the sync and AI use; disconnecting
+   before WHOOP data is exposed to a third party.
+3. Waldo never uses WHOOP data to create, train, fine-tune or improve any model. WHOOP's §4 also binds anyone acting for Waldo, so
+   zero-retention and no-training terms with the model provider are a precondition for WHOOP, not optional wording. The notice may
+   say the provider keeps nothing and trains on nothing only once those terms are in place.
+4. Who else sees it: the data, and Waldo's replies drawn from it, are shown only to the owner, on the surfaces the owner chooses. A
+   reply on WhatsApp, Telegram or iMessage passes through that channel's provider (Meta, Telegram, Apple), so the notice names them.
+   Staging trace capture (Langfuse) is a further recipient while testing; the owner accepted that on 22 October 2026, so the notice
+   names it for as long as staging capture stays on. Waldo's notes about the data are not medical advice.
+5. How to stop: withdrawing storage stops the sync and deletes what was stored; withdrawing AI use stops the sync and AI use; disconnecting
    ends WHOOP's access.
 
 Both grants (storage, then AI use) are asked on this notice. The copy changes only with a new version number, which asks the owner again.
-Until the app ships that notice and the migration `20261021170000_health_consent_copy_version.sql` is applied, set no WHOOP secret and
-enter no client for the edge.
+Set no WHOOP secret and enter no client for the edge until all three hold: the app ships that notice, the migration
+`20261021170000_health_consent_copy_version.sql` is applied, and the provider terms in item 3 are in place.
 
 ## WHOOP in the build
 
