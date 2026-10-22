@@ -10,7 +10,7 @@ import { constantTimeEqual } from './constant-time';
 // One cookie per attempt, so two connects started side by side in one browser both finish. It is path-scoped to the
 // callback so it rides no other request, which rules out the __Host- prefix (that requires Path=/). It is
 // SameSite=Lax because the provider's redirect back is a cross-site top-level GET, which a Strict cookie does not ride.
-export type BoundProvider = 'google' | 'mcp' | 'whoop';
+export type BoundProvider = 'google' | 'mcp' | 'whoop' | 'photon';
 export type BrowserCheck = 'bound' | 'missing' | 'expired' | 'mismatch';
 
 const PREFIX = '__Secure-waldo-oauth-';

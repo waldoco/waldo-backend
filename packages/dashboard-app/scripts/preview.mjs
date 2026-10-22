@@ -35,7 +35,7 @@ const controls = (view) => {
     setup: { telegram_linked: true, google_access_granted: true, quiet_hours_set: false },
     usage: { rows: [{ model: 'synthetic-model', calls: 42, input: 120000, cached: 80000, output: 9000, usd: 0.4312 }] },
     files: { storage: 'telegram_reference', items: [{ id: 1, kind: 'document', name: 'itinerary.pdf', mime: 'application/pdf', size: 48213, caption: 'Flights for October', at: 1790000000 }] },
-    imessage: { enabled: true, address: 'waldo@example.test', linked_hint: '4321', admin: true, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'], bridges: [
+    imessage: { enabled: true, address: 'waldo@example.test', linked_hint: '4321', admin: true, phone: null, photon: 'connected', actions: ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'], bridges: [
       { id: 'imb_' + '1'.repeat(32), kind: 'owner', state: 'pending', subject: 'sample@example.test', chat: 'iMessage;-;sample@example.test', observed: true, host_version: 'synthetic-host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] },
       { id: 'imb_' + '2'.repeat(32), kind: 'shared', state: 'active', subject: 'operator@example.test', chat: 'iMessage;-;operator@example.test', observed: true, host_version: 'synthetic-host-1', actions: ['imessage.revoke'] }] },
     devices: { actions: ['device.pair'], devices: [{ id: 'dev_synthetic', label: 'Synthetic MacBook', capabilities: ['machine_state_query', 'notify_local'], created_at: '2026-10-16 09:00', actions: ['device.revoke', 'device.query', 'device.notify'] }],
