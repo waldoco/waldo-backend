@@ -50,6 +50,8 @@ export type WorldSeed = Readonly<{
   health?: SeedHealth;
   // The day before, for a step that has the health trigger run on a change from it; none when unset.
   health_before?: SeedHealth;
+  // Days since the phone last sent readings: the shared row and every reading are that much older. 0 when unset.
+  health_days_old?: number;
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   // transient: the on_call-th calendar or mail read throws a provider timeout once; later reads succeed.
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
@@ -134,10 +136,10 @@ const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: 
 export const SYNTHETIC_RENDERINGS = ['317', '5h 17', '5 h 17', '5:17', '5 hours 17', '5 hr 17', '5hr 17', '5.3 h', '5.3 hours', '41.5', '63 bpm'] as const;
 const MODERATE_DAY: SeedHealth = { form_score: 48, recovery: 'moderate', load: 'good', drivers: ['sleep below baseline'] };
 const shift = (day: string, by: number) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86_400_000).toISOString().slice(0, 10);
-const healthSeries = (today: string) => ({
+const healthSeries = (today: string, daysOld: number) => ({
   access: 'granted', read_at: `${today}T03:00:00.000Z`,
   sources: [{ source: 'apple', consent_epoch: 1, samples: SYNTHETIC_SERIES.map(([signal, offset, value, method]) => {
-    const day = shift(today, offset);
+    const day = shift(today, offset - daysOld);
     const night = signal === 'resting_heart_rate' ? null : Date.parse(`${shift(day, -1)}T18:30:00Z`);
     return {
       signal, day, value, method, timezone: TIMEZONE,
@@ -302,7 +304,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     searchEpisodesHandler(episodes), web,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
-      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10));
+      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld);
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
@@ -311,13 +313,16 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
   // its score, as the producer writes a day's first row.
   const day = seed.health ?? MODERATE_DAY;
+  const daysOld = seed.health_days_old ?? 0;
+  const sharedDay = () => shift(localIso(now(), TIMEZONE).slice(0, 10), -daysOld);
+  const compiledAt = () => new Date(now() - daysOld * 86_400_000 - 3_600_000).toISOString();
   const formWord = toRowZone('form', formZoneOf(day.form_score));
   const sharedHealth = (): HealthContextRow => ({
     context: {
-      id: 'eval-health', day: localIso(now(), TIMEZONE).slice(0, 10),
+      id: 'eval-health', day: sharedDay(),
       form: { score: day.form_score, zone: formWord, drivers: day.drivers, confidence: 0.8 },
       recovery: { score: day.form_score, zone: day.recovery }, weight: { score: 70, zone: day.load },
-      drivers: day.drivers, confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(now() - 3_600_000).toISOString(),
+      drivers: day.drivers, confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: compiledAt(),
     },
     previous: null,
   });
@@ -327,10 +332,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   // marks today; the one card it can raise is recorded as an effect, never applied.
   const healthBook = healthTriggerBook(sql);
   const triggerRow = () => {
-    const today = localIso(now(), TIMEZONE).slice(0, 10), basis = [{ source: 'apple', consent_epoch: 1 }];
+    const rowDay = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: today, compiled_at: new Date(now() - 3_600_000).toISOString(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
-      previous: seed.health_before ? { day: shift(today, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
+      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
   const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
