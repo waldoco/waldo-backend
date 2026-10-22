@@ -283,7 +283,7 @@ describe('the memory notice', () => {
     await inOwner('memory-notice', async () => {
       const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
       const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
-      args[21] = { memoryNotice: () => notices.shift() ?? null };
+      args[21] = { memoryNotice: () => notices.length ? { line: notices[0]!, taken: () => { notices.shift(); } } : null };
       const responder = createOwnerResponder(...args);
       const job = await responder.prompt('job-1', 'owner', '[Reminder] stretch', (_name, work) => work());
       expect(job).not.toContain('Saved to memory');
@@ -291,6 +291,22 @@ describe('the memory notice', () => {
       expect(first).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
       const second = await responder.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'and now?' }), (_name, work) => work());
       expect(second).toBe('Noted.');
+    });
+  });
+
+  it('stays for the next reply when the reply carrying it is never saved', async () => {
+    const storage = memoryStorage();
+    const notices = ['Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).'];
+    const integration = { memoryNotice: () => notices.length ? { line: notices[0]!, taken: () => { notices.shift(); } } : null };
+    await inOwner('memory-notice-unsaved', async () => {
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const closing: Parameters<typeof createOwnerResponder> = ['fixture', { ...store, save: async () => { throw new Error('run closed'); } }];
+      closing[21] = integration;
+      await expect(createOwnerResponder(...closing).respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello' }), (_name, work) => work())).rejects.toThrow('run closed');
+      const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
+      args[21] = integration;
+      const next = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'hello again' }), (_name, work) => work());
+      expect(next).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
     });
   });
 });

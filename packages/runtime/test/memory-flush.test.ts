@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { episodeIndex, OWNER_SAID } from '../src/channels/episodes';
-import { HEALTH_MEMORY_KEY, HEALTH_SAVED_KEY, healthMemoryOn, memoryFlushHooks, noteHealthSaved, setHealthMemory, takeHealthNotice } from '../src/channels/health-memory';
+import { HEALTH_MEMORY_KEY, HEALTH_SAVED_KEY, healthMemoryOn, memoryFlushHooks, noteHealthSaved, setHealthMemory, healthNotice } from '../src/channels/health-memory';
 import type { SpanMemory } from '../src/conversation/compaction';
 import { claimStore } from '../src/memory/claims';
 
@@ -26,24 +26,40 @@ describe('the health notes setting', () => {
 });
 
 describe('the notice of health notes saved on Waldo\'s own', () => {
-  it('names each saved note still in memory once, in its current words, then clears', () => inOwner((state) => {
+  it('names each saved note still in memory once, in its current words, then clears when taken', () => inOwner((state) => {
     const kv = kvOf(state);
     const claims = [{ id: 3, text: 'Sleeps badly after late coffee' }, { id: 5, text: 'Feels flat on days without a walk' }];
     noteHealthSaved(kv, [3, 4]);
     noteHealthSaved(kv, [5, 3]);
-    const line = takeHealthNotice(kv, () => claims);
-    expect(line).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c3); "Feels flat on days without a walk" (c5). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    const notice = healthNotice(kv, () => claims);
+    expect(notice?.line).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c3); "Feels flat on days without a walk" (c5). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    notice!.taken();
     expect(kv.get(HEALTH_SAVED_KEY)).toBeUndefined();
-    expect(takeHealthNotice(kv, () => claims)).toBeNull();
+    expect(healthNotice(kv, () => claims)).toBeNull();
+  }));
+
+  // A reply that never saves (its run closed) must not lose the notice, and a note saved while the reply was written is
+  // still named next time.
+  it('stays until the reply carrying it is saved, and keeps notes saved after it was read', () => inOwner((state) => {
+    const kv = kvOf(state);
+    const claims = [{ id: 3, text: 'Sleeps badly after late coffee' }, { id: 6, text: 'Sleeps better after a walk' }];
+    noteHealthSaved(kv, [3]);
+    expect(healthNotice(kv, () => claims)?.line).toContain('(c3)');
+    const notice = healthNotice(kv, () => claims);
+    expect(notice?.line).toContain('(c3)');
+    noteHealthSaved(kv, [6]);
+    notice!.taken();
+    expect(healthNotice(kv, () => claims)?.line).toBe('Saved to memory from our earlier chat: "Sleeps better after a walk" (c6). Tell me to correct or forget any of it, or turn health notes off in your settings.');
   }));
 
   it('says nothing when every waiting note was forgotten first, and names at most five', () => inOwner((state) => {
     const kv = kvOf(state);
     noteHealthSaved(kv, [9]);
-    expect(takeHealthNotice(kv, () => [])).toBeNull();
+    expect(healthNotice(kv, () => [])).toBeNull();
+    expect(kv.get(HEALTH_SAVED_KEY)).toBeUndefined();
     const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
     noteHealthSaved(kv, many.map((claim) => claim.id));
-    expect(takeHealthNotice(kv, () => many)).toMatch(/\(c5\); and 2 more\. /);
+    expect(healthNotice(kv, () => many)?.line).toMatch(/\(c5\); and 2 more\. /);
   }));
 });
 
@@ -77,7 +93,9 @@ describe('the flush before older chat leaves Waldo\'s view', () => {
     expect(transcriptText).not.toContain('not in the span');
     expect(sides).toMatchObject({ owner: 'I sleep badly after late coffee', shared: 'Forwarded: Sam sleeps badly too', ownerMessages: [{ ref: 'tg-1', text: 'I sleep badly after late coffee' }] });
     expect(policy).toEqual({ health: true });
-    expect(hooks.memoryNotice()).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    const notice = hooks.memoryNotice();
+    expect(notice?.line).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    notice!.taken();
     expect(hooks.memoryNotice()).toBeNull();
 
     setHealthMemory(kv, 'off');

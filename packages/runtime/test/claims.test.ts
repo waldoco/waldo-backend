@@ -922,8 +922,9 @@ it('the nightly pass keeps no health note when the owner has health notes off, a
 it('the nightly pass saves ordinary facts with numbers and holds readings by kind and reason alone', async () => {
   await withSql(async (sql) => {
     const store = claimStore(sql);
-    const ordinary = ['Needs to file Form 16 by July', 'Laundry load at 6', 'Recovery week 2 of marathon plan', 'Kids go to sleep after 30 minutes of reading'];
-    const readings = ['HR was 52 bpm this morning', 'Sleeps about 6h on work nights', 'Weighs 72 kg'];
+    const ordinary = ['Needs to file Form 16 by July', 'Laundry load at 6', 'Recovery week 2 of marathon plan', 'Kids go to sleep after 30 minutes of reading',
+      'Flight 6E 204 leaves at 06:40', 'Meeting with HR at 10:30', 'Baggage weight is 23 kg', 'Motion 2 passed at the board meeting'];
+    const readings = ['HR was 52 bpm this morning', 'Sleeps about 6h on work nights', 'Weighs 72 kg', 'BP 130/85', 'SpO2 94%'];
     const day = `owner: ${[...ordinary, ...readings].join('. ')}. I like a pulse check at 7 on Mondays.`;
     const reply = ops({ add: [
       ...[...ordinary, ...readings].map((text) => ({ kind: 'routine', text, source: 'stated', evidence: text, touches_forgotten: false })),
@@ -935,7 +936,7 @@ it('the nightly pass saves ordinary facts with numbers and holds readings by kin
     expect(store.claims().map((claim) => claim.text).sort()).toEqual([...ordinary, 'Likes Monday check-ins'].sort());
     const held = store.holds().filter((hold) => hold.reason === 'numeric-health');
     expect(held).toHaveLength(readings.length);
-    expect(JSON.stringify(store.holds())).not.toMatch(/52|72|6h/);
+    expect(JSON.stringify(store.holds())).not.toMatch(/52|72|6h|130|94/);
   });
 });
 
