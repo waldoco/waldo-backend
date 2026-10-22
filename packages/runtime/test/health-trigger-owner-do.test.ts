@@ -141,6 +141,8 @@ describe('the health trigger on the owner object', () => {
   it('holds a change that arrives in quiet hours and still evaluates it when they end, through the real scheduler', async () => {
     await withOwner(async ({ state, pass, notify }) => {
       vi.setSystemTime(Date.parse('2026-10-20T17:30:00Z')); // 23:00 in Kolkata
+      // The change was marked on the 20th, so the row the read returns names the 20th; the evaluation after midnight is for that day.
+      fixture.health = { context: { ...ROW.context, day: '2026-10-20', compiled_at: '2026-10-20T17:00:00Z' }, previous: { ...ROW.previous, day: '2026-10-19' } };
       loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
       await notify('2026-10-20');
       await pass();

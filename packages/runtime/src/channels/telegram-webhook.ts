@@ -11,6 +11,8 @@ export type TelegramWebhookEnv = Readonly<{
   DEVICE_BRIDGE_DO?: DurableObjectNamespace<import('../devices/device-bridge-do').DeviceBridgeDO>;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  // Signs connector OAuth state (Google, MCP). Without it connector sign-in is off; it never falls back to another secret.
+  WALDO_OAUTH_STATE_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
   WALDO_OWNER_TIMEZONE?: string;
   LANGFUSE_PUBLIC_KEY?: string;

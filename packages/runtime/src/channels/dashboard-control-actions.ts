@@ -56,6 +56,17 @@ export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:
  if(result.kind==='redirect'&&result.path&&/^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(result.path))return {state:'recorded',message:'Sign in to the server to finish connecting. Nothing has been granted yet.',navigation:result.path};
  return {state:'rejected',message:MCP_CONNECT_FAILURES[result.reason??'']??'That server could not be connected. Check the address and try again.'};
 };
+// "tool|on|<digest>" or "tool|off". Allowing names the digest the console showed; taking a permission back needs none.
+export const mcpRunsReceipt=async(id:string,value:string,setRuns:(id:string,tool:string,withoutAsking:boolean,seen?:string)=>Promise<boolean|'changed'>):Promise<ControlReceipt>=>{
+ const [tool,choice,seen,...rest]=value.split('|');
+ const valid=!!tool&&!rest.length&&(choice==='on'?/^[0-9a-f]{64}$/.test(seen??''):choice==='off'&&seen===undefined);
+ if(!valid)return {state:'rejected',message:NOTICES.invalid!};
+ const done=await setRuns(id,tool,choice==='on',choice==='on'?seen:undefined);
+ if(done==='changed')return {state:'rejected',message:'That server changed its tools since this page loaded, so nothing was allowed. Refresh Connections and choose again.'};
+ if(!done)return {state:'rejected',message:NOTICES.invalid!};
+ const label=tool==='*read_only_hint'?'The tools labelled read-only':tool;
+ return {state:'recorded',message:choice==='on'?`${label} run${tool==='*read_only_hint'?'':'s'} without asking.`:`${label} ask${tool==='*read_only_hint'?'':'s'} you first.`};
+};
 export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
  ?{state:'rejected',message:result.provider==='not_needed'?'That server is no longer connected. Refresh the records.':'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
  :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='failed'||result.provider==='unsupported'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};

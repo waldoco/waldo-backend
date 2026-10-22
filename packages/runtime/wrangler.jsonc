@@ -7,6 +7,7 @@
   // carry code/state in the query. Enable traces only after issue #205's privacy gate.
   "observability": {
     "enabled": true,
+    "redact_query_string": true,
     "logs": { "enabled": true, "invocation_logs": false },
     "traces": { "enabled": false }
   },
@@ -84,6 +85,7 @@
       "browser": { "binding": "BROWSER" },
       "observability": {
         "enabled": true,
+        "redact_query_string": true,
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },

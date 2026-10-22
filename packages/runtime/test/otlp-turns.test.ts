@@ -265,7 +265,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '9', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '11', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -303,13 +303,14 @@ describe('otlpTurnExporter', () => {
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
     await log({ trace: 'tg-ctx', hop: 'llm_reply', ms: 5, ok: true,
       usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 },
-      shape: { system_bytes: 40, request_bytes: 90, context: {
+      shape: { system_bytes: 40, request_bytes: 90, voice_version: 2, context: {
         tools_count: 3, tools_bytes: 1200, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0,
         system_sections: { behavior: 20 }, context_sections: { clock: 8, memory: 8 } } } });
     await log({ trace: 'tg-ctx', hop: 'turn', ms: 10, ok: true });
     const generation = spans(0).find((span) => span.name === 'llm_reply')!;
     expect(attrs(generation)).toMatchObject({
       'langfuse.observation.metadata.context_system_bytes': '40',
+      'langfuse.observation.metadata.voice_version': '2',
       'langfuse.observation.metadata.context_tools_count': '3',
       'langfuse.observation.metadata.context_tools_bytes': '1200',
       'langfuse.observation.metadata.context_history_messages': '2',
@@ -320,6 +321,17 @@ describe('otlpTurnExporter', () => {
       'langfuse.observation.metadata.context_turn_memory_bytes': '8',
     });
     expect(attrs(generation)['langfuse.observation.metadata.context_context_sections']).toBeUndefined();
+  });
+
+  it('leaves voice_version off a generation whose call ran on no voice block', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-novoice', hop: 'llm_nightly_memory', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 }, shape: { system_bytes: 40, request_bytes: 90, context: {
+      tools_count: 0, tools_bytes: 0, tool_turns_bytes: 0, history_messages: 1, history_bytes: 30, current_bytes: 12, attachments: 0 } } });
+    await log({ trace: 'tg-novoice', hop: 'turn', ms: 10, ok: true });
+    const generation = spans(0).find((span) => span.name === 'llm_nightly_memory')!;
+    expect(attrs(generation)['langfuse.observation.metadata.context_system_bytes']).toBe('40');
+    expect(Object.keys(attrs(generation))).not.toContain('langfuse.observation.metadata.voice_version');
   });
 
   it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
@@ -367,7 +379,7 @@ describe('otlpTurnExporter', () => {
     await log({ trace: 'tg-v9', hop: 'turn', ms: 100, ok: true, outcome: 'answered', job_id: 'job_01', job_profile: 'reader', sandbox_ms: 0 });
     const [root, first, searched, drafted] = spans(0);
     expect(attrs(root!)).toMatchObject({
-      'langfuse.trace.metadata.schema_version': '9',
+      'langfuse.trace.metadata.schema_version': '11',
       'langfuse.trace.metadata.outcome': 'answered',
       'langfuse.trace.metadata.tools_offered': '12', 'langfuse.trace.metadata.tools_bytes': '8000', 'langfuse.trace.metadata.tools_tokens_est': '2000',
       'langfuse.trace.metadata.tools_called': '2', 'langfuse.trace.metadata.tools_failed': '1', 'langfuse.trace.metadata.tools_called_names': ['draft_email', 'search_mail'],

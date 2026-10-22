@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(35);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -14,8 +14,9 @@ end $$;
 create function pg_temp.route(provider text,account text) returns setof text language plpgsql as $$
 declare a bigint:=extract(epoch from now())::bigint;
 begin return query select r.do_name from waldo.health_provider_route(provider,account,a,pg_temp.sig('provroute.'||provider||'.'||lower(account),a)) r; end $$;
-create function pg_temp.grant_body(rid text,src text,purpose text,epoch int default 0) returns jsonb language sql as $$
-  select jsonb_build_object('request_id',rid,'source',src,'purpose',purpose,'version',2,'expected_epoch',epoch,'age_attested_18_plus',true) $$;
+-- Each source's grant carries its own notice's copy version: 2 for a device source, 3 for WHOOP.
+create function pg_temp.grant_body(rid text,src text,purpose text,epoch int default 0,ver int default null) returns jsonb language sql as $$
+  select jsonb_build_object('request_id',rid,'source',src,'purpose',purpose,'version',coalesce(ver,case when src='whoop' then 3 else 2 end),'expected_epoch',epoch,'age_attested_18_plus',true) $$;
 create function pg_temp.sleep(id text,val numeric,rev bigint default null) returns jsonb language sql as $$
   select jsonb_build_object('sample_id',id,'revision',coalesce(rev,extract(epoch from now())::bigint),'signal','sleep_duration','unit','minutes','value',val,
     'day',((now()-interval '2 hours') at time zone 'UTC')::date,
@@ -38,7 +39,10 @@ select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-a-terms-0','apple','provider_terms'))->>'error','invalid_request','nor for a device source');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-g-store-0','garmin','storage_compute'))->>'error','invalid_request','a source that is still unknown is refused');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-o-store-0','oura','storage_compute'))->>'error','invalid_request','Oura is not a source yet');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-old-0','whoop','storage_compute',0,2))->>'error','invalid_request','WHOOP storage on the device copy version is refused');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-a-new-0','apple','storage_compute',0,3))->>'error','invalid_request','and a device source on the WHOOP copy version is refused');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute'))->'consent'->>'status','granted','WHOOP storage is granted with nothing else first');
+select is((select c.version from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='whoop-owner-a' and c.source='whoop' and c.purpose='storage_compute' and c.withdrawn_at is null),3,'on the WHOOP copy version');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-model-1','whoop','model_processing'))->'consent'->>'status','granted','then model use');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute'))->>'replayed','true','a replayed grant answers the same way');
 
