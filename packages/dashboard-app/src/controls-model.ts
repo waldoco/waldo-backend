@@ -12,7 +12,7 @@ export type DayRecord = Base<'day', {
   // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
   health_memory?: boolean;
 }>;
-export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both'; app_linked: boolean; whatsapp_linked: boolean; telegram_linked: boolean };
+export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
   telegram: { linked: boolean; unlinkAvailable: boolean };
@@ -92,14 +92,14 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   if (expected === 'day') {
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
-    if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean'))) throw shapeError();
+    if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
-      ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, telegram_linked: surface.telegram_linked } } : {}),
+      ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
     } } as Records[V];
   }

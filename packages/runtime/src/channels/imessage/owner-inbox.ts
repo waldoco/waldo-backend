@@ -38,6 +38,11 @@ export class IMessageOwnerInbox {
     return [...this.storage.kv.list<IMessageInboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.updateId - b.updateId);
   }
   get(id: string): IMessageInboxRecord | null { return this.storage.kv.get<IMessageInboxRecord>(PREFIX + id) ?? null; }
+  /** The owner's latest iMessage, while its sender's authority stands: null once that record was revoked. */
+  latest(): IMessageInboxRecord | null {
+    const last = this.records().at(-1);
+    return last && last.state !== 'revoked' ? last : null;
+  }
 
   async admit(input: IMessageAdmitInput, assertCurrent?: () => void): Promise<{ kind: 'admitted' | 'duplicate'; record: IMessageInboxRecord } | { kind: 'conflict' | 'capacity' }> {
     return this.storage.transaction(async (txn) => {

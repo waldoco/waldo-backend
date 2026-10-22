@@ -94,17 +94,20 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, or an exact stored owner-message span using UTF-16 offsets. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
-        if (!turn) return fail('Authenticated owner memory context is unavailable.');
+        // A forget by ids from a turn that read outside text runs only from the owner's card. That replay has no
+        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select.
+        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.topic === undefined && args.source === undefined;
+        if (!turn && !approvedById) return fail('Authenticated owner memory context is unavailable.');
         const claims = store.allClaims(); const selected = new Map<number, Claim>(); const texts = new Set<string>();
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }
         if (args.topic) {
-          if (!ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
+          if (!turn || !ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
           texts.add(args.topic);
           for (const claim of claims) if (carriesTopic(claim.text, args.topic) || carriesTopic(claim.evidence, args.topic)) selected.set(claim.id, claim);
         }
         if (args.source) {
           const span = args.source;
-          const message = deps.resolveSource ? await deps.resolveSource(span.message_ref, ctx) : [turn.current, ...turn.recent].find(row => row.message_ref === span.message_ref);
+          const message = deps.resolveSource ? await deps.resolveSource(span.message_ref, ctx) : turn && [turn.current, ...turn.recent].find(row => row.message_ref === span.message_ref);
           if (!message || span.end > message.text.length || (message.sourceQuoteRanges ?? []).some(range => range.start < span.end && range.end > span.start)) return fail('Source ref or UTF-16 span is not owner-authored or in bounds.');
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);

@@ -624,7 +624,7 @@ describe('the console control', () => {
   it('reads the setting with what the owner can be reached on, and saves a new value against a fresh read', async () => {
     await withConsole('surface-console-save', async (stub, token) => {
       const before = await read(stub, token);
-      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, telegram_linked: false });
+      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, imessage_linked: false, telegram_linked: false });
       const saved = await post(stub, token, before, { value: 'both', request_id: 'surface-request-01' });
       expect(saved.status).toBe(200);
       expect(await saved.json()).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false });
