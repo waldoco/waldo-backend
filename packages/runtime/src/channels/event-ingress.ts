@@ -1,6 +1,7 @@
 import { sameSecret } from './telegram-webhook';
 import { CALENDAR_PUSH_PATH, GMAIL_PUSH_PATH, gmailPush, googlePushKeys, parseCalendarPush, parseGmailPush, verifyCalendarChannel, verifyPushToken, type GmailPushConfig } from '../connectors/google-push';
 import { signedRpc } from '../identity/owner-directory';
+import { handleWhoopWebhook, WHOOP_WEBHOOK_PATH } from '../health/providers/whoop-routes';
 
 // Verified source events await bounded owner admission. A provider ack means the owner
 // durably recorded the event, never that its optional notification was delivered.
@@ -172,6 +173,7 @@ export const handleEventIngress = async (
   const url = new URL(request.url);
   if (url.pathname === CALENDAR_PUSH_PATH) return handleCalendarPush(request, env);
   if (url.pathname === GMAIL_PUSH_PATH) return handleGmailPush(request, env);
+  if (url.pathname === WHOOP_WEBHOOK_PATH) return handleWhoopWebhook(request, env);
   const source = url.pathname.slice(EVENT_INGRESS_PREFIX.length).replace(/\/+$/, '');
   const config = parseEventSources(env.WALDO_EVENT_SOURCES)[source];
   if (request.method !== 'POST' || !config || !env.OWNER_DO || !source || source.length>60 || source.includes('/')) {
