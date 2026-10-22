@@ -3,6 +3,7 @@ import {
   appThreadReadQueryV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema, type AppThreadOperationResultV1, type AppThreadV1,
 } from '../../../contracts/src/app/threads';
 import { literalTextRedactor } from '../../../contracts/src/runtime/conversation-entry';
+import { carriesTopic } from '../memory/forget-guard';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { RunEffectScope } from './run-effect-scope';
 import { APP_THREADS_PATH, type appTranscriptPage } from './app-api';
@@ -85,8 +86,8 @@ export const redactThreadTitles = (kv: Pick<DurableObjectStorage['kv'], 'get' | 
   });
   const write = () => { for (const [key, thread] of changed) kv.put(key, thread); };
   if (changed.length) { if (scope) scope.commit(write); else write(); }
-  const needles = texts.map(text => text.trim().toLowerCase()).filter(Boolean);
-  const remaining = [...kv.list<ThreadRecord>({ prefix: THREAD })].filter(([, thread]) => thread.title !== null && needles.some(needle => thread.title!.toLowerCase().includes(needle))).length;
+  const needles = texts.map(text => text.trim()).filter(Boolean);
+  const remaining = [...kv.list<ThreadRecord>({ prefix: THREAD })].filter(([, thread]) => thread.title !== null && needles.some(needle => carriesTopic(thread.title!, needle))).length;
   return { rewritten: changed.length, remaining };
 };
 

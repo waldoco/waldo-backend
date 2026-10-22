@@ -133,8 +133,10 @@ export class PhotonTokens {
   /** 'invalid_grant': Photon refused the code or refresh token. Any other failure throws PhotonUnavailable. */
   private async token(params: Record<string, string>): Promise<{ access: string; refresh: string | null; expiresIn: number } | 'invalid_grant'> {
     let response: Response;
+    // Called unbound: Workers' fetch throws "Illegal invocation" when called as a method of another object.
+    const fetcher = this.fetcher;
     try {
-      response = await this.fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
+      response = await fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
         body: new URLSearchParams({ ...params, client_id: this.config.clientId, client_secret: this.config.clientSecret }) });
     } catch { throw new PhotonUnavailable('photon_token_unreachable'); }

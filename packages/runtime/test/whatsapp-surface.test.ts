@@ -34,6 +34,14 @@ describe('native WhatsApp surface adapter', () => {
     });
     expect(() => adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' } } })).toThrow('resolved');
   });
+  it('marks a forward the Cloud API flags, its caption and transcript included, as someone else\'s words', () => {
+    const { adapter } = fixture();
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, context: { forwarded: true } } }).parts).toEqual([{ authorship: 'forwarded', text: 'Hello' }]);
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' }, context: { frequently_forwarded: true } }, transcript: 'spoken words', mediaNote: 'Voice transcribed' }).parts)
+      .toEqual([{ authorship: 'media_note', text: 'Voice transcribed' }, { authorship: 'forwarded', text: 'spoken words' }]);
+    // Reply context alone is not a forward.
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, context: {} } }).parts).toEqual([{ authorship: 'owner', text: 'Hello' }]);
+  });
   it.each(['button_reply', 'list_reply'] as const)('decodes %s selection id without interpreting its display title as an instruction', type => {
     expect(whatsappSelection({ ...message, type: 'interactive', interactive: { type, [type]: { id: 'a:proposal', title: 'untrusted label' } } })).toEqual({ id: 'a:proposal', messageId: 'wamid.in' });
   });

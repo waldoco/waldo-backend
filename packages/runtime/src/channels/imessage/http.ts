@@ -67,7 +67,7 @@ async function redeem(request: Request, text: string, env: IMessageEnv, composit
       wrappedCredential: wrapped, hostVersion: body.data.hostVersion, transportVersion: body.data.transportVersion, generation: body.data.databaseGeneration, pendingSeconds: Math.floor(composition.policy.setupLifetimeMs / 1000) });
     if (!redeemed) return invalidRequest();
     // Returned exactly once; a lost response needs a fresh invitation.
-    return jsonResponse(200, { version: 1, state: 'pending_verification', bridgeId: identity.bridgeId, accountId: identity.accountId,
+    return jsonResponse(200, { version: 1, state: redeemed.state === 'active' ? 'active' : 'pending_verification', bridgeId: identity.bridgeId, accountId: identity.accountId,
       credential: { kind: 'hmac-sha256', key: identity.key }, expiresAtMs: redeemed.expiresAtMs });
   } catch { return errorResponse(503, 'unavailable'); }
 }
