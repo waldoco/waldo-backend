@@ -7,7 +7,7 @@ import { macInbox } from '../src/devices/mac-delivery';
 import { alarmPass } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
-import { remindInTwoHours } from './helpers/reminder-wake';
+import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 
 // Work outside the schedule re-arms the owner's one alarm, and each re-arm keeps the schedule's next entry: a reminder two
 // hours out keeps its wake through a WhatsApp status report and a Mac follow-up.
@@ -29,6 +29,12 @@ const whatsappOwner = (state: DurableObjectState) => {
   state.storage.kv.put('whatsapp_subject', SUBJECT);
   return owner(state, { WHATSAPP_ACCESS_TOKEN: 'synthetic', WHATSAPP_PHONE_NUMBER_ID: '100000000000001' });
 };
+// The runtime these owners build arms its own event-brief sweep and heartbeat, both sooner than the reminder, so the alarm
+// keeps the schedule's next entry, with the reminder still in the schedule behind it.
+const keepsSchedule = async (state: DurableObjectState, reminder: number) => {
+  expect(reminderDue(state)).toBe(reminder);
+  expect(await state.storage.getAlarm()).toBe(scheduleNext(state));
+};
 // Meta's report that a message reached the phone, for a message this owner has no record of: it changes nothing else.
 const delivered = () => new Request('https://telegram-owner/whatsapp-status', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
   body: JSON.stringify({ delivered: [{ id: 'wamid.unknown', at: Date.now() }] }) });
@@ -37,7 +43,7 @@ it('a WhatsApp status report keeps the alarm for the owner\'s reminder two hours
   await inObject(async state => {
     const whatsapp = whatsappOwner(state), due = await remindInTwoHours(state);
     expect((await whatsapp.fetch(delivered())).status).toBe(200);
-    expect(await state.storage.getAlarm()).toBe(due);
+    await keepsSchedule(state, due);
   });
 });
 
@@ -51,7 +57,7 @@ it('a WhatsApp status report that lands inside an alarm pass, after its schedule
       await new Scheduler(state.storage.sql, state.storage, productionDeps()).rearm();
       expect((await whatsapp.fetch(delivered())).status).toBe(200);
     });
-    expect(await state.storage.getAlarm()).toBe(due);
+    await keepsSchedule(state, due);
   });
 });
 
@@ -70,6 +76,6 @@ it('a Mac follow-up drain that sets aside a row from a revoked device keeps the 
       payload: { project: 'fixture', session_id: 'session_fixture', event: 'blocked_on_tool' } })).toBe(true);
     await (telegramOwner as unknown as { drainMacDeliveries(): Promise<void> }).drainMacDeliveries();
     expect(inbox.pending()).toEqual([]);
-    expect(await state.storage.getAlarm()).toBe(due);
+    await keepsSchedule(state, due);
   });
 });

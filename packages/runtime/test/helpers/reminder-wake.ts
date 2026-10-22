@@ -23,3 +23,8 @@ export function reminderDue(state: DurableObjectState): number {
   expect(rows).toHaveLength(1);
   return rows[0]!.due_at;
 }
+
+// The schedule's next entry: the wake the owner alarm keeps for it.
+export function scheduleNext(state: DurableObjectState): number {
+  return state.storage.sql.exec<{ next: number }>("SELECT MIN(due_at) AS next FROM schedule WHERE status = 'armed'").one().next;
+}
