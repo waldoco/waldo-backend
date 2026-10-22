@@ -35,6 +35,26 @@ it.each([
   });
 });
 
+// The floor refuses only a measurement: an ordinary fact that puts a number near a word a metric also uses still saves.
+it.each([
+  ['fact', 'Needs to file Form 16 by July'],
+  ['event', 'Visa form due 20 Oct'],
+  ['goal', 'Next steps for the 3 projects'],
+  ['routine', 'Pulse check meeting at 7'],
+  ['routine', 'Laundry load at 6'],
+  ['goal', 'Recovery week 2 of marathon plan'],
+  ['routine', 'Kids go to sleep after 30 minutes of reading'],
+])('a remember of an ordinary %s with a number saves: %s', async (kind, text) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-floor-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    seen.outputs.push(remember({ kind, text, evidence_quote: text }), []);
+    await createOwnerResponder('fixture', undefined, store, undefined, undefined, tools)
+      .respond(ownerTyped({ traceId: 'tg-3', conversationRef: 'owner', surface: 'telegram', text }), timer);
+    expect(store.claims().map((claim) => claim.text)).toEqual([text]);
+  });
+});
+
 it('a qualitative health note from the same message is stored', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('remember-floor-words')), async (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
