@@ -5,6 +5,7 @@ import {
   EXTERNAL_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
+  rungBlockedOutcomeSchema,
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
   connectIntentSchema,
@@ -17,6 +18,7 @@ import {
   type ConnectIntent,
   type ErrorCode,
   type ToolError,
+  type RungBlockedOutcome,
   type ToolErrorCode,
   type HookPayload,
   type HookEvent,
@@ -90,6 +92,8 @@ export type DispatchToolResult = (
       error_code: ToolErrorCode;
       fix: string;
       retryable: boolean;
+      // Why a page or site stopped the call, when the tool knew it for certain; fix names the next rung.
+      blocked?: RungBlockedOutcome;
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
       source_taint?: 'external';
@@ -424,7 +428,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        toolError(finalResult.code, 'The tool failed and its error text was too large to show.'),
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked),
         finalResult.code,
         'tool_result_error',
       ), settledTrustedEffect);
@@ -433,7 +437,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      toolError(finalResult.code, error),
+      toolError(finalResult.code, error, finalResult.blocked),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -627,7 +631,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        toolError(finalResult.code, 'The tool failed and its error text was too large to show.'),
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked),
         finalResult.code,
         'tool_result_error',
       ), input.effect);
@@ -635,7 +639,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      toolError(finalResult.code, error),
+      toolError(finalResult.code, error, finalResult.blocked),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -963,7 +967,7 @@ function failDispatch(
   connect?: ConnectIntent,
   guard?: GuardDiagnostic,
 ): DispatchToolResult {
-  const shaped = { error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable };
+  const shaped = { error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, ...(error.blocked === undefined ? {} : { blocked: error.blocked }) };
   const extra = {
     ...(connect === undefined ? {} : { connect }),
     ...(guard === undefined ? {} : { guard }),
@@ -1015,7 +1019,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent; blocked?: RungBlockedOutcome };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -1047,7 +1051,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'blocked'] : ['ok', 'error', 'code', 'connect', 'blocked'],
     )
   ) {
     return null;
@@ -1060,6 +1064,9 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   // rather than failing the whole result - the fixed model-facing text already stands alone.
   const connect = value.connect === undefined ? undefined : connectIntentSchema.safeParse(value.connect);
   if (connect !== undefined && !connect.success) return null;
+  const blocked = value.blocked === undefined ? undefined : rungBlockedOutcomeSchema.safeParse(value.blocked);
+  if (blocked !== undefined && !blocked.success) return null;
+  const typed = { ...(connect?.success ? { connect: connect.data } : {}), ...(blocked?.success ? { blocked: blocked.data } : {}) };
 
   if (expectsExternal) {
     if (value.source_taint !== 'external') return null;
@@ -1068,10 +1075,10 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       error: value.error,
       code: code.data,
       source_taint: 'external',
-      ...(connect?.success ? { connect: connect.data } : {}),
+      ...typed,
     };
   }
-  return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}) };
+  return { ok: false, error: value.error, code: code.data, ...typed };
 }
 
 function hasOnlyKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {

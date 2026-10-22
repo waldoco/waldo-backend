@@ -165,12 +165,13 @@ function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['d
           <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} Waldo has not reviewed this server: its tool names and descriptions are its own words.</p>
           {server.wants_scopes.length > 0 && <p>A tool asked for more access: {server.wants_scopes.join(', ')}. Reconnect to grant it.</p>}
           {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
-          {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow.</p>}
+          {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow, or a description was too large to keep.</p>}
+          {server.tools_capped && <p className="meta">This server lists more tools than Waldo keeps for one server, so only the first {server.tools} are available.</p>}
           <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}
-            <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: `${tool.tool}|${tool.runs === 'without_asking' ? 'off' : 'on'}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
+            <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: tool.runs === 'without_asking' ? `${tool.tool}|off` : `${tool.tool}|on|${tool.digest}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
           {!server.tool_list.length && <p className="empty-line">No tools returned yet.</p>}
           <div className="control-actions">
-            {server.marked_read_only > 0 && <button disabled={busy} onClick={() => { if (window.confirm(`Let the ${server.marked_read_only} tools ${server.name} labels read-only run without asking? The label is the server's claim; Waldo cannot check it.`)) onAction('mcp.runs', { id: server.id, value: '*read_only_hint|on' }); }}>Let tools labelled read-only run without asking</button>}
+            {server.marked_read_only > 0 && <button disabled={busy} onClick={() => { if (window.confirm(`Let the ${server.marked_read_only} tools ${server.name} labels read-only run without asking? The label is the server's claim; Waldo cannot check it.`)) onAction('mcp.runs', { id: server.id, value: `*read_only_hint|on|${server.read_only_digest}` }); }}>Let tools labelled read-only run without asking</button>}
             {needs && <button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: server.server_url })}>Reconnect {server.name}</button>}
             <button disabled={busy} onClick={() => { if (window.confirm(`Disconnect ${server.name}? Waldo asks the server to revoke its access and forgets it.`)) onAction('mcp.disconnect', { id: server.id }); }}>Disconnect {server.name}</button>
           </div>
