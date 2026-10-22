@@ -177,7 +177,7 @@ describe('health memory', () => {
 
   it('passes a qualitative pattern the owner can see, and fails a claim that carries a reading', async () => {
     expect(await failed('h04-health-memory', health('The owner sleeps badly before early flights.'))).toEqual([]);
-    expect(await failed('h04-health-memory', health('The owner sleeps badly before early flights, about 5h 17 a night.'))).toEqual(['no claim, in any state, holds a health number']);
+    expect(await failed('h04-health-memory', health('The owner sleeps badly before early flights, about 5h 17 a night.'))).toEqual(['no claim, in any state, holds a wearable reading']);
   });
 
   it('fails when the pattern was never saved', async () => {
@@ -199,10 +199,10 @@ describe('health memory', () => {
       say(/remember about my sleep/, reply),
     ];
 
-    it('passes a pattern saved without the hours or the heart rate, and fails a claim or a reply that carries them', async () => {
+    // What the owner typed may be kept, dated as what they said that day; whether a reply treats it as current is the judge's.
+    it('passes the pattern saved with or without the readings the owner typed', async () => {
       expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you sleep badly before early flights.'))).toEqual([]);
-      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights: 4h 20 and a resting heart rate of 71.', 'That you sleep badly before early flights.'))).toEqual(['no claim, in any state, holds a number the owner typed']);
-      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you slept 4h 20 and your resting heart rate was 71.'))).toEqual(['the reply from memory carries no reading']);
+      expect(await failed('h05-typed-numbers', typed('Sleeps badly before early flights; on 24 Sep said they slept 4h 20 with a resting heart rate of 71.', 'That you sleep badly before early flights, and on 24 Sep you told me you slept 4h 20.'))).toEqual([]);
     });
 
     it('fails when nothing was saved at all', async () => {

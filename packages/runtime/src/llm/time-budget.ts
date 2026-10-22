@@ -1,3 +1,4 @@
+import { ANTHROPIC_PROVIDER, type Provider } from '@waldo/contracts';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 
 // How long a turn may spend, in one place.
@@ -33,6 +34,10 @@ export const ALARM_JOB_MIN_MS = TURN_TIME_BUDGET_MS + RUN_CLOSE_MARGIN_MS;
 // stuck in a loop from spending a long run's whole deadline one tool call at a time.
 export const TOOL_ROUNDS_PER_TURN_BUDGET = 25;
 export const TOOL_ROUNDS_CEILING = 150;
+// How long a provider keeps a prompt prefix cached after a request that wrote or read it: Anthropic's default
+// (ephemeral, five minutes), which is what the adapter marks. OpenAI is left out: its retention for the routed models is
+// not confirmed from its own docs, so no wait is known to leave its cache cold.
+export const PROMPT_CACHE_TTL_MS: Readonly<Partial<Record<Provider, number>>> = { [ANTHROPIC_PROVIDER]: 5 * 60_000 };
 // Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
 // every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
 export const THREAD_TITLE_BUDGET_MS = 15_000;

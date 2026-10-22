@@ -32,7 +32,7 @@ export const MODEL_UNREACHABLE_REPLY = "I can't reach my model right now. I've k
 // Every owner-path route: its model, then the second provider when its key is deployed, then the floor. Without a usable
 // key the route has no fallback step at all, so nothing counts it as a provider ahead and the route is exactly the
 // single-provider route it was before the second provider existed. A call on the responder's chat model falls
-// to the second provider's chat model, with the stable system prompt cached provider-side and room for its thinking in the
+// to the second provider's chat model, with its system prompt and latest messages cached provider-side and room for its thinking in the
 // output cap; every other call (side jobs on the auxiliary model) falls to the second provider's small model.
 //
 // The floor stays 'template' on every route: the routes run under the user_message trigger, and the routing contract

@@ -184,6 +184,45 @@ export const healthIngestV1Schema = z.strictObject({
   samples: z.array(healthSampleV1Schema).max(HEALTH_INGEST_MAX_CHANGES_V1),
   deletions: z.array(healthSampleDeletionV1Schema).max(HEALTH_INGEST_MAX_CHANGES_V1),
 }).refine(batch => batch.samples.length + batch.deletions.length <= HEALTH_INGEST_MAX_CHANGES_V1, 'batch exceeds 128 changes');
+// Health revision 3: per-sample rejection. A build that names it has each change checked on its own, so one bad reading never
+// fails an upload: the good changes are stored and the bad ones come back on the receipt by position, kind of reading and a
+// closed reason, never by value. A build that does not name it keeps the all-or-nothing batch and never sees `rejected`, so
+// it never gets a partial commit it could advance its anchor past without a trace.
+// invalid_sample: the change is not a valid reading or deletion of a signal this backend knows (shape, unit, bounds, time).
+// unsupported_signal: the signal is one this backend does not know yet; a newer build loses only that reading.
+// revision_conflict: the same reading at the same revision was stored with other content; the app re-reads it and sends it
+// at a higher revision.
+// The anchor advances as for an accepted batch: the receipt is the trace of what was not stored.
+export const HEALTH_PER_SAMPLE_REVISION_V1 = 3;
+export const healthChangeRejectionReasonV1Schema = z.enum(['invalid_sample', 'unsupported_signal', 'revision_conflict']);
+export const healthChangeRejectionV1Schema = z.strictObject({
+  change: z.enum(['sample', 'deletion']),
+  index: z.int().min(0).max(HEALTH_INGEST_MAX_CHANGES_V1 - 1),
+  // Null when the change named no signal this backend knows.
+  signal: healthSignalV1Schema.nullable(),
+  reason: healthChangeRejectionReasonV1Schema,
+});
+// The server reads a revision-3 batch with this envelope, then each change on its own. The app still builds and checks its
+// batch with healthIngestV1Schema.
+export const healthIngestEnvelopeV1Schema = z.strictObject({
+  ...healthIngestV1Schema.shape,
+  samples: z.array(z.unknown()).max(HEALTH_INGEST_MAX_CHANGES_V1),
+  deletions: z.array(z.unknown()).max(HEALTH_INGEST_MAX_CHANGES_V1),
+}).refine(batch => batch.samples.length + batch.deletions.length <= HEALTH_INGEST_MAX_CHANGES_V1, 'batch exceeds 128 changes');
+type HealthChangeRejectionV1 = z.infer<typeof healthChangeRejectionV1Schema>;
+type HealthDeletionV1 = z.infer<typeof healthSampleDeletionV1Schema>;
+export function checkHealthChangeV1(change: 'sample', index: number, value: unknown): { ok: true; change: z.infer<typeof healthSampleV1Schema> } | { ok: false; rejection: HealthChangeRejectionV1 };
+export function checkHealthChangeV1(change: 'deletion', index: number, value: unknown): { ok: true; change: HealthDeletionV1 } | { ok: false; rejection: HealthChangeRejectionV1 };
+export function checkHealthChangeV1(change: 'sample' | 'deletion', index: number, value: unknown) {
+  const parsed = (change === 'sample' ? healthSampleV1Schema : healthSampleDeletionV1Schema).safeParse(value);
+  if (parsed.success) return { ok: true, change: parsed.data };
+  const named = value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as { signal?: unknown }).signal : undefined;
+  const signal = healthSignalV1Schema.safeParse(named);
+  return {
+    ok: false,
+    rejection: { change, index, signal: signal.success ? signal.data : null, reason: typeof named === 'string' && !signal.success ? 'unsupported_signal' : 'invalid_sample' },
+  };
+}
 export const healthIngestReceiptV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
@@ -193,6 +232,8 @@ export const healthIngestReceiptV1Schema = z.strictObject({
   ignored: z.int().nonnegative(),
   anchor_after: anchorV1,
   replayed: z.boolean(),
+  // Present only for a request that named health revision 3 or later; empty when every change was taken.
+  rejected: z.array(healthChangeRejectionV1Schema).max(HEALTH_INGEST_MAX_CHANGES_V1).optional(),
 });
 
 // Zone words carry their meaning, so direction cannot be confused across pillars: the better the
