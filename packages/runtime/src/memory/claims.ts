@@ -486,7 +486,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     barrier,
     recordHold(kind: string, reason: string, text: string, at: string): void {
-      sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
+      // A held reading keeps no fingerprint of its words: a short templated reading could be recovered from its hash.
+      sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, reason === 'numeric-health' ? 'withheld' : textFingerprint(text.trim()), at);
     },
     holds: () => sql.exec<{ id: number; kind: string; reason: string; fingerprint: string; created_at: string }>('SELECT * FROM claim_holds ORDER BY id').toArray(),
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
@@ -1057,7 +1058,6 @@ export const FLUSH_INSTRUCTION = [
   'The earlier part of this conversation between the owner and Waldo is about to leave Waldo\'s view. Save what the owner said in it that should stay true and is not already a claim, so it is not lost.',
   'Mark claims it repeated as seen. dismiss stays empty.',
   ...CLAIM_RULES,
-  'Health notes are qualitative patterns in the owner\'s words: how they feel, what tends to help or hurt their sleep, energy or mood. Never a number, score or measurement.',
   'forget_claims, forget_nodes, pin and unpin stay empty, and forget_topic is null.',
 ].join('\n');
 
@@ -1187,14 +1187,6 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     store.recordHold(claim.kind, 'forgotten', claim.text, at);
     holdReasons.add('forgotten');
   }
-  // Memory keeps how the owner is, never a measurement: a claim whose text, evidence or aliases carry a numeric health
-  // value is held whatever its kind, because evidence and aliases are stored beside the text.
-  const numeric = (...texts: readonly (string | undefined)[]) => texts.some((text) => typeof text === 'string' && numericHealthIn(text));
-  for (const claim of ops.add.filter((candidate) => !held.includes(candidate) && numeric(candidate.text, candidate.evidence, ...(candidate.aliases ?? [])))) {
-    store.recordHold(claim.kind, 'numeric-health', claim.text, at);
-    holdReasons.add('numeric-health');
-    held.push(claim);
-  }
   // Explicit corrections are applied first. A correction is all-or-nothing at the admission gate: one owner-quoted
   // replacement with a live old id, never an agent paraphrase or a forwarded statement. Like remember, it names the one
   // owner message its quote sits in: that message is its source ref, and without one the correction is held.
@@ -1208,13 +1200,6 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
-    if (numeric(correction.text, correction.evidence)) {
-      store.recordHold(correction.kind, 'numeric-health', correction.text, at);
-      holdReasons.add('numeric-health');
-      heldCorrections += 1;
-      replacements.set(normalizeForGrounding(correction.text), 'held');
-      continue;
-    }
     const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
     // closed reason, so the reply can say the memory was not updated instead of the skip being silent.
@@ -1243,6 +1228,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     let origin: string | null = null;
     const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
     if (replacement === 'held' && verdict !== 'owner') continue;
+    // A health reading is kept only as something the owner said: stated, on evidence in their own words. One from shared
+    // content (forwarded mail, a file), an ungrounded paraphrase or an inference is held, keyed on that source, never on
+    // wording; one that grounds only in Waldo's reply is held below as a self-report.
+    if (verdict !== 'waldo' && (verdict !== 'owner' || claim.source === 'inferred') && [claim.text, claim.evidence, ...(claim.aliases ?? [])].some(numericHealthIn)) {
+      store.recordHold(claim.kind, 'numeric-health', claim.text, at);
+      held.push(claim);
+      holdReasons.add('numeric-health');
+      continue;
+    }
     if (verdict !== undefined) {
       if (verdict === 'waldo') {
         // Self-report: evidence grounds only in Waldo's own reply. Held, never written -

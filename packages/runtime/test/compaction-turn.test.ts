@@ -6,7 +6,8 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { COMPACTION, COMPACTION_INSTRUCTION, COMPACTION_SUPERSEDED_MARKER, type CompactionFlush, type CompactionSpan } from '../src/conversation/compaction';
 import { compactionSummaryOpen } from '@waldo/contracts';
-import { claimStore, FLUSH_INSTRUCTION } from '../src/memory/claims';
+import { claimStore, FLUSH_INSTRUCTION, HEALTH_NOTES_OFF } from '../src/memory/claims';
+import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 
 const fake = vi.hoisted(() => ({ summary: 'The owner prefers tea and wants quiet mornings.', flushOps: '', bodies: [] as Array<{ instructions?: string; input?: unknown }> }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: { instructions?: string; input?: unknown }) => {
@@ -268,10 +269,23 @@ describe('what the flush keeps', () => {
     }, (sql) => holdTopic(sql, 'late coffee', '2026-10-20T08:30:00Z'));
   });
 
-  it('keeps no health note when the owner has health notes off', async () => {
+  // The model is told, so a health note it would file under another kind is its call; the kind filter backs it.
+  const flushInputs = () => fake.bodies.filter((body) => body.instructions === FLUSH_INSTRUCTION).map((body) => JSON.stringify(body.input));
+  it('keeps no health note when the owner has health notes off, and tells the model so', async () => {
+    fake.bodies.length = 0;
     await keepWith('flush-no-health', false, ({ saved, memory }) => {
       expect(saved[0]!.map((claim) => claim.kind)).toEqual(['preference']);
       expect(memory.claims().some((claim) => claim.kind === 'health')).toBe(false);
+      expect(flushInputs().length).toBeGreaterThan(0);
+      expect(flushInputs().every((input) => input.includes(HEALTH_NOTES_OFF))).toBe(true);
+    });
+  });
+
+  it('does not tell the model health notes are off while they are on', async () => {
+    fake.bodies.length = 0;
+    await keepWith('flush-health-on', true, () => {
+      expect(flushInputs().length).toBeGreaterThan(0);
+      expect(flushInputs().some((input) => input.includes(HEALTH_NOTES_OFF))).toBe(false);
     });
   });
 });
@@ -291,6 +305,23 @@ describe('the memory notice', () => {
       expect(first).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
       const second = await responder.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'and now?' }), (_name, work) => work());
       expect(second).toBe('Noted.');
+    });
+  });
+
+  // The reply is saved, then the run closes before its freshness check: the reply never counts as delivered, so the notice
+  // is not taken.
+  it('stays when the run closes after the reply carrying it is saved', async () => {
+    let read = 0;
+    let saved = 0;
+    let taken = 0;
+    let live = true;
+    const scope: RunEffectScope = { runId: 'run-1', attempt: 'a-1', deadline: Date.now() + 150_000, signal: new AbortController().signal,
+      admit() { if (!live) throw new ClosedRunError(); }, commit(work) { this.admit(); return work(); } };
+    await inOwner('memory-notice-closed', async () => {
+      const args: Parameters<typeof createOwnerResponder> = ['fixture', { load: async () => ({ entries: [], leafId: null }), save: async () => { saved += 1; live = false; } }];
+      args[21] = { memoryNotice: () => { read += 1; return { line: 'Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).', taken: () => { taken += 1; } }; } };
+      await expect(createOwnerResponder(...args).respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello', runScope: scope }), (_name, work) => work())).rejects.toBeInstanceOf(ClosedRunError);
+      expect([read, saved, taken]).toEqual([1, 1, 0]);
     });
   });
 

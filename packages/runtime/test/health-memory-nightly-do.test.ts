@@ -57,3 +57,22 @@ it.each([['off', ['preference'], true], ['on', ['health', 'preference'], false]]
       expect(asked.inputs.some((input) => input.includes(HEALTH_NOTES_OFF))).toBe(told);
     } finally { Date.now = realNow; await state.storage.deleteAlarm(); }
   }));
+
+// The one-time migration of the old notes files runs under the same setting.
+it.each([['off', ['preference'], true], ['on', ['health', 'preference'], false]] as const)('with health notes %s, the notes-file migration keeps %j', (setting, kinds, told) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`health-migration-${setting}`)), async (_instance, state) => {
+    asked.inputs.length = 0;
+    try {
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS core_file_revisions (file TEXT NOT NULL, revision INTEGER NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (file, revision))');
+      state.storage.sql.exec('INSERT INTO core_file_revisions VALUES (?, ?, ?, ?, ?)', 'MEMORY_CORE', 1, SAID, 'fixture', '2026-10-01T00:00:00Z');
+      const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+      state.storage.kv.put('do_name', `health-migration-${setting}`); state.storage.kv.put('telegram_subject', '7');
+      setHealthMemory(state.storage.kv, setting);
+      const update = { update_id: 301, message: { message_id: 42, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'hello' } };
+      expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
+      await vi.waitFor(() => expect(asked.inputs.some((input) => input.includes('Notes files to split'))).toBe(true));
+      await vi.waitFor(() => expect([...new Set(claimStore(state.storage.sql).claims().map((claim) => claim.kind))].sort()).toEqual([...kinds]));
+      const migration = asked.inputs.filter((input) => input.includes('Notes files to split'));
+      expect(migration.some((input) => input.includes(HEALTH_NOTES_OFF))).toBe(told);
+    } finally { await state.storage.deleteAlarm(); }
+  }));

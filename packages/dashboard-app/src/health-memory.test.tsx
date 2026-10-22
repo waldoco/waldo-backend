@@ -43,6 +43,14 @@ describe('the health notes control', () => {
     expect(shown).not.toContain('Each health note it keeps is named');
   });
 
+  // What the owner tells Waldo is kept, readings included, dated; wearable readings stay in the health plane.
+  it('says readings you mention are kept with their day, and wearable readings never are', () => {
+    const shown = html(day(true));
+    expect(shown).toContain('readings you mention, each kept with the day you said it');
+    expect(shown).toContain('Readings from your wearable are never copied into memory.');
+    expect(shown).not.toContain('never numbers');
+  });
+
   it('is not shown when the Worker does not say', () => {
     expect(html(day())).not.toContain('Health notes');
   });

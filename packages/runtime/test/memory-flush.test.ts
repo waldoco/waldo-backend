@@ -61,6 +61,16 @@ describe('the notice of health notes saved on Waldo\'s own', () => {
     noteHealthSaved(kv, many.map((claim) => claim.id));
     expect(healthNotice(kv, () => many)?.line).toMatch(/\(c5\); and 2 more\. /);
   }));
+
+  // "and 2 more" names nothing, so taking the line clears only the five it named; the other two are named next time.
+  it('clears only the notes the line named, and names the ones it only counted in the next reply', () => inOwner((state) => {
+    const kv = kvOf(state);
+    const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
+    noteHealthSaved(kv, [...many.map((claim) => claim.id), 9]);
+    healthNotice(kv, () => many)!.taken();
+    expect(kv.get(HEALTH_SAVED_KEY)).toEqual([6, 7]);
+    expect(healthNotice(kv, () => many)?.line).toBe('Saved to memory from our earlier chat: "Note 6" (c6); "Note 7" (c7). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+  }));
 });
 
 describe('the flush before older chat leaves Waldo\'s view', () => {
