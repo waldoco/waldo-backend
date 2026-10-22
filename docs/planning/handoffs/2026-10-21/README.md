@@ -232,6 +232,42 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-22 09:47 | **Merged:** #1411 (C11, closes #1386) as `315d6fe4`. **C6: #1378 re-Ready, verified by C0** at `ca06062c`: wall 34 PASS, no FAIL; **CI 6/6** (the recorded eval isn't triggered by its paths). Fixes: "linked" comes from the directory's channel presence (unlink and relink end the copies; an unknown directory holds the pass); iMessage never takes the work, it only gets a copy of the app message, which settles the job; the copy is keyed by the app row id; the iMessage-only value is dropped. The nit about `rejected` vs `heldTool` is left, with its reason. New draft: C12's **#1413** (WhatsApp outbox follow-ups). Walls are running for #1109 (`8d2dac1e`), #1410 (`d68c94bf`), #1409 (`e21bdb33`) and #1413 (`ec1b9cd6`). | #1378 `ca06062c` | Local: re-review #1378. |
 | 2026-10-22 09:56 | **Gate update (09:50Z) folded in.** **Staging now runs `beta-mvp` `8eae5128`** (trains k and l), deployed at 09:41Z. **#1364 is cloud's** (C13): it posts Ready at its head; the pre-flag items (v12 degrade field, spend kept on a failed continuation, M11–M13) are already committed on #1364 as `818b7d4e`, so C13 lists them in a separate section of the same Ready, and they can be split with a revert commit if local prefers. Staging flips `WALDO_TOOL_SEARCH` only after it merges. **#1379/#1381:** one precise matcher in one place for both; precision beats recall on background writers; the tests include the false positives "Form 16" and "laundry load at 6" (C6). **Gate review order:** #1365, #1378, then #1355. **Queued for after #1355 merges:** launch jobs 8–10 (bill and subscription radar; package tracking and return windows; health-admin radar), run as mail reader jobs on the worker layer, none with dedicated code today. First a design PR (reader scope, cadence, what reaches the brain). Lab values wait for a health-plane contract review. | staging `8eae5128` | Final handoff at 10:08Z. |
 
+## Final cloud handoff (C0, 2026-10-22 10:10)
+
+`beta-mvp` is `315d6fe4`. Staging runs `8eae5128` (deployed 09:41Z). Cloud sessions build and never merge; the local Mac reviews and merges.
+
+### A next cloud session starts here
+1. Read this section, `cloud/LANE_BRIEF.md` and the newest comments on #1359. Install the wall runner: `cp docs/planning/handoffs/2026-10-21/cloud/wall.sh /home/user/wt/wall.sh` (start Docker with `dockerd &` first; Supabase and pgTAP stay UNAVAILABLE in the cloud, and PR CI covers them).
+2. **First fix: #1365, BLOCKED again (10:05Z, comment 6338130124).** From a tainted turn, a topic or span `forget_memory` runs without approval (Probe A: `{topic:'e'}` deletes every claim and redacts history). Make every forget from a tainted turn an owner card by ids only, remove the carve-out at `contracts/src/tools/handler.ts:195-203` and its two tests, add Probe A as a regression test, and state whether `backgroundSourceTaint` can be reset by overlapping `prompt()` callers. Check the branch head first: C6 may have started it.
+3. Bring each in-flight PR below to Ready from its own `## Handoff` section. Search open PRs before starting any issue.
+4. **After #1355 merges:** a design PR for launch jobs 8–10 (bill and subscription radar; package tracking and return windows; health-admin radar), run as mail reader jobs on the worker layer, covering reader scope, cadence and what reaches the brain. Lab values wait for a health-plane contract review. Local proposed C0 as the owner. The browser wiring plan is in #1410's Handoff.
+
+### Every open cloud PR
+| PR | Branch | Head | State | Next owner |
+|---|---|---|---|---|
+| #1355 worker layer (B-2 to B-7, R-4) | `claude/worker-layer` | `c67e01e2` | Ready, verified (wall and CI 7/7); needs a carry at train time | Local review (critical path) |
+| #1356 onboarding and consent (O-1 to O-8) | `claude/onboarding-consent-a1f9ee` | `6ab65eed` | Ready, verified (CI 7/7); needs a carry | Local review |
+| #1365 untrusted text | `lane-a/untrusted-text` | `5c0c0377` | **BLOCK** (tainted topic/span forget) | Cloud: first fix above |
+| #1378 iMessage proactive (`app_imessage` only) | `lane-a/imessage-proactive` | `ca06062c` | Ready, verified (CI 6/6) | Local re-review |
+| #1379 M-4 memory flush | `lane-a/memory-flush` | `8e352f81` | **BLOCK**, fix in progress: one precise health-number matcher shared with #1381; background writers record a visible hold instead of dropping silently; tests for "Form 16" and "laundry load at 6" | C6 or next session, from the Handoff |
+| #1381 `remember` health floor | `lane-a/remember-health-floor` | `82898bfd` | **BLOCK**, the same fix as #1379 | C6 or next session |
+| #1383 H-9 ablation runner | `lane-a/rule-pruning` | `472296cb` | Ready, verified (CI 7/7); live ablations need the eval keys | Local review |
+| #1364 tool search readiness | `lane-a/tool-search-readiness` | `7797bbcb` | C13 posting Ready, which includes the pre-flag items (`818b7d4e`: v12 degrade field, spend kept on a failed continuation, M11–M13). Split with a revert commit if local wants. Staging flips `WALDO_TOOL_SEARCH` only after it merges | C13, then local |
+| #1109 meeting-prep mail | `l2/prep-related-mail` | `cbbeb28b` | Owner said yes to the ADR; record the ruling, fix `verify`, Ready | C13 or next session |
+| #1409 owner-session connect starts (#1391) | `claude/oauth-owner-session-start` | `992c6b5b` | C10 finishing Ready | C10, then local |
+| #1410 browser approval replay as a job (#1350) | `claude/browser-replay-job` | `80f00591` | C9 finishing Ready; stacks on #1355; the wiring plan is in the Handoff | C9, then local |
+| #1413 WhatsApp outbox follow-ups (#1380 items 2–9, #1310 LOW) | `claude/whatsapp-outbox-followups` | `969e08c7` | Walled; Ready after CI | C12, then local |
+
+### Dropped or unowned follow-ups (pick up when there is capacity)
+- OAuth hardening from the #1388 and #1393 reviews: the `__Host-` cookie prefix, a `/c/<ticket>` rate limit, a deploy-script check that `WALDO_OAUTH_STATE_SECRET` is set, a retry of the replaced-grant release, and correcting the PKCE overclaim (#1404).
+- A forget that selects nothing still wipes history (#1365 review, Probe B): `memory.ts:113` runs before the empty-selection failure at `:132`.
+- #1364 work saved as patches: `cloud/patches/`.
+
+### Not this session's
+- Cost routing, the per-owner turn guard and Apple Watch AW-6 belong to the second cloud account (N0).
+- Local's own PRs: #1402, #1414 (forget redesign design), #1415 (iMessage on Photon), #1400, #1399, #1398.
+| 2026-10-22 10:10 | **Final cloud handoff written** (section "Final cloud handoff" above the owner asks). **#1365 BLOCKED again** (10:05Z): a tainted topic or span forget runs without approval (Probe A). It is the first item for the next session, and C6 was told to start it if time allows. Local posted a build-plan status matrix on #1359 (10:00Z): launch jobs 8–10 are Missing, #1355 is the critical path, and nothing is Proven yet (no live evals or staging E2E since the deploy). | — | Next session: the "starts here" list. |
+
 ### Owner asks raised since handoff
 
 **Settled on 22 Oct (local gate, 09:10Z). These override the items below.** Voice v2 is ungated. The #1109 meeting-prep ADR is approved. WHOOP go-live is deprioritised (Apple Watch first, then Health Connect and Samsung, then WHOOP). The Langfuse staging capture risk is accepted (#1398 before production). Migration `20261021170000` is applied; the next deploy needs only `20261022040000` plus `WALDO_OAUTH_STATE_SECRET`. Local adds the `.env.example` line.
