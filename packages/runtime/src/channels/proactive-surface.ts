@@ -42,19 +42,19 @@ export const proactiveTargets = (wanted: readonly ProactiveTarget[], reachable: 
 };
 
 // A call whose effect is a message Waldo sends first, later: a reminder, a scheduled standing order, a loop with a date to
-// check back on. An owner with no surface that takes proactive work (one who writes only on iMessage, without the app)
+// check back on, a background task (it reports when it finishes). An owner with no surface that takes proactive work (one who writes only on iMessage, without the app)
 // would be promised a message that never comes, so such a call is refused with that reason and nothing is scheduled. A
 // standing order for every turn and a loop with no date still work: they need no message from Waldo first.
 const startsLaterMessage = (tool: string, args: unknown): boolean => {
   const given = (args ?? {}) as { trigger?: unknown; due?: unknown };
-  return tool === 'set_reminder'
+  return tool === 'set_reminder' || tool === 'start_task'
     || (tool === 'set_standing_order' && given.trigger !== 'every_turn')
     || (tool === 'open_loop' && given.due !== null && given.due !== undefined);
 };
 export const UNREACHABLE_CHECK_BACK = 'Nothing was scheduled: Waldo cannot message this owner first here. On iMessage Waldo only answers; reminders, '
-  + 'scheduled reports and check-backs need the Waldo app. Tell the owner that, and that a loop with no date stays on the list for when they write.';
+  + 'background tasks, scheduled reports and check-backs need the Waldo app. Tell the owner that, and that a loop with no date stays on the list for when they write.';
 export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string; handle(args: never, ctx: never): Promise<unknown> }>>(handlers: readonly H[], reachable: () => boolean): H[] =>
-  handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop'].includes(handler.name)
+  handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop', 'start_task'].includes(handler.name)
     ? { ...handler, handle: async (args: never, ctx: never) => !reachable() && startsLaterMessage(handler.name, args)
       ? { ok: false as const, code: 'rejected' as const, error: UNREACHABLE_CHECK_BACK, source_taint: null }
       : handler.handle(args, ctx) }

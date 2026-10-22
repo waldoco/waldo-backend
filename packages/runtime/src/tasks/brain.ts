@@ -9,7 +9,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
-import type { TaskClaim, TaskOutcome, TaskSpend } from './worker-loop';
+import { DROPPED_STEPS_NOTE, NOTE_END, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
 // checks the attempt's ticket against the job book first, so a fenced attempt can neither read nor write. The jobs lane,
@@ -49,7 +49,12 @@ const failedResult = (code: string): TaskResult => ({ status: 'failed', summary:
 // needs it, which a read allows.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
-const keptTurn = (turn: LLMToolTurn): LLMToolTurn => UNKEPT_OUTPUT_TOOLS.has(turn.call.name) ? { ...turn, output: UNKEPT_OUTPUT } : turn;
+// The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
+const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
+  if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name)) return turn;
+  const noteEnd = turn.output.startsWith(DROPPED_STEPS_NOTE) ? turn.output.indexOf(NOTE_END) : -1;
+  return { ...turn, output: `${noteEnd === -1 ? '' : turn.output.slice(0, noteEnd + NOTE_END.length)}${UNKEPT_OUTPUT}` };
+};
 
 export const taskHost = (deps: TaskHostDeps) => {
   // One run scope per live attempt, so a cancel aborts the attempt's in-flight I/O and every later admit fails.
@@ -99,9 +104,11 @@ export const taskHost = (deps: TaskHostDeps) => {
       // invocation runs a step the other may also run; the lease then lapses and a new attempt resumes from the checkpoint.
       if (busy.has(ticket.jobId)) {
         const ended = deps.book.abandon(ticket);
+        // A stale ticket from an earlier attempt: the call in flight is the live attempt's, and stays its own.
+        if (ended === 'fenced') return 'fenced';
         fence(ticket.jobId);
         const row = deps.book.get(ticket.jobId);
-        if (row && ended !== 'fenced') hop(row, 'task_rejoin_fenced', { ok: false, ...(row.park_reason ? { code: row.park_reason } : {}) });
+        if (row) hop(row, 'task_rejoin_fenced', { ok: false, ...(row.park_reason ? { code: row.park_reason } : {}) });
         return 'fenced';
       }
       const row = deps.book.claim(ticket);

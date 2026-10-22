@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
@@ -114,6 +115,9 @@ type Steps = Readonly<{
   // A background task whose brief carries the text, and the status of every task.
   task(text: string): void;
   tasks(): { status: string; cancel_reason: string | null }[];
+  // A browser card that task's errand raised, waiting for the owner; returns its ledger id.
+  taskCard(): Promise<string>;
+  cardStatus(id: string): string;
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -217,6 +221,10 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
             .create({ kind: 'task', profile: 'reader', idempotencyKey: 'forget-task', origin: 'turn', surface: 'whatsapp', brief, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR });
         },
         tasks: () => state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray(),
+        taskCard: () => approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
+          currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
+          .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
+        cardStatus: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -434,6 +442,17 @@ describe('owner forget reaches an open background task', { timeout: 30_000 }, ()
       task(SECRET);
       expect(await forget(kind, SECRET)).toBe(true);
       expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+    });
+  });
+
+  it('withdraws the card the forgotten task\'s errand raised: the owner is not asked to finish work they stopped', async () => {
+    await owned('wa-forget-task-card', async ({ task, tasks, taskCard, cardStatus, forget }) => {
+      task(SECRET);
+      const card = await taskCard();
+      expect(cardStatus(card)).not.toBe('skipped');
+      expect(await forget('spot', SECRET)).toBe(true);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(cardStatus(card)).toBe('skipped');
     });
   });
 });

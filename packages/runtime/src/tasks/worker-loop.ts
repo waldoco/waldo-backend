@@ -82,7 +82,7 @@ export const taskBriefText = (brief: TaskBrief, resumedFrom: number): string => 
 // first kept turn carries a note of the calls that no longer fit, each step that cannot be replayed with its arguments, so
 // a resumed attempt knows it already acted and does not act again. A note on a dropped turn is carried into the new one.
 export const DROPPED_STEPS_NOTE = '[Earlier steps of this task, no longer shown: ';
-const NOTE_END = ']\n\n';
+export const NOTE_END = ']\n\n';
 const NOTE_MAX = 4_000;
 const TOOL_OUTPUT_MAX = 32_768;
 const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {

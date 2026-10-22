@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
@@ -89,6 +90,34 @@ it('an owner turn starts a task; the worker runs with no authority and the resul
     expect(await rpc.taskReport(ticket, { kind: 'result', result: { ...RESULT, summary: 'forged' } }, [], { rounds: 0, costUsd: 0 })).toBe('duplicate');
     // Applied rows keep no result (only the apply turn reads it), and the duplicate wrote none back.
     expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'applied', result_json: null });
+  });
+}, 30_000);
+
+it('cancel_task in an owner turn ends the task and withdraws the card its errand raised', async () => {
+  const name = 'task-cancel-card-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const say = async (instance: unknown, state: DurableObjectState, update: number, text: string) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: name }, update,
+      JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: update, text } }));
+    await (instance as { drainInbox(): Promise<void> }).drainInbox();
+    // The queued task is due at once; no alarm may start its worker while this test drives the owner by hand.
+    await state.storage.deleteAlarm();
+  };
+  seen.outputs.push(fn('start_task', { ...BRIEF, profile: 'errand' }), []);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    await say(instance, state, 1, 'Book me a table for two tonight');
+    const [job] = jobs(state.storage.sql);
+    expect(job).toMatchObject({ status: 'queued' });
+    // The card the errand raised while it ran, still waiting for the owner.
+    const card = await approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
+      currentRunRef: () => `task:${job!.id}`, browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
+      .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] });
+    seen.outputs.push(fn('cancel_task', { job_id: job!.id }), []);
+    await say(instance, state, 2, 'Actually, cancel that');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+    expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card).one().status).toBe('skipped');
   });
 }, 30_000);
 

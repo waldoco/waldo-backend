@@ -8,6 +8,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
+import { DROPPED_STEPS_NOTE } from '../src/tasks/worker-loop';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { TOOL_RECORDS } from '../src/tools/records';
@@ -223,6 +224,41 @@ describe('the task brain host', () => {
       const kept = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
       expect(kept.map(turn => turn.output)).toEqual([UNKEPT_OUTPUT, '{"ok":true,"data":{"hits":2}}']);
       expect(book.get(t.jobId)!.checkpoint_json).not.toContain('synthetic server text');
+    });
+  });
+
+  it('a note on dropped steps riding on an MCP read survives the checkpoint; only the read\'s output is dropped', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      const note = `${DROPPED_STEPS_NOTE}browse_act {"url":"https://example.com/book"} (already run; do not run it again)]\n\n`;
+      const turns = [{ call: { call_id: 'm1', name: 'read_mcp_tool', arguments: '{"server":"ring","tool":"today","args":{}}' }, output: `${note}{"ok":true,"data":{"output":"synthetic server text"}}` }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      const [kept] = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
+      expect(kept!.output).toBe(`${note}${UNKEPT_OUTPUT}`);
+      expect(book.get(t.jobId)!.checkpoint_json).not.toContain('synthetic server text');
+    });
+  });
+
+  it('a stale ticket from a lapsed attempt rejoining leaves the live attempt\'s call alone', async () => {
+    await withHost(async ({ host, ticket, book, clock, hold, ran, log }) => {
+      const t1 = ticket('errand');
+      await host.claim(t1);
+      clock.at += 10 * 60_000;
+      book.lapse(new Set());
+      const t2 = book.startAttempt(t1.jobId)!;
+      expect(t2.attempt).toBe(2);
+      expect(await host.claim(t2)).not.toBe('fenced');
+      let release!: () => void;
+      hold.waiting = new Promise<void>(resolve => { release = resolve; });
+      const live = host.tool(t2, call('browse_act'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(await host.claim(t1)).toBe('fenced');
+      release();
+      expect(await live).not.toBe('fenced');
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+      expect(book.get(t1.jobId)).toMatchObject({ status: 'running', attempt: 2 });
+      expect(log.some(entry => entry.hop === 'task_rejoin_fenced')).toBe(false);
     });
   });
 
