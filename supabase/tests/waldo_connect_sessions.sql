@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(22);
+select plan(32);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -57,6 +57,20 @@ select is(waldo.connect_session_complete('hash6', pg_temp.at(), pg_temp.sig('con
 select lives_ok($$ select waldo.connect_session_issue('do-a', 'google', 'app', 'hash7', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.app.hash7')) $$, 'the app can issue a connect ticket');
 select is((select channel from waldo.connect_sessions where ticket_hash = 'hash7'), 'app', 'the ticket records the app as its channel');
 select throws_ok($$ select waldo.connect_session_issue('do-a', 'google', 'sms', 'hash8', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.sms.hash8')) $$, '23514', null, 'an unknown channel is still rejected');
+
+-- The bearer hop names whose Waldo the account joins, masked, and its Continue runs once.
+select is(has_function_privilege('anon', 'waldo.connect_session_begin(text, bigint, text)', 'execute'), true, 'the runtime key can begin (signature still required)');
+select is(has_function_privilege('service_role', 'waldo.connect_session_begin(text, bigint, text)', 'execute'), false, 'service role is not granted the Continue');
+select waldo.connect_session_issue('do-a', 'google', 'telegram', 'hash9', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.telegram.hash9'));
+create temp table r9 as select waldo.connect_session_resolve('hash9', pg_temp.at(), pg_temp.sig('connsess.resolve.hash9')) as r;
+select is((select r->>'owner_hint' from r9), 'a•••@test.invalid', 'resolve names the owner by a masked hint');
+select is((select position('a@test.invalid' in r::text) from r9), 0, 'and never by the full address');
+select is((select (r->>'begun')::boolean from r9), false, 'a ticket is not begun before its Continue');
+select throws_ok($$ select waldo.connect_session_begin('hash9', pg_temp.at(), 'badsig') $$, '42501', 'unsigned router call', 'an unsigned Continue is rejected');
+select is(waldo.connect_session_begin('hash9', pg_temp.at(), pg_temp.sig('connsess.begin.hash9'))->>'do_name', 'do-a', 'the first Continue begins the ticket');
+select is(waldo.connect_session_begin('hash9', pg_temp.at(), pg_temp.sig('connsess.begin.hash9')), null, 'a replayed Continue finds it begun and starts nothing');
+select is((waldo.connect_session_resolve('hash9', pg_temp.at(), pg_temp.sig('connsess.resolve.hash9'))->>'begun')::boolean, true, 'resolve reports the ticket begun');
+select is(waldo.connect_session_complete('hash9', pg_temp.at(), pg_temp.sig('connsess.complete.hash9')), true, 'a begun ticket completes as a clicked one does');
 
 select * from finish();
 rollback;

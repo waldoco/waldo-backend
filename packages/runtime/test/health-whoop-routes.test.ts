@@ -83,11 +83,13 @@ type Rpc = { fn: string; body: Record<string, unknown> };
 const rpcs: Rpc[] = [];
 let routeRows: unknown = [];
 let sessionAnswer: unknown = null;
+let beginAnswer: unknown = null;
 beforeEach(() => {
-  rpcs.length = 0; routeRows = []; sessionAnswer = null;
+  rpcs.length = 0; routeRows = []; sessionAnswer = null; beginAnswer = { status: 'ok', do_name: 'owner-a' };
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     const fn = url.split('/rpc/')[1]!;
     rpcs.push({ fn, body: JSON.parse(String(init.body)) });
+    if (fn === 'connect_session_begin') { const answer = beginAnswer; beginAnswer = null; return Response.json(answer); }
     return Response.json(fn === 'health_provider_route' ? routeRows : fn === 'connect_session_resolve' ? sessionAnswer : true);
   });
 });
@@ -234,14 +236,40 @@ describe('the WHOOP callback', () => {
   });
 });
 
-const start = async (path: string, over: { env?: Record<string, unknown>; limited?: boolean; method?: string } = {}) =>
-  handleWhoopStart(new Request(`https://worker.example.invalid${path}`, { method: over.method ?? 'GET', headers: { 'cf-connecting-ip': '203.0.113.9' } }),
+const ORIGIN = 'https://worker.example.invalid';
+const start = async (path: string, over: { env?: Record<string, unknown>; limited?: boolean; method?: string; origin?: string | null } = {}) => {
+  const method = over.method ?? 'GET', origin = over.origin === undefined ? ORIGIN : over.origin;
+  return handleWhoopStart(new Request(`${ORIGIN}${path}`, { method, headers: { 'cf-connecting-ip': '203.0.113.9', ...(method === 'POST' && origin ? { origin } : {}) } }),
     { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !over.limited }) }, ...over.env } as never);
+};
+const LIVE = { status: 'ok', do_name: 'owner-a', provider: 'whoop', begun: false, owner_hint: 'a•••@example.com' };
 
 describe('the WHOOP start link', () => {
-  it('sends the browser to WHOOP\'s own page for a live attempt and binds the attempt to that browser', async () => {
-    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+  it('on GET shows whose Waldo the WHOOP account joins, by the masked hint, and never redirects, binds or spends the attempt', async () => {
+    sessionAnswer = LIVE;
     const response = await start(`${WHOOP_START_PATH}AbCd1234`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('location')).toBeNull();
+    expect(setCookies(response)).toEqual([]);
+    const html = await response.text();
+    expect(html).toContain('a•••@example.com');
+    expect(html).toContain('<form method="post">');
+    expect(html).not.toContain(CLIENT_SECRET);
+    expect(response.headers.get('content-security-policy')).toContain("form-action 'self' https://api.prod.whoop.com");
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve']);
+    expect(JSON.stringify(rpcs)).not.toContain('AbCd1234');
+  });
+
+  it('never shows a full email, even if the directory sent one unmasked', async () => {
+    sessionAnswer = { ...LIVE, owner_hint: 'alice@example.com' };
+    const html = await (await start(`${WHOOP_START_PATH}AbCd1234`)).text();
+    expect(html).not.toContain('alice');
+    expect(html).toContain('the Waldo that sent this link');
+  });
+
+  it('on Continue from the same origin spends the attempt, binds this browser and sends it to WHOOP\'s own page', async () => {
+    sessionAnswer = LIVE;
+    const response = await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' });
     expect(response.status).toBe(303);
     const location = new URL(response.headers.get('location')!), query = location.searchParams;
     expect([location.origin + location.pathname, query.get('client_id'), query.get('response_type'), query.get('redirect_uri'), query.get('state')]).toEqual(['https://api.prod.whoop.com/oauth/oauth2/auth', 'client-id-fixture', 'code', 'https://worker.example.invalid/oauth/whoop/callback', 'AbCd1234']);
@@ -253,35 +281,58 @@ describe('the WHOOP start link', () => {
     expect(set!.split('=')[0]).toBe((await bound('AbCd1234')).split('=')[0]);
     expect(set).toContain(`Path=${WHOOP_CALLBACK_PATH}`);
     expect(set).toContain('Max-Age=1800');
-    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve']);
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve', 'connect_session_begin']);
     expect(JSON.stringify(rpcs)).not.toContain('AbCd1234');
   });
 
-  it('binds nothing and sends nowhere for a malformed, unknown, expired or spent attempt', async () => {
-    for (const path of [`${WHOOP_START_PATH}short`, `${WHOOP_START_PATH}AbCd1234/x`, WHOOP_START_PATH]) {
-      const response = await start(path);
-      expect([path, response.status >= 400, response.headers.get('location'), setCookies(response)]).toEqual([path, true, null, []]);
+  it('refuses a Continue posted from another site or without an origin, and spends nothing', async () => {
+    sessionAnswer = LIVE;
+    for (const origin of ['https://evil.example', 'null', null]) {
+      const response = await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST', origin });
+      expect([origin, response.status, response.headers.get('location'), setCookies(response)]).toEqual([origin, 400, null, []]);
     }
-    expect(rpcs).toEqual([]);
+    expect(rpcs.map(r => r.fn)).not.toContain('connect_session_begin');
+  });
+
+  it('refuses a replayed attempt after Continue, on a second Continue and on GET', async () => {
+    sessionAnswer = LIVE;
+    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' })).status).toBe(303);
+    const raced = await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' });
+    expect([raced.status, raced.headers.get('location'), setCookies(raced)]).toEqual([410, null, []]);
+    sessionAnswer = { ...LIVE, begun: true };
+    const reopened = await start(`${WHOOP_START_PATH}AbCd1234`);
+    expect([reopened.status, await reopened.text()]).toEqual([410, expect.stringContaining('already used')]);
+  });
+
+  it('binds nothing and sends nowhere for a malformed, unknown, expired or spent attempt, or a cancel', async () => {
+    for (const path of [`${WHOOP_START_PATH}short`, `${WHOOP_START_PATH}AbCd1234/x`, WHOOP_START_PATH, `${WHOOP_START_PATH}AbCd1234?cancelled`]) {
+      for (const method of ['GET', 'POST']) {
+        const response = await start(path, { method });
+        expect([path, method, response.headers.get('location'), setCookies(response)]).toEqual([path, method, null, []]);
+      }
+    }
     for (const [answer, code] of [[null, 400], [{ status: 'expired' }, 410], [{ status: 'completed' }, 400], [{ status: 'revoked' }, 400]] as const) {
       sessionAnswer = answer;
-      const response = await start(`${WHOOP_START_PATH}AbCd1234`);
-      expect([response.status, response.headers.get('location'), setCookies(response)]).toEqual([code, null, []]);
+      for (const method of ['GET', 'POST']) {
+        const response = await start(`${WHOOP_START_PATH}AbCd1234`, { method });
+        expect([response.status, response.headers.get('location'), setCookies(response)]).toEqual([code, null, []]);
+      }
     }
+    expect(rpcs.map(r => r.fn)).not.toContain('connect_session_begin');
   });
 
   it('is served by the Worker at the start path', async () => {
-    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
-    const response = await worker.fetch(new Request(`https://worker.example.invalid${WHOOP_START_PATH}AbCd1234`), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners } as never);
-    expect(response.status).toBe(303);
-    expect(new URL(response.headers.get('location')!).origin).toBe('https://api.prod.whoop.com');
+    sessionAnswer = LIVE;
+    const response = await worker.fetch(new Request(`${ORIGIN}${WHOOP_START_PATH}AbCd1234`), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners } as never);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('<form method="post">');
   });
 
-  it('is absent without its configuration, throttles per address, and takes only GET', async () => {
-    sessionAnswer = { status: 'ok', do_name: 'owner-a' };
+  it('is absent without its configuration, throttles per address, and takes only GET and POST', async () => {
+    sessionAnswer = LIVE;
     expect((await start(`${WHOOP_START_PATH}AbCd1234`, { env: { WHOOP_REDIRECT_URI: undefined } })).status).toBe(404);
-    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' })).status).toBe(404);
-    const limited = await start(`${WHOOP_START_PATH}AbCd1234`, { limited: true });
+    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'PUT' })).status).toBe(404);
+    const limited = await start(`${WHOOP_START_PATH}AbCd1234`, { limited: true, method: 'POST' });
     expect([limited.status, setCookies(limited), rpcs.length]).toEqual([429, [], 0]);
   });
 });
@@ -298,10 +349,10 @@ describe('the WHOOP callback is bound to the browser that followed the start lin
     expect(rpcs).toEqual([]);
   });
 
-  it('completes for the browser that started it, from start link to callback, and refuses the same callback replayed', async () => {
-    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+  it('completes for the browser that pressed Continue, from start link to callback, and refuses the same callback replayed', async () => {
+    sessionAnswer = LIVE;
     const jar = cookieJar();
-    const begun = jar.take(await start(`${WHOOP_START_PATH}AbCd1234`));
+    const begun = jar.take(await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'POST' }));
     const state = new URL(begun.headers.get('location')!).searchParams.get('state')!;
     const first = await callback(`code=auth-code-1&state=${state}`, { cookie: jar.header() });
     jar.take(first.response);
