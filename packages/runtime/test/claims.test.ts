@@ -936,7 +936,10 @@ it('the nightly pass saves ordinary facts with numbers and holds readings by kin
     expect(store.claims().map((claim) => claim.text).sort()).toEqual([...ordinary, 'Likes Monday check-ins'].sort());
     const held = store.holds().filter((hold) => hold.reason === 'numeric-health');
     expect(held).toHaveLength(readings.length);
-    expect(JSON.stringify(store.holds())).not.toMatch(/52|72|6h|130|94/);
+    // A hold row carries no text: only its kind, reason, a fingerprint and when. Matching the serialized rows against the
+    // readings' digits would also hit the timestamp and the fingerprint's hex.
+    expect(store.holds().map((hold) => Object.keys(hold).sort())).toEqual(store.holds().map(() => ['created_at', 'fingerprint', 'id', 'kind', 'reason']));
+    expect(store.holds().every((hold) => /^fnv1a:[0-9a-f]+$/.test(hold.fingerprint))).toBe(true);
   });
 });
 
