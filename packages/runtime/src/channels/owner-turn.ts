@@ -99,10 +99,10 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; taking
 // it clears it.
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -417,7 +417,10 @@ export const createOwnerResponder = (
       const watchFact = () => {
         try { return privateOwner?.watchStatus?.(); } catch { log({ trace, hop: 'watch_status', ms: 0, ok: false, code: 'watch_status_failed' }); return undefined; }
       };
-      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? watchFact() : undefined].filter(Boolean).join('\n\n');
+      const connectorsFact = () => {
+        try { return privateOwner?.connectors?.(); } catch { log({ trace, hop: 'connectors_fact', ms: 0, ok: false, code: 'connectors_fact_failed' }); return undefined; }
+      };
+      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? watchFact() : undefined, activeOwnerTurn ? connectorsFact() : undefined].filter(Boolean).join('\n\n');
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
@@ -851,7 +854,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
