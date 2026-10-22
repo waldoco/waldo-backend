@@ -96,6 +96,10 @@ export function alarmRetryDelay(streak: number, objectId: string, capMs: number)
   return Math.min(Math.floor(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4)), capMs);
 }
 
+// The schedule's next entry for a re-arm that must not wake the schedule: an object with no schedule (a Telegram link's
+// routing object), or an owner whose scheduled jobs must not run now. guard-wake-due-keys fails on a bare null in its place.
+export const NO_SCHEDULE_WAKE = null;
+
 type PassRearm = Readonly<{ scheduleDue: number | null; retryDelayMs: number }>;
 // The re-arms of an alarm pass in flight, keyed by its object's storage. Inside the handler the arbiter only records them,
 // and the pass applies the last one once its work completes. A delete there could cancel the platform's retry of a pass
@@ -114,7 +118,8 @@ export async function alarmPass(storage: DurableObjectStorage, work: () => Promi
 // retry delay. While a failed pass's lane waits for its retry, that lane's wakes arm no sooner than the retry, and the
 // other lanes' arm as due; a whole-pass hold holds them all. Outside a pass, with only the held lane's work due, an earlier
 // wake already in the slot stays (the platform's retry of a pass that died, or an admission's); otherwise the retry goes in.
-// With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it.
+// With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it. The schedule's next entry is not a
+// persisted key, so a caller passes it (Scheduler.rearm reads it) or the re-arm drops that wake.
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
   if (passRearms.has(storage)) { passRearms.set(storage, { scheduleDue, retryDelayMs }); return; }
   await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
