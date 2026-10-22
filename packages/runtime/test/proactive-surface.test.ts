@@ -120,6 +120,13 @@ describe('messages still waiting for WhatsApp', () => {
     expect(waitingForWhatsApp(new Set())(record())).toBe(false);
   });
 
+  it('never include a message WhatsApp took any part of: it is on the owner\'s phone in part, so the app must not get the rest alone', () => {
+    const waiting = waitingForWhatsApp(new Set(['15550001111']));
+    expect(waiting(record({ providerMessageIds: [null, 'wamid.2'], deliveredParts: 1 }))).toBe(false);
+    expect(waiting(record({ providerMessageIds: ['wamid.1', null], deliveredParts: 1 }))).toBe(false);
+    expect(waiting(record({ providerMessageIds: [null, null] }))).toBe(true);
+  });
+
   it('are found by every number the owner bound, newest last and a few at most, so a replaced number is still found', () => {
     const kv = memoryKv();
     rememberWhatsAppSubject(kv, '15550001111');
