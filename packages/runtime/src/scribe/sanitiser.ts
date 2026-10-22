@@ -109,11 +109,46 @@ const HEALTH_FREE_TEXT_QUALITATIVE: readonly RegExp[] = [
 ];
 const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEALTH_FREE_TEXT_QUALITATIVE];
 
-// The numeric health floor for a write the free-text scan does not cover (null-taint text at internal_context, such as
-// a stored conversation summary): the sensor and score patterns the contracts own plus the numeric free-text entries,
-// through the non-global matcher, so a shared `g` pattern never carries lastIndex from one call into the next.
+// What may sit between a metric and its number in a reading: a separator or a reading word ("was", "about", "of").
+// Anything else ("check meeting at", "week") means the number is not that metric's value.
+const READING_GAP = String.raw`(?:\s*(?:[:=~]|\b(?:is|was|were|are|of|at|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to)\b))*\s*`;
+const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
+const reading = (source: string): RegExp => new RegExp(source, 'i');
+// Readings in an owner's own words: a metric tied to its number through READING_GAP, or a number carrying a unit only a
+// health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse) count only with
+// a score, a unit or a reading word, so "Form 16", "Laundry load at 6" or "Pulse check meeting at 7" are not readings.
+const OWNER_HEALTH_READINGS: readonly RegExp[] = [
+  reading(String.raw`\b${READING_NUMBER}\s*(?:bpm|beats\s+per\s+minute)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*mm\s*hg\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:mg\s*\/\s*dl|mmol\s*\/\s*l)\b`),
+  reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:hr|pulse)\b${READING_GAP}\d{2,3}\b(?!\s*(?:people|staff|employees|members|%))`),
+  reading(String.raw`\b(?:hrv|heart\s+rate\s+variability)\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}\d{2,3}\s*(?:\/|over)\s*\d{2,3}\b`),
+  reading(String.raw`\bblood\s+pressure\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}${READING_NUMBER}\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*(?:h|hr|hrs|hours?|m|min|mins|minutes?)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:h|hrs?|hours?)\s+(?:of\s+)?(?:sleep|asleep)\b`),
+  reading(String.raw`\b(?:\d{1,3}(?:,\d{3})+|\d{4,}|${READING_NUMBER}\s*k)\s*steps\b`),
+  reading(String.raw`\bsteps\b${READING_GAP}(?:\d{1,3}(?:,\d{3})+|\d{4,})\b`),
+  reading(String.raw`\b(?:fever|temp(?:erature)?|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
+  reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*°?\s*c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*°?\s*f\b`),
+  reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:respiratory|breathing)\s+rate\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+energy)\b${READING_GAP}\d`),
+  reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
+  reading(String.raw`\bcrs\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${READING_GAP}\d`),
+  reading(String.raw`\b(?:recovery|readiness|strain)\b${READING_GAP}${READING_NUMBER}\s*%`),
+];
+
+// The numeric health floor for long-term memory and stored summaries, where a match refuses the write: the structured
+// sensor shapes the contracts own (`hrv_ms: 48`, `"weightKg": 80`) and the owner-prose readings above. It is narrower than
+// the egress scans, which may over-redact; here a false match loses an ordinary fact. Through the non-global matcher, so a
+// shared `g` pattern never carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean =>
-  [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT_NUMERIC].some((pattern) => matches(pattern, text));
+  [...RAW_SENSOR_PATTERNS, ...OWNER_HEALTH_READINGS].some((pattern) => matches(pattern, text));
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
@@ -466,6 +501,22 @@ function visitStrings(
   return { matched: false };
 }
 
+// What the canary and secret check finds in one string view: this session's canary first, then a secret pattern.
+const canaryOrSecretIn = (text: string, canaries: readonly string[]): 'canary' | 'secret' | null => {
+  if (canaries.some((token) => text.toLowerCase().includes(token))) return 'canary';
+  return SECRET_PATTERNS.some((pattern) => matches(pattern, text)) ? 'secret' : null;
+};
+
+// Whether the scribe would refuse this text for a canary or a secret, in any decoded view. A caller that builds a payload
+// from material it does not control uses it to leave that piece out, so one hidden token cannot make the scribe refuse the
+// whole result. Text the decoder cannot read counts as refused, because the scribe refuses it too.
+export const carriesSecretOrCanary = (text: string, canaries: readonly string[] = []): boolean => {
+  const tokens = canaries.map((token) => token.toLowerCase());
+  let found = false;
+  const result = visitStrings(text, 'internal_context', (view) => { found = canaryOrSecretIn(view, tokens) !== null; return found; });
+  return found || result.invalid !== undefined;
+};
+
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
@@ -477,10 +528,9 @@ function containsCanaryOrSecret(
   let canaryFound = false;
   let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
-    if (canaries.some((token) => text.toLowerCase().includes(token))) {
-      canaryFound = true;
-    }
-    if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
+    const hit = canaryOrSecretIn(text, canaries);
+    if (hit === 'canary') canaryFound = true;
+    else if (hit === 'secret') secretFound = true;
     return false;
   });
   if (result.invalid !== undefined) return denyInvalid(result.invalid);

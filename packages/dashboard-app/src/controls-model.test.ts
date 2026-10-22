@@ -17,6 +17,16 @@ describe('modern owner controls read', () => {
     expect(JSON.stringify(readControls({ ...connections, data: { ...connections.data, sessions: { ...connections.data.sessions, items: [{ ...connections.data.sessions.items[0], token: 'never-retain' }] } } }, 'connections'))).not.toContain('never-retain');
   });
 
+  it('keeps each MCP tool\'s shown digest, which a grant sends back, and refuses a server record without one', () => {
+    const server = { id: 'c1', name: 'notion', host: 'mcp.notion.com', server_url: 'https://mcp.notion.com/mcp', auth: 'oauth', status: 'active', scopes: [], wants_scopes: [], tools: 1, hidden_tools: 0, runs_without_asking: 0, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64), tool_list: [{ tool: 'search', runs: 'asks_first', read_only_hint: true, digest: 'a'.repeat(64) }] };
+    const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
+    expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
+    expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+      expect(() => readControls(withServer(broken), 'connections')).toThrow();
+    }
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);

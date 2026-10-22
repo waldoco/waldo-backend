@@ -2,6 +2,7 @@ import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_
 import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
 import { ftsQuery } from '../../channels/episodes';
+import { numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // Supplied by the authenticated conversation host, never by model arguments. Each text is
@@ -54,6 +55,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => part.includes(args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         if (!source) return fail('Evidence quote is not grounded in an owner-authored message.');
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
+        // The evidence and aliases are stored beside the text, so a reading in any of them would sit in memory.
+        if ([args.text, args.evidence_quote, ...(args.aliases ?? [])].some(numericHealthIn)) return fail('Memory keeps how the owner is in words, never a measurement: the text, evidence or an alias carries a health reading. Save the pattern in words, quoting words of the owner that carry no number, or save nothing.');
         const claims = store.claims();
         const previous = args.replaces_id === undefined ? undefined : claims.find(claim => claim.id === args.replaces_id);
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');

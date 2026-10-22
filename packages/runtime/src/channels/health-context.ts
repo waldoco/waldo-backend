@@ -1,11 +1,11 @@
 import {
   derivedHealthDestinationViewSchema,
-  formZoneOf,
   fromRowZone,
   narrativeContextSchema,
   type DerivedHealthDestinationView,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
+import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
 import { md5Hex } from './md5';
@@ -55,10 +55,6 @@ export type HealthContextRow = Readonly<{
 // without it there is no material. Form and Load are added when readable and stated as
 // unavailable otherwise, so a Recovery-first day still reaches the prompt.
 
-// A previous-day Form swing beyond this delta is a trend; smaller moves are steady. Pinned
-// here (single owner) rather than derived per turn.
-const TREND_DELTA = 5;
-
 // App-authored strings (drivers, tags) join the narrative only when they are pure words: no
 // digits and no URLs, so a raw metric value can never reach the prompt through a label.
 const wordOnly = (value: unknown): value is string =>
@@ -95,9 +91,10 @@ export const toContextHealthMaterial = (
     if (context === null) return null;
     const recovery = fromRowZone('recovery', pillarZone(context.recovery));
     if (recovery === null) return null;
-    // Form's zone comes from the backend's own bands (formZoneOf), never the stored word.
+    // Form's zone is the word the backend stored, which holds through a steady move, so the prompt and the app say the
+    // same; a row whose Form score is unreadable has no Form.
     const formScore = pillarScore(context.form);
-    const zone = formScore === null ? undefined : formZoneOf(formScore);
+    const zone = formScore === null ? undefined : fromRowZone('form', pillarZone(context.form)) ?? undefined;
     const load = fromRowZone('weight', pillarZone(context.weight)) ?? undefined;
 
     const previousScore =
@@ -107,9 +104,9 @@ export const toContextHealthMaterial = (
     const trend: DerivedHealthDestinationView['trend'] =
       previousScore === null || formScore === null
         ? 'insufficient'
-        : formScore - previousScore > TREND_DELTA
+        : formScore - previousScore > STEADY_SCORE_MOVE
           ? 'improving'
-          : formScore - previousScore < -TREND_DELTA
+          : formScore - previousScore < -STEADY_SCORE_MOVE
             ? 'declining'
             : 'steady';
 

@@ -394,6 +394,25 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
     });
   });
 
+  it('settles the records an unlink retired on the alarm when the unlink\'s own settle did not run, so no job stays running', async () => {
+    const settle = vi.spyOn(OwnerDO.prototype as unknown as { settleRetiredWhatsApp(): Promise<void> }, 'settleRetiredWhatsApp').mockImplementationOnce(async () => undefined);
+    try {
+      await drive('whatsapp-unlink-settle-lost', async ({ alarms, unlink, ledger, reminderRuns }) => {
+        await alarms(3);
+        expect(ledger().outbox).toMatchObject([{ status: 'pending' }]);
+        await unlink();
+        expect(settle).toHaveBeenCalledTimes(1);
+        // The unlink retired the record, but nothing settled it: the run is still open.
+        expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
+        expect(reminderRuns()).toEqual([{ status: 'running', summary: null }]);
+        // The owner has no surface left, and the alarm still settles what ended before it returns.
+        await alarms(2);
+        expect(reminderRuns()).toEqual([{ status: 'stopped', summary: 'reminder not sent; its WhatsApp number was unlinked' }]);
+        expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+      });
+    } finally { settle.mockRestore(); }
+  });
+
   it('a reminder Meta took before the unlink ends unconfirmed with it; a later report for the old number changes nothing', async () => {
     await drive('whatsapp-unlink-accepted', async ({ alarms, reply, unlink, arrive, ledger }) => {
       await reply();

@@ -76,16 +76,18 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures and the connector case, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(26);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(26);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the health trigger case, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(27);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      expect(scenario.steps.some((step) => 'say' in step)).toBe(true);
+      // Something happens to the owner: they speak, or the health trigger runs on a change in their health.
+      expect(scenario.steps.some((step) => 'say' in step || 'health_change' in step)).toBe(true);
     }
   });
 

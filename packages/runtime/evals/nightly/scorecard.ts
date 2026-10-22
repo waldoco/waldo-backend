@@ -3,18 +3,20 @@
 export type Pain = 'context' | 'follow_through' | 'judgment';
 export const PAINS: readonly Pain[] = ['context', 'follow_through', 'judgment'];
 export type TrialOutcome = 'pass' | 'fail' | 'judge_error' | 'harness_error' | 'blocked' | 'budget_exhausted';
-// voice_failed and receipt_failed count the graded trials the voice judge or a receipt check turned into a fail.
-export type ScenarioTrials = Readonly<{ id: string; pain: Pain; outcomes: readonly TrialOutcome[]; harness_errors?: readonly string[]; voice_failed?: number; receipt_failed?: number }>;
+// voice_failed and receipt_failed count the graded trials the voice judge or a receipt check turned into a fail. judge_passed
+// counts the trials the judges alone passed, before receipts; receipts_skipped the receipt checks a mode could not read (the
+// raw-history baseline has no claim store), so a comparison across modes can use the first and report the others apart.
+export type ScenarioTrials = Readonly<{ id: string; pain: Pain; outcomes: readonly TrialOutcome[]; harness_errors?: readonly string[]; voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number }>;
 export type Usage = Readonly<{ candidate_calls: number; judge_calls: number; budget: number; exhausted: boolean; candidate_tokens: number; judge_tokens: number }>;
 
 type Rates = Readonly<{ scenarios: number; graded: number; pass_rate: number | null; pass_k_rate: number | null }>;
 type ScenarioRow = Readonly<{
   id: string; pain: Pain; status: 'graded' | 'ungraded' | 'blocked' | 'incomplete'; trials: number;
   passed: number; failed: number; ungraded: number; pass_rate: number | null; pass_k: boolean | null; harness_errors?: readonly string[];
-  voice_failed?: number; receipt_failed?: number;
+  voice_failed?: number; receipt_failed?: number; judge_passed?: number; receipts_skipped?: number;
 }>;
 
-const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed }: ScenarioTrials, k: number): ScenarioRow => {
+const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed, judge_passed, receipts_skipped }: ScenarioTrials, k: number): ScenarioRow => {
   const passed = outcomes.filter((outcome) => outcome === 'pass').length;
   const failed = outcomes.filter((outcome) => outcome === 'fail').length;
   const blocked = outcomes.length > 0 && outcomes.every((outcome) => outcome === 'blocked');
@@ -26,6 +28,7 @@ const row = ({ id, pain, outcomes, harness_errors, voice_failed, receipt_failed 
     pass_k: blocked ? null : passed === k && outcomes.length === k,
     ...(harness_errors?.length ? { harness_errors } : {}),
     ...(voice_failed === undefined ? {} : { voice_failed }), ...(receipt_failed === undefined ? {} : { receipt_failed }),
+    ...(judge_passed === undefined ? {} : { judge_passed }), ...(receipts_skipped === undefined ? {} : { receipts_skipped }),
   };
 };
 
