@@ -11,7 +11,7 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { FINAL_OUTBOX_KEY, type FinalRecord } from '../channels/telegram-final-outbox';
+import { FINAL_OUTBOX_KEY, standingOrderFinalId, type FinalRecord } from '../channels/telegram-final-outbox';
 import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
@@ -98,6 +98,8 @@ export class Scheduler {
         throw new Error(`cron recurrence has no occurrence within scan bound: ${parsed.recurrence.expression}`);
       }
     }
+    // updated_at is the token complete() settles by. Re-arming a row must always move it, even within the millisecond the
+    // dispatch stamped it with, or the settle of the run that re-armed it deletes the new row.
     this.sql.exec(
       `INSERT INTO schedule
          (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts,
@@ -114,7 +116,7 @@ export class Scheduler {
            attempts = 0,
            last_fired_at = NULL,
            quarantined_until = NULL,
-           updated_at = excluded.updated_at`,
+           updated_at = MAX(excluded.updated_at, schedule.updated_at + 1)`,
       parsed.id,
       parsed.kind,
       parsed.occurrence_at,
@@ -281,8 +283,12 @@ export class Scheduler {
   }
 
   private hasCommittedFinal(entry: ScheduleEntry): boolean {
-    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat') return false;
+    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat' && entry.kind !== 'standing_order') return false;
     const finals = this.storage.kv.get<readonly FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+    if (entry.kind === 'standing_order') {
+      const queued = standingOrderFinalId(entry.id, entry.occurrence_at);
+      return finals.some(record => record.standingOrder !== undefined && record.id === queued);
+    }
     return finals.some(record => {
       const receipt = entry.kind === 'reminder' ? record.reminder : record.heartbeat;
       return receipt?.id === entry.id && receipt.occurrence === entry.occurrence_at;

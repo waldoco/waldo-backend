@@ -44,12 +44,16 @@ const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: str
 export const consentPage = (outcome: ConsentOutcome, bot: string | null, surface?: ConsentSurface): Response => {
   const copy = COPY[outcome.kind];
   const account = outcome.kind === 'linked' && outcome.email ? `<p><strong>${escape(outcome.email)}</strong></p>` : '';
-  const back = returnAction(surface, bot);
+  return callbackPage(outcome.kind === 'linked', copy, account, returnAction(surface, bot));
+};
+
+// The shell every OAuth callback lands on. account is escaped HTML or empty.
+export const callbackPage = (ok: boolean, copy: Readonly<{ status: number; title: string; body: string }>, account = '', back = returnAction('dashboard', null)): Response => {
   // The callback has already settled server-side. Remove its one-time code and state from
   // the address bar/history before the owner follows a return link or shares this tab.
   const html = standalonePage({
     title: `${copy.title} - Waldo`, layout: 'card',
-    body: resultCard({ tone: outcome.kind === 'linked' ? 'positive' : 'negative', title: copy.title, body: `${account}<p>${copy.body}</p>`, actions: back }),
+    body: resultCard({ tone: ok ? 'positive' : 'negative', title: copy.title, body: `${account}<p>${copy.body}</p>`, actions: back }),
     tail: "<script>history.replaceState(null, '', location.pathname);</script>",
   });
   return new Response(html, {
