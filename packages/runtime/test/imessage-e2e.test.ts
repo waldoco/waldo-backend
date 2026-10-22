@@ -12,6 +12,7 @@ import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
+import { reminderDue, remindInTwoHours } from './helpers/reminder-wake';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
@@ -28,6 +29,7 @@ const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
+let addresses = 0;
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
 
@@ -56,7 +58,12 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const cookie = `waldo_console=${session}; waldo_owner=${ownerName}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${ownerName}.session_fixture`)}`;
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => undefined } as unknown as ExecutionContext;
-  const call = (request: Request) => worker.fetch(request, env, ctx);
+  // Each world's host has its own address, as each paired Mac does, so the edge limit counts this test's requests only.
+  const address = `2001:db8::${(++addresses).toString(16)}`;
+  const call = (request: Request) => {
+    if (!request.headers.has('cf-connecting-ip')) request.headers.set('cf-connecting-ip', address);
+    return worker.fetch(request, env, ctx);
+  };
   const action = (name: string, fields: Record<string, string> = {}, token = csrf) => {
     const form = new FormData(); form.set('action', name); form.set('csrf', token);
     for (const [k, v] of Object.entries(fields)) form.set(k, v);
@@ -589,3 +596,94 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
 });
+
+// iMessage work re-arms the owner's one alarm, and each re-arm keeps the schedule's next entry: a reminder two hours out keeps
+// its wake. These read the alarm once the owner's serial queue has run everything queued, the reply's drain included.
+const ownerIdle = (stub: DurableObjectStub) => runInDurableObject(stub, async instance => {
+  const owner = instance as unknown as { queue: Promise<unknown> };
+  for (let tail = owner.queue; ; tail = owner.queue) { await tail; if (tail === owner.queue) return; }
+});
+const ownerAlarm = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => ({ alarm: await state.storage.getAlarm(), due: reminderDue(state) }));
+const clearOwnerAlarm = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => { await state.storage.deleteAlarm(); });
+// A turn from the host's message: the bridge hands it over in its pass, and the owner runs it outside any pass of its own.
+const handedTurn = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
+  const before = (await inbox(w.ownerStub)).length;
+  expect((await w.host.send(w.host.message(text))).status).toBe(200);
+  await runDurableObjectAlarm(w.bridgeStub());
+  await w.settle();
+  await vi.waitFor(async () => expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(Array(before + 1).fill('completed')), { timeout: 8_000, interval: 50 });
+  await ownerIdle(w.ownerStub);
+};
+// One full turn whose reply the host delivered, so the owner has a binding on record and no reply in flight.
+const afterOneReply = async (w: Awaited<ReturnType<typeof world>>) => {
+  await w.pairAndActivate();
+  await replyFor(w, 'Morning');
+  const { delivery } = await w.host.pull();
+  await w.host.postResult(delivery!, await w.host.execute(delivery!));
+  await w.pump(2);
+};
+
+it('an iMessage turn keeps the alarm for the owner\'s reminder two hours out', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  const due = await runInDurableObject(w.ownerStub, (_i, state) => remindInTwoHours(state));
+  try {
+    await handedTurn(w, 'Second message');
+    expect(proof.turns).toHaveLength(2);
+    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 15_000);
+
+it('an iMessage turn that sets a reminder two hours out leaves the alarm at that reminder', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true); });
+  proof.outputs.push([{ type: 'function_call', call_id: 'remind', name: 'set_reminder',
+    arguments: JSON.stringify({ note: 'water plants', at: new Date(Date.now() + 2 * 3_600_000).toISOString().slice(0, 16), repeat: 'none' }) }], []);
+  try {
+    await handedTurn(w, 'Remind me to water the plants in two hours');
+    const { alarm, due } = await ownerAlarm(w.ownerStub);
+    expect(due).toBeGreaterThan(Date.now() + 3_600_000);
+    expect(alarm).toBe(due);
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 15_000);
+
+// A message's drain can find its turn already run, by an alarm pass that held the queue when the message arrived. It then has
+// no turn and no reply, so its own re-arm is the last one.
+it('an iMessage drain that finds no turn left keeps the reminder\'s alarm', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    const due = await remindInTwoHours(state);
+    try {
+      await (instance as unknown as { drainIMessage(): Promise<void> }).drainIMessage();
+      expect(await state.storage.getAlarm()).toBe(due);
+    } finally { await state.storage.deleteAlarm(); }
+  });
+});
+
+// A turn the alarm pass runs queues its reply's drain behind the pass, so that drain is the last re-arm, after the pass has
+// ended. This fixture's owner has no app binding, so the pass arms no schedule wake of its own (an owner no surface admits
+// runs no scheduled work); the drain's re-arm is what keeps the reminder's. The message is admitted straight into the
+// owner's inbox, as the bridge's handoff does, so the pass runs it.
+it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes out', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  const due = await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const reminder = await remindInTwoHours(state);
+    const owned = new IMessageOwnerInbox(state.storage), first = owned.records()[0]!;
+    const dedupKey = JSON.stringify(['imessage', 'in-pass', crypto.randomUUID()]), digest = await sha256Hex(dedupKey);
+    const admitted = await owned.admit({ environment: first.environment, binding: first.binding, revision: first.revision, ownerDoName: first.ownerDoName,
+      bindingDigest: first.bindingDigest, conversationRef: first.conversationRef, bridgeDoName: first.bridgeDoName, dedupKey, digest,
+      commandId: `wrc_${digest.slice(0, 40)}`, text: 'What is on today?', occurredAt: Date.now() });
+    expect(admitted.kind).toBe('admitted');
+    return reminder;
+  });
+  try {
+    await runDurableObjectAlarm(w.ownerStub);
+    await vi.waitFor(async () => expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']), { timeout: 8_000, interval: 50 });
+    expect(proof.turns).toHaveLength(2);
+    await ownerIdle(w.ownerStub);
+    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 15_000);
