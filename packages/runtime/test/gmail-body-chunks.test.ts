@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildSessionState, readThreadArgsSchema } from '@waldo/contracts';
 import { b64url, googleClient } from '../src/connectors/google';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
@@ -239,6 +239,16 @@ describe('a body the scribe refuses', () => {
     expect(first!.body).not.toContain('steps');
     expect(second).toMatchObject({ id: 'm2', body: 'short note' });
     expect(second).not.toHaveProperty('body_withheld');
+  });
+
+  it('is logged once with the scribe\'s check and reason, and nothing of the message', async () => {
+    const lines: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { lines.push(String(line)); });
+    try { await reader(thread([plain('m1', dense, 'Quarterly steps')])).handle({ thread_id: 't', limit: 10 } as never); } finally { log.mockRestore(); }
+    const withheld = lines.filter(line => line.includes('mail_body_withheld'));
+    expect(withheld).toHaveLength(1);
+    expect(JSON.parse(withheld[0]!)).toEqual({ hop: 'mail_body_withheld', ok: false, code: expect.stringMatching(/^[a-z_]+:[a-z_]+$/) });
+    expect(withheld[0]).not.toMatch(/steps|Quarterly|sender@/);
   });
 
   it('is refused, not retried as transient, when its continuation is asked for', async () => {

@@ -14,7 +14,7 @@ import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendP
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
-import { sanitise } from '../../scribe/sanitiser';
+import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
@@ -167,7 +167,11 @@ class BodyWithheld extends Error {}
 const WITHHELD_BODY = "[This message's body was withheld: it could not be checked safely, so it is not shown.]";
 const scribedBody = (text: string, canaries: readonly string[]): string => {
   const scribed = sanitise({ payload: { body: text }, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
-  if (!scribed.ok) throw new BodyWithheld('mail body refused by the scribe');
+  if (!scribed.ok) {
+    // Which check refused it and why, nothing of the message: a canary, a secret and a health refusal stay distinguishable in traces.
+    console.log(JSON.stringify({ hop: 'mail_body_withheld', ok: false, code: `${scribed.check}:${scribed.reason}` }));
+    throw new BodyWithheld('mail body refused by the scribe');
+  }
   return (scribed.payload as { body: string }).body;
 };
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
@@ -188,13 +192,24 @@ const messageById = async (client: GoogleClient, threadId: string, messageId: st
   throw new Error('unknown message in thread');
 };
 
+// The connector lists a message's link targets after its body. A target the scribe would refuse (a token or key in a hidden
+// href) is left out of that list, so it cannot make the scribe refuse the whole thread. The connector is also bundled into the
+// connector-proxy edge function, which cannot import the scribe, so this runs where the result is built.
+const LINK_LIST_HEADER = '\n\nLinks:\n';
+const withoutFlaggedLinks = (body: string): string => {
+  const at = body.lastIndexOf(LINK_LIST_HEADER);
+  if (at < 0) return body;
+  const kept = body.slice(at + LINK_LIST_HEADER.length).split('\n').filter((line) => !carriesSecretOrCanary(line));
+  return kept.length ? `${body.slice(0, at)}${LINK_LIST_HEADER}${kept.join('\n')}` : body.slice(0, at);
+};
+
 const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) => {
   let budget = read.first ? READ_BODY_BUDGET : BODY_CHUNK;
   const shownMessages = [];
   for (const item of messages) {
     const { artifact_scan: scan, body_full_chars: clipped, attachments: listed, ...visible } = item;
     const subject = extractArtifacts(omitLongRuns(visible.subject));
-    const body = extractArtifacts(omitLongRuns(visible.body));
+    const body = extractArtifacts(omitLongRuns(withoutFlaggedLinks(visible.body)));
     const names = (listed ?? []).map((attachment) => ({ attachment, name: extractArtifacts(attachment.filename) }));
     const shown = [...subject.artifacts, ...body.artifacts, ...names.flatMap(({ name }) => name.artifacts)].filter((artifact, index, all) => all.findIndex((other) => other.value === artifact.value) === index);
     const linked = extractArtifacts(omitLongRuns(scan ?? '')).artifacts.filter((artifact) => !shown.some((other) => other.value === artifact.value));
@@ -378,7 +393,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; a send-as alias of the owner is not marked and stays in the lists. recipients_capped means a list was cut at 50 addresses, so a reply to all from it would leave people out: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces the thread, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments are listed by name, type and size, not read. body_source 'snippet': only Gmail's short preview was readable, so say so.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces the thread, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's short preview was readable, so say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
