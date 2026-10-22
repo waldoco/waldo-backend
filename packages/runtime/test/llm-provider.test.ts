@@ -928,11 +928,30 @@ describe('RuntimeLLMProvider', () => {
       if (result.ok) expect(result.attempts.map((attempt) => attempt.outcome)).toEqual(['failure', 'success']);
     });
 
+    it('marks the answer as degraded when the resend is what answered, and not otherwise', async () => {
+      const refused = new ScriptedGateway((request) => request.request.tool_search
+        ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
+        : { ok: true, data: response(request.request.model, 'answered') });
+      const degraded = await new RuntimeLLMProvider({ gateway: refused }).complete(searchTurn, runtimeCtx());
+      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true });
+      const accepted = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model, 'answered') }));
+      const clean = await new RuntimeLLMProvider({ gateway: accepted }).complete(searchTurn, runtimeCtx());
+      expect(clean).toMatchObject({ ok: true, degraded: false });
+      if (clean.ok) expect(clean.tool_search_degraded).toBeUndefined();
+    });
+
     it('fails as before when the resend is refused too, after one resend only', async () => {
       const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
       const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
       expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
       expect(gateway.requests).toHaveLength(2);
+    });
+
+    it('keeps tool search on a request that failed for another reason', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'transient', error: 'synthetic outage' }));
+      await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(gateway.requests.length).toBeGreaterThan(0);
+      expect(gateway.requests.every((request) => request.request.tool_search !== undefined)).toBe(true);
     });
 
     it('does not resend a refused request that carried no tool search', async () => {
