@@ -43,6 +43,13 @@ describe('turn event schema v9', () => {
     expect(turnEventSchema.parse(minimal)).toEqual(minimal);
   });
 
+  it('carries the voice block version on a call as a count, never text', () => {
+    const shape = { system_bytes: 1, request_bytes: 2, voice_version: 2 };
+    expect(turnEventSchema.parse({ ...minimal, shape })).toEqual({ ...minimal, shape });
+    expect(turnEventSchema.safeParse({ ...minimal, shape: { ...shape, voice_version: 'v2' } }).success).toBe(false);
+    expect(turnEventSchema.safeParse({ ...minimal, shape: { ...shape, voice_version: -1 } }).success).toBe(false);
+  });
+
   it('rejects free text or unknown enum members in the v9 fields', () => {
     expect(turnEventSchema.safeParse({ ...minimal, rung: 'telepathy' }).success).toBe(false);
     expect(turnEventSchema.safeParse({ ...minimal, outcome: 'meh' }).success).toBe(false);
