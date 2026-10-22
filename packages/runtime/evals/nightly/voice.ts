@@ -2,8 +2,8 @@
 // (https://claude.ai/artifact/9VE8Rz71y1rqY6C6Up86Uh, rev 12), calibrated by its sounds-like table and the build
 // handoff's health and near-medicine lines. It grades how Waldo said it; the outcome judge (judge.ts) grades what
 // happened. It is measured against a labelled set before its verdicts gate anything (voice-agreement.ts).
-import { z } from 'zod';
-import { askJudgeModel, jsonIn, type JudgeModelConfig } from './anthropic';
+import type { JudgeModelConfig } from './anthropic';
+import { combineDimensions, judgeDimensions, type JudgeMode } from './dimensions';
 import type { JudgeInput } from './judge';
 
 export type VoiceRubric = Readonly<{
@@ -40,7 +40,8 @@ export const VOICE_ANCHORS: readonly Readonly<{ moment: string; not_waldo: strin
 
 const INSTRUCTIONS = `You judge how Waldo speaks. Waldo is a personal assistant with a character: Alfred in a modern register, a caring and considerate concierge the owner could text. He says little, notices a lot, brings the answer rather than the question, owns his mistakes in the first word, and never pretends to be a person. He acts on the owner's behalf; "assistant" is the word owners hear.
 
-Judge every message marked WALDO in the transcript against six tests. A test fails when any one Waldo message fails it.
+You judge every message marked WALDO in the transcript against the personality's six tests (you may be asked about one of them or all six). A test fails when any one Waldo message fails it.
+The six tests are:
 ${VOICE_TESTS.map((entry, index) => `${index + 1}. ${entry.key}: ${entry.test}`).join('\n')}
 
 What the tests mean in practice:
@@ -59,8 +60,7 @@ These are habits, not banned words: judge what the message does, never whether a
 
 Calibration pairs from the north star (the left fails, the right passes). They show the register; a reply need not resemble them.
 ${VOICE_ANCHORS.map((pair) => `- ${pair.moment}. Not Waldo: ${pair.not_waldo} Waldo: ${pair.waldo}`).join('\n')}
-
-Answer with JSON only: {${VOICE_TESTS.map((entry) => `"${entry.key}":{"met":true|false,"why":"..."}`).join(',')}}. Keep each why to one sentence.`;
+`;
 
 export type VoiceJudgeInput = Readonly<{
   voice: VoiceRubric;
@@ -70,7 +70,8 @@ export type VoiceJudgeInput = Readonly<{
 }>;
 export type VoiceVerdict = Readonly<{
   outcome: 'pass' | 'fail' | 'judge_error' | 'budget_exhausted';
-  tests?: Readonly<Record<VoiceTestKey, Readonly<{ met: boolean; why: string }>>>;
+  // null: the judge said the evidence does not settle that test.
+  tests?: Readonly<Record<VoiceTestKey, Readonly<{ met: boolean | null; why: string }>>>;
 }>;
 export type VoiceJudge = (input: VoiceJudgeInput) => Promise<VoiceVerdict>;
 
@@ -85,19 +86,8 @@ export const voicePacket = (input: VoiceJudgeInput) => [
   `Effects: ${JSON.stringify(input.effects)}`,
 ].join('\n\n');
 
-const test = z.object({ met: z.boolean(), why: z.string() }).strict();
-const verdictSchema = z.object(Object.fromEntries(VOICE_TESTS.map((entry) => [entry.key, test])) as Record<VoiceTestKey, typeof test>).strict();
-
-// Every test must be decided and met; an undecided or missing test is a judge error, never a pass.
-export const decideVoice = (text: string): VoiceVerdict => {
-  const parsed = verdictSchema.safeParse(jsonIn(text));
-  if (!parsed.success) return { outcome: 'judge_error' };
-  const tests = parsed.data as Record<VoiceTestKey, { met: boolean; why: string }>;
-  return { outcome: VOICE_TESTS.every((entry) => tests[entry.key].met) ? 'pass' : 'fail', tests };
-};
-
-export const liveVoiceJudge = (config: JudgeModelConfig): VoiceJudge => async (input) => {
-  const text = await askJudgeModel(config, INSTRUCTIONS, voicePacket(input));
-  if (text === 'budget_exhausted') return { outcome: 'budget_exhausted' };
-  return text === null ? { outcome: 'judge_error' } : decideVoice(text);
+export const liveVoiceJudge = (config: JudgeModelConfig, mode: JudgeMode = 'split'): VoiceJudge => async (input) => {
+  const run = await judgeDimensions(config, mode, INSTRUCTIONS, VOICE_TESTS.map((entry) => ({ key: entry.key, definition: entry.test })), voicePacket(input));
+  if (run.status !== 'judged') return { outcome: run.status };
+  return { outcome: combineDimensions(run.results), tests: run.results as Record<VoiceTestKey, { met: boolean | null; why: string }> };
 };

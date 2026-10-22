@@ -34,6 +34,10 @@ export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; t
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
+export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts' }>;
+// claims: the production memory store and tools. raw_history: no claim store and no memory tools, so the model has only
+// the conversation and search_episodes; the baseline a memory change is compared against.
+export type MemoryMode = 'claims' | 'raw_history';
 // A remote MCP server the owner connected (no sign-in), answered in-process. runs_without_asking names the
 // tools the owner let run without a card; results maps a tool name to the text it returns.
 export type SeedMcpTool = Readonly<{ name: string; description: string; inputSchema: Readonly<Record<string, unknown>>; annotations?: Readonly<Record<string, unknown>> }>;
@@ -45,7 +49,10 @@ export type WorldSeed = Readonly<{
   // The day before, for a step that has the health trigger run on a change from it; none when unset.
   health_before?: SeedHealth;
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
-  faults?: Readonly<{ draft?: 'unconfirmed' }>;
+  // transient: the on_call-th calendar or mail read throws a provider timeout once; later reads succeed.
+  faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
+  // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
+  memory?: readonly SeedClaim[];
   mcp?: SeedMcp;
 }>;
 
@@ -60,14 +67,25 @@ const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestIn
 
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
-const sqlite = (): SqlStorage => {
+// node:sqlite behind the Durable Object's SqlStorage shape, with the same rowsWritten count and a transactionSync that
+// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO.
+const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => T) => T }> => {
   const db = new DatabaseSync(':memory:');
-  return {
+  const sql = {
     exec(query: string, ...bindings: unknown[]) {
-      const rows = db.prepare(query).all(...bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[]) as Record<string, unknown>[];
-      return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: 0, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
+      const statement = db.prepare(query);
+      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[];
+      const writes = /^\s*(insert|update|delete|replace)\b/i.test(query) && !/\breturning\b/i.test(query);
+      const changed = writes ? Number(statement.run(...values).changes) : 0;
+      const rows = writes ? [] : statement.all(...values) as Record<string, unknown>[];
+      return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: writes ? changed : rows.length, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
+  const transactionSync = <T>(work: () => T): T => {
+    db.exec('BEGIN');
+    try { const result = work(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
+  };
+  return { sql, transactionSync };
 };
 
 const keyValueStorage = () => {
@@ -131,7 +149,7 @@ const consentRows = (status: string) => ['storage_compute', 'model_processing'].
 const item = (mail: SeedMail): MailItem => ({ id: mail.id, thread_id: mail.thread_id, from: mail.from, subject: mail.subject, snippet: mail.body.slice(0, 160), at: mail.at });
 const message = (mail: SeedMail): ThreadMessage => ({ id: mail.id, from: mail.from, subject: mail.subject, at: mail.at, body: mail.body });
 
-export const evalWorld = (seed: WorldSeed, start: string) => {
+export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims') => {
   const events = (seed.events ?? []).map((event) => ({ owner_id: OWNER, ...event, all_day: event.all_day ?? false }));
   const mail = [...(seed.mail ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Health sharing: null before any step shares it; 'withdrawn' after one withdraws it.
@@ -164,6 +182,21 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
       return { draft_id: nextId('draft') };
     },
   };
+  const transient = seed.faults?.transient;
+  if (transient) {
+    const reads = { calendar: ['calendarPage', 'events', 'freeBusy'], mail: ['mailPage', 'searchMail', 'readThread', 'threadPage'] }[transient.reads];
+    const methods = client as unknown as Record<string, unknown>;
+    let calls = 0;
+    for (const name of reads) {
+      const inner = methods[name];
+      if (typeof inner !== 'function') continue;
+      methods[name] = async (...args: unknown[]) => {
+        calls += 1;
+        if (calls === transient.on_call) throw new Error('the provider timed out; nothing was read');
+        return (inner as (...values: unknown[]) => unknown)(...args);
+      };
+    }
+  }
   const google: GoogleAccess = {
     client: async () => client,
     state: async () => [{ id: 'eval-connection', email: OWNER_EMAIL, error: null, calendar: true, mail: true, tasks: false }],
@@ -215,8 +248,13 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     },
   };
 
-  const sql = sqlite();
-  const memory = claimStore(sql);
+  const { sql, transactionSync } = sqlite();
+  const claims = claimStore(sql, transactionSync);
+  for (const seeded of seed.memory ?? []) {
+    claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
+    if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
+  }
+  const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   const episodes = episodeIndex(sql);
   const conversation = indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, now);
@@ -239,7 +277,7 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
   })();
   const handlers = [
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }) : []),
     searchEpisodesHandler(episodes), web,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -308,7 +346,9 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
       reminders: reminders.map(({ id: _id, ...reminder }) => reminder),
       standing_orders: orders.map(({ id: _id, created_at: _created, ...order }) => order),
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
-      memory: memory.claims().map((claim) => ({ kind: claim.kind, text: claim.text, status: claim.status })),
+      // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
+      // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
+      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
     }),
   };
 };

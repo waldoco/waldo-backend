@@ -9,7 +9,7 @@ import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type SeedMail, type WorldSeed } from './world';
+import { evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -42,8 +42,8 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapte
   },
 });
 
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName }>): Promise<TrialRecord> => {
-  const world = evalWorld(scenario.world, scenario.start);
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; memory?: MemoryMode }>): Promise<TrialRecord> => {
+  const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
