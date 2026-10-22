@@ -59,29 +59,26 @@ select ok(exists (select 1 from waldo.link_codes where code_hash = pg_temp.h('2'
 select isnt(pg_temp.redeem_link(pg_temp.h('2'), 'whatsapp', '911234567890'), null, 'a whatsapp "waldo CODE" now redeems');
 select is((select o.do_name from waldo.presences p join waldo.owners o on o.id = p.owner_id where p.provider = 'whatsapp' and p.subject = '911234567890' and p.state = 'active'), 'sh-a', 'whatsapp presence linked to its own owner');
 
--- Shared bridge lifecycle: admin only.
+-- Shared bridge lifecycle: admin only, live at redemption (no challenge, no activation).
 select is(pg_temp.invite_shared('sh-a', pg_temp.h('4')), false, 'a non-admin cannot issue a shared invitation');
 select is(pg_temp.invite_shared('sh-op', pg_temp.h('5')), true, 'the operator issues a shared invitation');
-select is(pg_temp.redeem(pg_temp.h('5'), pg_temp.bid('5'), pg_temp.aid('5'))->>'bridge_id', pg_temp.bid('5'), 'host redeems the shared invitation');
-select is((select kind from waldo.imessage_bridges where bridge_id = pg_temp.bid('5')), 'shared', 'the pending bridge is shared');
+select is(pg_temp.redeem(pg_temp.h('5'), pg_temp.bid('5'), pg_temp.aid('5'))->>'state', 'active', 'a shared host is active the moment it redeems');
+select is((select kind || '/' || state from waldo.imessage_bridges where bridge_id = pg_temp.bid('5')), 'shared/active', 'the bridge is shared and active');
+select ok((select activated_at is not null from waldo.imessage_bridges where bridge_id = pg_temp.bid('5')), 'activation is recorded');
 select is(pg_temp.auth(pg_temp.bid('5'), pg_temp.aid('5'))->>'kind', 'shared', 'bridge authority names the kind');
-select is(pg_temp.scope('sh-op', pg_temp.bid('5'), 'op@icloud.test', 'iMessage;-;op@icloud.test', pg_temp.h('c')), true, 'operator sets the challenge scope');
-select is(pg_temp.challenge(pg_temp.bid('5'), pg_temp.aid('5'), pg_temp.h('c'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), true, 'host observes the operator challenge');
-select is(pg_temp.activate('sh-op', pg_temp.bid('5'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), null, 'the owner activation refuses a shared bridge');
-select is(pg_temp.activate_shared('sh-a', pg_temp.bid('5'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), null, 'a non-admin cannot activate a shared bridge');
-select is(pg_temp.activate_shared('sh-op', pg_temp.bid('5'), 'op@icloud.test', 'iMessage;-;op@icloud.test')->>'bridge_id', pg_temp.bid('5'), 'the operator activates the shared bridge');
-select is((select presence_id from waldo.imessage_bridges where bridge_id = pg_temp.bid('5')), null, 'a shared bridge carries no presence');
 select is(pg_temp.auth(pg_temp.bid('5'), pg_temp.aid('5'))->>'state', 'active', 'shared bridge authority is active without a presence');
+select is((select presence_id from waldo.imessage_bridges where bridge_id = pg_temp.bid('5')), null, 'a shared bridge carries no presence');
 select is(pg_temp.auth(pg_temp.bid('5'), pg_temp.aid('5'))->>'subject', null, 'shared bridge authority names no subject');
 select is(pg_temp.auth(pg_temp.bid('5'), pg_temp.aid('5'))->>'chat_guid', null, 'shared bridge authority names no chat');
-select is(exists (select 1 from waldo.presences where provider = 'imessage' and subject = 'op@icloud.test'), false, 'activation linked no one');
+select is(pg_temp.activate_shared('sh-op', pg_temp.bid('5'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), null, 'there is nothing left to activate');
+select is(exists (select 1 from waldo.presences where provider = 'imessage' and subject = 'op@icloud.test'), false, 'pairing linked no one');
 
--- A second shared bridge in the same environment cannot become active.
-select is(pg_temp.invite_shared('sh-op', pg_temp.h('6')), true, 'second shared invitation');
-select is(pg_temp.redeem(pg_temp.h('6'), pg_temp.bid('6'), pg_temp.aid('6'))->>'bridge_id', pg_temp.bid('6'), 'second shared bridge pending');
-select is(pg_temp.scope('sh-op', pg_temp.bid('6'), 'op@icloud.test', 'iMessage;-;op@icloud.test', pg_temp.h('e')), true, 'second scope');
-select is(pg_temp.challenge(pg_temp.bid('6'), pg_temp.aid('6'), pg_temp.h('e'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), true, 'second challenge');
-select is(pg_temp.activate_shared('sh-op', pg_temp.bid('6'), 'op@icloud.test', 'iMessage;-;op@icloud.test'), null, 'one active shared bridge per environment');
+-- One shared host per environment: no invitation while one is active, and a code issued earlier is refused unspent.
+select is(pg_temp.invite_shared('sh-op', pg_temp.h('6')), false, 'no shared invitation while a shared host is active');
+insert into waldo.imessage_invitations(code_hash, owner_id, environment, created_at, expires_at, kind)
+  select pg_temp.h('7'), id, 'test', now(), now() + interval '10 minutes', 'shared' from waldo.owners where do_name = 'sh-op';
+select is(pg_temp.redeem(pg_temp.h('7'), pg_temp.bid('7'), pg_temp.aid('7')), null, 'a second shared host cannot redeem while one is active');
+select ok((select used_at is null from waldo.imessage_invitations where code_hash = pg_temp.h('7')), 'the refused invitation is not spent');
 
 -- Per-sender authority on the shared bridge: each sender reaches only their own owner.
 select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'stranger@icloud.test')->>'state', 'unknown_sender', 'an unlinked sender is unknown');
