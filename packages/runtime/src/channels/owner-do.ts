@@ -54,7 +54,7 @@ import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRe
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
-import { TelegramFinalOutbox, standingOrderFinalId, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
+import { TelegramFinalOutbox, standingOrderFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -3294,7 +3294,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -3952,6 +3952,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const settleFinal = async (record: FinalRecord): Promise<void> => {
       // Forget ended the record only when its own status says so: forget that reached a record already sent leaves it to arrive.
       const delivered = record.status === 'delivered', forgetCancelled = record.status === 'blocked' && record.reason === 'owner_forget';
+      // Ended without going out again: a window that stayed closed past Meta's 30 days is nothing that failed (nothing was
+      // attempted), but a record any part of which the provider took is on the owner's phone in part, never "not sent".
+      const lapsedUnsent = record.status === 'blocked' && record.reason === 'lapsed';
+      const partlySent = record.status === 'quarantined' && tookPart(record) && ['lapsed', 'expired', 'owner_binding'].includes(record.reason ?? '');
       // Accepted by a surface that reports arrival later: nothing is recorded until that report, a refusal, or the lapse.
       if (record.status === 'accepted') { log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: true, detail: 'accepted', code: 'awaiting_arrival' }); return; }
       if (record.inbox && record.status !== 'pending') {
@@ -3973,20 +3977,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           surface_unlinked: 'order ran; its WhatsApp number was unlinked before the report arrived', lapsed: 'order ran; its report waited 30 days for your WhatsApp window and was not sent',
           delivery_unconfirmed: 'order report delivery unconfirmed' };
         runs.finish(record.standingOrder.runId, delivered ? 'completed' : record.status === 'quarantined' ? 'failed' : 'stopped',
-          delivered ? orderReported(record.standingOrder.gate) : unsent[record.reason ?? ''] ?? (record.status === 'quarantined' ? 'order report delivery unconfirmed' : 'order ran; its report was not sent'));
+          delivered ? orderReported(record.standingOrder.gate) : partlySent ? 'order ran; its report was partly sent, the rest was not'
+            : unsent[record.reason ?? ''] ?? (record.status === 'quarantined' ? 'order report delivery unconfirmed' : 'order ran; its report was not sent'));
       }
       if (!record.reminder && !record.dayCard && !record.standingOrder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
       if (record.heartbeat) {
         settleHeartbeat(record, this.ctx.storage.sql, scheduler);
         if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') {
           if (forgetCancelled) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent: it named something you asked me to forget');
-          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
+          else if (lapsedUnsent) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent; your WhatsApp window stayed closed for 30 days');
+          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : partlySent ? 'heartbeat partly sent; the rest was not sent' : 'heartbeat delivery unconfirmed');
         }
       }
       if (record.reminder) {
         // Never sent: ended by forget, cancelled by the owner, or its WhatsApp number unlinked first. No delivery was attempted.
         const unlinked = record.status === 'blocked' && record.reason === 'surface_unlinked';
-        const cancelled = record.status === 'blocked' && (forgetCancelled || unlinked || book.note(record.reminder.id) === null);
+        const cancelled = record.status === 'blocked' && (forgetCancelled || unlinked || lapsedUnsent || book.note(record.reminder.id) === null);
         if (record.reminder.schedulerRunId) {
           if (cancelled) scheduler.settleCancelled(record.reminder.schedulerRunId);
           else scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
@@ -3999,8 +4005,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (delivered) runs.finish(record.reminder.runId, 'completed', 'reminder sent');
           else if (forgetCancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent: it named something you asked me to forget');
           else if (unlinked) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent; its WhatsApp number was unlinked');
+          else if (lapsedUnsent) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent; your WhatsApp window stayed closed for 30 days');
           else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
-          else runs.finish(record.reminder.runId, 'failed', record.status === 'blocked' && record.reason === 'lapsed' ? 'reminder not sent; your WhatsApp window stayed closed for 30 days' : 'reminder delivery unconfirmed');
+          else runs.finish(record.reminder.runId, 'failed', partlySent ? 'reminder partly sent; the rest was not sent' : 'reminder delivery unconfirmed');
         }
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.

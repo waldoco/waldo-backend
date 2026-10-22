@@ -7,6 +7,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
+import { reminderBook } from '../src/channels/reminders';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
@@ -96,6 +97,10 @@ const owned = async (name: string, script: (steps: Readonly<{
   held(): string[];
   // A console forget of a memory that names the text, as a stated fact (spot) or a pattern (node).
   forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  // A forget the purge has not finished: a fact naming the text, still waiting to be cleaned from every store.
+  purging(text: string): void;
+  // A reminder due now: its turn is the next owner turn that finishes an unfinished forget, with the card still waiting.
+  reminder(): Promise<void>;
   // The owner's WhatsApp is bound to another number, as a confirmed link, a reconciled admission or an unlink and relink do.
   rebind(subject: string): void;
   // The owner writes from the given number.
@@ -144,6 +149,14 @@ const owned = async (name: string, script: (steps: Readonly<{
           else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
           const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims().find(row => row.text === text)!.id;
           return internals.setup('whatsapp').act({ action: `${kind}.forget`, id: String(id), value: '' });
+        },
+        purging: text => {
+          memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          memory.setStatus(memory.claims().find(row => row.text === text)!.id, 'purging');
+        },
+        reminder: async () => {
+          const clock = { timezone: 'UTC', now: () => new Date(Date.now() - HOUR) };
+          await reminderBook(state.storage.sql, scheduler, clock, () => 'rem-1').set({ note: 'stretch', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
         },
         rebind: subject => { state.storage.transactionSync(() => internals.bindWhatsApp(subject)); internals.runtimes = {}; },
         later: async (ms, step) => {
@@ -244,6 +257,21 @@ describe('a waiting approval card the owner may no longer be shown', { timeout: 
       expect(wire.events.some(event => event.includes('Weekly numbers'))).toBe(false);
       expect(wire.events.some(isCard(approval!.id))).toBe(false);
       expect(wire.events).toContain('turn');
+      expect(mail.sent).toEqual([]);
+    });
+  });
+
+  it('is never sent after an unfinished forget that names it is finished by a later turn, even a scheduled one', async () => {
+    await owned('wa-held-approval-forget-retry', async ({ alarms, order, reminder, purging, approvals }) => {
+      await order();
+      await alarms(4);
+      const [approval] = approvals();
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'card_unconfirmed' });
+      purging('Weekly numbers');
+      await reminder();
+      await alarms(3);
+      expect(approvals()).toMatchObject([{ id: approval!.id, status: 'skipped' }]);
+      expect(wire.events.some(event => event.includes('Weekly numbers'))).toBe(false);
       expect(mail.sent).toEqual([]);
     });
   });
