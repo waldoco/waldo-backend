@@ -254,12 +254,12 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | #1383 H-9 ablation runner | `lane-a/rule-pruning` | `472296cb` | Ready, verified (CI 7/7); live ablations need the eval keys | Local review |
 | #1364 tool search readiness | `lane-a/tool-search-readiness` | `7797bbcb` | C13 posting Ready, which includes the pre-flag items (`818b7d4e`: v12 degrade field, spend kept on a failed continuation, M11–M13). Split with a revert commit if local wants. Staging flips `WALDO_TOOL_SEARCH` only after it merges | C13, then local |
 | #1109 meeting-prep mail | `l2/prep-related-mail` | `cbbeb28b` | Owner said yes to the ADR; record the ruling, fix `verify`, Ready | C13 or next session |
-| #1409 owner-session connect starts (#1391) | `claude/oauth-owner-session-start` | `992c6b5b` | C10 finishing Ready | C10, then local |
+| #1409 owner-session connect starts (#1391) | `claude/oauth-owner-session-start` | `992c6b5b` | **Ready, verified** (wall and CI 7/7). Deploy order: migration `20261022060000` before the Worker. waldo-app must open the returned URL exactly, with the query string, and only once (see the PR body) | Local review |
 | #1410 browser approval replay as a job (#1350) | `claude/browser-replay-job` | `80f00591` | C9 finishing Ready; stacks on #1355; the wiring plan is in the Handoff | C9, then local |
 | #1413 WhatsApp outbox follow-ups (#1380 items 2–9, #1310 LOW) | `claude/whatsapp-outbox-followups` | `969e08c7` | Walled; Ready after CI | C12, then local |
 
 ### Dropped or unowned follow-ups (pick up when there is capacity)
-- OAuth hardening from the #1388 and #1393 reviews: the `__Host-` cookie prefix, a `/c/<ticket>` rate limit, a deploy-script check that `WALDO_OAUTH_STATE_SECRET` is set, a retry of the replaced-grant release, and correcting the PKCE overclaim (#1404).
+- OAuth hardening from the #1388 and #1393 reviews (C10 began (a) on branch `claude/oauth-hardening-followups-c10-wip` at `085f0c23`: typecheck passes, no tests run, no PR; the specs for (a)–(e) are in #1409's Handoff; also, #1388's comments in `google-oauth.ts`, `mcp-oauth-routes.ts`, `whoop-routes.ts` and the `oauth-browser-binding.ts` header overclaim protection against code injection): the `__Host-` cookie prefix, a `/c/<ticket>` rate limit, a deploy-script check that `WALDO_OAUTH_STATE_SECRET` is set, a retry of the replaced-grant release, and correcting the PKCE overclaim (#1404).
 - A forget that selects nothing still wipes history (#1365 review, Probe B): `memory.ts:113` runs before the empty-selection failure at `:132`.
 - #1364 work saved as patches: `cloud/patches/`.
 
@@ -267,6 +267,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 - Cost routing, the per-owner turn guard and Apple Watch AW-6 belong to the second cloud account (N0).
 - Local's own PRs: #1402, #1414 (forget redesign design), #1415 (iMessage on Photon), #1400, #1399, #1398.
 | 2026-10-22 10:10 | **Final cloud handoff written** (section "Final cloud handoff" above the owner asks). **#1365 BLOCKED again** (10:05Z): a tainted topic or span forget runs without approval (Probe A). It is the first item for the next session, and C6 was told to start it if time allows. Local posted a build-plan status matrix on #1359 (10:00Z): launch jobs 8–10 are Missing, #1355 is the critical path, and nothing is Proven yet (no live evals or staging E2E since the deploy). | — | Next session: the "starts here" list. |
+| 2026-10-22 10:11 | **C10 finished; #1409 Ready, verified by C0** at `992c6b5b` (contains `315d6fe4`): wall 34 PASS, no FAIL; **CI 7/7**. The console Google connect starts behind the console session; app WHOOP and Google links carry a one-time hashed `?handoff=` code (10 minutes, single use); chat links stay bearer links behind #1388's confirm step; new migration `20261022060000` (apply before the Worker). C10's unanswered contract question is defaulted, reversibly: the code rides inside `authorize_url`. OAuth hardening WIP is pushed as `claude/oauth-hardening-followups-c10-wip` (`085f0c23`, no PR). | #1409 `992c6b5b` | Local review. |
 
 ### Owner asks raised since handoff
 
