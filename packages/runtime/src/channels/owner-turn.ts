@@ -819,6 +819,8 @@ export const createOwnerResponder = (
   // nightly pass, in this turn's scope, never forgetting or pinning. Returns the claims it wrote.
   const saveFromSpan: SpanMemory['save'] = async (span, sides, policy) => {
     if (!memory || probeGuard?.suppressMemory) return [];
+    // Span rows are read raw; a topic still being forgotten would be saved again. The nightly pass reads them after the purge.
+    if (holdsHeldTopic(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
     const before = new Set(memory.allClaims().map(claim => claim.id));
     const started = Date.now();
     const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);

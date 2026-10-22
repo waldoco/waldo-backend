@@ -1,4 +1,5 @@
 import { ownerTyped } from './helpers/owner-typed';
+import { holdTopic } from './helpers/pending-topic';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -221,7 +222,7 @@ describe('what the flush keeps', () => {
     corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_nodes: [], forget_topic: 'tea', pin: [{ id: 1, block: 'owner_profile', order: 1 }], unpin: [],
   });
   type Kept = Readonly<{ saved: (readonly Readonly<{ id: number; kind: string }>[])[]; memory: ReturnType<typeof claimStore>; logs: TurnLogEntry[] }>;
-  const keepWith = async (name: string, health: boolean, inspect: (kept: Kept) => void) => {
+  const keepWith = async (name: string, health: boolean, inspect: (kept: Kept) => void, prepare: (sql: SqlStorage) => void = () => undefined) => {
     Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
     fake.flushOps = flushOps;
     const storage = memoryStorage();
@@ -229,6 +230,7 @@ describe('what the flush keeps', () => {
     return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const memory = claimStore(state.storage.sql);
       memory.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: '"Prefers tea"', origin: 'owner', source_ref: 'owner, fixture-1' }, '2026-10-20T08:00:00Z', 1);
+      prepare(state.storage.sql);
       const saved: (readonly Readonly<{ id: number; kind: string }>[])[] = [];
       const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
       const args: Parameters<typeof createOwnerResponder> = ['fixture', store, memory];
@@ -253,6 +255,17 @@ describe('what the flush keeps', () => {
       expect(fake.bodies.some((body) => body.instructions === FLUSH_INSTRUCTION)).toBe(true);
       expect(logs.find((entry) => entry.hop === 'memory_flush')).toMatchObject({ ok: true });
     });
+  });
+
+  // A forget whose purge has not settled holds its topic out of every read; the span still carries it, so the flush saves
+  // nothing from that span and leaves it to the nightly pass, which reads the rows after the purge.
+  it('saves nothing from a span that carries a topic the owner is still forgetting', async () => {
+    await keepWith('flush-held-topic', true, ({ saved, memory, logs }) => {
+      expect(saved).toEqual([[]]);
+      expect(memory.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+      expect(fake.bodies.some((body) => body.instructions === FLUSH_INSTRUCTION)).toBe(false);
+      expect(logs.find((entry) => entry.hop === 'memory_flush')).toMatchObject({ ok: true, code: 'held_topic' });
+    }, (sql) => holdTopic(sql, 'late coffee', '2026-10-20T08:30:00Z'));
   });
 
   it('keeps no health note when the owner has health notes off', async () => {
