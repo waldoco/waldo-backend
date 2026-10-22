@@ -11,7 +11,7 @@ export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
 export const startTaskArgsSchema = z.strictObject({
   profile: taskProfileSchema.describe('reader: mail, calendar, contacts, tasks, Drive, web. errand: also a browser; submits become approval cards. code: unavailable.'),
-  title: z.string().min(1).describe('Shown in progress notes.'),
+  title: z.string().min(1),
   goal: z.string().min(1).describe('What to find or do.'),
   context: z.string().describe('All it needs from this conversation: names, dates, links, decisions, what to avoid.'),
   done_when: z.string().min(1).describe('What a good result looks like.'),
