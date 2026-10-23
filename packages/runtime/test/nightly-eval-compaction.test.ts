@@ -1,7 +1,9 @@
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compactionSummaryOpen, type AdapterResult, type LLMResponse } from '@waldo/contracts';
 import { callBudget } from '../evals/nightly/budget';
-import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
+import { NIGHTLY_SCENARIOS, nightlyScenarios } from '../evals/nightly/catalogue';
 import { nightlyConfig } from '../evals/nightly/config';
 import { conversationStorage, evalConversation } from '../evals/nightly/conversation-world';
 import {
@@ -59,10 +61,25 @@ const trial = async (entry: NightlyScenario, compaction: boolean) => {
 const lastProbe = (entry: NightlyScenario) => said(entry).at(-1)!;
 
 describe('the compaction probes of ADR section 6', () => {
-  it('are in the catalogue: five recall probes and two safety probes, one scenario each', () => {
+  it('join the catalogue only when the switch is named, on or off, as the flip pair runs: five recall probes and two safety probes', () => {
     expect(COMPACTION_SCENARIOS.map((entry) => entry.id)).toEqual([...COMPACTION_PROBES.recall, ...COMPACTION_PROBES.safety]);
-    for (const entry of COMPACTION_SCENARIOS) expect(NIGHTLY_SCENARIOS).toContain(entry);
+    for (const value of ['on', 'off']) expect(nightlyScenarios({ WALDO_EVAL_COMPACTION: value })).toEqual([...NIGHTLY_SCENARIOS, ...COMPACTION_SCENARIOS]);
+    // The default nightly runs without them; its chats are still the canonical store with compaction off.
+    for (const env of [{}, { WALDO_EVAL_COMPACTION: '' }, { WALDO_EVAL_COMPACTION: 'yes' }]) expect(nightlyScenarios(env)).toEqual(NIGHTLY_SCENARIOS);
+    for (const entry of COMPACTION_SCENARIOS) expect(NIGHTLY_SCENARIOS).not.toContain(entry);
   });
+
+  it('reach the eval and the call plan only when the switch is named', () => {
+    const run = (script: string, env: Readonly<Record<string, string>>) => spawnSync(join('node_modules', '.bin', 'tsx'), [script], {
+      cwd: new URL('..', import.meta.url).pathname, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', ...env },
+    });
+    const probe = { WALDO_EVAL_ONLY: COMPACTION_PROBES.recall[1]! };
+    expect(run('evals/nightly/main.ts', probe).stderr).toContain(`no scenario ${COMPACTION_PROBES.recall[1]}`);
+    const named = run('evals/nightly/main.ts', { ...probe, WALDO_EVAL_COMPACTION: 'off' });
+    expect(named.status, named.stderr).toBe(0);
+    const scenarios = (env: Readonly<Record<string, string>>) => (JSON.parse(run('evals/nightly/plan.ts', env).stdout) as { scenarios: number }).scenarios;
+    expect(scenarios({ WALDO_EVAL_COMPACTION: 'on' }) - scenarios({})).toBe(COMPACTION_SCENARIOS.length);
+  }, 120_000);
 
   it('seed a history past the window that one page of rows holds, with every probe fact where the plain window drops it', () => {
     const history = LONG_HISTORY.reduce((sum, round) => sum + tokens(round.owner) + tokens(round.waldo), 0);

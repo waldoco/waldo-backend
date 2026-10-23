@@ -1,11 +1,12 @@
 // What a live run will spend, before anyone spends it, and what pass-rate floor its scorecard supports after.
 //   tsx evals/nightly/plan.ts                     the call plan for the catalogue at WALDO_EVAL_TRIALS (default 3) and
-//                                                 WALDO_EVAL_JUDGE_MODE (default split)
+//                                                 WALDO_EVAL_JUDGE_MODE (default split); with WALDO_EVAL_COMPACTION set,
+//                                                 the compaction flip pair's catalogue, probes included
 //   tsx evals/nightly/plan.ts <scorecard.json>    the live floor the first graded scorecard supports
 // No network, no keys. docs/evals/LIVE_BASELINE_RUNBOOK.md explains the numbers.
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { NIGHTLY_SCENARIOS } from './catalogue';
+import { nightlyScenarios } from './catalogue';
 import { judgeModeOf, type JudgeMode } from './dimensions';
 import type { NightlyScenario } from './scenarios';
 import type { Scorecard } from './scorecard';
@@ -58,6 +59,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const [cardPath] = process.argv.slice(2);
   const out = cardPath
     ? suggestedFloor(JSON.parse(readFileSync(cardPath, 'utf8')) as Scorecard)
-    : callPlan(NIGHTLY_SCENARIOS, Number(process.env.WALDO_EVAL_TRIALS ?? '3'), judgeModeOf(process.env.WALDO_EVAL_JUDGE_MODE));
+    : callPlan(nightlyScenarios(process.env), Number(process.env.WALDO_EVAL_TRIALS ?? '3'), judgeModeOf(process.env.WALDO_EVAL_JUDGE_MODE));
   console.log(JSON.stringify(out, null, 2));
 }

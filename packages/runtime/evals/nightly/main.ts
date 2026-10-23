@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { compactionVerdict } from './compaction-verdict';
 import { nightlyConfig } from './config';
-import { NIGHTLY_SCENARIOS, rawHistoryScenarios } from './catalogue';
+import { NIGHTLY_SCENARIOS, nightlyScenarios, rawHistoryScenarios } from './catalogue';
 import type { Scorecard } from './scorecard';
 import { runNightly } from './suite';
 
@@ -19,7 +19,7 @@ if (process.env.WALDO_EVAL_COMPACTION_VERDICT) {
 } else {
   // WALDO_EVAL_MEMORY=raw_history runs the memory cases without a claim store, as the baseline for memory changes;
   // its card is not gated. WALDO_EVAL_JUDGE_MODE=joint asks each judge about every dimension in one call (split is the default).
-  const SCENARIOS = process.env.WALDO_EVAL_MEMORY === 'raw_history' ? rawHistoryScenarios(NIGHTLY_SCENARIOS) : NIGHTLY_SCENARIOS;
+  const SCENARIOS = process.env.WALDO_EVAL_MEMORY === 'raw_history' ? rawHistoryScenarios(NIGHTLY_SCENARIOS) : nightlyScenarios(process.env);
   const only = process.env.WALDO_EVAL_ONLY;
   const scenarios = only ? SCENARIOS.filter((scenario) => scenario.id === only) : SCENARIOS;
   if (scenarios.length === 0) throw new Error(`no scenario ${only}`);
