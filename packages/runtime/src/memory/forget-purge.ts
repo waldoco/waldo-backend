@@ -2,9 +2,10 @@ import { textFingerprint, type ClaimStore } from './claims';
 
 // The background half of a forget. The forget itself deletes the owner's claims and keeps custody of every text it must
 // still clean; from then on the forget barrier keeps those texts out of the model's view, so nothing waits on this job.
-// A text in custody has a scope. 'everywhere': what the owner named, or a forgotten claim's own sentence; the claims table
-// is purged by it too, which deletes the derived memory that carries it. 'history': a claim's evidence, which may be a
-// citation other claims share ("owner agreed"), so it is cleared from the stores below and never deletes a claim.
+// A text in custody has a scope. 'everywhere': what the owner named; the claims table is purged by it too, which deletes
+// the derived memory that carries it (a claim only if it was there when the text was forgotten). 'history': what a forget by
+// id or a pattern's forget took with it, a claim's own sentence, the owner words it quoted, a pattern's name. Another claim
+// may repeat or cite it, so it is cleared from the stores below and never deletes a claim.
 // The job is the one retry owner: it cleans each store outside the claims table, records a receipt per store, and settles
 // a text (drops its custody row) only when every store reads back clean.
 
@@ -45,9 +46,6 @@ export const forgetPurge = ({ sql, store, stores, now, arm, log }: Readonly<{
   log?: (event: Readonly<{ hop: 'forget_settled' | 'forget_pending'; detail: string }>) => void;
 }>) => {
   sql.exec(FORGET_PURGE_STEPS_DDL);
-  if (!sql.exec("SELECT name FROM pragma_table_info('topic_purge_pending') WHERE name = 'scope'").toArray().length) {
-    sql.exec("ALTER TABLE topic_purge_pending ADD COLUMN scope TEXT NOT NULL DEFAULT 'everywhere' CHECK (scope IN ('everywhere', 'history'))");
-  }
   const held = (): Row[] => sql.exec<Row>('SELECT fingerprint, topic, created_at, scope FROM topic_purge_pending ORDER BY created_at, fingerprint').toArray();
   const steps = (fingerprint: string): Step[] => sql.exec<Step>('SELECT store, state, attempts FROM forget_purge_steps WHERE fingerprint = ? ORDER BY store', fingerprint).toArray();
   const iso = () => new Date(now()).toISOString();
@@ -61,11 +59,11 @@ export const forgetPurge = ({ sql, store, stores, now, arm, log }: Readonly<{
   };
 
   const run = async (): Promise<Readonly<{ settled: number; pending: number }>> => {
-    // Claims a nightly pass or the console marked for removal join as texts in custody; the claims go now.
+    // Claims a nightly pass or the console marked for removal go now, and only they: their words join custody as history.
     const purging = store.claims('purging').map((claim) => claim.id);
     if (purging.length) {
       const purged = store.purge(purging, iso());
-      track(purged.texts, 'everywhere');
+      track(purged.texts, 'history');
       if (purged.ready) store.settle(purging);
     }
     const rows = held();

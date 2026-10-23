@@ -158,6 +158,68 @@ describe('forget purge job', () => {
     });
   });
 
+  it('a claim marked for removal goes alone: a claim that repeats its sentence or cites the same owner words stays, losing only those words', async () => {
+    await run('forget-purge-by-id', async (sql, tx) => {
+      // The store stays unclean for two passes, so the job's later passes run while the words are still in custody.
+      const { store, purge } = setup(sql, tx, [fakeStore('conversation', [], 2)]);
+      const at = new Date(AT).toISOString();
+      const quote = 'owner, tg-1: "I adopted Bruno last spring and he hides from storms"';
+      store.add({ kind: 'fact', text: 'Has a dog', evidence: quote, source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, at);
+      store.add({ kind: 'fact', text: 'Has a dog named Bruno who fears thunder', evidence: 'owner, tg-2: "Bruno hides under the bed"', source: 'stated', origin: 'owner', source_ref: 'owner, tg-2' }, at);
+      store.add({ kind: 'fact', text: 'Bruno is afraid of storms', evidence: quote, source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, at);
+      const id = (text: string) => store.claims().find((claim) => claim.text === text)!.id;
+      const [forgotten, named, afraid] = [id('Has a dog'), id('Has a dog named Bruno who fears thunder'), id('Bruno is afraid of storms')];
+      sql.exec("UPDATE claims SET status = 'purging' WHERE id = ?", forgotten);
+      for (let pass = 0; pass < 3; pass += 1) await purge.run();
+      expect(store.allClaims().map((claim) => [claim.id, claim.text, claim.evidence]).sort()).toEqual([
+        [named, `${FORGOTTEN} named Bruno who fears thunder`, 'owner, tg-2: "Bruno hides under the bed"'],
+        [afraid, 'Bruno is afraid of storms', `owner, tg-1: "${FORGOTTEN}"`],
+      ].sort());
+      expect(store.pendingTopics()).toEqual([]);
+    });
+  });
+
+  it('a fact the owner tells while a forgotten topic is still cleaning is kept on every later pass, and the topic still settles', async () => {
+    await run('forget-purge-later-fact', async (sql, tx) => {
+      const { store, purge, advance } = setup(sql, tx, [fakeStore('conversation', [], 3)]);
+      store.add({ kind: 'fact', text: 'Has a dog named Bruno', evidence: 'my dog Bruno', source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, new Date(AT - 60_000).toISOString());
+      expect(await purge.track(['dog'], 'everywhere')).toEqual({ settled: 0, pending: 1 });
+      expect(store.allClaims()).toEqual([]);
+      advance(60_000);
+      store.add({ kind: 'fact', text: 'Has a dog named Rex since October', evidence: 'we got Rex', source: 'stated', origin: 'owner', source_ref: 'owner, tg-2' }, new Date(AT + 60_000).toISOString());
+      expect(await purge.run()).toEqual({ settled: 0, pending: 1 });
+      expect(await purge.run()).toEqual({ settled: 0, pending: 1 });
+      expect(await purge.run()).toEqual({ settled: 1, pending: 0 });
+      expect(store.allClaims().map((claim) => claim.text)).toEqual(['Has a dog named Rex since October']);
+    });
+  });
+
+  it('deletes a pattern that carries a named text, with its links, and keeps the pattern beside it', async () => {
+    await run('forget-purge-pattern', async (sql, tx) => {
+      const { store, purge } = setup(sql, tx, [fakeStore('conversation', [])]);
+      store.add({ kind: 'routine', text: 'Climbs on Thursdays', evidence: 'climbs', source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, new Date(AT).toISOString());
+      const support = JSON.stringify([store.claims()[0]!.id]);
+      for (const [label, summary] of [['Bluefin trips', 'Weekends at sea'], ['Climbing', 'Weekly climbing']]) {
+        sql.exec("INSERT INTO constellation_nodes (domain, label, summary, strength, status, first_seen, last_confirmed, supporting_spots) VALUES ('leisure', ?, ?, 0.5, 'active', 'now', 'now', ?)", label, summary, support);
+      }
+      const [trips, climbing] = ['Bluefin trips', 'Climbing'].map((label) => store.nodes().find((node) => node.label === label)!.id);
+      sql.exec("INSERT INTO constellation_edges (from_id, to_id, relation, strength) VALUES (?, ?, 'shares weekends', 0.4)", trips, climbing);
+      expect(await purge.track(['Bluefin'], 'everywhere')).toEqual({ settled: 1, pending: 0 });
+      expect(store.nodes().map((node) => node.label)).toEqual(['Climbing']);
+      expect(store.edges()).toEqual([]);
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Climbs on Thursdays']);
+    });
+  });
+
+  it('a named text found only in a claim\'s source pointer is redacted there; the claim stays', async () => {
+    await run('forget-purge-source-ref', async (sql, tx) => {
+      const { store, purge } = setup(sql, tx, [fakeStore('conversation', [])]);
+      store.add({ kind: 'preference', text: 'Prefers window seats', evidence: 'window seat please', source: 'stated', origin: 'owner', source_ref: 'owner, app-123' }, new Date(AT).toISOString());
+      expect(await purge.track(['app'], 'everywhere')).toEqual({ settled: 1, pending: 0 });
+      expect(store.claims().map((claim) => [claim.text, claim.source_ref])).toEqual([['Prefers window seats', `owner, ${FORGOTTEN}-123`]]);
+    });
+  });
+
   it('backs off from 30 seconds, doubling, to at most an hour', () => {
     expect([0, 1, 2, 3].map(forgetPurgeDelay)).toEqual([30_000, 30_000, 60_000, 120_000]);
     expect(forgetPurgeDelay(40)).toBe(60 * 60_000);

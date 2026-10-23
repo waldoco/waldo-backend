@@ -41,7 +41,7 @@ describe('a topic-only forget keeps its retry state until the purge job settles 
     await run('forget-topic-pending-failwrite', (rawSql, tx) => {
       const sql = new Proxy(rawSql, { get: (target, prop) => {
         if (prop === 'exec') return (query: string, ...bindings: unknown[]) => {
-          if (/INSERT OR IGNORE INTO topic_purge_pending/.test(query)) throw new Error('injected sqlite failure');
+          if (/INSERT INTO topic_purge_pending/.test(query)) throw new Error('injected sqlite failure');
           return (target.exec as (q: string, ...b: unknown[]) => unknown)(query, ...bindings);
         };
         const value = Reflect.get(target, prop, target);

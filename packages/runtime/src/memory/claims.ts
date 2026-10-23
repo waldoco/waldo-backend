@@ -369,6 +369,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // A topic-only forget (no claim left to carry retry state) keeps its exact owner-evidenced words here, only until the
   // caller confirms every store is clean and settles it. No permanent plaintext list: settle(ids, topics) deletes the row.
   sql.exec('CREATE TABLE IF NOT EXISTS topic_purge_pending (fingerprint TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // 'everywhere': what the owner named, which purges the claims table too. 'history': what a forget by id took with it, which
+  // leaves only the stores outside it (forget-purge.ts).
+  if (!sql.exec("SELECT name FROM pragma_table_info('topic_purge_pending') WHERE name = 'scope'").toArray().length) {
+    sql.exec("ALTER TABLE topic_purge_pending ADD COLUMN scope TEXT NOT NULL DEFAULT 'everywhere' CHECK (scope IN ('everywhere', 'history'))");
+  }
   // A count, never content. Every forget moves it, whoever asked (a tool, the console, the nightly pass), so text built from
   // memory earlier can be checked for staleness against the store rather than against its own rendering.
   sql.exec('CREATE TABLE IF NOT EXISTS forget_generation (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
@@ -564,9 +569,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
       }
     },
-    // words: redact-only texts (a forgotten claim's evidence, which may be a citation other claims share). They leave the
-    // episode index with the topics, longest first, so a shorter text redacted first cannot cut a longer one into a fragment
-    // the longer one no longer matches; they never delete a row and are not held in custody here.
+    // Only topics, what the owner named, delete the derived rows that carry them. A forget by id removes exactly its claims:
+    // their sentences and quoted words are held in custody as history and never delete another claim or a memory row; where
+    // one repeats them, it loses only the words. words (a forgotten claim's evidence, which may be a citation other claims share) are held the same way and
+    // leave only the episode index. Every text is redacted longest first, so a shorter text redacted first cannot cut a longer
+    // one into a fragment the longer one no longer matches; texts returns them all for the stores outside this table.
     purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       // Before anything is removed: if the count cannot move, nothing is forgotten either.
       forgetLanded();
@@ -584,16 +591,24 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
       };
-      // Custody before destruction: a topic is redacted only after its pending row is durably written. If that write fails the
-      // topic is NOT redacted this pass (the purge reports not ready), so the owner's source words are never destroyed while the
+      // Custody before destruction: a text is redacted only after its pending row is durably written. If that write fails the
+      // text is NOT redacted this pass (the purge reports not ready), so the owner's source words are never destroyed while the
       // only retry state is lost.
-      const durableTopics: string[] = [];
-      for (const topic of topics.map((t) => t.trim()).filter((t) => t.length >= 3)) {
-        let written = true;
-        try { sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, at); } catch { written = false; failed.push('pending_topic'); }
-        if (written) durableTopics.push(topic);
-      }
-      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...durableTopics].filter(Boolean))].sort((a, b) => b.length - a.length);
+      const custody = (list: readonly string[], scope: 'everywhere' | 'history'): string[] => list.filter((text) => {
+        try {
+          sql.exec(`INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, ?)
+            ON CONFLICT(fingerprint) DO UPDATE SET scope = 'everywhere' WHERE excluded.scope = 'everywhere'`, textFingerprint(text), text, at, scope);
+          return true;
+        } catch { failed.push('pending_topic'); return false; }
+      });
+      const longestFirst = (list: readonly string[]) => [...new Set(list.map((text) => text.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+      const named = longestFirst(custody(longestFirst(topics).filter((topic) => topic.length >= 3), 'everywhere'));
+      const spoken = custody(longestFirst([...forgotten.map((claim) => claim.text), ...quotedEvidence]).filter((text) => !named.includes(text)), 'history');
+      const cleaned = longestFirst([...named, ...spoken]);
+      const texts = longestFirst([...cleaned, ...custody(longestFirst(words).filter((text) => !cleaned.includes(text)), 'history')]);
+      // A claim the owner adds after a forget is theirs to keep: a topic still being cleaned deletes only claims that were
+      // already there when it was forgotten. A claim whose time cannot be read counts as already there.
+      const forgottenAt = (topic: string) => sql.exec<{ created_at: string }>('SELECT created_at FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic)).toArray()[0]?.created_at ?? at;
       const idList = forgotten.map((claim) => claim.id);
       const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
       const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
@@ -631,20 +646,23 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // matching rows and redact in JS with a case-insensitive literal replace instead.
       // Episodes mirror the owner's transcript, which is the owner's own record: redacted in place by word, every text of this
       // forget longest first.
-      if (hasEpisodes) for (const text of [...new Set([...texts, ...words.map((word) => word.trim()).filter(Boolean)])].sort((a, b) => b.length - a.length)) attempt('episodes', () => {
+      if (hasEpisodes) for (const text of texts) attempt('episodes', () => {
         for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, likePrefilter(text)).toArray()) {
           const redacted = ciRedact(row.text, text, FORGOTTEN);
           if (redacted !== row.text) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid); tally('redacted', 'episodes'); }
         }
       });
-      for (const text of texts) {
+      for (const text of cleaned) {
         // Bounded prefilter: fetched rows are a superset; ciRedact below applies the
         // case-insensitive FULL-text replace, so only true matches are rewritten.
         const like = likePrefilter(text);
         const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
-        // Derived memory that carries the text is deleted, not redacted: a redacted row keeps the paraphrase around the marker,
-        // a deleted one cannot. Owner records and rows that drive an operation (episodes, reminders, loops, goals, the day plan,
-        // cards, run candidates, outbox and schedule rows) keep their shape and lose only the words.
+        // Derived memory that carries a text the owner named is deleted, not redacted: a redacted row keeps the paraphrase
+        // around the marker, a deleted one cannot. A forget by id deletes no memory but its claims: other claims, legacy spots,
+        // core files and patterns lose only the words. Waldo's own snapshots, indexes, logs and run
+        // summaries that carry the text go for either. Owner records and rows that drive an operation (episodes, reminders,
+        // loops, goals, the day plan, cards, run candidates, outbox and schedule rows) keep their shape and lose only the words.
+        const removes = named.includes(text);
         const carries = (value: string | null) => value !== null && (carriesTopic(value, text) || hidesTopic(value, text));
         // A backup payload is JSON, so the text can sit in it escaped where the literal LIKE cannot see it; every backup is read.
         attempt('memory_backups', () => {
@@ -654,18 +672,24 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         });
         if (hasSpots) attempt('legacy_spots', () => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM spots WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).toArray()) {
-            if (carries(row.text) || carries(row.evidence)) { sql.exec('DELETE FROM spots WHERE id = ?', row.rid); tally('deleted', 'legacy_spots'); }
+            if (removes && (carries(row.text) || carries(row.evidence))) { sql.exec('DELETE FROM spots WHERE id = ?', row.rid); tally('deleted', 'legacy_spots'); }
+            else if (!removes) sql.exec('UPDATE spots SET text = ?, evidence = ? WHERE id = ?', ci(row.text), ci(row.evidence), row.rid);
           }
         });
         if (hasRevisions) attempt('legacy_core_files', () => {
           for (const row of sql.exec<{ f: string; rev: number; content: string }>(`SELECT file AS f, revision AS rev, content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray()) {
-            if (carries(row.content)) { sql.exec('DELETE FROM core_file_revisions WHERE file = ? AND revision = ?', row.f, row.rev); tally('deleted', 'legacy_core_files'); }
+            if (removes && carries(row.content)) { sql.exec('DELETE FROM core_file_revisions WHERE file = ? AND revision = ?', row.f, row.rev); tally('deleted', 'legacy_core_files'); }
+            else if (!removes) sql.exec('UPDATE core_file_revisions SET content = ? WHERE file = ? AND revision = ?', ci(row.content), row.f, row.rev);
           }
         });
-        // Other claims that quote the forgotten text in their text, evidence, aliases or source go with it.
+        // Other claims that carry a named text in their text, evidence or aliases go with it. A source ref is a pointer to
+        // where a claim came from, not what it says: it loses the words and the claim stays. A forget by id keeps every other
+        // claim and redacts the forgotten sentence or quote where one repeats it.
         attempt('surviving_claims', () => {
-          for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray()) {
-            if (carries(row.text) || carries(row.evidence) || carries(row.aliases) || carries(row.source_ref)) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); }
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray()) {
+            if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); continue; }
+            const redacted = [ci(row.text), ci(row.evidence), row.aliases === null ? null : ci(row.aliases), row.source_ref === null ? null : ci(row.source_ref)] as const;
+            if (redacted[0] !== row.text || redacted[1] !== row.evidence || redacted[2] !== row.aliases || redacted[3] !== row.source_ref) { sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ?, source_ref = ? WHERE id = ?', ...redacted, row.rid); tally('redacted', 'claims'); }
           }
         });
         // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
@@ -792,11 +816,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         });
         attempt('constellation_nodes', () => {
           for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
-            if (carries(row.label) || carries(row.summary)) {
+            if (removes && (carries(row.label) || carries(row.summary))) {
               sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', row.id, row.id);
               sql.exec('DELETE FROM constellation_nodes WHERE id = ?', row.id);
               tally('deleted', 'constellation_nodes');
-            }
+            } else if (!removes) sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', ci(row.label), ci(row.summary), row.id);
           }
         });
       }
@@ -815,7 +839,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         }
       });
       const remaining: Record<string, number> = {};
-      for (const text of texts) {
+      for (const text of cleaned) {
         const like = likePrefilter(text);
         // The LIKE above is only a prefilter; exactness is the case-insensitive full-text
         // substring check here, matching what the redaction loops rewrote.
@@ -824,7 +848,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // Same honesty contract as the redaction loops: a store that errors lands in failed,
         // the claim stays 'purging', and the console reports incomplete - no worker crash.
         // The purged claims themselves still hold their text until settle below - exclude them.
-        attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence) || (row.aliases !== null && exact(row.aliases)) || (row.source_ref !== null && exact(row.source_ref))).length));
+        attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence) || (row.aliases !== null && exact(row.aliases)) || (row.source_ref !== null && exact(row.source_ref))).length));
         if (hasEpisodes) attempt('episodes', () => add('episodes', sql.exec<{ text: string }>(`SELECT text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         // A backup payload is JSON, so the topic can sit in it escaped (a tab as \t) where the literal LIKE prefilter cannot
         // see it; every backup is read back whole, and an escaped copy the literal redaction left keeps the forget pending.

@@ -113,12 +113,12 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);
         }
-        // What the owner named and the forgotten claims' own sentences purge the claims table too, deleting the derived memory
-        // that carries them. A claim's evidence may be a citation other claims share, so it only leaves the stores outside it.
-        for (const claim of selected.values()) texts.add(claim.text);
+        // Only what the owner named purges the claims table, deleting the derived memory that carries it. The forget removes
+        // exactly the selected claims: their sentences and evidence may be repeated or cited by other claims, so they only
+        // leave the transcript and the stores outside the table.
         const purged = [...texts];
-        const evidence = [...selected.values()].filter(claim => claim.origin === 'owner').map(claim => claim.evidence);
-        for (const words of evidence) texts.add(words);
+        const words = [...selected.values()].flatMap(claim => claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]);
+        for (const word of words) texts.add(word);
         // With no claim selected, earlier chat the episode index holds counts as memory touched; the owner's current message,
         // which always names the topic, does not. Read before the commit, which redacts both.
         const current = new Set(turn ? [turn.current.text, ...ownerParts(turn.current)] : []);
@@ -132,7 +132,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
-          const counts = store.purge([...selected.keys()], now(), purged, evidence).receipt;
+          const counts = store.purge([...selected.keys()], now(), purged, words).receipt;
           touched = inHistory || [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();

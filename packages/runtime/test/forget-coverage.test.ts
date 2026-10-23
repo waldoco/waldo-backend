@@ -119,7 +119,7 @@ describe('forget coverage', () => {
     });
   });
 
-  it('a claim that quotes the forgotten text is deleted with it, and an unrelated claim stays whole', async () => {
+  it('a forget by id keeps a claim that quotes the forgotten text, redacting the quote, and an unrelated claim stays whole', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const forgottenId = Number(
@@ -133,9 +133,11 @@ describe('forget coverage', () => {
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner agreed', undefined, undefined, true);
-      // A claim whose evidence quotes the forgotten text is derived from it: redacting would keep its paraphrase around the marker.
-      expect(store.allClaims().map((claim) => claim.id)).not.toContain(quotingId);
-      expect(store.claims().map((claim) => claim.text)).toEqual(['Owner reads at night']);
+      // The owner chose one claim; another that quotes it stays and loses only the quoted words.
+      const quoting = store.claims().find((claim) => claim.id === quotingId)!;
+      expect(quoting.text).toBe('Owner likes morning runs');
+      expect(quoting.evidence).toBe(`chat: "${FORGOTTEN}"`);
+      expect(store.claims().map((claim) => claim.text).sort()).toEqual(['Owner likes morning runs', 'Owner reads at night']);
     });
   });
 
@@ -192,7 +194,7 @@ describe('forget coverage', () => {
     });
   });
 
-  it('case-variant quoting is caught too: LIKE matches it, so the quoting claim is deleted as well', async () => {
+  it('case-variant quoting is redacted too: LIKE matches it, so redaction must as well', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const forgottenId = Number(
@@ -207,9 +209,9 @@ describe('forget coverage', () => {
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner agreed', undefined, undefined, true);
       expect(result).toContain('purged');
-      // The claim quoting the variant is deleted with it - no half-forgotten state.
+      // The variant is gone AND the source settled - no half-forgotten state.
       expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE evidence LIKE ?`, `%${variant}%`).one().n).toBe(0);
-      expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE text = 'Owner likes morning runs'`).one().n).toBe(0);
+      expect(sql.exec<{ evidence: string }>(`SELECT evidence FROM claims WHERE text = 'Owner likes morning runs'`).one().evidence).toContain(FORGOTTEN);
       expect(store.claims().map((claim) => claim.id)).not.toContain(forgottenId);
     });
   });
