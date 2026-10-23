@@ -133,3 +133,31 @@ it.each([
   const { claims } = await ownerTurn(said, [remember({ kind: 'preference', text, evidence_quote: quote }), []]);
   expect(claims).toMatchObject([{ text, origin: 'owner', source: 'stated' }]);
 });
+
+// Probe F1 from the gate: a later untainted turn in which the owner says nothing about the fact cannot make the mail's claim the
+// owner's by quoting the owner's earlier words. Only a quote from the owner's current message restates it.
+const twoTurns = async (first: string, second: string, outputs: readonly [unknown[][], unknown[][]], seed?: (store: ClaimStore) => void) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-taint-two-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    seed?.(store);
+    const tools = [...memoryHandlers({ sql: state.storage.sql, store, transaction: work => state.storage.transactionSync(work), conversationRef: 'owner', now: () => NOW, hideHistory: async () => undefined }), mail];
+    const responder = createOwnerResponder('fixture', undefined, store, () => undefined, undefined, tools as never);
+    seen.outputs.push(...outputs[0]);
+    await responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: first }), timer);
+    seen.outputs.push(...outputs[1]);
+    const reply = await responder.respond(ownerTyped({ traceId: 'tg-2', conversationRef: 'owner', surface: 'telegram', text: second }), timer);
+    return { reply, claims: store.claims(), all: store.allClaims() };
+  });
+it('an untainted turn cannot upgrade a held claim by quoting an earlier owner message', async () => {
+  const planted = { kind: 'preference', text: PLANTED, evidence_quote: 'the invoice' };
+  const { claims, all } = await twoTurns('Check my billing mail for the invoice', 'thanks', [[readMail, remember(planted), []], [remember(planted), []]]);
+  expect(claims).toMatchObject([{ id: 1, text: PLANTED, origin: 'agent', source: 'inferred', verification_status: 'provisional' }]);
+  expect(all).toHaveLength(1);
+  expect(seen.inputs.at(-1)).toContain('not as the owner\'s statement');
+});
+it('an untainted "hello" cannot lift a shared-content claim with a quote from an earlier owner message', async () => {
+  const fact = { kind: 'fact', text: 'Accountant is Priya Rao', evidence_quote: 'My accountant is Priya Rao' };
+  const { claims } = await twoTurns('Check my mail. My accountant is Priya Rao', 'hello', [[readMail, []], [remember(fact), []]],
+    store => store.add({ kind: 'fact', text: fact.text, source: 'inferred', evidence: 'forwarded: Priya Rao is your accountant', origin: 'untrusted' }, NOW.toISOString()));
+  expect(claims).toMatchObject([{ id: 1, origin: 'untrusted', source: 'inferred' }]);
+});

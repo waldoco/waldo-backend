@@ -23,7 +23,9 @@ type Dependencies = Readonly<{
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
-const saidAs = (tainted: boolean) => tainted ? { source: 'inferred', note: 'Saved as Waldo\'s inference, because this turn read outside content. It counts as the owner\'s once they confirm it or say it again.' } : {};
+const CONFIRM_NOTE = 'It becomes the owner\'s once they confirm it or say it again in a later message of their own.';
+const HELD_NOTE = `Already held, but not as the owner's statement. ${CONFIRM_NOTE}`;
+const saidAs = (tainted: boolean) => tainted ? { source: 'inferred', note: `Saved as Waldo's inference, because this turn read outside content. ${CONFIRM_NOTE}` } : {};
 // Split, rather than join, so evidence cannot bridge an excluded quote.
 const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {
   const ranges = [...(turn.sourceQuoteRanges ?? [])].sort((a, b) => a.start - b.start);
@@ -82,8 +84,10 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const tainted = ctx.toolArgSourceTaint === 'external';
         const claim = { kind: args.kind, text: args.text, evidence: args.evidence_quote, source: tainted ? 'inferred' : 'stated', origin: tainted ? 'agent' : 'owner', source_ref: `owner, ${source.message_ref}`, aliases: args.aliases };
         const duplicate = claims.find(row => row.kind === args.kind && normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
-        // The owner saying a held fact again in their own words, with no outside content in the turn, makes it theirs.
-        const upgrade = !previous && !tainted && duplicate && (duplicate.origin !== 'owner' || duplicate.source !== 'stated') ? duplicate : undefined;
+        // The owner saying a held fact again in their own words, with no outside content in the turn, makes it theirs. Only their
+        // current message says it again: a quote from an earlier one may be the very words the held row was grounded on.
+        const held = duplicate && (duplicate.origin !== 'owner' || duplicate.source !== 'stated') ? duplicate : undefined;
+        const upgrade = !previous && !tainted && source === turn.current ? held : undefined;
         const replaced = previous ?? upgrade;
         await ready(ctx);
         if (replaced) {
@@ -93,7 +97,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           if (!replacement) throw new Error('Correction receipt missing');
           return success({ id: replacement.id, status: 'corrected', ...saidAs(tainted) });
         }
-        if (duplicate) return success({ id: duplicate.id, status: 'duplicate' });
+        if (duplicate) return success({ id: duplicate.id, status: 'duplicate', ...(held ? { source: held.source, note: HELD_NOTE } : {}) });
         if (ctx.runScope) ctx.runScope.commit(() => store.add(claim, now())); else store.add(claim, now());
         const saved = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one();
         return success({ id: saved.id, status: 'stored', ...saidAs(tainted) });
