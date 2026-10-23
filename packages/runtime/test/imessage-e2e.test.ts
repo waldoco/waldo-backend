@@ -52,7 +52,11 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; });
+// What the health plane answers the owner's prompt read with. null is what the RPC returns when the owner has no row or no
+// live consent, so that is the default.
+const noHealth = () => Response.json(null);
+let healthRead: () => Response = noHealth;
+afterEach(() => { vi.restoreAllMocks(); healthRead = noHealth; proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
@@ -60,7 +64,8 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
-    if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
+    if (fn === 'health_context_read') return healthRead();
+    if (fn === 'health_plane') return Response.json(null);
     if (fn === 'admin_overview') return Response.json(null);
     return null;
   } });
@@ -632,6 +637,81 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   expect(proof.turns[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
   for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
+});
+
+// Synthetic zone words only. The prompt read is compiled `agoMs` before the turn, on that day in the owner's zone (UTC here).
+const derivedRow = (agoMs: number) => {
+  const compiled = new Date(Date.now() - agoMs);
+  return { context: { id: 'ctx-imessage', day: compiled.toISOString().slice(0, 10), form: { score: 72, zone: 'good', drivers: ['sleep below baseline'], confidence: 0.8 },
+    recovery: { score: 70, zone: 'good' }, weight: { score: 45, zone: 'moderate' }, drivers: ['sleep below baseline'], confidence: 0.8, freshness: 'fresh', tags: [],
+    compiled_at: compiled.toISOString() }, previous: null };
+};
+const HOUR = 3_600_000, ABSENT = 'No derived health context is available';
+const times = (text: string, needle: string) => text.split(needle).length - 1;
+
+it('an iMessage owner turn carries the owner\'s fresh derived health on its message, once, and never in the system prompt', async () => {
+  healthRead = () => Response.json(derivedRow(HOUR));
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  const told = proof.turns[0]!;
+  expect(told).not.toContain(ABSENT);
+  expect(times(told, 'Form zone: steady.')).toBe(1);
+  expect(times(told, 'Recovery: solid. Load: moderate.')).toBe(1);
+  expect(times(told, 'Freshness: fresh.')).toBe(1);
+  expect(proof.systems[0]).not.toMatch(/Form zone:|Recovery zone:|No derived health context/);
+  expect(forbiddenEgress).toEqual([]);
+});
+
+// The runtime never decides consent: the health plane's prompt read returns null unless the row's sources hold storage consent
+// and a live model-processing grant (supabase/tests/waldo_health_plane.sql, "storage consent alone never reaches the prompt
+// read"). So a missing grant reaches the owner DO as a null read, and the turn must say so rather than guess a readiness.
+const expectAbsence = (told: string) => {
+  expect(times(told, ABSENT)).toBe(1);
+  expect(told).not.toMatch(/Form zone:|Recovery zone:|Freshness:|Recovery: [a-z]+\./);
+};
+
+it('an iMessage owner turn whose health read comes back empty, as it does without the consent grants, states absence and no readiness', async () => {
+  healthRead = noHealth;
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+  expect(proof.systems[0]).not.toMatch(/Form zone:|Recovery zone:|No derived health context/);
+});
+
+it('an iMessage owner turn whose derived row has expired states absence, not the old readiness', async () => {
+  healthRead = () => Response.json(derivedRow(73 * HOUR));
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+});
+
+it('an iMessage owner turn whose derived row has gone stale still carries it, marked stale', async () => {
+  healthRead = () => Response.json(derivedRow(10 * HOUR));
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  const told = proof.turns[0]!;
+  expect(told).not.toContain(ABSENT);
+  expect(times(told, 'Form zone: steady.')).toBe(1);
+  expect(times(told, 'Freshness: stale.')).toBe(1);
+  expect(told).not.toContain('Freshness: fresh.');
+});
+
+it('an iMessage owner turn whose health read fails still replies, and says health is absent', async () => {
+  healthRead = () => new Response('unavailable', { status: 500 });
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+  expect(JSON.parse((await w.host.pull()).delivery!.body)).toMatchObject({ operation: 'send', text: proof.reply });
 });
 
 // Proactive work for an owner admitted on the app who chose the app and iMessage: the app takes it, and its delivery is what
