@@ -16,6 +16,7 @@ import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import type { OwnerClock } from '../src/tools/live/get-context';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
+import { updateSweepTools } from '../src/channels/update-sweep';
 import { durableConversationStore } from '../src/channels/conversation-store';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import type { ModelInputAssert, Scenario } from './types';
@@ -155,6 +156,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
       if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       if (turn.startsWith('@job ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(5), time, undefined, undefined, undefined, undefined, 'external');
+      if (turn.startsWith('@sweep ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(7), time, updateSweepTools(true), undefined, undefined, undefined, 'external');
       if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       return responder.respond(inboundTurn({ updateId: n, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(turn) }), time);
     };

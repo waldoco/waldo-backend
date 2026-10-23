@@ -11,7 +11,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
-import { reportCheckBackJobs } from './helpers/heartbeat-job';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 // A due check-back is a fresh machine turn: the model reads the current state with read tools and decides what, if anything,
 // to say. The stored note or loop title is context for that turn, never the message.
@@ -92,7 +92,7 @@ const schedulePass = async (owner: Owner, state: DurableObjectState) => { state.
 const transportPass = async (owner: Owner, state: DurableObjectState) => { clock.now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
 // A loop check-back is a reader job the tick writes: its worker reports (stood in for here), and the owner's next pass
 // applies the report with the check-back turn.
-const checkBackPass = async (owner: Owner, state: DurableObjectState) => { await schedulePass(owner, state); reportCheckBackJobs(state.storage.sql); await schedulePass(owner, state); };
+const checkBackPass = async (owner: Owner, state: DurableObjectState) => { await schedulePass(owner, state); reportMachineJobs(state.storage.sql); await schedulePass(owner, state); };
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
 const dueReminder = (state: DurableObjectState) => reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(AT - 3_600_000) }, () => 'rem-1')
   .set({ note: NOTE, at: new Date(AT - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
@@ -216,7 +216,7 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       await schedulePass(owner, state);
       // The tick asks no model: it writes the job.
       expect(checkBackRequests()).toEqual([]);
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       const [first] = checkBackRequests();
       expect(first!.messages.at(-1)!.content).toContain(LOOP_TITLE);
@@ -280,7 +280,7 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
     await withOwner('check-back-loop-outage', async (owner, state) => {
       const loop = dueLoop(state);
       clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state);
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       fixture.outage = true;
       // Ticks while the job is open write no second job; the apply is retried on its backoff, 2 then 5 minutes.
       for (let tick = 0; tick < 3; tick++) { clock.now += 3 * 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state); }

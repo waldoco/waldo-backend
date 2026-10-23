@@ -24,7 +24,7 @@ export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;
   text: Readonly<{ title: string; goal: string; done_when: string }>;
   items: readonly MachineItem[]; timezone: string; now: number; deadlineAt: number;
-  source?: MachineBrief['source']; runId?: string;
+  source?: MachineBrief['source']; runId?: string; recordId?: number;
 }>;
 export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }>;
 
@@ -42,7 +42,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
     // A change detector over the data the job was started on, not a guard against an adversary, so MD5 is enough.
     machine: {
       job: spec.job, input_digest: md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
-      ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}),
+      ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}), ...(spec.recordId === undefined ? {} : { record_id: spec.recordId }),
     },
   };
   const { job, created } = book.create({
@@ -62,7 +62,7 @@ export const workerRouteDown = (access: OwnerModelAccess): boolean => {
 };
 
 // Why a machine job with news still told the owner nothing: its gate closed between the check and the apply.
-export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'no_source';
+export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'no_source';
 export type MachineApplied = 'delivered' | 'skipped' | Readonly<{ held: MachineHeld }>;
 // A job's apply: rechecks its gates, runs its apply turn and delivers. It calls `settle` exactly once, as the commit of its
 // delivery or alone when nothing goes out; `settle` throws ClosedRunError for a job cancelled or forgotten meanwhile. A

@@ -35,6 +35,22 @@ export const updateBook = (sql: Sql) => {
     judgedMail(changes: readonly Change[]): void {
       for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET judged = 1 WHERE source_ref = ? AND message_id = ?', change.source_ref, change.source_message_id ?? change.source_ref);
     },
+    // A sweep job's changes: the new ones it recorded (mail with a source comes back through its pending row instead), and
+    // the pending mail among its refs recorded no later than it. Mail recorded after the job was written is not the job's.
+    jobChanges(recordId: number, refs: readonly string[]): readonly Change[] {
+      const own = sql.exec<{ changes: string }>('SELECT changes FROM update_cards WHERE id = ?', recordId).toArray()[0];
+      const changes = own ? (JSON.parse(own.changes) as Change[]).filter(change => !(change.source === 'mail' && change.source_ref)) : [];
+      if (!refs.length) return changes;
+      return [...changes, ...sql.exec<{ source_ref: string; detail: string; source_message_id: string }>(`SELECT m.source_ref, json_extract(j.value, '$.detail') AS detail, m.message_id AS source_message_id
+        FROM observed_mail m JOIN update_cards c ON c.id = m.update_id, json_each(c.changes) j
+        WHERE m.judged = 0 AND m.update_id <= ? AND m.source_ref IN (${refs.map(() => '?').join(', ')})
+          AND json_extract(j.value, '$.source_ref') = m.source_ref AND json_extract(j.value, '$.source_message_id') = m.message_id
+        ORDER BY m.observed_at`, recordId, ...refs).toArray().map((row): Change => ({ source: 'mail', kind: 'new', ...row }))];
+    },
+    // The job judged its pending mail, by the same bound.
+    judgedJob(recordId: number, refs: readonly string[]): void {
+      if (refs.length) sql.exec(`UPDATE observed_mail SET judged = 1 WHERE judged = 0 AND update_id <= ? AND source_ref IN (${refs.map(() => '?').join(', ')})`, recordId, ...refs);
+    },
     pruneMail(now: number): void {
       sql.exec('DELETE FROM observed_mail WHERE attached = 0 AND observed_at < ?', now - 7 * DAY_MS);
     },
@@ -58,8 +74,9 @@ export const updateBook = (sql: Sql) => {
       return sql.exec<{ text: string; feedback: string }>('SELECT text, feedback FROM update_cards WHERE feedback IS NOT NULL ORDER BY at DESC LIMIT ?', limit).toArray()
         .map((row) => `- ${row.feedback}: ${row.text.replace(/\n/g, ' ')}`).join('\n');
     },
+    // A row a sweep job wrote with no new changes of its own (it judged earlier mail) and that sent nothing says nothing.
     unfolded(timezone: string): string {
-      return sql.exec<{ at: number; changes: string; text: string | null }>('SELECT at, changes, text FROM update_cards WHERE folded = 0 ORDER BY at').toArray()
+      return sql.exec<{ at: number; changes: string; text: string | null }>("SELECT at, changes, text FROM update_cards WHERE folded = 0 AND (text IS NOT NULL OR changes != '[]') ORDER BY at").toArray()
         .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[])}`)
         .join('\n');
     },
@@ -76,20 +93,30 @@ const toChange = (item: CalendarChange, since: number): Change => {
   return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)) };
 };
 
-export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number, sourceFollowups = false): Promise<readonly Change[]> => {
+// What changed since the watermarks, read with no write: the caller records the changes, the mail it observed and the new
+// watermarks in one transaction, so a stop between the read and the write leaves the window to be read again.
+export type ChangeRead = Readonly<{
+  changes: readonly Change[]; now: number;
+  observed: readonly Readonly<{ source_ref: string; thread_id: string; at: number; message_id: string }>[];
+}>;
+export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, 'changedEvents' | 'newMail'>, now: number, sourceFollowups = false): Promise<ChangeRead> => {
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const calendar = calendarSince === null ? [] : (await google.changedEvents(calendarSince, now, now + 2 * DAY_MS)).map((item) => toChange(item, calendarSince));
+  const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];
   const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => {
     const detail = JSON.stringify(mailPromptProjection(item));
     if (!sourceFollowups) return { source: 'mail', kind: 'new', detail };
     const source_ref = `mail:${item.thread_id || item.id}`;
-    book.observeMail(source_ref, item.thread_id, Date.parse(item.at), item.id);
+    observed.push({ source_ref, thread_id: item.thread_id, at: Date.parse(item.at), message_id: item.id });
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };
   });
-  book.mark('calendar_since', now);
-  book.mark('mail_since', now);
-  return [...calendar, ...mail];
+  return { changes: [...calendar, ...mail], observed, now };
+};
+export const writeChanges = (book: UpdateBook, read: ChangeRead): void => {
+  for (const mail of read.observed) book.observeMail(mail.source_ref, mail.thread_id, mail.at, mail.message_id);
+  book.mark('calendar_since', read.now);
+  book.mark('mail_since', read.now);
 };
 
 // One candidate, one existing responder turn, one frozen owner-only intent. The

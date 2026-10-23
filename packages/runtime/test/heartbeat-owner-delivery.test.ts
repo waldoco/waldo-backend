@@ -5,7 +5,7 @@ import { loopBook } from '../src/channels/loops';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, type FinalRecord } from '../src/channels/telegram-final-outbox';
-import { reportCheckBackJobs } from './helpers/heartbeat-job';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 const effects = vi.hoisted(() => ({ sends: 0, ack: true, sentText: '' }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
@@ -38,7 +38,7 @@ it.each(['ack', 'blocked', 'unlink'])('actual owner alarm keeps heartbeat backgr
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: {} });
       effects.sends = 0; effects.ack = mode === 'ack';
       await owner.alarm();
-      expect(reportCheckBackJobs(state.storage.sql)).toHaveLength(1);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
       await owner.alarm();
       expect(state.storage.kv.get('owner_alarm_failures_v1')).toBeUndefined();
       const rows = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
@@ -90,7 +90,7 @@ it('a settle transaction that fails queues nothing and settles nothing, and the 
         .schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: {} });
       effects.sends = 0; effects.ack = true;
       await owner.alarm();
-      const [job] = reportCheckBackJobs(state.storage.sql);
+      const [job] = reportMachineJobs(state.storage.sql);
       const enqueueFenced = TelegramFinalOutbox.prototype.enqueueFenced;
       const failing = vi.spyOn(TelegramFinalOutbox.prototype, 'enqueueFenced').mockImplementationOnce(function (this: TelegramFinalOutbox, input, commit) {
         return enqueueFenced.call(this, input, work => commit(() => { work(); throw new Error('storage failed inside the settle transaction'); }));

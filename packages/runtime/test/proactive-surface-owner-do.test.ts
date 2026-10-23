@@ -30,7 +30,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
-import { reportCheckBackJobs } from './helpers/heartbeat-job';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
 const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
@@ -248,6 +248,11 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await schedulePass(owner, state);
+      // The sweep wrote a reader job; its worker reports (stood in for here), the next pass queues the card, and the outbox
+      // sends it to WhatsApp.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toHaveLength(1);
       expect(wire.whatsapp[0]!.startsWith(`text:${UPDATE_TEXT}`)).toBe(true);
       expect(await said(owner, ctx)).toEqual([]);
@@ -274,7 +279,7 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
     await withOwner('surface-whatsapp-switched', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       expect(outbox(state).map(record => [record.payload.chat_id, record.status])).toEqual([[ctx.appSubject, 'pending']]);
       state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
@@ -322,7 +327,7 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     await withOwner('surface-both-check-back', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       expect(heartbeat.payload.chat_id).toBe(ctx.appSubject);
@@ -344,11 +349,31 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both' });
   });
 
+  it('an update card from the outbox reaches the app and WhatsApp gets one copy', async () => {
+    await withOwner('surface-both-update', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      const update = outbox(state).find(record => record.update)!;
+      expect(update.payload.chat_id).toBe(ctx.appSubject);
+      await outboxPass(owner, state, ctx);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
+      expect(copies(state).map(record => record.id)).toEqual([`${WHATSAPP_COPY_PREFIX}${update.id}`]);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
+    }, { surface: 'both' });
+  });
+
   it('a check-back the app could not write gets no WhatsApp copy', async () => {
     await withOwner('surface-both-check-back-failed', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       vi.spyOn(OwnerDO.prototype as unknown as { appAssistantRow(): Promise<unknown> }, 'appAssistantRow').mockRejectedValueOnce(new Error('transcript write failed'));

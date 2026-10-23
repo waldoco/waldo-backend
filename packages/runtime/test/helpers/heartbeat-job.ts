@@ -6,6 +6,7 @@ import type { TaskHost } from '../../src/tasks/brain';
 import { isMachine, jobBook } from '../../src/tasks/jobs';
 import { runJobsLane } from '../../src/tasks/lane';
 import { enqueueMachine } from '../../src/tasks/machine';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../../src/channels/telegram-final-outbox';
 
 // The heartbeat check-back is a reader job: the tick writes it, a worker reads, and the jobs lane applies what the worker
 // found. These stand in for the worker and the lane over a real job book, so a test can drive a tick to its message.
@@ -46,12 +47,20 @@ export const heartbeatJobs = (storage: DurableObjectStorage, options: Readonly<{
   return { book, tickDeps, runJobs };
 };
 
-// In an owner object: every queued check-back job reports `result` the way its worker would, so the owner's next alarm pass
+// In an owner object: every queued machine job (a check-back, an update sweep) reports `result` the way its worker would, so the owner's next alarm pass
 // applies it. Answers the ids it reported.
-export const reportCheckBackJobs = (sql: SqlStorage, result: TaskResult = CHECKED): string[] => {
+export const reportMachineJobs = (sql: SqlStorage, result: TaskResult = CHECKED): string[] => {
   const book = jobBook(sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
   return book.open().filter(row => row.status === 'queued' && isMachine(row)).map(row => {
     book.report(book.startAttempt(row.id)!, result, { rounds: 1, costUsd: 0 });
     return row.id;
   });
+};
+
+// The owner's next two alarm passes: the jobs lane applies what the workers reported, then the outbox sends what the apply
+// queued, once it falls due.
+export const applyAndSend = async (owner: { alarm(): Promise<void> }, kv: DurableObjectStorage['kv']): Promise<void> => {
+  await owner.alarm();
+  kv.put(FINAL_OUTBOX_KEY, (kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).map(record => ({ ...record, dueAt: Math.min(record.dueAt, Date.now() - 1) })));
+  await owner.alarm();
 };

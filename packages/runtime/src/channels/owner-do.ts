@@ -116,8 +116,8 @@ import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } 
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
-import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
-import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
+import { reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
+import { UPDATE_CARD_FRESH_MS, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { literalTextRedactor, toolNameSchema } from '@waldo/contracts';
@@ -1161,7 +1161,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
-      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup) || record.payload.chat_id !== app.owner) return;
+      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.update) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
         try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
@@ -4153,6 +4153,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       await updateCheck(`update:${entry.occurrence_at}`);
     };
+    const sweepSourceFollowups = () => proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
+    // Whether an update card could go out now. Where a send would only wait for the owner (WhatsApp outside its window), none
+    // is written: its changes stay for the next card that reaches them.
+    const sweepGate = (day: string): SweepGate | null => {
+      const { followups, volume } = loops.proactivity();
+      return followups === false ? 'held_preference' : plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
+        : volume === 'low' ? 'held_volume' : quiet() ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
+    };
     const updateCheck = async (trace: string) => {
       const client = await google.client();
       if (client === null) return;
@@ -4165,35 +4173,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       };
       try {
         const now = Date.now();
-        const sourceFollowups = proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
-        const changes = await collectChanges(updates, client, now, sourceFollowups);
+        const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        let id = changes.length ? updates.record(day, now, changes, null) : null;
-        updates.pruneMail(now);
-        const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
-        const { volume } = loops.proactivity();
-        const canSend = loops.proactivity().followups !== false && !sentToday.has('card:close') && volume !== 'low' && !quiet();
-        // Where a send would only wait for the owner (WhatsApp outside its window), no update card is written: its changes stay
-        // for the next card that reaches them.
-        const cardNow = canSend && writesFirstNow();
-        const pendingMail = sourceFollowups ? updates.pendingMail() : [];
-        const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
-        let text: string | null = null;
-        if (cardNow && analysisChanges.length) {
-          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await promptLedger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
-          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
-          if (reply && reply !== SKIP_UPDATE) text = reply;
-          updates.judgedMail(pendingMail);
+        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups,
+          gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
+          enqueued: () => holdTaskJobsDue(storage.kv, now) });
+        log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}` });
+        if (check.code === 'enqueued') {
+          log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: check.job!.id, job_profile: 'reader' });
+          await armTaskJobsWake(storage, Date.now());
         }
-        if (text) {
-          if (id === null) id = updates.record(day, now, [], null);
-          // The app chat has no feedback buttons; Useful and Not useful stay on Telegram.
-          const feedback = channel === 'app' ? {} : { reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } };
-          // An update is worth sending only now: if the window closed meanwhile it is refused, not kept for later.
-          await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, ...feedback, [SEND_NOW_ONLY]: true }));
-          updates.pushed(id, text);
-        }
-        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
+        const gate = sweepGate(day);
+        const canSend = gate === null || gate === 'held_window';
+        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && check.analysis === 0 && check.code !== 'held_open_job',
           ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_owner_context', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
@@ -4211,13 +4203,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             await scheduler.rearm();
           },
         });
-        log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : cardNow ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
+        log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${check.changes} changes; ${check.code === 'enqueued' || check.code === 'existing' ? 'handed to a reader job' : check.code}` });
         closeMachineTraces(true);
       } catch (error) {
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
         closeMachineTraces(false);
       }
     };
+    // The sweep job's apply: the update-card turn on the job's changes, with the sweep's tools and the health logs as turn
+    // context, tainted. Its card goes through the final outbox under the job's key, and is recorded sent once delivered.
+    const updateSweepApply = updateSweepApplier({
+      updates, timezone: clock.timezone, now: () => Date.now(), sourceFollowups: sweepSourceFollowups,
+      gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
+      transaction: work => storage.transactionSync(work),
+      context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
+      turn: async (turn, text, current) => this.asOwnerJob('heartbeat', turn, async () =>
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external')),
+      deliver: async (id, trace, text, recordId, commit) => {
+        if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+          doName: storage.kv.get<string>('do_name') ?? '', ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}),
+          expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
+      },
+    });
     const cards = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
       if (card === null) return;
@@ -4297,6 +4305,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
       if (record.mailFollowup) loops.settleReview(record);
+      // An update card counts as sent, for the next main card, only once it reached the owner.
+      if (record.update) {
+        if (delivered) updates.pushed(record.update.recordId, record.payload.text);
+        log({ trace: record.trace, hop: 'update_card_delivery', ms: 0, ok: delivered, detail: delivered ? 'delivered' : record.reason ?? record.status, ...(record.reason ? { code: record.reason } : {}) });
+      }
       if (record.dayCard) {
         // A card the owner never saw keeps its day-plan row unsent and its updates for the next card.
         if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); }
@@ -4349,7 +4362,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { machine: { heartbeat: heartbeatApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
       taskContext: () => { const egress = parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST); return { authenticatedUserId: ownerRef(), sanitise, ...(egress ? { egressAllowlist: egress } : {}) }; },

@@ -23,7 +23,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
-import { reportCheckBackJobs } from './helpers/heartbeat-job';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
@@ -1080,7 +1080,7 @@ const dueFollowUp = async (state: DurableObjectState) => {
 const tickedFollowUp = async (w: Awaited<ReturnType<typeof world>>) => {
   await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
   await runDurableObjectAlarm(w.ownerStub); await w.settle();
-  await runInDurableObject(w.ownerStub, async (_i, state) => { expect(reportCheckBackJobs(state.storage.sql)).toHaveLength(1); });
+  await runInDurableObject(w.ownerStub, async (_i, state) => { expect(reportMachineJobs(state.storage.sql)).toHaveLength(1); });
 };
 const TICK_RUN = { status: 'completed', summary: 'check-back handed to a reader job' };
 it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {

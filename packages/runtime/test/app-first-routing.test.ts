@@ -9,7 +9,7 @@ import { episodeIndex } from '../src/channels/episodes';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
-import { reportCheckBackJobs } from './helpers/heartbeat-job';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 import { loopBook } from '../src/channels/loops';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, type FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -184,6 +184,12 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await schedulePass(owner, state);
+      // The sweep wrote a reader job; its worker reports (stood in for here) and the next pass queues the card for the app.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      expect(outbox(state).filter(record => record.update).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT, channel: 'app' }]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT }]);
     });
@@ -226,7 +232,7 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
       await schedulePass(owner, state);
       // The tick wrote a check-back job; its worker reports, and the next pass applies it on the app.
-      reportCheckBackJobs(state.storage.sql);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       expect(outbox(state).filter(record => record.heartbeat).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
       await outboxPass(owner, state, ctx);
@@ -247,7 +253,8 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     });
   });
 
-  it('keeps an update card on Telegram, with its buttons and no copy, while the owner has no app binding', async () => {
+  // The card goes through the final outbox, whose payload carries no feedback buttons.
+  it('keeps an update card on Telegram, with no copy, while the owner has no app binding', async () => {
     await withOwner('routing-no-app', async (owner, state, ctx) => {
       dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
       updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
@@ -255,7 +262,11 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await schedulePass(owner, state);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT, reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }) }]);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT }]);
       expect(await appChat(owner, ctx)).toEqual([]);
     }, { app: false });
   });
@@ -374,15 +385,19 @@ describe('link previews on Telegram', () => {
     }, { app: false });
   });
 
-  it('an update card, with its buttons, goes out with link previews off', async () => {
-    await withOwner('previews-update', async (owner, state) => {
+  it('an update card goes out with link previews off', async () => {
+    await withOwner('previews-update', async (owner, state, ctx) => {
       dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
       updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
       fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await schedulePass(owner, state);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT, reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }) }]);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT }]);
       expect(wire.previews).toEqual([noPreview]);
     }, { app: false });
   });

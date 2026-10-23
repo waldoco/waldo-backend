@@ -21,10 +21,11 @@ export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep';
 export const MACHINE_ORIGIN = 'machine:';
 export const isMachine = (row: Pick<JobRow, 'origin'>): boolean => row.origin.startsWith(MACHINE_ORIGIN);
 // What a machine job was started on: a digest of its inputs, the scope it holds open (one open job per job and scope), the
-// refs of the items it was given, the connection its data came from, and the schedule run that started it.
+// refs of the items it was given, the connection its data came from, the schedule run that started it, and the record its
+// data was written to (an update sweep's update_cards row).
 export type MachineBrief = Readonly<{
   job: MachineJob; input_digest: string; scope: string; refs: readonly string[];
-  source?: Readonly<{ connection_id: string }>; run_id?: string;
+  source?: Readonly<{ connection_id: string }>; run_id?: string; record_id?: number;
 }>;
 
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
