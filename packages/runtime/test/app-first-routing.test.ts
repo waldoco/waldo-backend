@@ -9,6 +9,7 @@ import { episodeIndex } from '../src/channels/episodes';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
+import { reportCheckBackJobs } from './helpers/heartbeat-job';
 import { loopBook } from '../src/channels/loops';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, type FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -223,6 +224,9 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     await withOwner('routing-heartbeat', async (owner, state, ctx) => {
       loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
+      await schedulePass(owner, state);
+      // The tick wrote a check-back job; its worker reports, and the next pass applies it on the app.
+      reportCheckBackJobs(state.storage.sql);
       await schedulePass(owner, state);
       expect(outbox(state).filter(record => record.heartbeat).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
       await outboxPass(owner, state, ctx);

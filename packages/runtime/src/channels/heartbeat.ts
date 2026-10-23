@@ -1,5 +1,9 @@
 import type { ScheduleEntry } from '@waldo/contracts';
 import type { Scheduler, ScheduleExecutor } from '../scheduler/multiplexer';
+import { HEARTBEAT_JOB_TEXT, machineResultText } from '../prompt/machine-jobs';
+import { taskBrief } from '../tasks/jobs';
+import type { MachineEnqueued, MachineHandler, MachineSpec } from '../tasks/machine';
+import { checkBackReply, loopCheckBackText } from './check-back';
 import type { DayPlanBook } from './day-cards';
 import { isQuiet, type Loop, type LoopBook } from './loops';
 import { localIso } from './reminders';
@@ -7,13 +11,14 @@ import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
 // H1 of the heartbeat/cron plan: a periodic check-in tick that scans due work, stays silent when
 // nothing needs attention, and records every tick in schedule_runs. The scan is deterministic; only
-// past-due loops Waldo took on start a model turn, the check-back, which reads the current state and
-// decides what to say or to stay silent.
+// past-due loops Waldo took on start the check-back: a reader job, written with the scan, whose worker
+// reads the current state off the owner's alarm pass. The brain's apply turn writes the message, only
+// when the worker found something, or stays silent.
 //
 // Run history is the scheduler-owned schedule_runs table (the one run-history record): the
-// Scheduler writes the row before dispatch, and the tick records its DECISION
-// (heartbeat_result: quiet vs acted) and the SEND (delivery: pending -> sent/failed) on it.
-// Frozen outbox intent owns delivery after the producer completes. Ambiguous attempts are
+// Scheduler writes the row before dispatch, and the tick records its DECISION on it (heartbeat_result:
+// quiet, or acted when it wrote a job or released a card). The job owns the check-back from there.
+// Frozen outbox intent owns delivery once the apply turn wrote it. Ambiguous attempts are
 // quarantined; only a validated provider ACK settles delivery and the loop cooldown.
 //
 // H1+H1b scope: past-due open loops, plus release of quiet-hours-held day cards (H1b). A card
@@ -26,8 +31,10 @@ export const HEARTBEAT_EVERY_MS = 30 * 60_000;
 const DUE_SCAN_LIMIT = 20;
 // Cross-tick flood control: a loop is re-notified only after this cooldown, and only while it is
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
-// fresh occurrence that notifies again immediately.
+// fresh occurrence that notifies again immediately. A check that found nothing to say holds it too.
 const RENOTIFY_COOLDOWN_MS = 4 * 60 * 60_000;
+// A check-back job not done by the next tick is dropped; its loops are not marked, so that tick asks again.
+const HEARTBEAT_JOB_DEADLINE_MS = HEARTBEAT_EVERY_MS;
 
 export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<void> => {
   if (scheduler.lookup(HEARTBEAT_ID).state !== 'absent') return;
@@ -40,6 +47,30 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
+// The past-due loops a check-back may name: open, past due, not from a mail source (those have their own review), and not
+// told about within the cooldown. The cooldown filter lives in SQL BEFORE the LIMIT: paging the earliest-due loops and
+// filtering in JS would starve a 21st notifiable loop forever while the front page sits in cooldown. `only` narrows the
+// scan to the loops a job was given.
+export const dueLoops = (sql: Sql, now: number, timezone: string, only?: readonly string[]): Loop[] => {
+  const ids = only ?? [];
+  if (only && !ids.length) return [];
+  return sql.exec<Loop>(
+    `SELECT l.* FROM loops l
+     WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
+       AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
+       AND NOT EXISTS (
+         SELECT 1 FROM heartbeat_notified n
+         WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)
+       ${only ? `AND l.id IN (${ids.map(() => '?').join(', ')})` : ''}
+     ORDER BY l.due LIMIT ?`,
+    localIso(now, timezone).slice(0, 16), now - RENOTIFY_COOLDOWN_MS, ...ids, DUE_SCAN_LIMIT,
+  ).toArray();
+};
+
+// What one tick did about past-due loops: why no job was written, or the job that holds them (written now, written by an
+// earlier fire of this occurrence, or still open from an earlier tick).
+export type HeartbeatCheck = 'held_quiet' | 'held_volume' | 'unchanged' | 'held_breaker' | MachineEnqueued['code'];
+
 export type HeartbeatDeps = Readonly<{
   releaseHeldCards?: boolean;
   scheduler: Scheduler;
@@ -48,10 +79,13 @@ export type HeartbeatDeps = Readonly<{
   plans: Pick<DayPlanBook, 'heldToday'>;
   timezone: string;
   now: () => number;
-  // The check-back turn for these loops: its reply, or null when the model decided to stay silent. A throw is a failed
-  // check-back the next tick retries, never a failed tick.
-  checkBack: (loops: readonly Loop[]) => Promise<string | null>;
-  enqueue: (text: string, receipt: HeartbeatReceipt) => Promise<void>;
+  // The scan and the job it writes commit together or not at all; no I/O runs inside.
+  transaction<T>(work: () => T): T;
+  // Every provider the worker could use is down: a job written now could only wait, so the next tick asks again.
+  providerDown(): boolean;
+  // Writes the check-back job for these loops, synchronously, inside the scan's transaction.
+  enqueue(loops: readonly Loop[], tick: Readonly<{ entryId: string; occurrence: number; runId: string; now: number }>): MachineEnqueued['code'];
+  checked(code: HeartbeatCheck, detail: string): void;
 }>;
 
 // One tick: quiet hours suppress sends entirely. Due work comes from a bounded index-backed scan
@@ -74,6 +108,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
 
     if (isQuiet(deps.loops.proactivity(), firedAt, deps.timezone)) {
       deps.scheduler.markHeartbeatDecision(runId, 'quiet');
+      deps.checked('held_quiet', 'loops=0');
       return;
     }
     // H1b release: quiet-hours-held day cards from TODAY re-arm to fire immediately. The upsert
@@ -92,56 +127,83 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
     // (C3 policy, not this tick) are unchanged.
     if (deps.loops.proactivity().volume === 'low') {
       deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
+      deps.checked('held_volume', 'loops=0');
       return;
     }
-    const localNow = localIso(firedAt, deps.timezone).slice(0, 16);
-    // The cooldown filter lives in SQL BEFORE the LIMIT: paging the 20 earliest-due loops and
-    // filtering in JS would starve a 21st notifiable loop forever while the front page sits in
-    // cooldown. The bounded scan stays index-backed; only notifiable occurrences fill the page.
-    const notify = deps.sql
-      .exec<Loop>(
-        `SELECT l.* FROM loops l
-         WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
-           AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
-           AND NOT EXISTS (
-             SELECT 1 FROM heartbeat_notified n
-             WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)
-         ORDER BY l.due LIMIT ?`,
-        localNow,
-        firedAt - RENOTIFY_COOLDOWN_MS,
-        DUE_SCAN_LIMIT,
-      )
-      .toArray();
-    if (notify.length === 0) {
-      // A release-only tick acted (its effect is the re-arm) but sent nothing itself - the
-      // released card's own run row carries that send's delivery truth.
-      deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
-      return;
-    }
-    let text: string | null;
-    try { text = await deps.checkBack(notify); }
-    catch {
-      // checkBack logs its own failure. A model outage must not fail the tick: three failed ticks quarantine the heartbeat
-      // for a day, the held-card release above with it. The run records no decision and nothing is marked notified, so
-      // the next tick asks again.
-      return;
-    }
-    // The turn may have closed some loops. The receipt freezes each loop as the turn left it, so a loop the owner closes
-    // or moves before the send stops it.
-    const after = notify.map(loop => deps.sql.exec<{ status: string; due: string | null }>('SELECT status, due FROM loops WHERE id = ?', loop.id).toArray()[0])
-      .flatMap((row, index) => row?.due ? [{ id: notify[index]!.id, due: row.due, status: row.status }] : []);
-    if (text === null) {
-      // Checked and nothing to say: the cooldown holds these loops as if told, so the next tick does not ask again.
-      for (const loop of after) if (loop.status === 'open') markNotified(deps.sql, loop, firedAt);
-      deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
-      return;
-    }
-    deps.scheduler.markHeartbeatDecision(runId, 'acted');
-    deps.scheduler.markDelivery(runId, 'pending');
-    await deps.enqueue(text, { id: entry.id, occurrence: entry.occurrence_at, schedulerRunId: runId, loops: after });
-    return 'delivery_pending';
+    const { code, count } = deps.transaction(() => {
+      const notify = dueLoops(deps.sql, firedAt, deps.timezone);
+      if (notify.length === 0) return { code: 'unchanged' as const, count: 0 };
+      if (deps.providerDown()) return { code: 'held_breaker' as const, count: notify.length };
+      const made = deps.enqueue(notify, { entryId: entry.id, occurrence: entry.occurrence_at, runId, now: firedAt });
+      // The decision commits with the job, so a crash in between leaves neither.
+      if (made === 'enqueued' || made === 'existing') deps.scheduler.markHeartbeatDecision(runId, 'acted');
+      return { code: made, count: notify.length };
+    });
+    // A release-only tick acted (its effect is the re-arm) but sent nothing itself - the
+    // released card's own run row carries that send's delivery truth.
+    if (code !== 'enqueued' && code !== 'existing') deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
+    deps.checked(code, `loops=${count}`);
   };
 };
+
+// The check-back job for one tick's past-due loops. Keyed by the tick's occurrence, not by the loops: a key on the loop set
+// would return the settled job of the same loops and block the re-notify after the cooldown.
+export const heartbeatJobSpec = (loops: readonly Loop[], tick: Readonly<{ entryId: string; occurrence: number; runId: string; now: number; surface: string; timezone: string }>): MachineSpec => ({
+  job: 'heartbeat', scope: 'owner', key: `machine:heartbeat:${tick.entryId}:${tick.occurrence}`, surface: tick.surface, text: HEARTBEAT_JOB_TEXT,
+  items: loops.map(loop => ({ ref: loop.id, detail: `${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}` })),
+  timezone: tick.timezone, now: tick.now, deadlineAt: tick.now + HEARTBEAT_JOB_DEADLINE_MS, runId: tick.runId,
+});
+
+export type HeartbeatApplyDeps = Readonly<{
+  sql: Sql;
+  loops: LoopBook;
+  timezone: string;
+  now(): number;
+  // The owner's heartbeat preference, read at apply.
+  enabled(): boolean;
+  transaction(work: () => void): void;
+  // The check-back turn on the owner's chain, for exactly these loops (close_loop may close only them): its raw reply.
+  turn(trace: string, loops: readonly Loop[], text: string, current: () => Promise<void>): Promise<string>;
+  // Queues the message under its key with its receipt, `commit` in the same transaction; a key already queued only commits.
+  deliver(id: string, trace: string, text: string, receipt: HeartbeatReceipt, commit: () => void): Promise<void>;
+}>;
+
+// The loops of a job as the check left them: the ones still open hold their cooldown from `at`.
+const holdCooldown = (deps: Pick<HeartbeatApplyDeps, 'sql'>, loops: readonly Readonly<{ id: string; due: string | null; status?: string }>[], at: number) => {
+  for (const { id, due, status } of loops) if (due !== null && (status ?? 'open') === 'open') markNotified(deps.sql, { id, due }, at);
+};
+
+// The heartbeat job's apply. Its gates run again here, since quiet hours or the owner's preference can change while the
+// worker reads, and only the loops the worker was given and that still need a check-back reach the turn.
+export const heartbeatApplier = (deps: HeartbeatApplyDeps): MachineHandler => ({
+  apply: async (row, result, io) => {
+    const now = deps.now();
+    const proactivity = deps.loops.proactivity();
+    const held = !deps.enabled() ? 'held_preference' : isQuiet(proactivity, now, deps.timezone) ? 'held_quiet' : proactivity.volume === 'low' ? 'held_volume' : null;
+    const machine = taskBrief(row).machine!;
+    const due = held ? [] : dueLoops(deps.sql, now, deps.timezone, machine.refs);
+    const code = held ?? (due.length ? null : 'held_stale');
+    if (code) { deps.transaction(io.settle); return { held: code }; }
+    const reply = checkBackReply(await deps.turn(io.trace, due, `${loopCheckBackText(due)}\n\n${machineResultText(result)}`, io.current));
+    // The receipt freezes each loop as the turn left it, so a loop the owner closes or moves before the send stops it.
+    const after = due.flatMap(loop => {
+      const current = deps.sql.exec<{ status: string; due: string | null }>('SELECT status, due FROM loops WHERE id = ?', loop.id).toArray()[0];
+      return current?.due ? [{ id: loop.id, due: current.due, status: current.status }] : [];
+    });
+    if (reply === null) {
+      deps.transaction(() => { holdCooldown(deps, after, now); io.settle(); });
+      return 'skipped';
+    }
+    // The receipt names the tick that started the job; that tick's own run settled when it wrote the job.
+    await deps.deliver(`heartbeat:${row.id}`, io.trace, reply, { id: HEARTBEAT_ID, occurrence: taskBrief(row).started_at, schedulerRunId: machine.run_id ?? '', loops: after }, io.settle);
+    return 'delivered';
+  },
+  // Checked and nothing to say: the cooldown holds these loops as if told, so the next tick does not ask again.
+  noNews: (row, settle) => deps.transaction(() => {
+    holdCooldown(deps, dueLoops(deps.sql, deps.now(), deps.timezone, taskBrief(row).machine!.refs), deps.now());
+    settle();
+  }),
+});
 
 export const heartbeatEligible = (record: FinalRecord, sql: Sql, loops: LoopBook, timezone: string, now: number): boolean => {
   if (!record.heartbeat) return true;

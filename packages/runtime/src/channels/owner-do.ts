@@ -54,7 +54,7 @@ import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, runClaimDead
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, holdTaskJobsDue, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -75,8 +75,8 @@ import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type Conv
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
-import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
-import { checkBackReply, loopCheckBackText, LOOP_CHECK_BACK_TOOLS } from './check-back';
+import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatApplier, heartbeatJobSpec, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -196,9 +196,11 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
-import { jobBook, type JobBook, type TaskTicket } from '../tasks/jobs';
+import { jobBook, type JobBook, type MachineJob, type TaskTicket } from '../tasks/jobs';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
+import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
+import type { OwnerModelAccess } from '../llm/owner-routes';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
 import { promiseRetry, RETRY_FIRST_TRY_MS } from '../tasks/retry-turn';
 import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
@@ -252,6 +254,8 @@ type OwnerRuntime = Readonly<{
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
   calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
+  // How the jobs lane applies each machine job this runtime started.
+  machine: MachineAppliers;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
@@ -2544,6 +2548,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         },
         room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
         heldTopics: () => claimStore(storage.sql).pendingTopics(),
+        machine: runtime.machine,
       });
       next = ran;
     } finally {
@@ -3290,6 +3295,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The loops each running check-back turn was given, by its turn id: that turn may close only these.
     const checkBackLoops = new Map<string, ReadonlySet<string>>();
     const schedPrefs = schedulePreferences(storage.sql, loops);
+    // A kind the owner turns off stops its open machine jobs too, and fences their workers.
+    const cancelMachine = (job: MachineJob) => { for (const id of this.jobs().cancelMachine(job)) this.tasks.cancelled(id); };
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
@@ -3362,10 +3369,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
-        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() })) : this.browserReady)
+        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine })) : this.browserReady)
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
       .then(async ([, [, , seeded]]) => {
-        await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() });
+        await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine });
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
         // Boot work is the nightly memory job's migration and the day plan that arms the Brief, run as those jobs.
@@ -3510,6 +3517,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
     const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
+    // The model access the owner's turns and workers share; read before a machine job is written.
+    const modelAccess: OwnerModelAccess = { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth };
     const responder = createTelegramResponder(
       { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, floorReply: retryFloor, ...(this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
@@ -3568,7 +3577,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); this.forgetTasks(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable, cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); this.forgetTasks(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -3786,53 +3795,75 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
-    // lands in the schedule retry/quarantine policy unchanged; past-due loops get a check-back turn, whose failure the tick
-    // records and the next tick retries. The send goes through the same final outbox as every other owner message.
+    // lands in the schedule retry/quarantine policy unchanged. Past-due loops become a reader job written with the scan; the
+    // worker checks them off this pass, and the jobs lane applies what it found (heartbeatApply below).
     const beat = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       const run = runs.start('heartbeat', entry.id);
+      let queued: string | null = null;
       try {
-        const delivery = await heartbeatTick({
+        await heartbeatTick({
           scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
-          checkBack: async due => {
-            const turn = `${trace}:check-back`, at = Date.now();
-            checkBackLoops.set(turn, new Set(due.map(loop => loop.id)));
-            try {
-              return checkBackReply(await responder.prompt(turn, owner, loopCheckBackText(due), async (hop, work) => {
-                const hopAt = Date.now();
-                try {
-                  const result = await work();
-                  log({ trace, hop, ms: Date.now() - hopAt, ok: true });
-                  return result;
-                } catch (error) {
-                  log({ trace, hop, ms: Date.now() - hopAt, ok: false, error: String(error), code: turnFailureCode(error) });
-                  throw error;
-                }
-              }, LOOP_CHECK_BACK_TOOLS));
-            } catch (error) {
-              log({ trace, hop: 'check_back', ms: Date.now() - at, ok: false, error: String(error), code: turnFailureCode(error) });
-              throw error;
-            } finally { checkBackLoops.delete(turn); }
+          transaction: work => storage.transactionSync(work),
+          providerDown: () => workerRouteDown(modelAccess),
+          enqueue: (due, tick) => {
+            const made = enqueueMachine(this.jobs(), heartbeatJobSpec(due, { ...tick, surface: channel, timezone: clock.timezone }));
+            if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, tick.now); queued = made.job.id; }
+            return made.code;
           },
-          enqueue: async (text, heartbeat) => finalOutbox.enqueue({
-            id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
-            payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-            doName: this.ctx.storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
-            heartbeat: { ...heartbeat, runId: run.id },
-          }),
+          checked: (code, detail) => log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code, detail }),
         })(entry);
-        if (delivery !== 'delivery_pending') runs.finish(run.id, 'completed', 'tick completed');
+        if (queued) {
+          log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: queued, job_profile: 'reader' });
+          await armTaskJobsWake(storage, Date.now());
+        }
+        runs.finish(run.id, 'completed', queued ? 'check-back handed to a reader job' : 'tick completed');
         log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'heartbeat' });
-        return delivery;
       } catch (error) {
-        if (!finalOutbox.records().some(record => record.heartbeat?.runId === run.id)) runs.finish(run.id, 'failed', 'tick failed');
+        runs.finish(run.id, 'failed', 'tick failed');
         log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: false, error: String(error), code: turnFailureCode(error) });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'heartbeat' });
         throw error;
       }
     };
+    // The heartbeat job's apply: the check-back turn on the loops the worker checked, with exactly the check-back tools,
+    // tainted, since the worker's result carries what it read. Its message goes through the final outbox under the job's key.
+    const heartbeatApply = heartbeatApplier({
+      sql: storage.sql, loops, timezone: clock.timezone, now: () => Date.now(), enabled: () => schedPrefs.enabled('heartbeat'),
+      transaction: work => storage.transactionSync(work),
+      turn: async (turn, due, text, current) => {
+        checkBackLoops.set(turn, new Set(due.map(loop => loop.id)));
+        try {
+          return await this.asOwnerJob('heartbeat', turn, () => responder.prompt(turn, owner, text, async (hop, work) => {
+            const hopAt = Date.now();
+            try {
+              const result = await work();
+              log({ trace: turn, hop, ms: Date.now() - hopAt, ok: true });
+              return result;
+            } catch (error) {
+              log({ trace: turn, hop, ms: Date.now() - hopAt, ok: false, error: String(error), code: turnFailureCode(error) });
+              throw error;
+            }
+          }, LOOP_CHECK_BACK_TOOLS, current, undefined, undefined, 'external'));
+        } finally { checkBackLoops.delete(turn); }
+      },
+      deliver: async (id, trace, text, heartbeat, commit) => {
+        if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+        const run = runs.start('heartbeat', HEARTBEAT_ID);
+        try {
+          await finalOutbox.enqueueFenced({
+            id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+            doName: this.ctx.storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
+            heartbeat: { ...heartbeat, runId: run.id },
+          }, work => storage.transactionSync(() => { work(); commit(); }));
+        } catch (error) {
+          if (!finalOutbox.records().some(record => record.heartbeat?.runId === run.id)) runs.finish(run.id, 'stopped', 'heartbeat not sent');
+          throw error;
+        }
+      },
+    });
     // A job the scheduler paused after its runs failed three times in a row says so in its fixed line, through the final outbox
     // addressed like the heartbeat's message. The notice lapses when the pause ends or is lifted. A record already queued
     // under the notice's id (a pass that died before marking it) is marked, never queued again.
@@ -4288,7 +4319,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { machine: { heartbeat: heartbeatApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
       taskContext: () => { const egress = parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST); return { authenticatedUserId: ownerRef(), sanitise, ...(egress ? { egressAllowlist: egress } : {}) }; },

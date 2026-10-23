@@ -1,7 +1,8 @@
-import type { TaskResult } from '@waldo/contracts';
+import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type TaskResult } from '@waldo/contracts';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { md5Hex } from '../channels/md5';
+import { ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
@@ -39,13 +40,25 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
     context: fenced('Data fetched for this job', items.map(({ ref, detail }) => `- [${ref}] ${detail}`).join('\n')).trim(),
     effort: 'standard', timezone: spec.timezone, started_at: spec.now,
     // A change detector over the data the job was started on, not a guard against an adversary, so MD5 is enough.
-    machine: { job: spec.job, input_digest: md5Hex(JSON.stringify(items)), scope: spec.scope, ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}) },
+    machine: {
+      job: spec.job, input_digest: md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
+      ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}),
+    },
   };
   const { job, created } = book.create({
     kind: 'task', profile: 'reader', idempotencyKey: spec.key, origin: `${MACHINE_ORIGIN}${spec.job}`, surface: spec.surface,
     brief, dueAt: spec.now, deadlineAt: spec.deadlineAt, taint: 'external',
   });
   return { code: created ? 'enqueued' : 'existing', job };
+};
+
+// Every provider a machine job's worker could be served by (its auxiliary route, `effort: 'standard'`) is open on the
+// owner's breaker. A job written now could only wait out the outage, so the brain writes none and its next tick asks again.
+export const workerRouteDown = (access: OwnerModelAccess): boolean => {
+  const { health } = access;
+  if (!health) return false;
+  const route = ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access).routes[0]!;
+  return [route.primary, ...route.fallback].every((step) => health.isOpen(step.provider));
 };
 
 // Why a machine job with news still told the owner nothing: its gate closed between the check and the apply.
@@ -55,7 +68,13 @@ export type MachineApplied = 'delivered' | 'skipped' | Readonly<{ held: MachineH
 // delivery or alone when nothing goes out; `settle` throws ClosedRunError for a job cancelled or forgotten meanwhile. A
 // throw of anything else is an apply that could not run (no model), retried like a task report.
 export type MachineApplier = (row: JobRow, result: TaskResult, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>) => Promise<MachineApplied>;
-export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineApplier>>>;
+export type MachineHandler = Readonly<{
+  apply: MachineApplier;
+  // The worker checked and found nothing: the job's own record that its data was checked, written in one transaction with
+  // `settle`, so the same data does not start another job.
+  noNews?(row: JobRow, settle: () => void): void;
+}>;
+export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler>>>;
 
 // A report that no model could apply is retried for an hour.
 export const APPLY_RETRY_MS = 60 * 60_000;
@@ -74,20 +93,20 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
       detail: `rounds=${after.rounds}:cost_usd=${after.cost_usd.toFixed(4)}:attempts=${after.attempt}`, ...fields,
     });
   };
-  const quietly = (name: string, fields: Partial<TurnLogEntry> = {}) => {
-    try { settle(); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
+  const quietly = (name: string, fields: Partial<TurnLogEntry> = {}, close: (settle: () => void) => void = (settle) => settle()) => {
+    try { close(settle); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
     done(name, fields);
   };
   if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
+  const handler = deps.appliers[taskBrief(row).machine!.job];
   const result = jobResult(row)!;
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention.
-  if (!result.findings.length && !result.proposals.length) return quietly('machine_no_news');
-  const applier = deps.appliers[taskBrief(row).machine!.job];
-  if (!applier) return quietly('machine_held', { code: 'no_applier' });
+  if (!result.findings.length && !result.proposals.length) return quietly('machine_no_news', {}, handler?.noNews && ((settle) => handler.noNews!(row, settle)));
+  if (!handler) return quietly('machine_held', { code: 'no_applier' });
   const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
   let applied: MachineApplied;
   try {
-    applied = await applier(row, result, { trace: `task:${row.id}:apply`, current, settle });
+    applied = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
   } catch (error) {
     if (error instanceof ClosedRunError) return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });

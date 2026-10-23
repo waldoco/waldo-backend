@@ -30,6 +30,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { reportCheckBackJobs } from './helpers/heartbeat-job';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
 const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
@@ -273,6 +274,8 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
     await withOwner('surface-whatsapp-switched', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
+      reportCheckBackJobs(state.storage.sql);
+      await schedulePass(owner, state);
       expect(outbox(state).map(record => [record.payload.chat_id, record.status])).toEqual([[ctx.appSubject, 'pending']]);
       state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
       for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
@@ -319,6 +322,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     await withOwner('surface-both-check-back', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
+      reportCheckBackJobs(state.storage.sql);
+      await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       expect(heartbeat.payload.chat_id).toBe(ctx.appSubject);
       await outboxPass(owner, state, ctx);
@@ -342,6 +347,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
   it('a check-back the app could not write gets no WhatsApp copy', async () => {
     await withOwner('surface-both-check-back-failed', async (owner, state, ctx) => {
       await dueCheckBack(state);
+      await schedulePass(owner, state);
+      reportCheckBackJobs(state.storage.sql);
       await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       vi.spyOn(OwnerDO.prototype as unknown as { appAssistantRow(): Promise<unknown> }, 'appAssistantRow').mockRejectedValueOnce(new Error('transcript write failed'));

@@ -5,21 +5,13 @@ import { loopBook } from '../src/channels/loops';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
-const effects = vi.hoisted(() => ({ sends: 0, ack: true, crashEnqueue: false, ordinaryEnqueue: false, sentText: '' }));
+import { reportCheckBackJobs } from './helpers/heartbeat-job';
+const effects = vi.hoisted(() => ({ sends: 0, ack: true, sentText: '' }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
     if (method === 'sendMessage') { effects.sends++; effects.sentText = payload.text ?? ''; return effects.ack ? { message_id: 91, chat: { id: payload.chat_id } } : undefined; }
     return true;
-  } };
-});
-vi.mock('../src/scheduler/alarm-slot', async load => {
-  const original = await load<typeof import('../src/scheduler/alarm-slot')>();
-  return { ...original, persistTransportWake: async (storage: DurableObjectStorage, rows: unknown, due: number | null) => {
-    await original.persistTransportWake(storage, rows, due);
-    if (effects.crashEnqueue && (rows as FinalRecord[]).some(r => r.heartbeat && r.status === 'pending')) {
-      effects.crashEnqueue = false; throw new Error(effects.ordinaryEnqueue ? 'post-commit storage notification failed' : 'crash-injection: after enqueue');
-    }
   } };
 });
 // Only the check-back turn may call the model; its reply carries a link the outbox must redact.
@@ -29,7 +21,9 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: {
 } }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 let sequence = 0;
-it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {
+// The check-back is a reader job: the tick writes it, its worker reports (stood in for here), and the next pass's apply turn
+// queues the message with the job's settle in one transaction.
+it.each(['ack', 'blocked', 'unlink'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {
   const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`heartbeat-owner-${sequence++}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const owner = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' });
@@ -42,34 +36,35 @@ it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual 
       loops.open({ title: 'Synthetic errand https://fixture.invalid/page?code=fixture-code', due: '2026-09-01' });
       const scheduler = new Scheduler(state.storage.sql, state.storage, { now: () => now, newRunId: () => 'r', newOutboxId: () => 'o', sha256Hex: async () => 's' });
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: {} });
-      effects.sends = 0; effects.ack = mode === 'ack' || mode === 'enqueueCrash' || mode === 'enqueueFailure'; effects.crashEnqueue = mode === 'enqueueCrash' || mode === 'enqueueFailure'; effects.ordinaryEnqueue = mode === 'enqueueFailure';
+      effects.sends = 0; effects.ack = mode === 'ack';
       await owner.alarm();
-      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBe(mode === 'enqueueCrash' ? 1 : undefined);
+      expect(reportCheckBackJobs(state.storage.sql)).toHaveLength(1);
+      await owner.alarm();
+      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBeUndefined();
       const rows = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
       expect(rows).toHaveLength(1); expect(rows[0]?.heartbeat?.runId).toBeTruthy();
       expect(rows[0]?.payload.text).not.toContain('fixture-code');
       expect(rows[0]?.payload.text).toContain('[link removed]');
       expect(effects.sends).toBe(0);
-      expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ status: 'running' }]);
-      expect(state.storage.sql.exec('SELECT outcome, delivery FROM schedule_runs WHERE kind = ?', 'heartbeat').toArray()).toEqual([{ outcome: 'running', delivery: 'pending' }]);
+      // The tick's run finished when it wrote the job; the send's own run waits for the ACK.
+      const runs = () => state.storage.sql.exec<{ status: string }>("SELECT status FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray();
+      expect(runs()).toEqual([{ status: 'completed' }, { status: 'running' }]);
+      expect(state.storage.sql.exec('SELECT outcome, delivery FROM schedule_runs WHERE kind = ?', 'heartbeat').toArray()).toEqual([{ outcome: 'ok', delivery: null }]);
       rows[0]!.dueAt = Date.now() - 1; state.storage.kv.put(FINAL_OUTBOX_KEY, rows);
       if (mode === 'unlink') state.storage.kv.put('telegram_unlinked', true);
       await owner.alarm();
-      // The crash failed the schedule lane, which waits for its retry; the outbox lane delivers the reply meanwhile.
-      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBe(mode === 'enqueueCrash' ? 1 : undefined);
-      expect(state.storage.kv.get('owner_alarm_failed_lane_v1')).toBe(mode === 'enqueueCrash' ? 'schedule' : undefined);
+      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBeUndefined();
       expect(effects.sends).toBe(mode === 'unlink' ? 0 : 1);
       if (mode !== 'unlink') expect(effects.sentText).toBe(rows[0]!.payload.text);
-      expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ status: effects.ack ? 'completed' : 'failed' }]);
-      expect(state.storage.sql.exec('SELECT delivery FROM schedule_runs WHERE kind = ?', 'heartbeat').toArray()).toEqual([{ delivery: effects.ack ? 'sent' : 'failed' }]);
+      expect(runs()).toEqual([{ status: 'completed' }, { status: effects.ack ? 'completed' : 'failed' }]);
       expect(state.storage.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toHaveLength(effects.ack ? 1 : 0);
       if (mode === 'ack') {
-        const endedAt = state.storage.sql.exec<{ ended_at: number }>("SELECT ended_at FROM background_runs WHERE kind = 'heartbeat'").one().ended_at;
+        const endedAt = state.storage.sql.exec<{ ended_at: number }>("SELECT ended_at FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at DESC LIMIT 1").one().ended_at;
         const replay = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!; replay[0]!.settled = false;
         state.storage.kv.put(FINAL_OUTBOX_KEY, replay);
         const originalNow = Date.now; Date.now = () => endedAt + 60000;
         try { await owner.alarm(); } finally { Date.now = originalNow; }
-        expect(state.storage.sql.exec<{ ended_at: number }>("SELECT ended_at FROM background_runs WHERE kind = 'heartbeat'").one().ended_at).toBe(endedAt);
+        expect(state.storage.sql.exec<{ ended_at: number }>("SELECT ended_at FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at DESC LIMIT 1").one().ended_at).toBe(endedAt);
         expect(effects.sends).toBe(1);
       }
     } finally { await state.storage.deleteAlarm(); }

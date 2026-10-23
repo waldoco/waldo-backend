@@ -11,6 +11,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { reportCheckBackJobs } from './helpers/heartbeat-job';
 
 // A due check-back is a fresh machine turn: the model reads the current state with read tools and decides what, if anything,
 // to say. The stored note or loop title is context for that turn, never the message.
@@ -89,6 +90,9 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
 const schedulePass = async (owner: Owner, state: DurableObjectState) => { state.storage.kv.put('owner_alarm_last_v1', 1); await owner.alarm(); };
 // The outbox holds a fresh record a moment before sending it.
 const transportPass = async (owner: Owner, state: DurableObjectState) => { clock.now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
+// A loop check-back is a reader job the tick writes: its worker reports (stood in for here), and the owner's next pass
+// applies the report with the check-back turn.
+const checkBackPass = async (owner: Owner, state: DurableObjectState) => { await schedulePass(owner, state); reportCheckBackJobs(state.storage.sql); await schedulePass(owner, state); };
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
 const dueReminder = (state: DurableObjectState) => reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(AT - 3_600_000) }, () => 'rem-1')
   .set({ note: NOTE, at: new Date(AT - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
@@ -210,16 +214,21 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       await dueHeartbeat(state);
       fixture.script = looksThen(FOUND, () => [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify({ id: loop.id, outcome: 'done' }) }]);
       await schedulePass(owner, state);
+      // The tick asks no model: it writes the job.
+      expect(checkBackRequests()).toEqual([]);
+      reportCheckBackJobs(state.storage.sql);
+      await schedulePass(owner, state);
       const [first] = checkBackRequests();
       expect(first!.messages.at(-1)!.content).toContain(LOOP_TITLE);
       expect(first!.messages.at(-1)!.content).toContain(loop.id);
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'close_loop']));
-      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'remember']) expect(offered(first!)).not.toContain(effect);
+      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'remember', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'done' }]);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
       expect(wire.sent.join('\n')).not.toContain('From your list');
-      expect(state.storage.sql.exec("SELECT delivery FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ delivery: 'sent' }]);
+      expect(state.storage.sql.exec("SELECT outcome, heartbeat_result FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ outcome: 'ok', heartbeat_result: 'acted' }]);
+      expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray()).toEqual([{ status: 'completed' }, { status: 'completed' }]);
     });
   });
 
@@ -228,16 +237,16 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       const loop = dueLoop(state);
       await dueHeartbeat(state);
       fixture.script = looksThen('SKIP');
-      await schedulePass(owner, state);
+      await checkBackPass(owner, state);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([]);
       expect(outbox(state)).toEqual([]);
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);
-      expect(state.storage.sql.exec("SELECT heartbeat_result FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ heartbeat_result: 'quiet' }]);
       fixture.requests = [];
       await dueHeartbeat(state);
       await schedulePass(owner, state);
-      expect(state.storage.sql.exec("SELECT COUNT(*) AS ticks FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ ticks: 2 }]);
+      expect(state.storage.sql.exec("SELECT heartbeat_result FROM schedule_runs WHERE kind = 'heartbeat' ORDER BY fired_at").toArray()).toEqual([{ heartbeat_result: 'acted' }, { heartbeat_result: 'quiet' }]);
+      expect(state.storage.sql.exec('SELECT COUNT(*) AS jobs FROM task_jobs').toArray()).toEqual([{ jobs: 1 }]);
       expect(checkBackRequests()).toEqual([]);
     });
   });
@@ -247,7 +256,7 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       const loop = dueLoop(state);
       await dueHeartbeat(state);
       fixture.script = looksThen(FOUND);
-      await schedulePass(owner, state);
+      await checkBackPass(owner, state);
       expect(outbox(state).map(record => record.payload.text)).toEqual([FOUND]);
       loopBook(state.storage.sql, { now: () => AT, newId: () => 'x' }).close(loop.id, 'dropped');
       await transportPass(owner, state);
@@ -261,26 +270,30 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       const later = loopBook(state.storage.sql, { now: () => AT, newId: () => 'later' }).open({ title: 'a loop due tomorrow', due: '2026-10-04T09:00' });
       await dueHeartbeat(state);
       fixture.script = looksThen(FOUND, () => [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify({ id: later.id, outcome: 'done' }) }]);
-      await schedulePass(owner, state);
+      await checkBackPass(owner, state);
       expect(checkBackRequests()[1]!.tool_turns!.find(turn => turn.call.name === 'close_loop')!.output).toContain('rejected');
       expect(state.storage.sql.exec('SELECT id, status FROM loops ORDER BY id').toArray()).toEqual([{ id: later.id, status: 'open' }, { id: loop.id, status: 'open' }]);
     });
   });
 
-  it('a provider outage fails the check-back, not the tick: nothing is sent, the heartbeat is never quarantined, and the next tick asks again', async () => {
+  it('a provider outage at apply fails the check-back, not the tick: nothing is sent, the heartbeat is never quarantined, and the job is applied once the provider is back', async () => {
     await withOwner('check-back-loop-outage', async (owner, state) => {
       const loop = dueLoop(state);
+      clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state);
+      reportCheckBackJobs(state.storage.sql);
       fixture.outage = true;
-      for (let tick = 0; tick < 4; tick++) { clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state); }
-      expect(state.storage.sql.exec("SELECT outcome, heartbeat_result, delivery FROM schedule_runs WHERE kind = 'heartbeat'").toArray())
-        .toEqual(Array(4).fill({ outcome: 'ok', heartbeat_result: null, delivery: null }));
+      // Ticks while the job is open write no second job; the apply is retried on its backoff, 2 then 5 minutes.
+      for (let tick = 0; tick < 3; tick++) { clock.now += 3 * 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state); }
+      expect(state.storage.sql.exec("SELECT outcome, heartbeat_result, delivery FROM schedule_runs WHERE kind = 'heartbeat' ORDER BY fired_at").toArray())
+        .toEqual([{ outcome: 'ok', heartbeat_result: 'acted', delivery: null }, ...Array(3).fill({ outcome: 'ok', heartbeat_result: 'quiet', delivery: null })]);
       expect(state.storage.sql.exec('SELECT status, attempts FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray()).toEqual([{ status: 'armed', attempts: 0 }]);
-      expect(state.storage.sql.exec("SELECT ok FROM trace_log WHERE hop = 'check_back'").toArray()).toEqual(Array(4).fill({ ok: 0 }));
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'machine_apply_deferred'").one()).toEqual({ n: 2 });
+      expect(state.storage.sql.exec("SELECT status FROM task_jobs").toArray()).toEqual([{ status: 'reported' }]);
       expect(state.storage.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);
       expect(outbox(state)).toEqual([]);
       fixture.outage = false;
       fixture.script = looksThen(FOUND);
-      clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state);
+      clock.now += 20 * 60_000; await schedulePass(owner, state);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);

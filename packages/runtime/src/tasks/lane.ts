@@ -37,7 +37,7 @@ export type JobsLaneDeps = Readonly<{
 }>;
 
 const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
-const quote = (value: unknown) => JSON.stringify(value).replace(/[<>]/g, (char) => (char === '<' ? '\\u003c' : '\\u003e'));
+export const quote = (value: unknown) => JSON.stringify(value).replace(/[<>]/g, (char) => (char === '<' ? '\\u003c' : '\\u003e'));
 export const resultApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
   return [

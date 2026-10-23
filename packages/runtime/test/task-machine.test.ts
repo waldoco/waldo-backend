@@ -8,7 +8,8 @@ import { numericHealthIn, sanitise } from '../src/scribe/sanitiser';
 import { noteDue, taskHost, type TaskHost, type TaskHostDeps } from '../src/tasks/brain';
 import { isMachine, jobBook, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
-import { enqueueMachine, HEALTH_DETAIL_DROPPED, type MachineApplier, type MachineSpec } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineSpec } from '../src/tasks/machine';
+import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { MACHINE_READER, TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import { taskBriefText } from '../src/tasks/worker-loop';
@@ -57,7 +58,7 @@ const lane = (h: Harness, appliers: Partial<Record<'heartbeat' | 'update_sweep' 
       // A machine job's apply turn names its own tools: it must never be handed the owner's full apply list.
       applyTools: () => { throw new Error('a machine job reached applyTools()'); },
       deliver: async (id, _trace, text, commit) => { h.transaction(() => { commit(); sent.set(id, text); }); },
-      room: () => true, heldTopics: () => [], machine: appliers, ...over,
+      room: () => true, heldTopics: () => [], machine: Object.fromEntries(Object.entries(appliers).map(([job, apply]) => [job, { apply }])), ...over,
     }),
   };
 };
@@ -315,5 +316,21 @@ describe('applying a machine job', () => {
       await runJobsLane(l.deps({ heldTopics: () => ['Asha'] }));
       expect(h.book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
     });
+  });
+});
+
+describe('the worker route', () => {
+  it('is down only when every provider a worker could be served by is open on the owner\'s breaker', () => {
+    const health = new InMemoryCircuitBreaker();
+    const access = { openaiApiKey: 'synthetic-openai', anthropicApiKey: 'synthetic-anthropic', health };
+    expect(workerRouteDown(access)).toBe(false);
+    for (let i = 0; i < 3; i += 1) health.recordFailure('openai');
+    // The second provider still answers.
+    expect(workerRouteDown(access)).toBe(false);
+    expect(workerRouteDown({ openaiApiKey: 'synthetic-openai', health })).toBe(true);
+    for (let i = 0; i < 3; i += 1) health.recordFailure('anthropic');
+    expect(workerRouteDown(access)).toBe(true);
+    // An object that keeps no breaker never holds a job back.
+    expect(workerRouteDown({ openaiApiKey: 'synthetic-openai' })).toBe(false);
   });
 });
