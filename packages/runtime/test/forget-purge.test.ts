@@ -113,6 +113,21 @@ describe('forget purge job', () => {
     });
   });
 
+  it('a claim\'s sentence held as history becomes everywhere once the owner names it, so later passes purge the claims table by it', async () => {
+    await run('forget-purge-scope-upgrade', async (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const at = new Date(AT).toISOString();
+      store.add({ kind: 'fact', text: 'Has a dog', evidence: 'owner, tg-1: "I have a dog"', source: 'stated', origin: 'owner' }, at);
+      const id = store.claims()[0]!.id;
+      sql.exec("UPDATE claims SET status = 'purging' WHERE id = ?", id);
+      store.purge([id], at);
+      const scope = () => sql.exec<{ scope: string }>('SELECT scope FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint('Has a dog')).one().scope;
+      expect(scope()).toBe('history');
+      store.purge([], at, ['Has a dog']);
+      expect(scope()).toBe('everywhere');
+    });
+  });
+
   it('takes claims marked for removal: deletes them and holds their words until the stores are clean', async () => {
     await run('forget-purge-purging', async (sql, tx) => {
       const chat = fakeStore('conversation', ['I drink oolong every morning'], 1);
