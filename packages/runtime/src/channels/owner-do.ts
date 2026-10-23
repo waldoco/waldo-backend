@@ -2999,10 +2999,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = all.find((known) => known.id === id);
         if (!account) return false;
         // Google is asked to revoke the grant first; whatever it answers, Waldo forgets the grant. Only a failed delete of a
-        // Vault secret fails the disconnect, and keeps the account so the owner can try again.
+        // Vault secret fails the disconnect, and keeps the account so the owner can try again. The outcome is one fixed word,
+        // kept as the detail too: a trace that captures text keeps a row's detail, not its code.
         const revoked = account.refresh_token ? await revokeGoogleGrant(fetch, account.refresh_token)
           : !id.startsWith('local:') && vault && doName ? (await vault.revoke(doName, id, account.email)).google : null;
-        if (revoked) log({ trace: `google:${Date.now()}`, hop: 'google_disconnect', ms: 0, ok: revoked === 'revoked' || revoked === 'already_invalid', code: revoked });
+        if (revoked) log({ trace: `google:${Date.now()}`, hop: 'google_disconnect', ms: 0, ok: revoked === 'revoked' || revoked === 'already_invalid', code: revoked, detail: revoked });
         const { [id]: _profile, ...profiles } = await googleProfiles();
         const remaining = all.filter((known) => known.id !== id);
         await storage.put({ 'google:accounts': remaining, 'google:profiles': profiles });

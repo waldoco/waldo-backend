@@ -109,8 +109,7 @@ describe('disconnecting Google', () => {
       await disconnecting(`disconnect-captured-${outcome}`, { id: `local:${EMAIL}`, email: EMAIL, scopes: [CALENDAR], refresh_token: TOKEN }, async (owner, state) => {
         expect(await owner.setup('telegram').act({ action: 'google.disconnect', id: `local:${EMAIL}` })).toBe(true);
         expect(revoking()).toEqual(['google:revoke']);
-        // With capture on the row keeps free text instead of the code; the code goes out as trace metadata.
-        expect(hops(state).map(({ hop, ok }) => ({ hop, ok }))).toEqual([{ hop: 'google_disconnect', ok: outcome === 'revoked' ? 1 : 0 }]);
+        expect(hops(state)).toEqual([{ hop: 'google_disconnect', ok: outcome === 'revoked' ? 1 : 0, note: outcome }]);
         expect(traces(state)).not.toContain(TOKEN);
         expect(traces(state)).not.toContain(EMAIL);
       }, CAPTURING);
