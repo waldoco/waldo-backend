@@ -31,7 +31,11 @@ export const appConsentStateV1Schema = z.strictObject({
   status: z.enum(['granted', 'withdrawn', 'not_granted']),
   granted_at: epoch.nullable(),
   withdrawn_at: epoch.nullable(),
+  // Whether the yes counts now: granted, at the current copy, offered by this server, with its prerequisite live. A yes the
+  // server holds back (a switch off) or an older copy reads granted and not active; a settings screen shows active.
+  active: z.boolean(),
 }).superRefine((state, ctx) => {
+  if (state.active && state.status !== 'granted') ctx.addIssue({ code: 'custom', path: ['active'], message: 'only a granted purpose can be active' });
   if ((state.status === 'not_granted') !== (state.granted_at === null) || (state.status === 'not_granted') !== (state.version === null)) ctx.addIssue({ code: 'custom', path: ['granted_at'], message: 'only a never-granted purpose has no version or grant time' });
   if ((state.status === 'withdrawn') !== (state.withdrawn_at !== null)) ctx.addIssue({ code: 'custom', path: ['withdrawn_at'], message: 'withdrawn status and withdrawn_at must agree' });
   if (state.withdrawn_at !== null && state.granted_at !== null && state.withdrawn_at < state.granted_at) ctx.addIssue({ code: 'custom', path: ['withdrawn_at'], message: 'withdrawal cannot precede grant' });
@@ -39,8 +43,8 @@ export const appConsentStateV1Schema = z.strictObject({
 });
 // age_attested_18_plus is true once the owner has said they are 18 or over; it is recorded on the account, never only ticked.
 // agreements_offered is false while this server holds back the terms and the notice (until their copy is approved): the app
-// then shows no agreements step, terms and privacy_notice are refused not_offered, and nothing after the agreements can be
-// answered. owner_lookup_offered is false while this server does not offer the look-up (until the notice that discloses it is
+// then shows no agreements step, terms and privacy_notice are refused not_offered, and the steps after the agreements run with
+// the agreements step pending, in a completed run too, until they are offered and accepted on the consent route. owner_lookup_offered is false while this server does not offer the look-up (until the notice that discloses it is
 // published, and whenever the agreements are held back): the app then does not ask, and a grant is refused not_offered.
 // owner_lookup can be granted only after privacy_notice.
 export const appConsentListV1Schema = z.strictObject({
@@ -115,7 +119,6 @@ export const appOnboardingV1Schema = z.strictObject({
   if ((run.state === 'not_started') !== (run.run_id === null) || (run.run_id === null) !== (run.started_at === null)) ctx.addIssue({ code: 'custom', path: ['run_id'], message: 'a run id and start time exist exactly once started' });
   if ((run.state === 'completed') !== (run.completed_at !== null)) ctx.addIssue({ code: 'custom', path: ['completed_at'], message: 'completed_at exists exactly once completed' });
   if ((run.steps.first_look === 'done') !== (run.first_look.message_id !== null)) ctx.addIssue({ code: 'custom', path: ['first_look'], message: 'a done first look names its message' });
-  if (run.state === 'completed' && run.steps.agreements !== 'done') ctx.addIssue({ code: 'custom', path: ['steps', 'agreements'], message: 'a completed run has accepted the agreements' });
 });
 // agreements.accept records terms and the notice at their current versions, the 18+ attestation and the owner's look-up choice
 // in one step. health.connected is checked against the health plane's own consent ledger; an app's word alone never marks it.

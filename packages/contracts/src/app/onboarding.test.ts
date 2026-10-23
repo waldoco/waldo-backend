@@ -12,17 +12,20 @@ const accepted = (schema: { safeParse(input: unknown): { success: boolean } }, i
 const REVISION = 'a'.repeat(64);
 
 describe('consent ledger', () => {
-  const granted = { purpose: 'owner_lookup', version: APP_PRIVACY_NOTICE_VERSION_V1, status: 'granted', granted_at: 1_000, withdrawn_at: null };
+  const granted = { purpose: 'owner_lookup', version: APP_PRIVACY_NOTICE_VERSION_V1, status: 'granted', granted_at: 1_000, withdrawn_at: null, active: true };
   it('reads a state for every purpose, never granted, granted or withdrawn', () => {
-    accepted(appConsentStateV1Schema, [granted, { ...granted, status: 'withdrawn', withdrawn_at: 2_000 }, { purpose: 'terms', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }]);
+    accepted(appConsentStateV1Schema, [granted, { ...granted, active: false }, { ...granted, status: 'withdrawn', withdrawn_at: 2_000, active: false }, { purpose: 'terms', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false }]);
     rejected(appConsentStateV1Schema, [
+      // active says whether the yes counts now; only a granted yes can.
+      { ...granted, status: 'withdrawn', withdrawn_at: 2_000 }, { purpose: 'terms', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: true },
+      { ...granted, active: undefined }, { ...granted, active: 'yes' },
       { ...granted, status: 'withdrawn' }, { ...granted, withdrawn_at: 2_000 }, { ...granted, status: 'withdrawn', withdrawn_at: 500 },
       { ...granted, status: 'not_granted' }, { ...granted, version: null }, { ...granted, purpose: 'health_processing' },
       { ...granted, purpose: 'terms', status: 'withdrawn', withdrawn_at: 2_000 }, { ...granted, owner_id: 'other' },
     ]);
   });
   it('lists each purpose exactly once with the 18+ attestation', () => {
-    const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }));
+    const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false }));
     const offered = { agreements_offered: true, owner_lookup_offered: false };
     accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, ...offered, consents }, { age_attested_18_plus: true, agreements_offered: false, owner_lookup_offered: true, consents }]);
     rejected(appConsentListV1Schema, [{ consents, ...offered }, { age_attested_18_plus: false, consents }, { age_attested_18_plus: false, owner_lookup_offered: false, consents }, { age_attested_18_plus: false, ...offered, agreements_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, owner_lookup_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, consents: consents.slice(1) }, { age_attested_18_plus: false, ...offered, consents: [consents[0], consents[0], consents[1]] }]);
@@ -43,7 +46,7 @@ describe('one consent representation per purpose', () => {
     const health = new Set<string>([...healthPurposeV1Schema.options, ...healthSourceV1Schema.options, 'whoop', 'oura', 'whoop_storage_ai']);
     expect(appConsentPurposeV1Schema.options.filter(purpose => health.has(purpose))).toEqual([]);
     rejected(appConsentGrantV1Schema, [...health].map(purpose => ({ request_id: 'consent-001', purpose, version: 1, age_attested_18_plus: true })));
-    rejected(appConsentStateV1Schema, [...health].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null })));
+    rejected(appConsentStateV1Schema, [...health].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false })));
   });
 });
 
@@ -53,10 +56,11 @@ describe('first run', () => {
   const run = { ...fresh, state: 'in_progress', run_id: `onb_${'b'.repeat(32)}`, started_at: 1_000 };
   const done = { ...run, state: 'completed', completed_at: 9_000, steps: { ...steps, agreements: 'done', name: 'skipped', google: 'skipped', health: 'skipped', first_look: 'done', brief_time: 'done', priority: 'skipped', channel: 'done' }, first_look: { message_id: 'onboarding-first-look-1' }, brief: { time: '07:30', timezone_confirmed: true }, channel: { surface: 'both' } };
   it('reads a run before start, in progress and completed', () => {
-    accepted(appOnboardingV1Schema, [fresh, run, done]);
+    // A run completed while the server holds the agreements back finishes with them pending; they are never skipped.
+    accepted(appOnboardingV1Schema, [fresh, run, done, { ...done, steps: { ...done.steps, agreements: 'pending' } }]);
     rejected(appOnboardingV1Schema, [
       { ...fresh, run_id: run.run_id }, { ...run, run_id: null }, { ...run, started_at: null }, { ...done, completed_at: null }, { ...run, completed_at: 5 },
-      { ...done, steps: { ...done.steps, agreements: 'pending' } }, { ...run, steps: { ...steps, agreements: 'skipped' } }, { ...run, steps: { ...steps, first_look: 'skipped' } },
+      { ...done, steps: { ...done.steps, agreements: 'skipped' } }, { ...run, steps: { ...steps, agreements: 'skipped' } }, { ...run, steps: { ...steps, first_look: 'skipped' } },
       { ...run, steps: { ...steps, first_look: 'done' } }, { ...run, first_look: { message_id: 'onboarding-first-look-1' } },
       { ...run, steps: { ...steps, mood_quiz: 'pending' } }, { ...run, brief: { time: '7:30', timezone_confirmed: false } }, { ...run, brief: { time: '24:00', timezone_confirmed: false } },
       { ...run, channel: { surface: 'telegram' } }, { ...run, channel: undefined }, { ...run, steps: { ...steps, channel: undefined } }, { ...run, run_id: 'onb_short' }, { ...run, revision: 'nope' }, { ...run, version: 2 },

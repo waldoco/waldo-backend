@@ -88,7 +88,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
-    if (!host.consent.agreed()) return problem('agreements_required');
+    if (!host.consent.stepsOpen()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');
     if (!offered) return problem('not_offered');

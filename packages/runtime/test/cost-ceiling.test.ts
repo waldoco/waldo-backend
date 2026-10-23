@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costNotice, parseCeilingUsd, spendPosture } from '../src/llm/cost-ledger';
+import { costNotice, MONTHLY_SPEND_CEILING_USD, monthlySpendCeilingUsd, parseCeilingUsd, spendPosture, STAGING_MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
 
 describe('spend posture', () => {
   it('runs normally below 80% of the ceiling', () => {
@@ -17,5 +17,15 @@ describe('spend posture', () => {
     expect(parseCeilingUsd(undefined)).toBeNull();
     expect(parseCeilingUsd('abc')).toBeNull();
     expect(parseCeilingUsd('25')).toBe(25);
+  });
+});
+
+describe('monthly ceiling per environment', () => {
+  it('gives staging its own higher ceiling', () => {
+    expect(monthlySpendCeilingUsd('staging')).toBe(STAGING_MONTHLY_SPEND_CEILING_USD);
+    expect(STAGING_MONTHLY_SPEND_CEILING_USD).toBeGreaterThan(MONTHLY_SPEND_CEILING_USD);
+  });
+  it('keeps the production ceiling everywhere else, including an unset environment', () => {
+    for (const environment of ['production', 'preview', 'development', '', undefined]) expect(monthlySpendCeilingUsd(environment)).toBe(MONTHLY_SPEND_CEILING_USD);
   });
 });

@@ -84,8 +84,9 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     // A name sign-up recorded answers the name step.
     const name = base.name === 'pending' && named(claims) ? 'done' : base.name;
     // While the run is open the agreements step reads from the ledger itself, however they were accepted, so a copy bump shows
-    // it pending again; a finished run keeps the step it finished with.
-    const agreements = !run || run.completed_at !== null ? base.agreements : consent.agreed() ? 'done' : 'pending';
+    // it pending again. A finished run keeps a done step; one finished while the agreements were held back reads the ledger, so
+    // accepting them later on the consent route shows them done.
+    const agreements = !run || (run.completed_at !== null && base.agreements === 'done') ? base.agreements : consent.agreed() ? 'done' : 'pending';
     const body = {
       version: 1 as const,
       state: !run ? 'not_started' as const : run.completed_at === null ? 'in_progress' as const : 'completed' as const,
@@ -123,7 +124,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       return null;
     }
     // The ledger answers, as the link route asks it: after a copy bump both refuse until the new copy is accepted.
-    if (!consent.agreed()) return 'agreements_required';
+    if (!consent.stepsOpen()) return 'agreements_required';
     switch (action.action) {
       case 'name.set': {
         const saved = answer(NAME_REF, 'preference', calledText(action.name), action.name);
@@ -170,7 +171,8 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
         return null;
       case 'complete': {
         // What the owner left unanswered stays unasked: the rest is learned in the first week, in context.
-        const current = { ...steps(run), agreements: 'done' as const };
+        // The agreements are done only with a live ledger row behind them; a run finished while they are held back leaves them pending.
+        const current = { ...steps(run), agreements: consent.agreed() ? 'done' as const : 'pending' as const };
         for (const name of APP_ONBOARDING_SKIPPABLE_V1) {
           if (current[name] === 'pending') current[name] = (name === 'google' && await host.googleConnected()) || (name === 'name' && named(claims)) ? 'done' : 'skipped';
         }

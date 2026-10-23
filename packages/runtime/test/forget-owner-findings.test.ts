@@ -23,13 +23,13 @@ const finding = { category: 'work' as const, text: 'Product manager at Acme', so
 describe('consent ledger', () => {
   it('records a grant against the current copy only, and a withdrawal as a new row', () => withStorage(storage => {
     const { consent } = stores(storage);
-    expect(consent.state('owner_lookup')).toEqual({ purpose: 'owner_lookup', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null });
+    expect(consent.state('owner_lookup')).toEqual({ purpose: 'owner_lookup', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false });
     expect(consent.grant('owner_lookup', 2, 10)).toBe('stale_version');
     expect(consent.active('owner_lookup')).toBe(false);
     consent.grant('privacy_notice', 1, 9);
-    expect(consent.grant('owner_lookup', 1, 10)).toMatchObject({ changed: true, state: { status: 'granted', version: 1, granted_at: 10 } });
+    expect(consent.grant('owner_lookup', 1, 10)).toMatchObject({ changed: true, state: { status: 'granted', version: 1, granted_at: 10, active: true } });
     expect(consent.grant('owner_lookup', 1, 11)).toMatchObject({ changed: false });
-    expect(consent.withdraw('owner_lookup', 20)).toMatchObject({ changed: true, state: { status: 'withdrawn', granted_at: 10, withdrawn_at: 20 } });
+    expect(consent.withdraw('owner_lookup', 20)).toMatchObject({ changed: true, state: { status: 'withdrawn', granted_at: 10, withdrawn_at: 20, active: false } });
     expect(consent.active('owner_lookup')).toBe(false);
     expect(consent.withdraw('owner_lookup', 21).changed).toBe(false);
     expect(consent.grant('owner_lookup', 1, 30)).toMatchObject({ changed: true, state: { status: 'granted', granted_at: 30 } });
