@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { SignInRequired } from './model';
+import { SignInRequired, signInHref } from './model';
 import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
@@ -148,7 +148,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
 
 export function ControlsFeedback({ state, onRefresh }: { state: Exclude<ControlsState, { kind: 'ready' }>; onRefresh: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-block"><span className="visually-hidden">Loading your controls…</span><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
-  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href="/console/signin">Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
+  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
 // Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
@@ -192,7 +192,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
     {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
-    {receipt.signed_out ? <a href="/console/signin">Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
+    {receipt.signed_out ? <a href={signInHref()}>Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }
 
@@ -266,7 +266,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}
     <div className="tools"><button className="quiet" disabled={busy} onClick={refresh}>Refresh</button></div>
     {result && <ControlReceipt result={result} onCheck={result.receipt.state === 'unconfirmed' ? check : undefined} onRefresh={refresh} busy={busy}/>}
-    {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href="/console/signin">Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
+    {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href={signInHref()}>Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
     {state.kind !== 'ready' ? <ControlsFeedback state={state} onRefresh={refresh}/> : <div className="controls-stack" key={`${state.data.view}:${state.data.revision}`}>{content}</div>}
   </>;
 }

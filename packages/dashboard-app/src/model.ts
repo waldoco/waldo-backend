@@ -40,6 +40,8 @@ export const OVERVIEW_URL = '/console/dashboard/api/v1/overview';
 export class SignInRequired extends Error {
   constructor() { super('Sign in to see your dashboard.'); }
 }
+// Carries the page the owner is on, so sign-in returns there. The fragment never reaches the server.
+export const signInHref = (): string => `/console/signin${typeof window === 'undefined' ? '' : window.location.hash}`;
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewV1> {
   const response = await fetch(OVERVIEW_URL, { credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
   if (response.status === 401) throw new SignInRequired();

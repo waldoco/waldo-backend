@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Dashboard, DashboardNavigation, DashboardFeedback, isSettingsRoute, resolveRoute } from './App';
 import type { OverviewV1 } from './model';
@@ -97,6 +97,11 @@ describe('dashboard routing and overview boundaries', () => {
     const signedOut = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'Sign in to see your dashboard.', signedOut: true }} onRetry={() => {}}/>);
     expect(signedOut).toContain('href="/console/signin"');
     expect(signedOut).not.toContain('Try again');
+    vi.stubGlobal('window', { location: { hash: '#/memory/spots' } });
+    try {
+      const back = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'Sign in to see your dashboard.', signedOut: true }} onRetry={() => {}}/>);
+      expect(back).toContain('href="/console/signin#/memory/spots"');
+    } finally { vi.unstubAllGlobals(); }
     const unavailable = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'The dashboard could not load right now.', signedOut: false }} onRetry={() => {}}/>);
     expect(unavailable).toContain('Try again');
     expect(unavailable).not.toMatch(/Not available yet|Nothing waiting|No saved Spots/);
