@@ -34,7 +34,7 @@ export const consentLedger = (sql: Sql, options: ConsentOptions) => {
     sql.exec<Row>('SELECT purpose, action, version, at FROM consent_ledger WHERE purpose = ? ORDER BY id DESC LIMIT 1', purpose).toArray()[0] ?? null;
   const lastGrant = (purpose: string): Row | null =>
     sql.exec<Row>("SELECT purpose, action, version, at FROM consent_ledger WHERE purpose = ? AND action = 'granted' ORDER BY id DESC LIMIT 1", purpose).toArray()[0] ?? null;
-  const state = (purpose: AppConsentPurposeV1): AppConsentStateV1 => {
+  const recorded = (purpose: AppConsentPurposeV1): Omit<AppConsentStateV1, 'active'> => {
     const row = latest(purpose);
     if (!row) return { purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null };
     if (row.action === 'granted') return { purpose, version: row.version, status: 'granted', granted_at: row.at, withdrawn_at: null };
@@ -44,9 +44,10 @@ export const consentLedger = (sql: Sql, options: ConsentOptions) => {
   const offered = (purpose: AppConsentPurposeV1) => options.agreementsOffered && (purpose !== 'owner_lookup' || options.lookupOffered);
   // Live only for the copy that is current now, while the server offers it and the copy it depends on is live too.
   const active = (purpose: AppConsentPurposeV1): boolean => {
-    const current = state(purpose), prerequisite = DEPENDS_ON[purpose];
+    const current = recorded(purpose), prerequisite = DEPENDS_ON[purpose];
     return offered(purpose) && current.status === 'granted' && current.version === CURRENT_CONSENT_VERSION[purpose] && (prerequisite === undefined || active(prerequisite));
   };
+  const state = (purpose: AppConsentPurposeV1): AppConsentStateV1 => ({ ...recorded(purpose), active: active(purpose) });
   const ageAttested = () => latest(AGE)?.action === 'granted';
   const append = (purpose: string, action: Row['action'], version: number | null, at: number) =>
     sql.exec('INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, ?, ?, ?)', purpose, action, version, at);

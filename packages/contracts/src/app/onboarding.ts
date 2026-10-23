@@ -31,7 +31,11 @@ export const appConsentStateV1Schema = z.strictObject({
   status: z.enum(['granted', 'withdrawn', 'not_granted']),
   granted_at: epoch.nullable(),
   withdrawn_at: epoch.nullable(),
+  // Whether the yes counts now: granted, at the current copy, offered by this server, with its prerequisite live. A yes the
+  // server holds back (a switch off) or an older copy reads granted and not active; a settings screen shows active.
+  active: z.boolean(),
 }).superRefine((state, ctx) => {
+  if (state.active && state.status !== 'granted') ctx.addIssue({ code: 'custom', path: ['active'], message: 'only a granted purpose can be active' });
   if ((state.status === 'not_granted') !== (state.granted_at === null) || (state.status === 'not_granted') !== (state.version === null)) ctx.addIssue({ code: 'custom', path: ['granted_at'], message: 'only a never-granted purpose has no version or grant time' });
   if ((state.status === 'withdrawn') !== (state.withdrawn_at !== null)) ctx.addIssue({ code: 'custom', path: ['withdrawn_at'], message: 'withdrawn status and withdrawn_at must agree' });
   if (state.withdrawn_at !== null && state.granted_at !== null && state.withdrawn_at < state.granted_at) ctx.addIssue({ code: 'custom', path: ['withdrawn_at'], message: 'withdrawal cannot precede grant' });
