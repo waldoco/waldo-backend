@@ -40,6 +40,16 @@ export const OVERVIEW_URL = '/console/dashboard/api/v1/overview';
 export class SignInRequired extends Error {
   constructor() { super('Sign in to see your dashboard.'); }
 }
+// Carries the page the owner is on, so sign-in returns there. The fragment never reaches the server.
+export const signInHref = (): string => `/console/signin${typeof window === 'undefined' ? '' : window.location.hash}`;
+// The server refuses an action that creates lasting access until this browser proves a recent email code. Nothing was
+// done, so the owner can confirm and try the same action again.
+export class StepUpRequired extends Error {
+  constructor() { super('This needs an email code from the last 2 hours. Confirm it\'s you, then try again.'); }
+}
+export const isStepUpRefusal = (status: number, body: unknown): boolean =>
+  status === 403 && !!body && typeof body === 'object' && (body as { error?: unknown }).error === 'step_up_required';
+export const confirmHref = (): string => `/console/signin?confirm=1${typeof window === 'undefined' ? '' : window.location.hash}`;
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewV1> {
   const response = await fetch(OVERVIEW_URL, { credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
   if (response.status === 401) throw new SignInRequired();
