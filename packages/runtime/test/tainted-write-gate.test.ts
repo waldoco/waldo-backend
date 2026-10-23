@@ -86,6 +86,15 @@ describe('a tainted turn sends every write to the owner card', () => {
     }
   });
 
+  // The exemption names the operations that commit nothing; an operation added later is carded until someone adds it there.
+  it('a typed browser operation outside the named non-committing steps is carded, whatever it is called', async () => {
+    const browseAct = TOOL_RECORDS.browse_act;
+    for (const operation of ['upload_file', 'submit', 'pick_file', 'download', '']) {
+      expect(await recordNeedsOwnerCard('browse_act', browseAct, { url: 'https://example.com/form', task: 't', command: { operation } }, {}), operation).toBe(true);
+    }
+    expect(await recordNeedsOwnerCard('browse_act', browseAct, { url: 'https://example.com/form', task: 't', command: { operation: 'click', element_ref: 'e1' } }, {})).toBe(false);
+  });
+
   it('remember is exempt: under outside text its handler writes what it keeps as Waldo\'s read, never as the owner\'s', async () => {
     const { handler, runs } = recording('remember');
     const args = { kind: 'preference', text: 'Prefers morning calls', evidence_quote: 'I prefer morning calls' };

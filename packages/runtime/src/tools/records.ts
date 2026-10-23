@@ -53,8 +53,9 @@ export type ToolRecord = Readonly<{ brain: BrainPlacement; scope: 'deny' | 'allo
 //  source_bound   a write bound to an observed mail source runs without a card; any other call to it is carded.
 //  own_card       its handler only raises the owner's own approval card. The gate admits it through the handler's
 //                 proposal_only declaration, read per call, so a host wiring an executing handler under the name is carded.
-//  commits_on_card  a typed browser command: the owner's browser host sends no request but GET and holds every submit
-//                 for the owner's own browser card. A download into the workspace, or a call with no typed command, is carded.
+//  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
+//                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
+//                 Any other operation, or a call with no typed command, is carded.
 export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });

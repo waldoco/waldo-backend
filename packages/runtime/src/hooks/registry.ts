@@ -1,4 +1,5 @@
 import type {
+  BrowserTaskCommand,
   CanaryTokens,
   ErrorCode,
   HookEvent,
@@ -477,13 +478,22 @@ const boundToObservedSource = async (tool: ToolName, args: unknown, ctx: Pick<Ho
   return false;
 };
 
-// A typed browse_act command runs on the owner's browser host, which refuses every request but GET and holds a submit for
-// the owner's browser card, so the step changes nothing outside Waldo's own page. A download saves into the owner's
-// workspace, and a call with no typed command takes the legacy path, whose stop before a commit is a model's judgment.
+// The typed browse_act operations that commit nothing: the owner's browser host sends no request but GET or HEAD and holds a
+// native submit for the owner's browser card, so these change only Waldo's own page and session. prepare_submit raises that
+// card; cancel ends Waldo's own session; owner_login hands the page to the owner, who signs in themselves on the console,
+// and resume_owner_login reads the result. Any other operation is carded: a download saves into the owner's workspace, and
+// an operation added later is carded until it is named here. A call with no typed command takes the legacy path, whose stop
+// before a commit is a model's judgment, so it is carded too.
+// What remains: a step can still follow a GET link on an allowed origin, and a link that acts on GET (unsubscribe, confirm,
+// cancel) still acts.
+export const NON_COMMITTING_BROWSER_OPERATIONS: readonly BrowserTaskCommand['operation'][] = [
+  'goto', 'back', 'click', 'type', 'fill', 'select', 'set_checked', 'scroll', 'read', 'wait', 'inspect', 'screenshot', 'verify',
+  'open_tab', 'switch_tab', 'close_tab', 'prepare_submit', 'cancel', 'owner_login', 'resume_owner_login',
+];
 const typedBrowserStep = (tool: ToolName, args: unknown): boolean => {
   const command = tool === 'browse_act' && typeof args === 'object' && args !== null ? (args as { command?: unknown }).command : undefined;
   const operation = typeof command === 'object' && command !== null ? (command as { operation?: unknown }).operation : undefined;
-  return typeof operation === 'string' && operation !== 'download';
+  return (NON_COMMITTING_BROWSER_OPERATIONS as readonly unknown[]).includes(operation);
 };
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
