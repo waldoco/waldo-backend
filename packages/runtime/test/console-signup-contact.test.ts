@@ -104,6 +104,20 @@ describe('sign-up asks for a name and a phone', () => {
   });
 });
 
+describe('a number typed at sign-up is sent nothing', () => {
+  it('reaches only the owner directory and the owner object, never a messaging provider, even when it is someone else\'s', async () => {
+    const outside = vi.fn(async () => new Response(null, { status: 599 }));
+    vi.stubGlobal('fetch', outside);
+    try {
+      const s = setup(), v = await verified(s);
+      expect((await finish(s, v, { name: 'Asha Menon', phone: '+15550001111' })).status).toBe(303);
+      expect(new Set(s.fetcher.mock.calls.map(call => new URL(String(call[0])).origin))).toEqual(new Set(['https://db.test']));
+      expect(s.profiles).toEqual([{ name: 'Asha Menon', doName: 'owner-new' }]);
+      expect(outside).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
 describe('the sign-up phone stays out of the logs', () => {
   const PHONE = '+919876543210';
   const captured = () => {

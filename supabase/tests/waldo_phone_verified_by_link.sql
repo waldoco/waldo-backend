@@ -17,6 +17,10 @@ create function pg_temp.live(prov text, subj text) returns text language sql as 
   select o.do_name from waldo.presences p join waldo.owners o on o.id = p.owner_id where p.provider = prov and p.subject = subj and p.state = 'active' $$;
 create function pg_temp.unspent(code text) returns boolean language sql as $$
   select used_at is null from waldo.link_codes where code_hash = code $$;
+create function pg_temp.isig(op text, loc text) returns text language sql as $$
+  select encode(extensions.hmac(pg_temp.at()::text || '.' || 'imsg.' || op || '.' || encode(extensions.digest(loc, 'sha256'), 'hex'), 'test-router-secret', 'sha256'), 'hex') $$;
+create function pg_temp.console_view(o text) returns jsonb language sql as $$
+  select waldo.imessage_enrollment_read(o, 'test', jsonb_build_array(o, 'test')::text, pg_temp.at(), pg_temp.isig('enroll_read', jsonb_build_array(o, 'test')::text)) $$;
 
 -- The number each owner typed at sign-up is unverified contact data until a link code arrives from it.
 insert into waldo.owners (do_name, email, phone) values
@@ -26,11 +30,18 @@ insert into waldo.owners (do_name, email, phone) values
   ('do-twin', 'twin@test.invalid', '+15550001111'),
   ('do-tom', 'tom@test.invalid', '+15550004444');
 
+-- Typed at sign-up, a number proves nothing: no presence, and the console reads it as not verified yet.
+select is((select count(*)::int from waldo.presences p join waldo.owners o on o.id = p.owner_id where o.do_name in ('do-vera', 'do-twin')), 0, 'a number typed at sign-up links nothing');
+select is(pg_temp.console_view('do-vera') - 'email' - 'enrollment', '{"phone":"+15550001111","phone_verified":false}'::jsonb, 'the console reads vera''s number as not verified yet');
+select throws_ok($$ insert into waldo.presences (owner_id, provider, subject) select id, 'whatsapp', '15550001111' from waldo.owners where do_name = 'do-vera' $$,
+  null, 'whatsapp presence requires a verified phone (phone_verified_at is null)', 'an unverified number cannot become a WhatsApp presence');
+
 -- iMessage: the code arriving from the number on file links the handle and proves the number in one step.
 select is(pg_temp.plink('do-vera', 'imessage', pg_temp.h('1')), true, 'vera gets an iMessage link code');
 select isnt(pg_temp.redeem_link(pg_temp.h('1'), 'imessage', '+15550001111'), null, 'the code sent from the number on file links');
 select is(pg_temp.live('imessage', '+15550001111'), 'do-vera', 'the handle is live for vera');
 select ok(pg_temp.verified('do-vera'), 'and her number is verified');
+select is(pg_temp.console_view('do-vera')->'phone_verified', 'true'::jsonb, 'and the console reads it as verified');
 
 -- A code sent from anything else still links that handle, as before, but proves nothing about the number on file.
 select is(pg_temp.plink('do-wes', 'imessage', pg_temp.h('2')), true, 'wes gets an iMessage link code');

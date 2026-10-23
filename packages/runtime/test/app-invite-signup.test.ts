@@ -117,6 +117,16 @@ describe('an invited person joins from the app with their phone', () => {
     expect(state.signups).toEqual([]);
   });
 
+  it('sends nothing to the phone: the join reaches only the owner directory', async () => {
+    const { app, state, invited } = await directory(), outside = vi.fn(async () => new Response(null, { status: 599 }));
+    vi.stubGlobal('fetch', outside);
+    try {
+      expect((await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone: '+15550001111' })).status).toBe(200);
+      expect(state.signups).toEqual([expect.objectContaining({ p_phone: '+15550001111' })]);
+      expect(outside).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('logs nothing carrying the phone on a join', async () => {
     const { app, invited } = await directory(), lines: string[] = [];
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(level =>

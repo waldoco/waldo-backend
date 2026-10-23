@@ -39,3 +39,18 @@ begin
 end $$;
 create trigger owners_phone_change_unverifies before update of phone on waldo.owners
   for each row execute function waldo.owners_phone_change_unverifies();
+
+-- The console's iMessage set-up says whether the number on file is verified yet, so an owner who typed it at sign-up is
+-- shown the text-us step instead of a number that looks proven.
+create or replace function waldo.imessage_enrollment_read(p_do_name text, p_environment text, p_locator text, p_at bigint, p_sig text) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare v_owner waldo.owners; v_row waldo.imessage_photon_enrollments;
+begin
+  perform waldo.imessage_signed('enroll_read', p_locator, jsonb_build_array(p_do_name, p_environment), p_at, p_sig);
+  select * into v_owner from waldo.owners where do_name = p_do_name and state = 'active';
+  if v_owner.id is null then return null; end if;
+  select * into v_row from waldo.imessage_photon_enrollments where owner_id = v_owner.id and environment = p_environment;
+  return jsonb_build_object('email', v_owner.email, 'phone', v_owner.phone, 'phone_verified', v_owner.phone_verified_at is not null,
+    'enrollment', case when v_row.owner_id is null then null else jsonb_build_object(
+      'phone', v_row.phone, 'photon_user_id', v_row.photon_user_id, 'assigned_number', v_row.assigned_number) end);
+end $$;
