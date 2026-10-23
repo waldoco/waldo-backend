@@ -32,7 +32,7 @@ const notFound = () => new Response('not found', { status: 404, headers: { 'cach
 const PAGES = {
   linked: { status: 200, title: 'WHOOP is connected', body: 'Waldo can now read your WHOOP sleep, recovery and workouts. Your first days arrive in a few minutes. You can close this tab.' },
   denied: { status: 400, title: 'WHOOP was not connected', body: 'Access was not granted. You can connect WHOOP from Waldo whenever you want to try again.' },
-  expired: { status: 410, title: 'This link has expired', body: 'Connect links last 30 minutes. Start the connection again from Waldo.' },
+  expired: { status: 410, title: 'This link has expired', body: 'This connect link has run out. Start the connection again from Waldo.' },
   used: { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Start the connection again from the Waldo app.' },
   cancelled: { status: 200, title: 'WHOOP was not connected', body: 'Nothing was connected. You can go back to the app.' },
   unhanded: UNHANDED,
