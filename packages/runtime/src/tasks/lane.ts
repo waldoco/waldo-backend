@@ -7,6 +7,7 @@ import { isMachine, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RU
 import { applyMachineJob, APPLY_RETRY_MS, type MachineAppliers } from './machine';
 import { fixedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
 import { retryTurnText } from './retry-turn';
+import { quote } from '../prompt/turn-prompt';
 
 // The jobs lane: the brain's single retry owner, run inside the owner's alarm pass with the runtime of the surface that
 // takes proactive work. Each pass restarts lost attempts, starts due ones, applies every reported job once, runs retried
@@ -38,7 +39,6 @@ export type JobsLaneDeps = Readonly<{
 }>;
 
 const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
-export const quote = (value: unknown) => JSON.stringify(value).replace(/[<>]/g, (char) => (char === '<' ? '\\u003c' : '\\u003e'));
 export const resultApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
   return [

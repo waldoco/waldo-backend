@@ -1,5 +1,5 @@
 import type { TaskResult } from '@waldo/contracts';
-import { quote } from '../tasks/lane';
+import { quote } from './turn-prompt';
 
 // The fixed words of each machine job's brief, and of the block that hands its result to the brain's apply turn. The
 // worker reads the brief; it never sees the owner's conversation.

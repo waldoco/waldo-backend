@@ -1,5 +1,6 @@
 import type { TaskResult } from '@waldo/contracts';
-import { heartbeatApplier, heartbeatJobSpec, type HeartbeatApplyDeps, type HeartbeatDeps } from '../../src/channels/heartbeat';
+import type { HeartbeatDeps } from '../../src/channels/heartbeat';
+import { heartbeatApplier, heartbeatJobSpec, type HeartbeatApplyDeps } from '../../src/channels/heartbeat-job';
 import type { Loop, LoopBook } from '../../src/channels/loops';
 import type { TaskHost } from '../../src/tasks/brain';
 import { isMachine, jobBook } from '../../src/tasks/jobs';
