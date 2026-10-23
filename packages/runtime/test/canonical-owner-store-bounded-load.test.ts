@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, type ConversationCovers, type ConversationEntry, type ConversationModelMessage } from '@waldo/contracts';
+import { ConversationTree, conversationModelMessages, type ConversationCovers, type ConversationEntry, type ConversationModelMessage } from '@waldo/contracts';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { COMPACTION, compactedHistory, compactionPlan, liveCompaction, ownerRowsSince, supersededCompaction, type CompactionSettings } from '../src/conversation/compaction';
+import { estimateMessageTokens } from '../src/conversation/window';
 
 const PRINCIPAL = 'prn_10000000000000000000000000000001', TENANT = 'tnt_1', THREAD = 'thr_bounded';
 const MAIN = `owner:${PRINCIPAL}`, THREAD_CHAT = `owner:${PRINCIPAL}:${THREAD}`, IMESSAGE = 'imessage-1';
@@ -281,6 +282,24 @@ describe('each path the read follows is needed', () => {
     const rows = [...chain(500), row('retry', `${MAIN}-u499-reply`, 'user', text('retried question')), row('retry-did-not-finish', 'retry', 'assistant', text('did not finish', 360_000))];
     const { view } = await equivalent(stored(rows, 'retry-did-not-finish'), MAIN, { retry: 'retry' });
     expect(view.messages.length).toBeGreaterThan(150);
+  });
+
+  it('a window that fills the budget exactly at the last row of a page reads one row past it, so the turn knows rows were dropped', async () => {
+    // 150 rows of one size, the newest an owner message being retried: the newest page (128 rows) holds exactly the budget.
+    const rows: Row[] = Array.from({ length: 150 }, (_, index) => row(`r${index}`, index === 0 ? null : `r${index - 1}`, index % 2 === 0 ? 'assistant' : 'user', 'x'.repeat(92), { createdAt: 1_000 + index }));
+    const settings = { ...COMPACTION, budgetTokens: rows.slice(-128).reduce((sum, entry) => sum + estimateMessageTokens(conversationModelMessages([entry])[0]!), 0) };
+    const view = async (storage: DurableObjectStorage) => {
+      const tree = new ConversationTree();
+      for (const entry of (await canonicalOwnerConversationStore(storage, contextFor(MAIN), undefined, undefined, settings).load()).entries) tree.append(entry);
+      return compactedHistory(tree, 'r149', undefined, settings);
+    };
+    const bounded = countingStorage(stored(rows, 'r149'));
+    const { messages, stats } = await view(bounded);
+    expect(messages).toHaveLength(128);
+    // The compaction trigger reads dropped > 0: a read that stopped at the full budget would show the turn nothing dropped.
+    expect(stats.dropped).toBeGreaterThan(0);
+    expect(stats).toEqual((await view(unboundedView(stored(rows, 'r149')))).stats);
+    expect(bounded.reads.lists).toBe(2);
   });
 
   it('a load with no chat reads back to the stored leaf and its window when the leaf is more than a page behind the newest row', async () => {
