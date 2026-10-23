@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, consoleAuth } from '../src/identity/console-auth';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
-import { clearConsoleCookie, consoleAccess, consoleCookie, consoleSessionRows } from '../src/channels/console';
+import { clearConsoleCookie, consoleAccess, consoleCookie, consoleSessionRows, signInPage } from '../src/channels/console';
+import { handleConsole } from '../src/channels/console-signin';
+import type { ConsoleAuth } from '../src/identity/console-auth';
 import { consoleCrossSiteRefusal } from '../src/channels/console-cross-site';
 import { controlAction, controlRevision } from '../src/channels/dashboard-control-actions';
 import type { ConsoleView } from '../src/channels/console';
@@ -163,6 +165,20 @@ describe('cross-site requests to the console', () => {
       expect(consoleCrossSiteRefusal(at(path, 'POST', sameOrigin)), `${path} from the console`).toBeNull();
       expect(consoleCrossSiteRefusal(at(path, 'POST', { origin: 'https://waldo.test' })), `${path} from the console, older browser`).toBeNull();
     }
+  });
+
+  it('accepts a form the console posts from its own no-referrer page, which says Origin: null', () => {
+    for (const path of ['/console', '/console/action', '/console/verify'])
+      expect(consoleCrossSiteRefusal(at(path, 'POST', { origin: 'null', 'sec-fetch-site': 'same-origin' })), path).toBeNull();
+    for (const site of ['cross-site', 'same-site', 'none'])
+      expect(consoleCrossSiteRefusal(at('/console/verify', 'POST', { origin: 'null', 'sec-fetch-site': site }))?.status, site).toBe(403);
+    expect(consoleCrossSiteRefusal(at('/console/verify', 'POST', { origin: 'null' }))?.status, 'no fetch metadata').toBe(403);
+  });
+
+  it('serves both sign-in entry pages with a same-origin referrer policy, so a browser without fetch metadata still names the console as Origin', async () => {
+    expect(signInPage('ab12').headers.get('referrer-policy')).toBe('same-origin');
+    const page = await handleConsole(new Request('https://waldo.test/console/signin'), { OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
+    expect(page!.headers.get('referrer-policy')).toBe('same-origin');
   });
 
   it('a same-origin fetch claim with a foreign Origin is still refused', () => {

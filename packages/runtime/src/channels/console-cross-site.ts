@@ -16,14 +16,16 @@ const refused = () => new Response('This request must come from the Waldo consol
 // here, before any handler, rather than left to the cookie: every write under /console must come from the console's own
 // origin, by Fetch Metadata where the browser sends it and by Origin otherwise (OWASP CSRF Prevention Cheat Sheet). That
 // also covers the sign-in, code and ticket routes, which take no cookie, so no other site can sign a browser in or out.
-// Same-site is refused too: a sibling subdomain is not the console. A flow-starting GET is refused only when the
-// browser says another site sent it; typing the address or opening it from an app ("none") is the owner.
+// Same-site is refused too: a sibling subdomain is not the console. A form posted from a no-referrer page carries the
+// literal Origin "null" (Fetch spec), so "null" names nobody and Sec-Fetch-Site decides. A flow-starting GET is refused
+// only when the browser says another site sent it; typing the address or opening it from an app ("none") is the owner.
 export const consoleCrossSiteRefusal = (request: Request): Response | null => {
   const url = new URL(request.url);
   if (url.pathname !== CONSOLE_PATH && !url.pathname.startsWith(`${CONSOLE_PATH}/`)) return null;
   const site = request.headers.get('sec-fetch-site');
   if (SAFE.has(request.method)) return startsFlow(url.pathname) && (site === 'cross-site' || site === 'same-site') ? refused() : null;
-  const origin = request.headers.get('origin');
+  const header = request.headers.get('origin');
+  const origin = header === 'null' ? null : header;
   if (origin !== null && origin !== url.origin) return refused();
   if (site !== null) return site === 'same-origin' ? null : refused();
   return origin === url.origin ? null : refused();

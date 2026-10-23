@@ -195,7 +195,8 @@ const page = (body: string, status = 200) => new Response(
   window.addEventListener('pagehide', stop);
 })();
 </script></body></html>`,
-  { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } },
+  // same-origin, as on signup: a browser without Sec-Fetch-Site still names the console as the Origin of these forms.
+  { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'same-origin' } },
 );
 const DAY_MS = 24 * 60 * 60_000;
 const staysSignedIn = `<p class="help">You stay signed in on this browser for up to ${CONSOLE_SESSION_LIFETIME_MS / DAY_MS} days while you keep using it, and sign in again after ${CONSOLE_SESSION_IDLE_MS / DAY_MS} days away. On a shared computer, sign out when you finish.</p>`;
