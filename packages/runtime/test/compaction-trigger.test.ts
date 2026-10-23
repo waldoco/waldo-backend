@@ -269,4 +269,20 @@ describe('the span a held topic leaves', () => {
       expect(row!.covers.rows).toBe(fake.compactions()[0]!.request.messages.length);
     });
   });
+
+  it('a summary that names a topic forgotten in the turn is not written, and the hop says so without the words', async () => {
+    await inOwner('compaction-output-held-topic', async (storage) => {
+      const fake = model(undefined, LOTUS_SUMMARY);
+      const hops: TurnLogEntry[] = [];
+      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake), { tools: [forgetTool as never], log: entry => hops.push(entry) });
+      await lotusChat(responder, true);
+      await responder.compactIfDue!('owner');
+      expect(fake.compactions()).toHaveLength(1);
+      expect(JSON.stringify(fake.compactions()[0]!.request.messages)).not.toContain('Lotus Hall');
+      expect(summaries(storage)).toHaveLength(0);
+      expect(storage.kv.get(`${PREFIX}compaction-live:owner`)).toBeUndefined();
+      expect(lastCompactionHop(hops)).toEqual(expect.objectContaining({ ok: false, code: 'held_topic' }));
+      expect(JSON.stringify(hops.filter(hop => hop.hop === 'compaction'))).not.toContain('Lotus');
+    });
+  });
 });

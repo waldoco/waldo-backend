@@ -822,6 +822,8 @@ export const createOwnerResponder = (
       if (!summary) { hop(false, 'empty'); return; }
       // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
       if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }
+      // The summary can name a held topic its input did not carry; one that does is not kept.
+      if (barrier().shows(summary)) { hop(false, 'held_topic'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
       await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
