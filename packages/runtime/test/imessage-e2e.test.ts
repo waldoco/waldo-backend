@@ -664,6 +664,56 @@ it('an iMessage owner turn carries the owner\'s fresh derived health on its mess
   expect(forbiddenEgress).toEqual([]);
 });
 
+// The runtime never decides consent: the health plane's prompt read returns null unless the row's sources hold storage consent
+// and a live model-processing grant (supabase/tests/waldo_health_plane.sql, "storage consent alone never reaches the prompt
+// read"). So a missing grant reaches the owner DO as a null read, and the turn must say so rather than guess a readiness.
+const expectAbsence = (told: string) => {
+  expect(times(told, ABSENT)).toBe(1);
+  expect(told).not.toMatch(/Form zone:|Recovery zone:|Freshness:|Recovery: [a-z]+\./);
+};
+
+it('an iMessage owner turn whose health read comes back empty, as it does without the consent grants, states absence and no readiness', async () => {
+  healthRead = noHealth;
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+  expect(proof.systems[0]).not.toMatch(/Form zone:|Recovery zone:|No derived health context/);
+});
+
+it('an iMessage owner turn whose derived row has expired states absence, not the old readiness', async () => {
+  healthRead = () => Response.json(derivedRow(73 * HOUR));
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+});
+
+it('an iMessage owner turn whose derived row has gone stale still carries it, marked stale', async () => {
+  healthRead = () => Response.json(derivedRow(10 * HOUR));
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  const told = proof.turns[0]!;
+  expect(told).not.toContain(ABSENT);
+  expect(times(told, 'Form zone: steady.')).toBe(1);
+  expect(times(told, 'Freshness: stale.')).toBe(1);
+  expect(told).not.toContain('Freshness: fresh.');
+});
+
+it('an iMessage owner turn whose health read fails still replies, and says health is absent', async () => {
+  healthRead = () => new Response('unavailable', { status: 500 });
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'How am I doing today?');
+  expect(proof.turns).toHaveLength(1);
+  expectAbsence(proof.turns[0]!);
+  expect(JSON.parse((await w.host.pull()).delivery!.body)).toMatchObject({ operation: 'send', text: proof.reply });
+});
+
 // Proactive work for an owner admitted on the app who chose the app and iMessage: the app takes it, and its delivery is what
 // settles the job, so a bridge that is asleep or refuses loses nothing; iMessage gets one copy of that app message, frozen
 // into the iMessage outbox under the app message's id and handed to the bridge, which re-checks the sender before it sends.
