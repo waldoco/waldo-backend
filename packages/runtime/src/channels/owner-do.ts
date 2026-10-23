@@ -2290,15 +2290,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
+      // An owner linked on Telegram who also uses the app has their proactive work delivered in the app with a plain Telegram
+      // copy: scheduled jobs, the delivery outbox's app route and Mac reports all follow this one decision.
+      const appWithTelegramCopy = channel === 'telegram' && consoleAuth(this.env) !== null && this.appBound();
       const { scheduler, fire, beat, nightly, briefs, healthTrigger, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
-      // A pass that reaches here with the app bound but no app targets runs on the owner's Telegram link; their scheduled work
-      // is delivered in the app with a plain Telegram copy, and owner jobs are admitted through the app binding, so the report
-      // goes to the app too.
-      await lane('mac', () => this.drainMacDeliveries(whatsappTarget === null && consoleAuth(this.env) && this.appBound() ? 'app' : channel));
+      await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
       // Results the iMessage outbox already holds, including hand-offs that aged out there, reach the records waiting on them.
       observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now());
       await lane('transport', () => finalOutbox.maintain());
@@ -2337,7 +2337,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const routeFor = (surface: ChannelKind): OutboxRoute => this.outboxRoute(surface);
         // An owner the directory admits on the app has the app's route and, while WhatsApp takes proactive work, WhatsApp's.
         const routes = whatsappTarget === null ? [routeFor(channel)] : [routeFor('app'), ...(whatsappTarget ? [routeFor('whatsapp')] : [])];
-        if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
+        if (appWithTelegramCopy) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
           return found.kind;
@@ -2366,7 +2366,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : NO_SCHEDULE_WAKE, Date.now(), 30_000);
             return;
           }
-          if (channel === 'telegram' && owner.authority) {
+          if (appWithTelegramCopy && owner.authority) {
             this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
             const app = this.setup('app');
             await app.ready;
