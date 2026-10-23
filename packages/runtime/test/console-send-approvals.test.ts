@@ -51,10 +51,16 @@ it('the console Waiting view shows an email draft exactly, and approves, skips a
 
       const first = await read();
       const shown = first.data.proposals.find(item => item.id === sendId)!;
-      expect(shown).toMatchObject({ kind: 'email_send', state: 'open', actions: ['approval.approve', 'approval.edit', 'approval.skip'],
+      expect(shown).toMatchObject({ kind: 'email_send', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'],
         review: { kind: 'email_send', account: 'owner@example.test', to: draft.to, cc: draft.cc, bcc: [], subject: draft.subject, body: draft.body } });
 
-      const approved = await act(first, 'approval.approve', sendId, 'console-send-0001');
+      // Sending as the owner needs an email code from the last two hours, so a copied session cookie cannot send.
+      const unconfirmed = await act(first, 'approval.send', sendId, 'console-send-0000');
+      expect([unconfirmed.status, JSON.parse(unconfirmed.text)]).toEqual([403, { error: 'step_up_required' }]);
+      expect([proof.sentRaw, row(sendId).status]).toEqual([[], 'open']);
+      const sessions = (await state.storage.get<Record<string, Record<string, unknown>>>('console:sessions'))!;
+      await state.storage.put('console:sessions', { ...sessions, [token]: { ...sessions[token]!, verified_at: Date.now() } });
+      const approved = await act(first, 'approval.send', sendId, 'console-send-0001');
       expect([approved.status, JSON.parse(approved.text).receipt]).toEqual([200, { state: 'recorded', message: 'Sent. This cannot be undone.' }]);
       expect(proof.sentRaw).toHaveLength(1);
       expect(sentMime(proof.sentRaw[0]!).body).toBe(shown.review!.body);

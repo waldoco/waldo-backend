@@ -56,8 +56,8 @@ describe('modern owner controls read', () => {
   });
 
   it('validates exact reviews, admits Send and Change it only on an open draft, and no unsupported calendar undo', () => {
-    const proposal = { id: 'email', kind: 'email_send', state: 'open', summary: 'Send proposal', actions: ['approval.approve', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words', raw: 'never-retain' } };
-    const message = { id: 'message', kind: 'message_send', state: 'open', summary: 'Send message', actions: ['approval.approve', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message' } };
+    const proposal = { id: 'email', kind: 'email_send', state: 'open', summary: 'Send proposal', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words', raw: 'never-retain' } };
+    const message = { id: 'message', kind: 'message_send', state: 'open', summary: 'Send message', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message' } };
     const value = { ...day, view: 'waiting', data: { proposals: [proposal, message] } };
     const parsed = readControls(value, 'waiting');
     expect(parsed.data.proposals[0]?.review).toEqual({ kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words' });
@@ -72,7 +72,7 @@ describe('modern owner controls read', () => {
     expect(readControls({ ...value, data: { proposals: [calendar] } }, 'waiting').data.proposals[0]?.actions).toEqual(calendar.actions);
     for (const wrong of [
       { ...proposal, state: 'review_only' }, { ...proposal, state: 'review_only', actions: ['approval.edit'] }, { ...proposal, review: null }, { ...proposal, actions: ['approval.edit'], review: null },
-      { ...calendar, actions: ['approval.edit'] }, { ...proposal, state: 'done', actions: ['approval.undo'] }, { ...proposal, actions: ['approval.later'] },
+      { ...calendar, actions: ['approval.edit'] }, { ...calendar, actions: ['approval.send'] }, { ...proposal, actions: ['approval.approve'] }, { ...proposal, state: 'done', actions: ['approval.undo'] }, { ...proposal, actions: ['approval.later'] },
       { ...proposal, review: { kind: 'message_send', channel: 'telegram', content: 'Other review' } }, { ...proposal, review: { ...proposal.review, to: 'to@test.invalid' } }, { ...proposal, review: { ...proposal.review, account: 7 } },
     ]) expect(() => readControls({ ...value, data: { proposals: [wrong] } }, 'waiting')).toThrow();
   });

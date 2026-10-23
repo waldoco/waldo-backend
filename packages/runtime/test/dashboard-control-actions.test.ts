@@ -59,13 +59,14 @@ describe('send approval from the dashboard', () => {
    {id:'p-walk',kind:'calendar_change',summary:'x',state:'open' as const,undoable:false,review:{kind:'calendar_change' as const,action:'create' as const,title:'Walk',event_id:null,start:'2026-10-20T10:00:00Z',end:'2026-10-20T10:30:00Z',reason:'asked'}}];
   deps.view=async()=>({cards:[],proactivity:day.data.proactivity,approvals} as unknown as ConsoleView);
   const revision=await controlRevision(day);
-  for(const [action,id] of [['approval.approve','p-long'],['approval.approve','p-stranded'],['approval.approve','p-other'],['approval.edit','p-long'],['approval.edit','p-stranded'],['approval.edit','p-other'],['approval.edit','p-walk']]){
+  // A send is approved as approval.send, which the step-up table gates; approval.approve stays the calendar decision.
+  for(const [action,id] of [['approval.send','p-long'],['approval.send','p-stranded'],['approval.send','p-other'],['approval.send','p-walk'],['approval.approve','p-mail'],['approval.approve','p-message'],['approval.edit','p-long'],['approval.edit','p-stranded'],['approval.edit','p-other'],['approval.edit','p-walk']]){
    const refused=await controlAction(await decision(revision,action!,id!),deps);
    expect({action,id,status:refused.status,body:await refused.json()}).toMatchObject({action,id,status:409,body:{error:'no_longer_eligible'}});
   }
   expect(act).not.toHaveBeenCalled();
-  for(const [action,id] of [['approval.approve','p-mail'],['approval.edit','p-mail'],['approval.approve','p-message'],['approval.edit','p-message']])expect([action,id,(await controlAction(await decision(revision,action!,id!),deps)).status]).toEqual([action,id,200]);
-  expect((act.mock.calls as unknown as [{action:string;id:string}][]).map(([action])=>[action.action,action.id])).toEqual([['approval.approve','p-mail'],['approval.edit','p-mail'],['approval.approve','p-message'],['approval.edit','p-message']]);
+  for(const [action,id] of [['approval.send','p-mail'],['approval.edit','p-mail'],['approval.send','p-message'],['approval.edit','p-message'],['approval.approve','p-walk']])expect([action,id,(await controlAction(await decision(revision,action!,id!),deps)).status]).toEqual([action,id,200]);
+  expect((act.mock.calls as unknown as [{action:string;id:string}][]).map(([action])=>[action.action,action.id])).toEqual([['approval.send','p-mail'],['approval.edit','p-mail'],['approval.send','p-message'],['approval.edit','p-message'],['approval.approve','p-walk']]);
  });
  it('says what a Change it records: the request, never the draft', async () => {
   const { approvalControlReceipt } = await import('../src/channels/dashboard-control-actions');

@@ -140,7 +140,7 @@ const everyAction = (): readonly string[] => {
 };
 const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
 const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
-const LASTING = ['account.delete', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
+const LASTING = ['account.delete', 'approval.send', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
   'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
 const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
 
@@ -154,7 +154,7 @@ describe('every console action is classified before it ships', () => {
     }
   });
 
-  it('needs a fresh code for exactly the actions that create or widen lasting access', () => {
+  it('needs a fresh code for exactly the actions that create or widen lasting access, or send as the owner', () => {
     expect(Object.entries(table()).filter(([, rule]) => rule.gated === true).map(([action]) => action).sort()).toEqual(LASTING);
   });
 

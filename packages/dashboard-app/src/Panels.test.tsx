@@ -7,9 +7,9 @@ const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repea
 const noop = () => {};
 const waiting: WaitingRecord = { ...base, view: 'waiting', data: { timezone: null, proposals: [
   { id: 'calendar', kind: 'calendar_change', summary: 'Move event', state: 'open', actions: ['approval.approve', 'approval.skip'], review: { kind: 'calendar_change', action: 'move', title: 'Gym', event_id: 'gym-1', start: '2026-10-02T08:00Z', end: '2026-10-02T09:00Z', reason: 'Requested move' } },
-  { id: 'email', kind: 'email_send', summary: 'Send email', state: 'open', actions: ['approval.approve', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: ['cc@test.invalid'], bcc: ['bcc@test.invalid'], subject: '<script>subject</script>', body: '<script>full email body</script>' } },
+  { id: 'email', kind: 'email_send', summary: 'Send email', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: ['cc@test.invalid'], bcc: ['bcc@test.invalid'], subject: '<script>subject</script>', body: '<script>full email body</script>' } },
   { id: 'message', kind: 'message_send', summary: 'Send message', state: 'unconfirmed', actions: [], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message words' } },
-  { id: 'ready-message', kind: 'message_send', summary: 'Send ready message', state: 'open', actions: ['approval.approve', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Ready message words' } },
+  { id: 'ready-message', kind: 'message_send', summary: 'Send ready message', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Ready message words' } },
   { id: 'long-email', kind: 'email_send', summary: 'Long email', state: 'review_only', actions: ['approval.skip'], review: null },
   { id: 'undo', kind: 'calendar_change', summary: 'Recorded move', state: 'done', actions: ['approval.undo'], review: null },
 ] } };
