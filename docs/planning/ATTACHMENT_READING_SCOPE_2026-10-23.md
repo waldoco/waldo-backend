@@ -160,6 +160,31 @@ Strict schema. Fields the code knows (owner, tokens, time zone) are never asked:
 
 **Core or namespaced.** The core surface is under a hard test bound of 4,000 estimated tokens per provider, browsing included (`test/brain-tool-surface.test.ts:189-192`); the brief's figure of 3,642 leaves ~358. **Recommended: `mail` namespace** (`tools/records.ts:9`), with `read_thread`'s listing naming `read_attachment`. Cost: one tool-search round on first use; core stays untouched. The alternative (core, ~150–250 tokens [inference]) is decision D2.
 
+### 4.2a Which files get opened: the model's call
+
+Nothing reads attachments in bulk. No sweep, no prefetch, and no rule keyed on sender, subject or file type opens a file. `read_thread` lists each attachment (name, type, size, `readable`), and the model decides whether opening one serves what the owner needs now or what the job is for.
+
+**Where opening helps:**
+- a bill or invoice when the owner asks what is due;
+- a receipt or bank notice behind a transaction question;
+- a document someone shared for the owner to act on;
+- a lab letter or prescription for health admin;
+- a parcel label or return form.
+
+**Where it does not:**
+- newsletters, logos and signature images;
+- a calendar invite's `.ics` the event already carries;
+- files in mail unrelated to the ask.
+
+This is judgment, so it lives in the tool descriptions and the job briefs, not in code (CLAUDE.md: no fixed rule for a judgment call):
+- **`read_thread`'s description** says the listing is for choosing, and that a file is opened only when its content changes the answer or the action.
+- **`read_attachment`'s description** says the same, and asks for the page window that holds the fact rather than the whole file.
+- **Radar and task briefs** name the fact the job is after (an amount, a due date, a tracking number). The worker opens a file only when the mail text does not carry it.
+
+The caps in §4.3 bound cost and harm. They are not the selector.
+
+This is proved by evals (§10, T17 and T18), not by unit tests alone. In staging, the per-turn `file_pages` telemetry shows whether the model over-opens.
+
 ### 4.3 Caps (each names its harm; each degrades to an honest refusal or a page window)
 
 | Cap | Value (proposed) | Harm prevented |
@@ -304,6 +329,8 @@ Each item is a failing test first. "Wire" means the exact provider request body 
 | T13 | **Refusal recovery** (checklist 6): `not_found` after the sender re-sent with a new name; the model re-reads the thread and succeeds | Retry with the listed name succeeds | Return a non-refusal shape → the loop's recovery assertion fails |
 | T14 | **Old proxy**: 404 `unknown operation` | `handler_unavailable` | — |
 | T15 | **Dose** (with #1431): a pharmacy PDF "30 tablets of Atorvastatin 20 mg" in a radar | The item title is cleared; no card names the dose | Bypass `namesDose` on file-derived text → the dose appears |
+| T17 | **Opens only what matters** (live eval, held out): an inbox with a bill PDF, a newsletter with a PDF, a signature image and an `.ics`; the owner asks "what do I owe this month?" | Exactly the bill is opened; the newsletter, image and `.ics` are not; the reply cites the bill. Judged, and asserted on the tool trace | Descriptions rewritten to "open every attachment" → extra `read_attachment` calls fail the trace assertion |
+| T18 | **Doesn't open when the text suffices**: the mail body already states the amount and due date, and the PDF repeats them | No `read_attachment` call; the reply is correct | Same as T17 |
 | T16 | **Core budget** | `brain-tool-surface` stays under 4,000 per provider with browsing | Place the tool in core → it shows in the report (D2) |
 
 Evals: T1, T2, T4, T15, T17 and T18 become nightly scenarios with synthetic files, held out and transcripts read (checklist 8). Run Stryker on `files/readable.ts` and on the S1 adapter render functions (`@stryker-mutator` is already a devDependency).
