@@ -5,6 +5,13 @@ import { CONSOLE_ACTION_PATH, consoleAccess } from '../src/channels/console';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { OWNER_CONTROLS_ACTION_PATH, OWNER_CONTROLS_PATH } from '../src/channels/dashboard-owner-controls';
+import * as ownerControls from '../src/channels/dashboard-owner-controls';
+import * as controlActions from '../src/channels/dashboard-control-actions';
+import * as stepUp from '../src/channels/console-step-up';
+import { CONSOLE_ACTIONS } from '../src/channels/console';
+import { CONSOLE_PHOTON_START_PATH, IMESSAGE_CONSOLE_ACTIONS } from '../src/channels/imessage/console';
+import { WHATSAPP_LINK_CONFIRM_ACTION } from '../src/channels/whatsapp-link-console';
+import { BROWSER_TRIAL_PATH } from '../src/channels/browser-trial-consent';
 
 const root = 'https://telegram-owner';
 const HOUR = 60 * 60_000;
@@ -53,7 +60,8 @@ const owner = async (name: string) => {
   };
   const post = (path: string, fields: Record<string, string>, extra: Record<string, string> = {}) =>
     stub.fetch(root + path, { method: 'POST', headers: headers({ 'content-type': 'application/x-www-form-urlencoded', ...extra }), body: new URLSearchParams(fields) });
-  return { stub, codeAge, read, post };
+  const get = (path: string) => stub.fetch(root + path, { headers: headers({ accept: 'text/html' }) });
+  return { stub, codeAge, read, post, get };
 };
 
 // Each action posts the same request twice, once with a code older than two hours and once with a fresh one.
@@ -64,6 +72,10 @@ const actions: ReadonlyArray<{ name: string; path: string; read: string; fields:
     ran: (_calls, body) => typeof body.receipt === 'object' && body.receipt !== null },
   { name: 'mcp.connect', path: CONTROL_ACTION_PATH, read: `${CONTROLS_PATH}?view=connections`, fields: { view: 'connections', action: 'mcp.connect', value: 'https://mcp.example.test/mcp' },
     ran: (_calls, body) => typeof body.receipt === 'object' && body.receipt !== null },
+  { name: 'telegram.link', path: CONTROL_ACTION_PATH, read: `${CONTROLS_PATH}?view=connections`, fields: { view: 'connections', action: 'telegram.link' },
+    ran: calls => calls.includes('issue_link_code') },
+  { name: 'whatsapp.link', path: CONTROL_ACTION_PATH, read: `${CONTROLS_PATH}?view=connections`, fields: { view: 'connections', action: 'whatsapp.link' },
+    ran: calls => calls.includes('issue_provider_link_code') },
   { name: 'invite.member', path: OWNER_CONTROLS_ACTION_PATH, read: `${OWNER_CONTROLS_PATH}?view=invites`, fields: { view: 'invites', action: 'invite.member', value: 'friend@example.test' },
     ran: calls => calls.includes('issue_member_invite') },
   { name: 'account.delete', path: OWNER_CONTROLS_ACTION_PATH, read: `${OWNER_CONTROLS_PATH}?view=account`, fields: { view: 'account', action: 'account.delete', confirmation: 'DELETE' },
@@ -115,5 +127,128 @@ describe('a fresh email code before an action that creates lasting access', () =
     const current = await o.read(`${CONTROLS_PATH}?view=day`);
     const response = await o.post(CONTROL_ACTION_PATH, { csrf: current.csrf, revision: current.revision, request_id: 'ordinary-pin', view: 'day', action: 'card.pin', id: 'card:close', value: '22:15' });
     expect(response.status).toBe(200);
+  });
+});
+
+// Every action the console can run, from each registry that accepts one.
+const everyAction = (): readonly string[] => {
+  const views = (controlActions as Record<string, unknown>).CONTROL_VIEW_ACTIONS as Readonly<Record<string, readonly string[]>> | undefined;
+  const owner = (ownerControls as Record<string, unknown>).OWNER_CONTROL_VIEW_ACTIONS as Readonly<Record<string, string>> | undefined;
+  expect(views, 'the controls registry is exported').toBeDefined();
+  expect(owner, 'the owner controls registry is exported').toBeDefined();
+  return [...new Set([...CONSOLE_ACTIONS, ...IMESSAGE_CONSOLE_ACTIONS, WHATSAPP_LINK_CONFIRM_ACTION, ...Object.values(views ?? {}).flat(), ...Object.values(owner ?? {})])].sort();
+};
+const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
+const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
+const LASTING = ['account.delete', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
+  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
+const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
+
+describe('every console action is classified before it ships', () => {
+  it('names each action every registry accepts, and nothing else, with a one-line reason', () => {
+    const classified = table();
+    expect(Object.keys(classified).sort()).toEqual(everyAction());
+    for (const [action, rule] of Object.entries(classified)) {
+      expect(typeof rule.gated, action).toBe('boolean');
+      expect(oneLine(rule.why), action).toBe(true);
+    }
+  });
+
+  it('needs a fresh code for exactly the actions that create or widen lasting access', () => {
+    expect(Object.entries(table()).filter(([, rule]) => rule.gated === true).map(([action]) => action).sort()).toEqual(LASTING);
+  });
+
+  it('classifies the console routes that start access or consent outside an action', () => {
+    const classified = routes();
+    expect(classified[CONSOLE_PHOTON_START_PATH]?.gated).toBe(true);
+    expect(classified[BROWSER_TRIAL_PATH]?.gated).toBe(false);
+    for (const [path, rule] of Object.entries(classified)) {
+      expect(typeof rule.gated, path).toBe('boolean');
+      expect(oneLine(rule.why), path).toBe(true);
+    }
+  });
+});
+
+// Linking a chat number lets that chat mint console sign-ins, pairing a Mac binds a host to the owner, and mcp.runs lets a
+// tool run without asking: each outlives the session, so each needs a code from the last two hours.
+const IMESSAGE_FIELDS: Readonly<Record<string, Record<string, string>>> = {
+  'imessage.enroll': { phone: '+15555550100' }, 'imessage.link': {}, 'imessage.pair': {}, 'imessage.pair_shared': {},
+  'imessage.verify': { id: `imb_${'a'.repeat(32)}`, subject: 'owner@example.test', chat: 'iMessage;-;owner@example.test' },
+  'imessage.activate': { id: `imb_${'a'.repeat(32)}`, subject: 'owner@example.test', chat: 'iMessage;-;owner@example.test' },
+  'imessage.activate_shared': { id: `imb_${'a'.repeat(32)}`, subject: 'owner@example.test', chat: 'iMessage;-;owner@example.test' },
+};
+const WHATSAPP_TOKEN = 'w'.repeat(43);
+const controlsRequests = [
+  ...['telegram.link', 'whatsapp.link'].map(action => ({ action, fields: { view: 'connections', action } })),
+  { action: 'mcp.runs', fields: { view: 'connections', action: 'mcp.runs', id: 'mcp-server-1', value: 'search:on' } },
+  ...Object.entries(IMESSAGE_FIELDS).map(([action, fields]) => ({ action, fields: { view: 'imessage', action, ...fields } })),
+];
+const classicRequests = [
+  ...Object.entries(IMESSAGE_FIELDS).map(([action, fields]) => ({ action, fields: { action, ...fields } })),
+  { action: 'telegram.link', fields: { action: 'telegram.link' } },
+  { action: WHATSAPP_LINK_CONFIRM_ACTION, fields: { action: WHATSAPP_LINK_CONFIRM_ACTION, token: WHATSAPP_TOKEN, subject: '15555550100' } },
+];
+
+describe('linking a chat, pairing a Mac and letting a tool run need a fresh code too', () => {
+  for (const [age, fresh] of [[3 * HOUR, false], [60_000, true]] as const) {
+    it(`the dashboard's ${fresh ? 'fresh code passes the check' : 'old code is refused before anything runs'}`, async () => {
+      const calls = directory();
+      const o = await owner(`step-up-dashboard-${fresh ? 'fresh' : 'stale'}`);
+      await o.codeAge(age);
+      for (const request of controlsRequests) {
+        calls.length = 0;
+        const response = await o.post(CONTROL_ACTION_PATH, { csrf: 'c'.repeat(64), revision: 'r'.repeat(64), request_id: `step-up-${request.action.replace('.', '-')}`, ...request.fields });
+        const body = await response.json() as Record<string, unknown>;
+        if (fresh) expect(body.error, request.action).not.toBe('step_up_required');
+        else {
+          expect([request.action, response.status, body]).toEqual([request.action, 403, { error: 'step_up_required' }]);
+          expect(calls, request.action).toEqual([]);
+        }
+      }
+    });
+
+    it(`the classic console's ${fresh ? 'fresh code passes the check' : 'old code gets the confirm page before anything runs'}`, async () => {
+      const calls = directory();
+      const o = await owner(`step-up-classic-chat-${fresh ? 'fresh' : 'stale'}`);
+      await o.codeAge(age);
+      for (const request of classicRequests) {
+        calls.length = 0;
+        const page = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', ...request.fields }, { accept: 'text/html' });
+        const text = await page.text();
+        if (fresh) expect(text, request.action).not.toContain('/console/signin?confirm=1');
+        else {
+          expect([request.action, page.status]).toEqual([request.action, 403]);
+          expect(text, request.action).toContain('/console/signin?confirm=1');
+          expect(calls, request.action).toEqual([]);
+        }
+      }
+    });
+
+    it(`starting a Photon connect ${fresh ? 'passes the check with a fresh code' : 'is refused with an old code before Photon is asked'}`, async () => {
+      const calls = directory();
+      const o = await owner(`step-up-photon-${fresh ? 'fresh' : 'stale'}`);
+      await o.codeAge(age);
+      calls.length = 0;
+      const response = await o.get(CONSOLE_PHOTON_START_PATH);
+      const text = await response.text();
+      if (fresh) expect(text).not.toContain('/console/signin?confirm=1');
+      else {
+        expect(response.status).toBe(403);
+        expect(text).toContain('/console/signin?confirm=1');
+        expect(calls).toEqual([]);
+      }
+    });
+  }
+
+  it('the confirm page sends the owner back to the page that asked', async () => {
+    directory();
+    const o = await owner('step-up-return');
+    await o.codeAge(3 * HOUR);
+    const devices = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: 'device.pair' }, { accept: 'text/html' })).text();
+    expect(devices).toContain('/console/signin?confirm=1&amp;return_to=%2Fconsole%2Fdevices');
+    const whatsapp = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: WHATSAPP_LINK_CONFIRM_ACTION, token: WHATSAPP_TOKEN, subject: '15555550100' }, { accept: 'text/html' })).text();
+    expect(whatsapp).toContain(`/console/signin?confirm=1&amp;return_to=%2Fconsole%2Fwhatsapp%2Flink%2F${WHATSAPP_TOKEN}`);
+    const forged = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: WHATSAPP_LINK_CONFIRM_ACTION, token: '../admin', subject: '15555550100' }, { accept: 'text/html' })).text();
+    expect(forged).toContain('href="/console/signin?confirm=1"');
   });
 });
