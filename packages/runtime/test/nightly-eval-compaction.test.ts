@@ -209,13 +209,18 @@ describe('the off and on runs differ only in the switch', () => {
     }
   });
 
-  it('records the switch on the scorecard from what the trials ran with', async () => {
-    const short = NIGHTLY_SCENARIOS.find((entry) => entry.id === 't01-calendar-free-hour')!;
+  it('hands the switch to every trial and records it on the scorecard', async () => {
+    const entry = scenario(COMPACTION_PROBES.recall[1]!);
     for (const [value, recorded] of [[undefined, 'off'], ['on', 'on']] as const) {
       const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', ...(value ? { WALDO_EVAL_COMPACTION: value } : {}) });
-      expect((await runNightly([short], run)).compaction).toBe(recorded);
+      const states: unknown[] = [];
       // The card reads the settings the trials ran with, not the label.
-      expect((await runNightly([short], { ...run, candidate: 'recorded' })).compaction).toBe(recorded);
+      const card = await runNightly([entry], { ...run, candidate: 'recorded', show: (_scenario, record) => { states.push(record.final_state); } });
+      expect(card.compaction).toBe(recorded);
+      // The recorded model's fixed reply is a summary like any other, so a trial run with the switch on writes one.
+      expect(states).toHaveLength(1);
+      if (recorded === 'on') expect((states[0] as { compaction: unknown }).compaction).toEqual([{ text: 'Recorded reply.', live: true }]);
+      else expect(states[0]).not.toHaveProperty('compaction');
     }
   }, 60_000);
 
