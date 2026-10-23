@@ -69,8 +69,8 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS, ...(verifiedAt === undefined ? {} : { verified_at: verifiedAt }) };
     if (live) {
       const { verified_at: _code, ...rest } = replaced;
-      const ends = Math.min(replaced.ends ?? Number.POSITIVE_INFINITY, now() + CONSOLE_REPLACED_SESSION_MS);
-      sessions[replacing!] = { ...rest, ends, expires: Math.min(replaced.expires, ends) };
+      const ends = Math.min(replaced.expires, now() + CONSOLE_REPLACED_SESSION_MS);
+      sessions[replacing!] = { ...rest, ends, expires: ends };
     } else if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
