@@ -151,7 +151,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
-      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
       const detail = error instanceof OpenAI.APIError
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`

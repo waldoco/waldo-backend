@@ -148,8 +148,10 @@ export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean
 
 // A failed attempt as an adapter reports it. `spent` carries the tokens of an attempt the provider still billed, such as
 // a reply with neither text nor a tool call; they join the usage of the attempt that succeeds, so a retried model step
-// is metered whole. `retry` carries the provider's own retry headers to the one retry owner.
-export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice }>;
+// is metered whole. `retry` carries the provider's own retry headers to the one retry owner. `firstTokenLate`: a streamed
+// call showed nothing within the first-token window and was cut to fail over; the provider was slow, not failing, so it
+// does not count against the provider's circuit.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true }>;
 
 export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
 
@@ -560,7 +562,7 @@ export class RuntimeLLMProvider {
 
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
-        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code)) this.circuitBreaker.recordFailure(plan.step.provider);
+        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
           model: plan.step.model,
