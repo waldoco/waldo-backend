@@ -67,3 +67,21 @@ it('requires a grounded source for background loop creation while owner tools re
     expect(loops.list()).toHaveLength(2);
   });
 });
+
+it('a job over outside text that names no tools gets the read-and-card ceiling; an owner-text job keeps every tool', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('outside-text-job-ceiling')), async (_i, state) => {
+    const loops = loopBook(state.storage.sql, { now: () => 1, newId: () => 'x' });
+    const read = { name: 'read_thread' as const, description: 'Read', schema: readThreadArgsSchema, trigger_allowlist: ['user_message' as const], autonomy_gated: false, async handle() { return { ok: true as const, data: [], source_taint: 'external' as const }; } };
+    const offered = async (taint?: 'external') => {
+      const { gateway, requests } = scripted('open_loop', { title: 'Pay the invoice', due: null });
+      await createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [read, ...loopHandlers(loops)], undefined, false, undefined, undefined, gateway)
+        .prompt(`job-${taint ?? 'owner'}`, 'owner', 'Write the morning card', time, 'telegram', undefined, undefined, undefined, undefined, taint);
+      return requests[0]!.request.tools?.map(t => t.name) ?? [];
+    };
+    const outside = await offered('external');
+    expect(outside).toContain('read_thread');
+    expect(outside).not.toContain('open_loop');
+    expect(loops.list()).toEqual([]);
+    expect(await offered()).toEqual(expect.arrayContaining(['read_thread', 'open_loop']));
+  });
+});
