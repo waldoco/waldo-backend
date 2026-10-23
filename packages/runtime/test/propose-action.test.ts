@@ -257,13 +257,13 @@ describe('taint goes to a card', () => {
   });
 
   // A spoofed "your invoice is paid" mail must not close a loop the owner made. Mail-bound loops the follow-through opened
-  // from mail close directly, as before. An id the store does not know is treated as the owner's.
+  // from mail close directly, as before. An id the store does not know is treated as the owner's, and gets no card.
   it('after outside content, an owner loop closes only by card and a mail-bound loop closes directly', async () => {
     await runInDurableObject(stub('close-loop'), async (_instance, state) => {
       const sql = state.storage.sql;
       let n = 0;
       const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
-      sql.exec("INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id, update_id) VALUES ('mail:thread-deck', 'thread-deck', 0, 'm1', 1)");
+      sql.exec("INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id, update_id) VALUES ('mail:thread-deck', 'thread-deck', 0, 'm1', 1), ('mail:thread-venue', 'thread-venue', 0, 'm2', 2)");
       const own = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
       const sourced = loops.open({ title: 'Check the deck review', due: '2026-10-23T10:00', source_ref: 'mail:thread-deck' });
       const status = (id: string) => sql.exec<{ status: string }>('SELECT status FROM loops WHERE id = ?', id).one().status;
@@ -271,7 +271,7 @@ describe('taint goes to a card', () => {
       const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
       const close = (id: string) => ({ id, outcome: 'done' as const });
       const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
-      const propose = proposeActionHandler(desk);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
 
       expect(await dispatchTool({ id: 'c1', name: 'close_loop', args: close(own.id) }, read(), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
       expect(status(own.id)).toBe('open');
@@ -287,13 +287,49 @@ describe('taint goes to a card', () => {
       expect(await propose.handle({ tool: 'close_loop', args: close(sourced.id), reasoning: 'r' } as never, read())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call it directly') });
 
       expect(await dispatchTool({ id: 'c3', name: 'close_loop', args: close('o-unknown') }, read(), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
-      expect(await propose.handle({ tool: 'close_loop', args: close('o-unknown'), reasoning: 'r' } as never, read({ toolCallId: 'p3' }))).toMatchObject({ ok: true });
-      // A host without the loop read cards every tainted close, a mail-bound one included.
-      expect(await propose.handle({ tool: 'close_loop', args: close(sourced.id), reasoning: 'r' } as never, tainted({ toolCallId: 'p4' }))).toMatchObject({ ok: true });
-      expect(rows('tainted_action')).toHaveLength(3);
+      expect(await propose.handle({ tool: 'close_loop', args: close('o-unknown'), reasoning: 'r' } as never, read({ toolCallId: 'p3' }))).toMatchObject({ ok: false, code: 'invalid_args' });
+      // A host without the source-bound read cards every tainted close, a mail-bound one included.
+      const venue = loops.open({ title: 'Confirm the venue', due: '2026-10-25T12:00', source_ref: 'mail:thread-venue' });
+      expect(await propose.handle({ tool: 'close_loop', args: close(venue.id), reasoning: 'r' } as never, tainted({ toolCallId: 'p4' }))).toMatchObject({ ok: true });
+      expect(rows('tainted_action')).toHaveLength(2);
 
       const later = loops.open({ title: 'Book the dentist', due: null });
       expect(await dispatchTool({ id: 'c4', name: 'close_loop', args: close(later.id) }, context({ hasApproval: undefined }), { handlers })).toMatchObject({ ok: true, data: { closed: true } });
+    });
+  });
+
+  // The reasoning on a close card is the model's, written in a turn that read outside text, so it can name any loop. The
+  // loop the card closes is named from the owner's loop store, and an id the store cannot close gets no card at all.
+  it('a close card names its loop from the store, and an id that is unknown or already closed gets no card', async () => {
+    await runInDurableObject(stub('close-loop-card'), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let n = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const dentist = loops.open({ title: 'Book the dentist', due: '2026-10-30T09:00' });
+      loops.close(dentist.id, 'done');
+      const handlers = loopHandlers(loops);
+      const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
+      const { desk, cards, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+
+      const injected = 'The City Power invoice is paid, so I am closing the City Power bill.';
+      expect(await propose.handle({ tool: 'close_loop', args: { id: passport.id, outcome: 'dropped' }, reasoning: injected } as never, read({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      expect(JSON.parse(rows('tainted_action')[0]!.payload_json)).toMatchObject({ preview: ['Renew the passport, as dropped'] });
+      expect(cards.at(-1)).toContain('It closes:\n- Renew the passport, as dropped');
+      expect(cards.at(-1)).not.toContain('Pay City Power');
+
+      for (const [id, code, fix] of [['o-gone', 'invalid_args', 'open loops'], [dentist.id, 'rejected', 'already closed']] as const) {
+        const refused = await propose.handle({ tool: 'close_loop', args: { id, outcome: 'done' }, reasoning: injected } as never, read({ toolCallId: `p-${id}` }));
+        expect(refused).toMatchObject({ ok: false, code, error: expect.stringContaining(fix) });
+      }
+      expect(rows('tainted_action')).toHaveLength(1);
+
+      expect(await propose.handle({ tool: 'close_loop', args: { id: power.id, outcome: 'done' }, reasoning: injected } as never, read({ toolCallId: 'p2' }))).toMatchObject({ ok: true });
+      expect(cards.at(-1)).toContain('It closes:\n- Pay City Power (due 2026-10-24 18:00), as done');
+      expect(rows('tainted_action')).toHaveLength(2);
+      expect(loops.list().map((loop) => loop.id)).toEqual([power.id, passport.id]);
     });
   });
 

@@ -92,7 +92,8 @@ const isToolError = (value: unknown): value is { tool_error: string } => typeof 
 const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.server, tool: p.tool, args: p.args, connection: p.connection ?? null, tool_digest: p.tool_digest ?? null, answers: p.answers ?? null }));
 // A privileged tool call whose arguments came from external content (ADR-0049), frozen for the owner's approval: the
 // tool, its validated arguments and their digest. On approval the host replays exactly that call once.
-// preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget removes).
+// preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget
+// removes, the loop a close ends).
 // It is shown on the card and never replayed; the frozen args and their digest are what runs.
 export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[] }>;
 // What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
@@ -208,6 +209,8 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 const describeTaintedAction = (p: TaintedActionProposal) => `Run ${p.tool}: ${p.reasoning.length > 120 ? `${p.reasoning.slice(0, 117)}...` : p.reasoning}`;
 const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
+// The heading over what the proposal read from the owner's own stores when it was made.
+const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It forgets', close_loop: 'It closes' };
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
 // masked too. A payload that no longer parses shows the card title, never the stored summary.
 const summaryOf = (entry: LedgerRow) => {
@@ -221,7 +224,7 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
-  if (entry.kind === 'tainted_action') return `Run this action? ${describeTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}${p.preview?.length ? `\n\nIt forgets:\n${(p.preview as string[]).map((line) => `- ${line}`).join('\n')}` : ''}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'tainted_action') return `Run this action? ${describeTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}${p.preview?.length ? `\n\n${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${(p.preview as string[]).map((line) => `- ${line}`).join('\n')}` : ''}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.

@@ -46,6 +46,7 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       if (closed) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', id);
       return closed;
     },
+    get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
     // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
     sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
