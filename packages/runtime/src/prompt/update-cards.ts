@@ -1,3 +1,4 @@
+import { fenced } from './turn-prompt';
 // In-between update cards (owner ask 2026-09-23): short, change-driven notes between the
 // main day cards. What they surface also feeds the next main card.
 export const SKIP_UPDATE = 'SKIP';
@@ -18,8 +19,9 @@ export const updateCardPrompt = (localNow: string, context: Readonly<{ changes: 
   `If it is worth it, write the update card: a first line "Update", then one to three short lines on what changed and what it means for their day. Otherwise reply with exactly ${SKIP_UPDATE}.`,
 ].join('\n\n');
 
+// Updates carry mail subjects and sender names other people wrote, and the text of update cards written from them.
 export const updatesSection = (updates: string): string =>
-  `<updates>\n${updates}\n</updates>\nThese changes came in since the last main card (some were already sent as update cards). Reflect what they mean in this card; do not repeat an update word for word.`;
+  `${fenced('updates since the last main card, from the owner\'s calendar and inbox', updates).trimStart()}\nThese changes came in since the last main card (some were already sent as update cards). Reflect what they mean in this card; do not repeat an update word for word.`;
 
 // Reuses the existing responder on the periodic update lane; this is one bounded
 // hypothesis, not an inferred owner commitment or authority for external actions.
