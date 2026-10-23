@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void>; serial(work: () => Promise<void>): Promise<void> }>;
+type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void>; serial(work: () => Promise<void>): Promise<void>; fetch(request: Request): Promise<Response> }>;
 // google: the owner has connected a Google account (the mocked client above) before the owner object starts.
 const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectState) => Promise<void>, google = false) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -276,18 +276,42 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
   });
 
   // A check-back may read mail or a page that claims the work is done. Outside words cannot end a loop the owner gave
-  // Waldo: the close is refused toward the owner's card, which a check-back cannot raise, so the loop stays open.
-  it('a check-back that read outside content cannot close the owner\'s loop', async () => {
+  // Waldo: the direct close is refused toward the owner's card, the check-back raises that card on the owner's desk, and the
+  // loop stays open until the owner approves it.
+  it('a check-back that read outside content closes the owner\'s loop only from the owner\'s card', async () => {
     await withOwner('check-back-loop-tainted', async (owner, state) => {
       const loop = dueLoop(state);
+      const later = loopBook(state.storage.sql, { now: () => AT, newId: () => 'later' }).open({ title: 'a loop due tomorrow', due: '2026-10-04T09:00' });
       await dueHeartbeat(state);
-      fixture.script = (request) => request.tool_turns?.length === 1 ? { text: '', calls: [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify({ id: loop.id, outcome: 'done' }) }] }
-        : request.tool_turns?.length ? { text: FOUND } : { text: '', calls: [{ call_id: 'outside', name: 'search_contacts', arguments: JSON.stringify({ query: 'launch' }) }] };
+      const close = { id: loop.id, outcome: 'done' };
+      const cardFor = (call_id: string, args: object) => ({ call_id, name: 'propose_action', arguments: JSON.stringify({ tool: 'close_loop', args, reasoning: 'A contact entry says the launch email draft is done.' }) });
+      fixture.script = (request) => {
+        const round = request.tool_turns?.length ?? 0;
+        if (round === 0) return { text: '', calls: [{ call_id: 'outside', name: 'search_contacts', arguments: JSON.stringify({ query: 'launch' }) }] };
+        if (round === 1) return { text: '', calls: [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify(close) }] };
+        if (round === 2) return { text: '', calls: [cardFor('card', close), cardFor('other', { id: later.id, outcome: 'done' })] };
+        return { text: FOUND };
+      };
       await schedulePass(owner, state);
-      const turns = checkBackRequests().at(-1)!.tool_turns!;
+      const requests = checkBackRequests();
+      expect(requests[0]!.messages.at(-1)!.content).toContain('card');
+      expect(offered(requests[1]!)).toContain('propose_action');
+      const turns = requests.at(-1)!.tool_turns!;
       expect(turns.find(turn => turn.call.name === 'search_contacts')!.output).toContain('Launch email draft is done');
       expect(turns.find(turn => turn.call.name === 'close_loop')!.output).toContain('propose_action');
+      expect(turns.find(turn => turn.call.call_id === 'card')!.output).toContain('"executed":false');
+      // The check-back's card, like its direct close, reaches only the loops it was given.
+      expect(turns.find(turn => turn.call.call_id === 'other')!.output).toContain('no loop with the id');
+      const cards = state.storage.sql.exec<{ id: string; payload_json: string }>("SELECT id, payload_json FROM ledger WHERE kind = 'tainted_action'").toArray();
+      expect(cards).toHaveLength(1);
+      expect(JSON.parse(cards[0]!.payload_json)).toMatchObject({ tool: 'close_loop', args: close, preview: [`${LOOP_TITLE} (due 2026-10-03 08:30), as done`] });
+      expect(wire.sent.filter(text => text.includes('It closes:'))).toHaveLength(1);
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);
+
+      const approve = { update_id: 300, callback_query: { id: 'close-it', from: { id: 7, is_bot: false }, data: `a:${cards[0]!.id}`, message: { message_id: 41, chat: { id: 7, type: 'private' } } } };
+      expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(approve) }))).status).toBe(200);
+      await transportPass(owner, state);
+      expect(state.storage.sql.exec('SELECT id, status FROM loops ORDER BY id').toArray()).toEqual([{ id: later.id, status: 'open' }, { id: loop.id, status: 'done' }]);
     }, true);
   });
 
