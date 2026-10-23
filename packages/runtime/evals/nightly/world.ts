@@ -10,7 +10,6 @@ import { localIso, reminderHandlers, type ReminderBook } from '../../src/channel
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
 import { loopBook, loopHandlers } from '../../src/channels/loops';
 import { episodeIndex, indexedConversationStore } from '../../src/channels/episodes';
-import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
@@ -89,20 +88,6 @@ const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => 
     try { const result = work(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
   return { sql, transactionSync };
-};
-
-const keyValueStorage = () => {
-  const rows = new Map<string, unknown>();
-  return {
-    async get<T>(key: string) { return rows.get(key) as T | undefined; },
-    async list<T>(options?: { prefix?: string }) {
-      return new Map([...rows].filter(([key]) => key.startsWith(options?.prefix ?? '')).sort(([a], [b]) => (a < b ? -1 : 1))) as Map<string, T>;
-    },
-    async put(first: string | Record<string, unknown>, value?: unknown) {
-      if (typeof first === 'string') rows.set(first, value);
-      else for (const [key, entry] of Object.entries(first)) rows.set(key, entry);
-    },
-  } as unknown as Parameters<typeof durableConversationStore>[0];
 };
 
 // Gmail-like matching over the synthetic mail: quoted phrases and bare words must all appear;
@@ -260,7 +245,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   const episodes = episodeIndex(sql);
-  const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  const chat = evalConversation(seed, CHAT_REF, start, () => now() - Date.parse(start));
   const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,

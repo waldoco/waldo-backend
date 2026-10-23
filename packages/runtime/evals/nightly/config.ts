@@ -40,14 +40,15 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   // WALDO_TOOL_SEARCH=on does for an owner; the scorecard names it so the two menus' results are never mixed up.
   const toolSearch = env.WALDO_EVAL_TOOL_SEARCH === 'on';
   const menu = toolSearch ? { toolSearch: true } : {};
-  // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, as WALDO_COMPACTION=on does
-  // for the app; the scorecard names it so the two runs are never mixed up.
-  const compaction: Readonly<{ compaction?: CompactionSettings }> = env.WALDO_EVAL_COMPACTION === 'on' ? { compaction: compactionSettings({ WALDO_COMPACTION: 'on' }) } : {};
+  // Every trial's chat is the canonical store the app runs on. WALDO_EVAL_COMPACTION=on turns compaction on there, as
+  // WALDO_COMPACTION=on does for the app; anything else leaves it off. The label and the scorecard both name it, so the
+  // two runs are never mixed up.
+  const compaction: Readonly<{ compaction: CompactionSettings }> = { compaction: compactionSettings(env.WALDO_EVAL_COMPACTION === 'on' ? { WALDO_COMPACTION: 'on' } : {}) };
   const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
   if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
   // The raw-history baseline's card names its mode, so it is never read as the normal run's.
   const label = (name: string) => {
-    const menuNamed = `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`;
+    const menuNamed = `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction.enabled ? '+compaction' : ''}`;
     return memory === 'raw_history' ? `${menuNamed} (raw_history)` : menuNamed;
   };
   const memoryMode: Readonly<{ memory?: MemoryMode }> = memory === 'raw_history' ? { memory } : {};

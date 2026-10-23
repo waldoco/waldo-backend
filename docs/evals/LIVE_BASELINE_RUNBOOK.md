@@ -29,7 +29,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
 | `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
-| `WALDO_EVAL_MAX_CALLS` | required for live | `2400`: `pnpm eval:plan` suggests 2000 in split mode and 1500 in joint mode for 3 trials of today's catalogue, and the workflow sets 2400 so a scenario or two more does not exhaust the budget, which fails the gate |
+| `WALDO_EVAL_MAX_CALLS` | required for live | `3000`: `pnpm eval:plan` suggests 2700 in split mode and 2100 in joint mode for 3 trials of today's catalogue, and the workflow sets 3000 so a scenario or two more does not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
 | `WALDO_EVAL_TRIALS` | optional | `3`, which pass^k needs |
@@ -49,7 +49,7 @@ A refused or truncated grade counts as a judge error, never a pass.
 ```bash
 cd packages/runtime
 read -s OPENAI_API_KEY; read -s ANTHROPIC_API_KEY; export OPENAI_API_KEY ANTHROPIC_API_KEY
-WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=2400 WALDO_EVAL_TRIALS=3 \
+WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=3000 WALDO_EVAL_TRIALS=3 \
   WALDO_EVAL_OUT="$PWD/live-scorecard.json" npx -y pnpm@10.34.4 eval:nightly > /dev/null
 WALDO_EVAL_MODE=live npx -y pnpm@10.34.4 exec tsx evals/nightly/report.ts live-scorecard.json live-scorecard.md
 ```
@@ -71,14 +71,14 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 
 ## Calls and cost per run
 
-`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 61 scenarios, 58 of them runnable, at 3 trials:
+`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 71 scenarios, 68 of them runnable, at 3 trials:
 
 | | Split (default) | Joint |
 | --- | --- | --- |
-| Owner turns and fired reminders | 243 | 243 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 486 to 1,215 | 486 to 1,215 |
-| Judge calls | 780 | 216 |
-| Suggested `WALDO_EVAL_MAX_CALLS` | 2000 | 1500 |
+| Owner turns and fired reminders | 351 | 351 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 702 to 1,755 | 702 to 1,755 |
+| Judge calls | 888 | 249 |
+| Suggested `WALDO_EVAL_MAX_CALLS` | 2700 | 2100 |
 
 A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
@@ -86,20 +86,21 @@ A test holds the cap in `evals-live.yml` at or above the plan's suggestion for t
 
 Prices come from `packages/runtime/src/llm/pricing.ts`: Sol $2 input, $0.10 cached input and $10 output per million tokens. Opus 5.5 is $4 and $20 per million, confirmed against the claude-api reference on 21 October 2026.
 
-A chat request in the recorded dry run is about 51,000 characters, roughly 13,000 tokens, mostly the system prompt and tool schemas. Live requests grow with tool output.
+A chat request in the recorded dry run is about 51,000 characters, roughly 13,000 tokens, mostly the system prompt and tool schemas. Live requests grow with tool output. The seven compaction probes are the exception: their chat starts past the 100K window, so each of their 102 turns (34 a trial) sends about 100K to 130K input tokens.
 
 | Part | Low | High |
 | --- | --- | --- |
-| Candidate (13K to 20K input tokens per call, 0.6K to 1.5K output, half the input cached at the high end) | about $8 | about $44 (about $65 with no cache hits) |
-| Judges on Opus 5.5, joint (3K to 6K input, 1.5K to 4K output with thinking, 216 calls) | about $9 | about $22 |
-| Judges on Opus 5.5, split (the same packet each call, shorter output, 780 calls) | about $25 | about $75 |
+| Candidate, all but the compaction probes (13K to 20K input tokens per call, 0.6K to 1.5K output, half the input cached at the high end) | about $8 | about $44 (about $65 with no cache hits) |
+| Candidate, the compaction probes (100K to 130K input tokens per call, one to four calls a turn) | about $20 | about $50 (about $100 with no cache hits) |
+| Judges on Opus 5.5, joint (3K to 6K input, 1.5K to 4K output with thinking, 249 calls) | about $10 | about $25 |
+| Judges on Opus 5.5, split (the same packet each call, shorter output, 888 calls) | about $28 | about $85 |
 | Judges on Sonnet 5.5 | about half of Opus | about half of Opus |
-| **A run, Opus 5.5 judging, joint** | **about $17** | **about $66 (up to about $87 with no cache hits)** |
-| **A run, Opus 5.5 judging, split** | **about $33** | **about $120 (up to about $140 with no cache hits)** |
+| **A run, Opus 5.5 judging, joint** | **about $38** | **about $119 (up to about $190 with no cache hits)** |
+| **A run, Opus 5.5 judging, split** | **about $56** | **about $179 (up to about $250 with no cache hits)** |
 
 The judge-agreement check (`eval:voice-agreement` in live mode) makes 33 calls in joint mode and 198 in split mode, about $1 to $3 and $5 to $12.
 
-Run nightly at the high end, live mode would cost on the order of $2,000 to $4,000 a month in split mode. Decide the cadence after the first run measures the real cost. For example, run the full suite weekly and one trial on behaviour PRs, or use joint mode for the regular runs and split mode for baselines.
+Run nightly at the high end, live mode would cost on the order of $3,000 to $5,500 a month in split mode, about a third of it the compaction probes. Decide the cadence after the first run measures the real cost. For example, run the full suite weekly and one trial on behaviour PRs, or use joint mode for the regular runs and split mode for baselines.
 
 The scorecard reports token totals per role, but not the cached split. The exact figure for a run comes from the provider dashboards, filtered to the eval project and workspace.
 
@@ -107,7 +108,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 
 1. **Measure the judge first.** Run `eval:voice-agreement` live (about $2) on the labelled set, after Suyash has reviewed the labels (`reviewed_by` set). Read the false-pass rate. If the voice judge passes more than about 1 in 10 labelled fails, fix the rubric before trusting voice verdicts. [proposed] This 1-in-10 bar is a proposed threshold, not an agreed one.
 2. **Smoke-test one scenario**, as above.
-3. **Do the full run** at 3 trials with a cap of 2400, locally or by dispatch.
+3. **Do the full run** at 3 trials with a cap of 3000, locally or by dispatch.
 4. **Read the scorecard before any rate.** Check these things:
    - Blocked must be 3.
    - Harness errors must be 0.
@@ -122,7 +123,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 6. **Record the baseline.** Open the PR that sets the floor with the scorecard's Markdown (`live-scorecard.md`), the exact SHA, the models, the call and token counts, and the dashboard cost. The scorecard holds no reply text.
 7. **Raise the floor only with evidence.** Raise it when a later run's lower bound clears it. Never lower it to make a run pass; a drop is a regression to classify.
 
-`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (60), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
+`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (68), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
 
 ## The raw-history baseline
 

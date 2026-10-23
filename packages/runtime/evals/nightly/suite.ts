@@ -10,7 +10,7 @@ import type { NightlyScenario } from './scenarios';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from './scorecard';
 import { runTrial, type TrialRecord } from './trial';
 import type { MemoryMode } from './world';
-import type { CompactionSettings } from '../../src/conversation/compaction';
+import { COMPACTION, type CompactionSettings } from '../../src/conversation/compaction';
 import type { VoiceJudge, VoiceVerdict } from './voice';
 
 export type NightlyRun = Readonly<{
@@ -28,7 +28,7 @@ export type NightlyRun = Readonly<{
   toolSearch?: boolean;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
   memory?: MemoryMode;
-  // Compaction on: each trial's chat is the app's canonical store, built with these settings (WALDO_EVAL_COMPACTION=on).
+  // The compaction settings every trial's chat (the app's canonical store) is built with; absent means off.
   compaction?: CompactionSettings;
   // Read receipts on every completed trial, not only the ones a judge graded: state is checked in code, so a judge that
   // errs or runs out of budget cannot hide a duplicated effect. Live runs set it; the recorded dry run's fixed replies
@@ -41,6 +41,7 @@ export type NightlyRun = Readonly<{
 const graded = (outcome: TrialOutcome) => outcome === 'pass' || outcome === 'fail';
 
 export const runNightly = async (scenarios: readonly NightlyScenario[], run: NightlyRun) => {
+  const compaction = run.compaction ?? COMPACTION;
   const results: ScenarioTrials[] = [];
   for (const scenario of scenarios) {
     const outcomes: TrialOutcome[] = [];
@@ -52,7 +53,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.memory ? { memory: run.memory } : {}) });
+      const record = await runTrial({ ...scenario, world: { ...scenario.world, compaction } }, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       // What the judges alone made of the trial, before receipts: the figure two memory modes can be compared on.
@@ -78,5 +79,5 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), receipt_failed: receiptFailed, judge_passed: judgePassed, receipts_skipped: receiptsSkipped,
     });
   }
-  return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage() });
+  return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage(), compaction: compaction.enabled ? 'on' : 'off' });
 };

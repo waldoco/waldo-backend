@@ -14,6 +14,7 @@ import { labelInput, loadVoiceLabels, parseVoiceLabels, voiceAgreement, type Lab
 import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
 import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
 import { STATE_MEMORY_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
+import { COMPACTION_SCENARIOS } from '../evals/nightly/long-conversation';
 import { evalWorld } from '../evals/nightly/world';
 
 const scenario = (id: string) => NIGHTLY_SCENARIOS.find((entry) => entry.id === id)!;
@@ -342,12 +343,12 @@ describe('the nightly catalogue', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
-    // (h1-health-change-card), the stale health reading case (h2-stale-health-reading) and these sets, so it holds whether
-    // or not other scenarios land beside them.
+    // (h1-health-change-card), the stale health reading case (h2-stale-health-reading), these sets and the compaction
+    // probes, so it holds whether or not other scenarios land beside them.
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'c1-connected-tracker')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h2-stale-health-reading')).toBe(true);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + COMPACTION_SCENARIOS.length);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {

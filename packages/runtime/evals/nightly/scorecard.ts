@@ -42,13 +42,16 @@ const rates = (rows: readonly ScenarioRow[]): Rates => {
   };
 };
 
-export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage }>) => {
+// compaction: the switch every trial's chat ran with, on the canonical store; a card written before the eval ran every
+// chat there has none.
+export const scorecard = (results: readonly ScenarioTrials[], run: Readonly<{ candidate: string; judge: string; trials: number; usage: Usage; compaction?: 'on' | 'off' }>) => {
   const scenarios = results.map((result) => row(result, run.trials));
   return {
     version: 1 as const,
     candidate_model: run.candidate,
     judge_model: run.judge,
     trials_per_scenario: run.trials,
+    ...(run.compaction ? { compaction: run.compaction } : {}),
     scenarios,
     pains: Object.fromEntries(PAINS.map((pain) => [pain, rates(scenarios.filter((entry) => entry.pain === pain))])) as Record<Pain, Rates>,
     overall: rates(scenarios),
