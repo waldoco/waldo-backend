@@ -32,6 +32,11 @@ select throws_ok($$ select pg_temp.open_for('life-owner', repeat('a', 64), 0, 0)
 select throws_ok($$ select pg_temp.open_for('life-owner', repeat('a', 64), 86400, 86401) $$, '22023', 'console session lifetime out of range', 'an idle limit longer than the lifetime is refused');
 select throws_ok($$ select pg_temp.open_for('life-owner', repeat('a', 64), 86400, 0) $$, '22023', 'console session lifetime out of range', 'a zero idle limit is refused');
 select is(pg_temp.open_for('nobody', repeat('a', 64), 2592000, 604800), false, 'an unknown owner gets no session');
+select is(pg_temp.open_for('life-owner', repeat('z', 64), 2592000, 604800), false, 'a session hash that is not 64 lowercase hex characters is refused');
+select is(pg_temp.open_for('life-owner', upper(repeat('a', 64)), 2592000, 604800), false, 'an uppercase hash is refused');
+select is(pg_temp.open_for('life-owner', repeat('a', 63), 2592000, 604800), false, 'a short hash is refused');
+select is(pg_temp.open_for('life-owner', '', 2592000, 604800), false, 'an empty hash is refused');
+select is((select count(*)::int from waldo.console_sessions where session_hash !~ '^[a-f0-9]{64}$'), 0, 'no refused hash was stored');
 
 select is(pg_temp.open_for('life-owner', repeat('a', 64), 2592000, 604800), true, 'a signed open stores a console session');
 select is((select lifetime = interval '30 days' and idle_timeout = interval '7 days' from waldo.console_sessions where session_hash = repeat('a', 64)), true, 'the row carries its own lifetime and idle limit');
