@@ -82,9 +82,9 @@ import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
+import { CONSOLE_INVITES_PATH, inviteReceipt, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleNotice, consoleSessionRows, signInPage, telegramLinkResult, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { iMessageScheduledRoute, observeIMessageReports } from './imessage/scheduled-route';
@@ -1766,13 +1766,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
     if (posted) {
       const routed = posted.startsWith('c1.') && this.env.WALDO_ROUTER_HMAC_SECRET ? await readConsoleTicket(posted, this.env.WALDO_ROUTER_HMAC_SECRET) : null;
-      if (posted.startsWith('c1.') && (!routed || this.env.OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return new Response('Invalid console link.', { status: 403 });
+      if (posted.startsWith('c1.') && (!routed || this.env.OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return consoleNotice(request, 403, 'This console link is not valid.', 'Invalid console link.');
       const session = await this.serial(() => access.redeem(routed?.token ?? posted, sessionCookie(request)));
-      if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
+      if (!session) return consoleNotice(request, 403, 'This console link is used or expired.', 'This console link is used or expired. Send /console to Waldo for a new one.');
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
     const session = await access.session(sessionCookie(request));
-    if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    if (!session) return overviewRoute ? new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }) : consoleNotice(request, 401, 'Sign in to your Waldo.', 'Send /console to Waldo on Telegram for a sign-in link.');
     const classic = classicConsoleRedirect(request);
     if (classic) return classic;
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request));if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
@@ -2009,13 +2009,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
         const code = action.action === 'invite.create' ? newInviteCode() : '';
         const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value, code) : admin.revokeInvite(doName, action.id)) : false;
-        if (done && code) return new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+        if (done && code) return inviteReceipt(request, action.value, inviteLink(request.url, action.value, code), CONSOLE_ADMIN_PATH);
         return done ? new Response(null, { status: 303, headers: { location: CONSOLE_ADMIN_PATH } }) : noticePage('invalid');
       }
       if (action?.action === 'invite.member') {
         const code = newInviteCode();
         const done = admin && doName ? await admin.memberInvite(doName, action.value, code) : false;
-        return done ? new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : noticePage('invalid');
+        return done ? inviteReceipt(request, action.value, inviteLink(request.url, action.value, code), CONSOLE_INVITES_PATH) : noticePage('invalid');
       }
       if (action?.action === 'telegram.unlink') {
         const done = admin && doName ? await admin.unlinkTelegram(doName) : false;
@@ -2092,9 +2092,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const text = code
       ? `Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`
       : 'Linking Telegram from the console needs account sign-in, which is not set up on this server yet.';
-    return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><p style="font:18px system-ui;margin:40px">${text}</p><p style="font:16px system-ui;margin:40px"><a href="${CONSOLE_PATH}">Back</a></p>`, {
-      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' },
-    });
+    return telegramLinkResult(code ?? null, text);
   }
 
   // Settles one consent attempt. The owner hears about a new link once, in Telegram, whatever the browser shows.
