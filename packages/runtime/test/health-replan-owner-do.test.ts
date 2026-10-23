@@ -29,7 +29,7 @@ const OFFSITE: CalendarItem = { id: 'gcal-offsite-1', title: 'Partner offsite', 
 const world = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(), trace: [] as string[], requests: [] as LLMGatewayRequest[],
   busy: [] as { start: string; end: string }[], changed: [] as CalendarChange[], events: [] as CalendarItem[],
-  access: 'granted', scoresAccess: true, decision: '' as string,
+  access: 'granted', scoresAccess: true, decision: '' as string, latencyMs: 0,
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -54,7 +54,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const gateway: LLMGatewayAdapter = { async complete(request) {
     world.requests.push(request);
     const format = request.request.response_format?.name;
-    if (format === 'health_proposal') world.trace.push('health_evaluation');
+    if (format === 'health_proposal') { world.trace.push('health_evaluation'); vi.setSystemTime(Date.now() + world.latencyMs); }
     const text = format === 'health_proposal' ? world.decision : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -84,7 +84,7 @@ const pillars = ['recovery', 'form', 'weight'] as const;
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; printed.length = 0;
+  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; world.latencyMs = 0; printed.length = 0;
   // A month of one to two hours of meetings a day, and today's hour at 10:00 so far.
   world.busy = Array.from({ length: 31 }, (_, i) => block(addDays(TODAY, -i), 10, i === 0 ? 1 : 1 + (i % 3) * 0.5));
   world.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T11:30', end: '2026-10-21T12:30', title: 'Focus block', notify_guests: null, reason: 'Load is peaking with the offsite; an hour clear before it keeps the day steady.' });
@@ -208,6 +208,53 @@ describe('Weight follows the day', () => {
       const sent = JSON.stringify(world.requests.find(r => r.request.response_format?.name === 'health_proposal')!.request);
       expect(sent).toContain('Partner offsite');
       for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(o.state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
+    });
+  });
+
+  it('puts up a second card the same day once the gate\'s cooldown ends, showing the model the first and that it is still waiting', async () => {
+    const REVIEW: CalendarItem = { id: 'gcal-review-2', title: 'Quarterly board review', start: '2026-10-21T16:00:00+05:30', end: '2026-10-21T16:30:00+05:30', all_day: false, attendees: 6, etag: 'r2' };
+    // Today still holds an hour of meetings before the offsite: half an hour at 10:00 and the review.
+    world.busy[0] = block(TODAY, 10, 0.5);
+    world.busy.push(block(TODAY, 16, 0.5));
+    // The model takes five seconds, so each card is booked after its run started.
+    world.latencyMs = 5_000;
+    await withOwner(async o => {
+      await morning(o);
+      offsiteAdded();
+      world.events = [OFFSITE, REVIEW];
+      await o.sweep();
+      vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
+      await o.pass();
+      const firstRun = Date.now();
+      await o.pass();
+      expect(cards(o.state)).toHaveLength(1);
+      // At 10:40 the offsite is called off. Google returns the cancellation without times.
+      vi.setSystemTime(NOW + 40 * 60_000);
+      world.events = [REVIEW];
+      world.busy = world.busy.filter(b => b.start !== block(TODAY, 13, 6).start);
+      world.changed = [{ id: OFFSITE.id, title: '(no title)', start: '', end: '', all_day: true, status: 'cancelled', created: '' }];
+      world.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T15:30', title: 'Buffer', notify_guests: null, reason: 'The afternoon opened up; a short buffer before the review keeps it steady.' });
+      await o.sweep();
+      expect(calendarLogs().at(-1)).toEqual({ ok: true, code: 'asked' });
+      vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
+      await o.pass();
+      expect(world.trace.filter(step => step.startsWith(`context_write:${TODAY}`)).at(-1)).toBe(`context_write:${TODAY}:weight`);
+      // The floor arms the evaluation an hour after the first one started, five seconds inside the cooldown of its card.
+      expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 60 * 60_000 });
+      vi.setSystemTime(firstRun + 60 * 60_000);
+      await o.pass();
+      expect(runs(o.state).map(run => run.outcome)).toEqual(['proposed']);
+      expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 5_000 + 60 * 60_000 });
+      vi.setSystemTime(firstRun + 5_000 + 60 * 60_000);
+      await o.pass();
+      expect(runs(o.state)).toEqual([{ mode: 'live', outcome: 'proposed' }, { mode: 'live', outcome: 'proposed' }]);
+      expect(cards(o.state)).toHaveLength(2);
+      const evaluations = world.requests.filter(r => r.request.response_format?.name === 'health_proposal').map(r => JSON.stringify(r.request));
+      expect(evaluations).toHaveLength(2);
+      expect(evaluations[0]).toContain('Nothing proposed earlier on 2026-10-21.');
+      expect(evaluations[1]).toContain('Earlier on 2026-10-21 you proposed:');
+      expect(evaluations[1]).toContain('\\"title\\":\\"Focus block\\",\\"start\\":\\"2026-10-21T11:30\\",\\"end\\":\\"2026-10-21T12:30\\",\\"answer\\":\\"waiting for the owner\\"');
+      for (const leak of LEAKS) for (const [where, text] of [['the model requests', evaluations.join('\n')], ['tables and storage', dump(o.state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
     });
   });
 
