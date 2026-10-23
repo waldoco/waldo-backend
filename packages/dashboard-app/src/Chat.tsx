@@ -1,3 +1,4 @@
+import { signInHref } from './model';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
 import { CHAT_TEXT_MAX, visibleText, type ChatMessage, type ChatPart } from './chat-model';
 import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type LocalMessage } from './chat-store';
@@ -160,7 +161,7 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
   };
   const reply = (text: string) => { pinned.current = true; store.send(text); };
 
-  if (chat.phase === 'signed-out') return <section className="tile notice" role="alert"><h1>Sign in to chat with Waldo.</h1><p>{chat.error}</p><a className="button-link" href="/console/signin">Sign in</a></section>;
+  if (chat.phase === 'signed-out') return <section className="tile notice" role="alert"><h1>Sign in to chat with Waldo.</h1><p>{chat.error}</p><a className="button-link" href={signInHref()}>Sign in</a></section>;
 
   const unlanded = chat.local.filter(item => !item.landed);
   const closures = chat.local.filter(item => item.landed && (item.state === 'interrupted' || item.state === 'revoked' || item.effectsUnconfirmed));

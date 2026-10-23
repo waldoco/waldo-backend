@@ -85,10 +85,13 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
 | `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
+| `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |
+| `OWNER_LOOKUP` | `0` | `0` | `0` until the privacy notice that discloses the look-up is published (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. |
 | `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
 | `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
 | `WHATSAPP_ONBOARDING_URL`, `WHATSAPP_REENGAGE_TEMPLATE`, `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` | onboarding URL set; templates empty | empty | empty until Meta verification and a production number (D5) |
+| `GMAIL_PUSH_PROJECT` | `waldo-dev-492217` | `""` | `""` until the production Cloud project has its `waldo-gmail-push` topic and push subscription (S7). While it is empty, production starts no Gmail watch (`gmail_watch_skipped:unconfigured`) and `/events/gmail` answers 404; mail reads still work (`connectors/google-push.ts`, `channels/event-ingress.ts`). |
 | `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_SEARCH`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, tool search off, offload on. |
 | `WALDO_STREAM_REPLIES` | not set | not set | not set. Owner replies arrive whole. `on` shows a reply while it is written: a Telegram draft (`sendMessageDraft`) and, on the app and console, a `draft` on the running message's receipt for clients that send `x-waldo-app-contract: chat=2`. Only a message the model labels its final answer streams; WhatsApp and iMessage always get whole messages (`channels/owner-do.ts`, `conversation/reply-stream.ts`). |
 
@@ -102,7 +105,8 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `ANTHROPIC_API_KEY` | `owner-do.ts:3210` | the fallback model fails with `auth_failed` | **required**: a separate workspace with a spend limit |
 | `SUPABASE_PROJECT_URL`, `SUPABASE_PUBLISHABLE_KEY` | `identity/owner-directory.ts:64`, `identity/console-auth.ts:77` | no directory, no sign-in | **required** |
 | `WALDO_ROUTER_HMAC_SECRET` | `identity/owner-directory.ts:64` | every signed database call fails; the console ticket returns 403 | **required**. One fresh value, held identically in three places: this Worker secret, the Vault secret `waldo_router_hmac`, and the `connector-proxy` and `oauth-proxy` function secrets. |
-| `TELEGRAM_WEBHOOK_SECRET` | `channels/google-oauth.ts:77`, `channels/mcp-oauth-routes.ts:26` | **the Google and MCP OAuth callbacks return 404**, because this secret also signs their OAuth state | **required even with no Telegram bot**, until P8 gives OAuth state its own secret |
+| `WALDO_OAUTH_STATE_SECRET` | `connectors/oauth-state-secret.ts:8`, read by `channels/google-oauth.ts:80` and `channels/mcp-oauth-routes.ts:37` | **the Google and MCP OAuth callbacks return 404**; it signs their OAuth state, with no fallback to any other secret | **required**: one fresh value |
+| `TELEGRAM_WEBHOOK_SECRET` | `channels/telegram-webhook.ts:103` | the Telegram webhook answers 404 | **not set**, with `TELEGRAM_BOT_TOKEN`. It no longer signs OAuth state. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `channels/google-oauth.ts:77` | no Google connect | **required**: the production client (S7) |
 | `BRAVE_SEARCH_API_KEY` | `owner-do.ts:3243` | `web_search` says it is not set up | recommended |
 | `ELEVENLABS_API_KEY` or `SMALLEST_AI_API_KEY` | `llm/transcriber.ts:17-18` | voice notes go untranscribed | optional |
@@ -115,7 +119,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
 | `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
 
-One more secret is in an open PR: #1393 adds `WALDO_OAUTH_STATE_SECRET` for MCP, fail-closed. Freeze the secret list on the stand-up SHA (S0).
+#1393 (merged 22 Oct as `e228a483`) moved Google and MCP OAuth state onto `WALDO_OAUTH_STATE_SECRET`. Freeze the secret list on the stand-up SHA (S0).
 
 ### 1.4 Supabase
 
@@ -145,7 +149,7 @@ One more secret is in an open PR: #1393 adds `WALDO_OAUTH_STATE_SECRET` for MCP,
 | Item | Staging | Production needs | Status |
 | --- | --- | --- | --- |
 | Google Cloud project | `waldo-dev-492217`: Testing, External, 7 of 100 lifetime users, no organisation, branding links empty, one Web client with only the staging redirect | A separate production project. Google recommends separating test and production. It needs branding (home, privacy and terms pages on the owned domain) and a Web client whose only redirect is `https://<domain>/oauth/google/callback` (S7). | source doc, read-only GCP facts recorded 21 Oct |
-| Gmail push | Pub/Sub in `waldo-dev-492217`, **hard-coded** (`connectors/google-push.ts:96`) | per-environment project and topic (P6) | gap |
+| Gmail push | Pub/Sub in `waldo-dev-492217`, named by `GMAIL_PUSH_PROJECT` (§1.2) | `GMAIL_PUSH_PROJECT` set to the production project once its topic and push subscription exist (S7) | code done (P6); production off until set |
 | Langfuse | one project; text captured for every tester (#1398 gates it on agreement) | decision D7: none, or a separate production project with capture off, identifiers hashed (P5) and a retention period (Pro plan only) [cited: [Langfuse retention](https://langfuse.com/docs/data-retention)] | gap |
 | WhatsApp | Meta app callback is the staging webhook; system user `waldo-staging`; business verification in review (ECOFRESH GREENSYNC LLP, 22 Oct) | its own number, system user and callback, or a callback move; billing; a utility template (`docs/channels/whatsapp/NUMBER_SETUP_AND_SMOKE_TEST.md`) | blocked on Meta |
 | iMessage | connector on; host profile is fixtures-only | a real Apple Account, a dedicated host Mac, the number on iMessage | not started |
@@ -160,7 +164,7 @@ Each step lists the owner action, the blast radius and the rollback. A step star
 
 ### S0. Decide and freeze (no hosted change)
 
-- **Owner action.** Answer D1 to D10 (§5). Name the stand-up SHA: the `beta-mvp` commit that carries P1, P2 and P3. Hold #1388 and #1398 (new migrations), #1393 (new secret) and #1334 and #1355 (DO migration tags) until they land on that SHA or after the stand-up.
+- **Owner action.** Answer D1 to D10 (§5). Name the stand-up SHA: the `beta-mvp` commit that carries P1, P2 and P3. Hold #1388 and #1398 (new migrations) and #1334 and #1355 (DO migration tags) until they land on that SHA or after the stand-up.
 - **Check.** `node scripts/production-alpha-dryrun.mjs` at that SHA reports no `GAP` lines. `DECIDE` lines remain only for decisions the owner has answered in writing.
 - **Blast radius.** None.
 - **Rollback.** n/a.
@@ -225,7 +229,7 @@ Each step lists the owner action, the blast radius and the rollback. A step star
   | `GET /app/v1/session` | 401 |
   | `GET /console` | 303 when signed out |
   | `POST /probe/turn` with a body | 404 (staging-only route) |
-  | `POST /telegram/webhook` without the secret header | 403. `TELEGRAM_WEBHOOK_SECRET` is set for OAuth state (§1.3), so the route answers 403 rather than 404 (`channels/telegram-webhook.ts:99-104`). After P8 it is 404. |
+  | `POST /telegram/webhook` without the secret header | 404 while `TELEGRAM_WEBHOOK_SECRET` is unset (`channels/telegram-webhook.ts:104`). OAuth state no longer needs it (§1.3). |
   | `POST /events/gmail` without a bearer | 403 or 404 |
   | unsigned `POST /functions/v1/connector-proxy` | 401 |
 
@@ -247,8 +251,8 @@ Each step lists the owner action, the blast radius and the rollback. A step star
   - Fill in branding: home, privacy and terms links on the domain, plus authorised domains.
   - Create one Web client whose only redirect is `https://<domain>/oauth/google/callback`.
   - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` twice: as Worker secrets (`wrangler secret put … --name <production worker>`) and as `connector-proxy` function secrets (`supabase secrets set --project-ref <prod-ref>`). Values are typed at the prompt.
-  - Choose Testing (each invitee added as a test user, at most 100 for the project's lifetime, refresh tokens expiring every 7 days) or publishing unverified (the unverified-app screen, a 100-new-user cap, no 7-day expiry [inference in the research doc]). The research doc recommends Testing for the alpha and restricted verification with CASA for production (`docs/research/GOOGLE_INTEGRATION_2026-10-21.md:96-110`).
-  - Gmail push for production waits on P6; until then, production gets no Gmail push. Mail reads still work.
+  - Choose Testing (each invitee added as a test user, at most 100 for the project's lifetime, refresh tokens expiring every 7 days) or publishing unverified (the unverified-app screen, a 100-new-user cap, no 7-day expiry [inference in the research doc]). The research doc recommends Testing for the alpha and restricted verification with CASA for production (`docs/research/GOOGLE_INTEGRATION_2026-10-21.md:96-110`). Under Testing, each weekly lapse reaches the owner as one reconnect notice per failure episode: a reconnect button on Telegram and WhatsApp (WhatsApp only inside its 24-hour window), and plain text pointing at Connections on the app and iMessage. The owner still has to reconnect every week.
+  - Gmail push: create the `waldo-gmail-push` topic and a push subscription whose service account is `waldo-gmail-push@<project>.iam.gserviceaccount.com` and whose endpoint and audience are `https://<domain>/events/gmail` (the names `connectors/google-push.ts` and `channels/event-ingress.ts` check), then set `GMAIL_PUSH_PROJECT` on the production Worker. Until then production gets no Gmail push. Mail reads still work.
 - **Check.** A test owner connects Google on production and a Calendar read returns.
 - **Blast radius.** Google access for production owners only.
 - **Rollback.** Delete the client; owners re-link.
@@ -328,7 +332,7 @@ Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, *
   - 30 attempts per IP per 15 minutes.
 
   A group onboarding behind one office network will meet the IP limit [inference].
-- **Sessions last 12 hours** (`console-signin.ts:306`, `app-api.ts:87`), so 50 daily users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4).
+- **App sessions last 12 hours** (`app-api.ts:87`), so 50 daily app users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4). Console sessions stay signed in for up to 30 days while used (`identity/console-auth.ts`).
 
 **Cost ceiling.**
 - **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
@@ -373,7 +377,7 @@ The path [source]:
 | `workspace_owner_mappings`, the Auth audit log | no, on purpose | `:8-9` | n/a |
 | `whatsapp_onboarding_replies` (hashed number), `console_auth_attempts` (expire on a window) | no | `20261017090000:5-6`; `console-signin.ts:232` | none |
 | `DeviceBridgeDO`, `IMessageBridgeDO` state | **no**. Never contacted; iMessage keeps held bodies up to 30 days [unverified whether pruned] | `devices/device-bridge-do.ts:163-206`; `imessage/bridge-store.ts:41-43` | none |
-| Google, WHOOP and MCP grants at the provider; Gmail and Calendar watches | **no**. No revoke call exists anywhere (no `oauth2.googleapis.com/revoke`) | `owner-do.ts:2811-2820` runs only on disconnect | none |
+| Google, WHOOP and MCP grants at the provider; Gmail and Calendar watches | **no** on account deletion. A disconnect revokes at the provider first: Google through `googleProxy.revoke`, which asks the `connector-proxy` `revoke` operation only for a mailbox no other owner holds; WHOOP and MCP through `oauth-proxy`'s. Account deletion calls none of them (P4 item 2). | `connectors/connections.ts` (`revoke`), `connectors/mcp-connections.ts`, `health/providers/whoop-owner.ts` | disconnect only |
 | Langfuse traces | **no** | export only | none |
 | DO point-in-time recovery (30 days), Supabase backups and PITR | **no**, and not disclosed | ADR-0058; ADR-0055 requires a tombstone ledger and re-deletion after restore, not built | none |
 
@@ -460,7 +464,11 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
 
 **P4. Account deletion that finishes.**
 1. **Erase the DO even when the directory call fails or is unknown.** Write an erase-pending marker first. On a lost or failed `delete_owner`, retry it from the DO's alarm with the same request id, and make the retry return a distinct "already gone" result instead of `false`.
-2. **Revoke at providers before the Vault delete.** Google `oauth2.googleapis.com/revoke`, WHOOP `DELETE user/access`, MCP RFC 7009, and stopping the Gmail and Calendar watches. The runtime never holds these tokens. `connector-proxy` holds Google and `oauth-proxy` holds WHOOP and MCP (ADR-0075 custody), so each revoke is a new signed operation inside those functions. It runs before `delete_owner` removes the Vault rows. Each is best-effort, and the receipt names it.
+2. **Revoke at providers before the Vault delete.** The signed revoke operations exist: `connector-proxy` `revoke` for Google (`oauth2.googleapis.com/revoke`) and `oauth-proxy` `revoke` for WHOOP and MCP (ADR-0075 custody). Account deletion must reach each one before `delete_owner` removes the Vault rows, and stop the Gmail and Calendar watches. Each call is best-effort, and the receipt names it.
+   - For Google, the only entry point is the Worker's `googleProxy(env).revoke` in `connectors/connections.ts`. Never call the edge `revoke` op directly.
+   - Google's revocation ends Waldo's whole authorization for that Google user, so it would also end another owner's grant on the same mailbox.
+   - `googleProxy.revoke` asks Google only when signed `gmail_push_route` lists this connection as the mailbox's one live connection. The edge op has no such check.
+   - Call it while the owner's state is still `active`. `gmail_push_route` lists only active owners' connections, so once the owner is not active it no longer lists this one, and `googleProxy.revoke` answers `unavailable` without asking Google.
 3. **Clear the device and iMessage bridge objects.**
 4. **Delete or fix the legacy console form and its copy.**
 5. **Name every store outside reach in the receipt:** Langfuse until P5's purge, model providers, backups and PITR, and copies the owner shared.
@@ -485,20 +493,14 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
   - Capture stays off for `prod`, `production`, unset and `preview`.
   - The purge is called on deletion.
 
-**P6. Gmail push per environment.**
-- **Change.** `GMAIL_PUSH_PROJECT` and its topic become config. Production without it skips `watch` and logs `push_unconfigured` instead of publishing to the staging project.
-- **Files.** `connectors/google-push.ts:96-103`, `wrangler.jsonc`, the bindings guard's var mirror.
-- **Tests.** Unset means no watch call. A set value builds the topic name.
+**P6. Gmail push per environment.** Done: `GMAIL_PUSH_PROJECT` names the project per environment (§1.2). Unset, the watch is skipped (`gmail_watch_skipped:unconfigured`) and `/events/gmail` answers 404.
 
 **P7. Production gate.**
 - **Change.** `staging-gate.mjs` takes a pinned target (staging or production), with the production origin and ref as constants added after S1 and S6. The production probe list is §2 S5.
 - **Files.** `scripts/staging-gate.mjs` (or a new `scripts/production-gate.mjs` sharing its functions), its tests, and `docs/ops/STAGING_DEPLOY_GATE.md`.
 - **Tests.** The probe expectations per target, and that an unknown target is refused.
 
-**P8. A dedicated OAuth state secret.**
-- **Change.** Google and MCP state are signed with their own secret, not `TELEGRAM_WEBHOOK_SECRET`. Coordinate with #1393's `WALDO_OAUTH_STATE_SECRET` so there is one secret, not two.
-- **Files.** `channels/google-oauth.ts`, `channels/mcp-oauth-routes.ts`, `owner-do.ts:2694`, `connectors/mcp-oauth.ts`.
-- **Tests.** The callbacks work with the Telegram secret unset. A state signed under the old secret is rejected after rotation.
+**P8. A dedicated OAuth state secret.** Done by #1393 (`e228a483`): Google and MCP state are signed with `WALDO_OAUTH_STATE_SECRET`, with no fallback (`connectors/oauth-state-secret.ts`).
 
 **P9. Report a problem.**
 - **Change.** A tool the model can call when the owner says something went wrong. It records the trace key, the surface and the owner's own words in the owner's DO, and shows an approval card before anything leaves. Sending the report to the support address is an approved effect with a receipt. The console lists the owner's reports.
