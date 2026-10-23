@@ -4,8 +4,9 @@ import { telegramReceipt, tookPart, type FinalRecord } from './telegram-final-ou
 
 // Where Waldo's proactive messages go for an owner reachable on the app and on a chat surface: the day cards (the Brief among
 // them), reminders, follow-ups and update cards. The owner chooses in the console; the app is the default. WhatsApp can take
-// them instead of the app (whatsapp) or with it (both). iMessage comes only with the app (app_imessage): the bridge's report
-// of a send never reaches the job that sent it, so the app's delivery is what settles the job and iMessage gets a copy.
+// them instead of the app (whatsapp) or with it (both). With the app, iMessage gets a copy (app_imessage): the app's delivery
+// settles the job. An owner whose only surface is iMessage gets proactive work there, outside this setting, through the
+// delivery outbox (imessage/scheduled-route.ts).
 export const PROACTIVE_SURFACES = ['app', 'whatsapp', 'both', 'app_imessage'] as const;
 export type ProactiveSurface = (typeof PROACTIVE_SURFACES)[number];
 export type ProactiveTarget = 'app' | 'whatsapp' | 'imessage';
@@ -42,8 +43,9 @@ export const proactiveTargets = (wanted: readonly ProactiveTarget[], reachable: 
 };
 
 // A call whose effect is a message Waldo sends first, later: a reminder, a scheduled standing order, a loop with a date to
-// check back on, a background task (it reports when it finishes). An owner with no surface that takes proactive work (one who writes only on iMessage, without the app)
-// would be promised a message that never comes, so such a call is refused with that reason and nothing is scheduled. A
+// check back on, a background task (it reports when it finishes). An owner with no surface that takes proactive work (one whose
+// iMessage sender the directory no longer binds, with no other surface) would be promised a message that never comes, so such
+// a call is refused with that reason and nothing is scheduled. A
 // standing order for every turn and a loop with no date still work: they need no message from Waldo first.
 const startsLaterMessage = (tool: string, args: unknown): boolean => {
   const given = (args ?? {}) as { trigger?: unknown; due?: unknown };
@@ -51,11 +53,11 @@ const startsLaterMessage = (tool: string, args: unknown): boolean => {
     || (tool === 'set_standing_order' && given.trigger !== 'every_turn')
     || (tool === 'open_loop' && given.due !== null && given.due !== undefined);
 };
-export const UNREACHABLE_CHECK_BACK = 'Nothing was scheduled: Waldo cannot message this owner first here. On iMessage Waldo only answers; reminders, '
-  + 'background tasks, scheduled reports and check-backs need the Waldo app. Tell the owner that, and that a loop with no date stays on the list for when they write.';
-export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string; handle(args: never, ctx: never): Promise<unknown> }>>(handlers: readonly H[], reachable: () => boolean): H[] =>
+export const UNREACHABLE_CHECK_BACK = 'Nothing was scheduled: Waldo cannot message this owner first here, because no surface Waldo can write to first is '
+  + 'linked to them now. Tell the owner that, and that a loop with no date stays on the list for when they write.';
+export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string; handle(args: never, ctx: never): Promise<unknown> }>>(handlers: readonly H[], reachable: () => boolean | Promise<boolean>): H[] =>
   handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop', 'start_task'].includes(handler.name)
-    ? { ...handler, handle: async (args: never, ctx: never) => !reachable() && startsLaterMessage(handler.name, args)
+    ? { ...handler, handle: async (args: never, ctx: never) => startsLaterMessage(handler.name, args) && !(await reachable())
       ? { ok: false as const, code: 'rejected' as const, error: UNREACHABLE_CHECK_BACK, source_taint: null }
       : handler.handle(args, ctx) }
     : handler);

@@ -90,7 +90,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
 
   const brief = data.brief.status === 'sent_recorded'
     ? { title: 'Sent, as recorded.', body: 'Waldo logged a send. That doesn’t confirm delivery or show the message; check your chat.' }
-    : data.brief.status === 'sent_unconfirmed' ? { title: 'Sent, waiting for your phone.', body: 'WhatsApp took the Brief but hasn’t yet said it reached your phone. Waldo records it as arrived once it does.' }
+    : data.brief.status === 'sent_unconfirmed' ? { title: 'Waiting to hear it arrived.', body: 'Waldo queued the Brief for delivery and hasn’t yet heard that it reached you. It records it as arrived once it does.' }
     : data.brief.status === 'not_scheduled' ? { title: 'No Brief scheduled.', body: 'There’s nothing to send yet.' }
       : { title: 'Not sent yet.', body: 'No Brief content is shown here.' };
   const zone = data.timezone, next = data.next_card;

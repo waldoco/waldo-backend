@@ -4,8 +4,8 @@ import { Scheduler } from '../../src/scheduler/multiplexer';
 import { productionDeps } from '../../src/seams/deps';
 import { ensureSchema } from '../../src/tracer/schema';
 
-// A one-off reminder two hours out, set through the scheduler as the set_reminder tool sets one. Returns its due time, which
-// the owner alarm holds once the reminder is set, while nothing sooner is due.
+// A one-off reminder two hours out, set through the scheduler as the set_reminder tool sets one. Returns its due time. Once it
+// is set the owner alarm holds the schedule's next entry: this reminder, unless an owner job is due sooner.
 export async function remindInTwoHours(state: DurableObjectState): Promise<number> {
   ensureSchema(state.storage);
   state.storage.kv.put('timezone', 'UTC');
@@ -14,7 +14,7 @@ export async function remindInTwoHours(state: DurableObjectState): Promise<numbe
   await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID())
     .set({ note: 'water plants', at: new Date(Date.now() + 2 * 3_600_000).toISOString().slice(0, 16), repeat: 'none' });
   const due = reminderDue(state);
-  expect(await state.storage.getAlarm()).toBe(due);
+  expect(await state.storage.getAlarm()).toBe(scheduleNext(state));
   return due;
 }
 
