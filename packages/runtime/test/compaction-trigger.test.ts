@@ -192,4 +192,28 @@ describe('a topic forgotten in the turn never reaches its summary', () => {
       expect(summaries(storage)).toHaveLength(1);
     });
   });
+
+  it('a span in which every row carries the topic makes no summary call and writes no row', async () => {
+    await inOwner('compaction-held-topic-whole-span', async (storage) => {
+      const fake = model();
+      const forget = { name: 'forget_memory', description: 'Forget a topic.', schema: forgetMemoryArgsSchema, trigger_allowlist: ['user_message'], autonomy_gated: false,
+        handle: async () => ({ ok: true as const, data: { forgotten: true }, source_taint: null }) };
+      const gateway: LLMGatewayAdapter = { complete: async (input) => {
+        if (input.request.system === COMPACTION_INSTRUCTION) return fake.gateway.complete(input);
+        const said = JSON.stringify(input.request.messages.at(-1) ?? '');
+        if (said.includes('Please forget the Lotus Hall plan') && !input.request.tool_turns?.length) {
+          return { ok: true, data: { model: input.request.model, text: '', tool_calls: [{ call_id: 'f1', name: 'forget_memory', arguments: JSON.stringify({ topic: 'Lotus Hall', scope_note: 'the plan' }) }], input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+        }
+        return { ok: true, data: { model: input.request.model, text: 'Noted for the Lotus Hall.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+      } };
+      const hops: TurnLogEntry[] = [];
+      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), gateway, { tools: [forget as never], log: entry => hops.push(entry) });
+      for (let n = 1; n <= 5; n += 1) await say(responder, n, `Question ${n}: the Lotus Hall party. ${'q'.repeat(70)}`);
+      await say(responder, 6, `Please forget the Lotus Hall plan. ${'q'.repeat(60)}`);
+      await responder.compactIfDue!('owner');
+      expect(fake.compactions()).toHaveLength(0);
+      expect(summaries(storage)).toHaveLength(0);
+      expect(hops.filter(hop => hop.hop === 'compaction').at(-1)).toMatchObject({ ok: false, code: 'held_topic' });
+    });
+  });
 });
