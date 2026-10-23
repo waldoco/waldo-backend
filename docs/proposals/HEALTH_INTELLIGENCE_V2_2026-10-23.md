@@ -49,7 +49,7 @@
 - Nothing learns patterns.
 
 **The industry [§2]:**
-- No vendor waits 14 days. Oura and Apple score from the first night and learn in the background. WHOOP greys out 4 days. Apple, Fitbit and Samsung need about 7 nights for their baselines.
+- No vendor waits 14 days. Oura scores Readiness from the first morning and learns in the background. Apple scores sleep from the first night. WHOOP greys out Recovery for 4 days. Apple's Vitals and Readiness, Fitbit and Samsung need about 7 nights for their baselines.
 - Firstbeat (Garmin), Samsung and Fitbit seed with age and sex.
 - No vendor composite has published external validation.
 
@@ -78,7 +78,7 @@
 
 **How to read this section.**
 - One block per score family. Each block has the vendors, then Waldo today, then Waldo v2 (§3).
-- Every vendor cell cites a page in §13 that was opened and read on 23 October 2026. A cell with no citation is marked UNCONFIRMED (looked for, not found on an opened page) or [inference].
+- Every vendor cell cites a page in §12 that was opened and read on 23 October 2026. A cell with no citation is marked UNCONFIRMED (looked for, not found on an opened page) or [inference].
 - None of these vendors publishes a full formula. This compares method *shapes*: inputs, windows, cold start and gaps.
 
 **The finding that matters most.** Nobody waits 14 days. The vendors split two ways.
@@ -218,7 +218,7 @@ baseline: {
 
 - **When it reads `personal`.** A pillar is `personal` when every used component has n ≥ 14. This depends on how much data exists, not on account age. An owner whose history was backfilled (§4) is `personal` on the first morning, as "Bring your past" promises. `prior: 'adults'` means the owner didn't share age or sex.
 - **What the owner sees.** The app shows "your baseline is being calculated" while the state is `provisional`. That is the owner's wording from the 23 October ruling, and the app owns the copy.
-- **Old builds.** The key is new, and `healthScoresV1Schema` is a strict object. So the key is served only to builds naming the next free health revision (§9). A build below it receives the same pillar as `unavailable` / `baseline_immature`, which is what it gets today. An installed build therefore never shows a prior-anchored number without its label.
+- **Old builds.** The key is new, and `healthScoresV1Schema` is a strict object. So the key is served only to builds naming the next free health revision: 4, unless #1399's reserved clinical purpose lands first, in which case 5. A build below it receives the same pillar as `unavailable` / `baseline_immature`, which is what it gets today. An installed build therefore never shows a prior-anchored number without its label.
 - **The model.** It gets the same label in words (§6). Under `auto`, the health trigger stays a shadow run while Recovery is provisional (§6.3).
 
 #### 3.1.2 Which components get a population prior
@@ -360,7 +360,8 @@ These are the inputs every baseline and pattern in §3 and §5 reads. Hourly sha
   - Within the last 90 days, it sends raw samples as today, and the rollup fills the aggregates.
   - Older than 90 days, it sends `daily_aggregate` samples (a new sample kind at the next health revision). SQL writes these to the aggregate table only, never to `health_samples`.
 - **Recording the window:** The phone records the authorised window per type. The backend records the earliest day it holds per signal, so "no data before X" is never read as "no change before X".
-- **Recompute:** When a backfill batch lands, the producer recomputes only today and yesterday, as now. Older days get no score rows. Scores are never recomputed retroactively for history (decision HI-8). The aggregates feed baselines and patterns, not past scores.
+- **Recompute:** When a backfill batch lands, the producer recomputes today and yesterday, as now.
+- **History rows (HI-8):** for backfilled days within the last 90 days, it also writes Recovery and sleep-debt rows labelled `backfilled`. These never raise a zone-change event, so "Your history" (7, 30 or 90 dots) works from day 1. Form and Weight aren't reconstructed for past days. Days older than 90 feed baselines and patterns only.
 
 **Reading.** Baselines read up to 60 days from the aggregate table through a new signed `health_daily_read`. That also removes the 8,000-row series cap (#1399 §10) from the baseline path. The 90-day hourly read stays as it is for Form's same-hours comparison.
 
@@ -434,10 +435,12 @@ The code computes statistics and decides statistical support. Whether a pattern 
 **Why caffeine and alcohol can enter only through owner labels.** The website's "Excess Caffeine" spot needs an exposure no sensor measures. The owner can label a day in chat or in the app ("had wine last night"), and the model may propose that label from what the owner said. The label is stored as owner-stated (§5.4). No code infers it from text, which follows the CLAUDE.md judgment rule.
 
 **What is never learned:**
-- conditions, diagnoses, cycle or ovulation estimates, mood (#1399 AW-8 deferred State of Mind), or any sensitive trait;
-- anything from clinical tier-C types.
+- conditions, diagnoses, cycle or ovulation estimates, or any sensitive trait;
+- anything from clinical tier-C types. Those types may reach the model as context once their own consent purpose exists (#1399 AW-4), but they never become patterns.
 
 This holds the launch contract's line against "automatic sensitive-trait inference".
+
+**Not in the v1 catalogue: mood.** Self-reported mood (Apple State of Mind) follows the open AW-8 question in #1399. If the owner accepts it there, mood joins as an exposure in a later catalogue version.
 
 ### 5.2 Where it lives
 
@@ -519,7 +522,7 @@ Today `toContextHealthMaterial` (`channels/health-context.ts:84-188`) carries zo
 | Field | Source | Example in the prompt |
 |---|---|---|
 | availability + baseline state | Each pillar's `baseline` (§3.1) | `Recovery solid (provisional: personal baseline day 5 of 14).` |
-| version | `algorithm_version` per pillar. **Fixes a mislabel:** the view today hard-codes `form.safte-fast.v1` / `recovery.v1` (`health-context.ts:144-145`), while rows are `*.candidate.v*`. This is recorded here and fixed in P5. | — |
+| version | `algorithm_version` per pillar. **Fixes a mislabel:** the view today hard-codes `form.safte-fast.v1` / `recovery.v1` (`health-context.ts:144-145`), while rows are `*.candidate.v*`. This is recorded here and fixed in Q5 (§9). | — |
 | trend and drivers | #1399 drivers, plus `trend` patterns (§5.1) | `HRV below your usual for 6 nights.` |
 | sleep debt and need | `sleep_debt` (AW-7, §3.5) | `Sleep debt building over 14 nights; need about 8 h (estimated).` |
 | supported patterns | `health_patterns` with state `supported`, at most 6 per turn, ranked by relevance to the turn's purpose (calendar planning, sleep question and so on) | `Since 4 Sep: Mondays your resting heart rate runs higher than other days (supported, 7 Mondays).` |
@@ -543,7 +546,7 @@ The brief asks for "dated, qualitative statements".
   - **Proposal:** `auto` reads the stored `baseline.state` and stays a shadow run while Recovery is provisional.
   - **Why:** this keeps the owner's setting meaning what its comment says, "watches quietly until their own baseline exists".
   - `live` still fires on provisional zones, and the model sees the label.
-- **`channels/health-context.ts`.** It returns material from day 1 and must thread the baseline label. That is the P5 change, in that lane's file and with its agreement.
+- **`channels/health-context.ts`.** It returns material from day 1 and must thread the baseline label. That is Q5 (§9), in that lane's file and with its agreement.
 - **Trigger wake on drivers.** #1399's P6 still belongs to the freshness lane. Pattern changes do not wake the trigger in v1. They reach the model on its next turn or scheduled run.
 
 ## 7. Evaluation [proposed]
@@ -608,7 +611,7 @@ No vendor composite has published external validation (§2), so "as good as or b
 |---|---|---|---|
 | HI-1 | Provisional scores through §3.1's shrinkage. The label follows baseline maturity, not account age. Builds below the new revision keep `baseline_immature`. | **Yes** | Scores stay hidden for 14 days, against the 23 Oct ruling |
 | HI-2 | Health profile: age band and sex from HealthKit characteristics (iOS) or onboarding (Android). Optional, editable, stored in the health plane. | **Yes**. Without it every owner gets the wider all-adults prior. | All-adults priors only |
-| HI-3 | Apple SDNN: no population prior and no conversion. Personal-only, joining at 7 nights. Day-1 Recovery for Apple owners uses sleep and resting HR. | **Yes**. The alternative, seeding from Fitbit's 5-minute SDRR, uses a different window and device. | Name the alternative explicitly, and it is labelled `prior: adults_sdrr` |
+| HI-3 | Apple SDNN: no population prior and no conversion. Personal-only, joining at 7 nights. Day-1 Recovery for Apple owners uses sleep and resting HR. | **Yes**. The alternative, seeding from Fitbit's 5-minute SDRR, uses a different window and device. | Seed Apple SDNN from Fitbit's 5-minute SDRR as a labelled, wide prior. This needs a new `baseline.prior` value, which isn't in §3.1.1's enum. |
 | HI-4 | Baseline window 60 days; `personal` at 14 days; personal-only components join at 7 | **Yes** | Keep 30 days |
 | HI-5 | Form v6: per-method stress HRV, plus a SAFTE-shaped alertness term replacing the midpoint term, **shadow for 4 weeks** before it shows | **Yes, shadow first**. Ship the stress-HRV change even if the alertness term is declined. | Form v5 plus the SDNN fix only |
 | HI-6 | Weight v5: calendar optional, tasks and messages wired as counts. HR-based TRIMP load left as a later candidate. | **Yes** | Weight stays calendar-only |
@@ -631,7 +634,7 @@ No vendor composite has published external validation (§2), so "as good as or b
 
 | PR | Content | Depends on | Touches |
 |---|---|---|---|
-| Q1 | Contract, next free health revision (§3.1.1): `baseline` on pillars; `daily_aggregate` sample kind; health profile DTO and route; patterns list, feedback and day-label DTOs and routes. App-lane announcement first (additive-only rule). | #1399 P1 | `contracts/src/app/health-ingest.ts` (or a new `health-patterns.ts`) |
+| Q1 | Contract, next free health revision (4, or 5 if the clinical purpose lands first): `baseline` on pillars; `daily_aggregate` sample kind; health profile DTO and route; patterns list, feedback and day-label DTOs and routes. App-lane announcement first (additive-only rule). | #1399 P1 | `contracts/src/app/health-ingest.ts` (or a new `health-patterns.ts`) |
 | Q2 | Migrations: new tables `health_daily_aggregates`, `health_profile`, `health_patterns`, `health_day_labels`. RPCs `health_daily_read`, `health_patterns_write`/`_read`/`_feedback`, `health_day_label_write`. `health_ingest` gains the rollup and routes daily samples older than 90 days to aggregates instead of ignoring them. The deletion paths in §4.4, with a pgTAP test per path and per table. | Q1; #1399 P2 | `supabase/migrations/*`, registry, pgTAP |
 | Q3 | Scores: `scores/baseline.ts`; recovery v3, sleep need v1, debt v2, weight v5. Producer reads aggregates and the profile, and writes `baseline`. Form v6 is computed into a shadow field only. | Q2; #1399 P3 | `health/scores/*`, `health/producer.ts` (after the freshness lane's and #1399's producer changes) |
 | Q4 | Owner DO wiring: tasks and messages counts beside calendar busy minutes | Q3 | `health/calendar-demand.ts` neighbour, owner-DO hunk |
