@@ -336,6 +336,24 @@ describe('consent and findings routes', () => {
       expect(count(storage)).toBe(0);
     }, { hideText: async () => { if (failing) throw new Error('history cleanup is incomplete'); } });
   });
+  it('also hides and bars a finding a turn recorded while the copies were being hidden', () => {
+    const LATE = { category: 'achievement', text: 'Spoke at the Pune product summit', source_url: 'https://samrivera.dev/talks', evidence_quote: 'Sam spoke at the Pune product summit' } as const;
+    const hidden: (readonly string[])[] = [];
+    let storageRef: DurableObjectStorage | null = null;
+    return owner(async ({ storage, send }) => {
+      storageRef = storage;
+      seed(storage);
+      expect(appConsentChangeV1Schema.parse(await (await send('/app/v1/consents/withdraw', { request_id: 'withdraw-late-1', purpose: 'owner_lookup' })).json()).findings_erased).toBe(2);
+      expect(hidden).toEqual([[ACME.text, ACME.evidence_quote], [LATE.text, LATE.evidence_quote]]);
+      expect(count(storage)).toBe(0);
+      ledger(storage).grant('owner_lookup', 1, 10);
+      expect(stores(storage).findings.record(LATE, 'Talks', 11)).toBe('forgotten');
+    }, { hideText: async texts => {
+      // The first hide yields to a turn that records one more finding before the withdrawal commits.
+      if (!hidden.length) stores(storageRef!).findings.record(LATE, 'Talks', 5);
+      hidden.push(texts);
+    } });
+  });
   it('unticking the look-up in the agreements withdraws it, hides the copies and bars the findings', () => owner(async ({ storage, calls, act }) => {
     seed(storage);
     await act({ action: 'start' }); await act({ ...agree, owner_lookup: false });
