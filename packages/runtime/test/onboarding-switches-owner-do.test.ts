@@ -103,6 +103,48 @@ describe('a finding that expired before the withdrawal', () => {
   }));
 });
 
+describe('a first run while the agreements are held back', () => {
+  const objectFor = (state: DurableObjectState, vars: Record<string, string>) => {
+    const object = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined, ...vars });
+    const name = state.storage.kv.get<string>('do_name')!;
+    return (path: string, body?: unknown) => object.fetch(new Request(`https://telegram-owner${path}`, {
+      method: body === undefined ? 'GET' : 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }));
+  };
+  const onboarding = async (call: ReturnType<typeof objectFor>) => await (await call('/app/v1/onboarding')).json() as { state: string; steps: Record<string, string> };
+
+  it('runs the later steps, completes with the agreements pending, and offers them once the switch is on', () => owner({ APP_AGREEMENTS: '0', OWNER_LOOKUP: '1' }, async ({ state, call }) => {
+    for (const [id, action] of [['held-start-01', { action: 'start' }], ['held-name-001', { action: 'name.set', name: 'Sam' }], ['held-prio-001', { action: 'priority.set', text: 'Ship the beta' }], ['held-done-001', { action: 'complete' }]] as const) {
+      const response = await call('/app/v1/onboarding/actions', { request_id: id, ...action });
+      expect(response.status, `${action.action}: ${await response.clone().text()}`).toBe(200);
+    }
+    const held = await onboarding(call);
+    expect(held).toMatchObject({ state: 'completed', steps: { agreements: 'pending', name: 'done', priority: 'done' } });
+    // Consent stays the basis for the look-up: it is refused while the agreements are held back, and nothing is recorded.
+    expect((await call('/app/v1/consents', { request_id: 'held-lookup-1', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true })).status).toBe(409);
+    expect(state.storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+
+    const on = objectFor(state, { APP_AGREEMENTS: '1', OWNER_LOOKUP: '1' });
+    expect(await onboarding(on)).toMatchObject({ state: 'completed', steps: { agreements: 'pending' } });
+    expect(await (await on('/app/v1/consents')).json()).toMatchObject({ agreements_offered: true });
+    for (const purpose of ['terms', 'privacy_notice']) {
+      expect((await on('/app/v1/consents', { request_id: `on-${purpose}-01`, purpose, version: 1, age_attested_18_plus: true })).status).toBe(200);
+    }
+    expect(await onboarding(on)).toMatchObject({ state: 'completed', steps: { agreements: 'done' } });
+  }));
+  it('with the switch on, the later steps still wait for the agreements', () => owner({ APP_AGREEMENTS: '1', OWNER_LOOKUP: '1' }, async ({ call }) => {
+    expect((await call('/app/v1/onboarding/actions', { request_id: 'on-start-001', action: 'start' })).status).toBe(200);
+    const name = await call('/app/v1/onboarding/actions', { request_id: 'on-name-0001', action: 'name.set', name: 'Sam' });
+    expect([name.status, await name.json()]).toEqual([409, { error: 'agreements_required' }]);
+    const link = await call('/app/v1/onboarding/channel-link', { provider: 'telegram' });
+    expect(await link.json()).toEqual({ error: 'agreements_required' });
+  }));
+  it('lets the chat-channel link run while held back', () => owner({ APP_AGREEMENTS: '0', OWNER_LOOKUP: '1' }, async ({ call }) => {
+    expect(await (await call('/app/v1/onboarding/channel-link', { provider: 'telegram' })).json()).not.toEqual({ error: 'agreements_required' });
+  }));
+});
+
 describe('findings reach the model as outside content whatever the switches say', () => {
   it('list_owner_findings returns a finding listed while the agreements are held back, tainted external', () => runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`onboarding-switches-taint-${n++}`)), async (_i, state) => {
     const sql = state.storage.sql, claims = claimStore(sql, w => state.storage.transactionSync(w));

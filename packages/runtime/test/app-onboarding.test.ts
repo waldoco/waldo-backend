@@ -393,7 +393,7 @@ describe('consent and findings routes', () => {
     expect(storage.sql.exec<{ purpose: string }>("SELECT purpose FROM consent_ledger WHERE purpose IN ('terms', 'owner_lookup')").toArray()).toEqual([]);
     expect((await run(await act({ ...agree, owner_lookup: false }))).steps.agreements).toBe('done');
   }, { lookupOffered: false }));
-  it('holds the agreements back while the server has their copy off: the app is told, nothing is recorded, and no step after them runs', () => owner(async ({ storage, calls, send, act }) => {
+  it('holds the agreements back while the server has their copy off: the app is told, nothing is recorded, and the steps after them run', () => owner(async ({ storage, calls, send, act }) => {
     expect(appConsentListV1Schema.parse(await (await send('/app/v1/consents')).json())).toMatchObject({ agreements_offered: false, owner_lookup_offered: false });
     const terms = await send('/app/v1/consents', { request_id: 'grant-held-1', purpose: 'terms', version: 1, age_attested_18_plus: true });
     expect([terms.status, await terms.json()]).toEqual([409, { error: 'not_offered' }]);
@@ -402,7 +402,7 @@ describe('consent and findings routes', () => {
       const yes = await act({ ...agree, owner_lookup });
       expect([yes.status, await yes.json()]).toEqual([409, { error: 'not_offered' }]);
     }
-    expect(await (await act({ action: 'name.set', name: 'Sam' })).json()).toEqual({ error: 'agreements_required' });
+    expect((await run(await act({ action: 'name.set', name: 'Sam' }))).steps).toMatchObject({ agreements: 'pending', name: 'done' });
     expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
     expect(calls.hidden).toEqual([]);
     expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.agreements).toBe('pending');

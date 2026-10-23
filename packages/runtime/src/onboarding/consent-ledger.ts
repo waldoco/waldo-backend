@@ -58,6 +58,9 @@ export const consentLedger = (sql: Sql, options: ConsentOptions) => {
     active,
     // The terms and the notice, both at their current copy: what every step after the agreements needs.
     agreed: (): boolean => active('terms') && active('privacy_notice'),
+    // Whether the steps after the agreements may run: once this server offers the agreements, only with them accepted at their
+    // current copy. While it holds them back the steps run and the agreements step stays pending; the look-up stays refused.
+    stepsOpen: (): boolean => !offered('terms') || (active('terms') && active('privacy_notice')),
     list: () => ({ age_attested_18_plus: ageAttested(), agreements_offered: offered('terms'), owner_lookup_offered: offered('owner_lookup'), consents: appConsentPurposeV1Schema.options.map(state) }),
     attestAge(at: number): void { if (!ageAttested()) append(AGE, 'granted', 1, at); },
     // Granting what is already granted at this version changes nothing, so a repeated yes leaves one record.
