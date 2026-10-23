@@ -292,10 +292,11 @@ describe('calendar demand with Waldo\'s own blocks', () => {
 
   it('lists only calendars Waldo can write to, and only for an account that granted event access', () => withDemand(async sql => {
     const { demand, pages } = setup(sql, {
-      'work@example.com': account([calendar('work'), calendar('shared', { access_role: 'reader' })], [busyAndListed('shared', 'tagged', '09:00', '10:00', 'rest')]),
+      'work@example.com': account([calendar('work'), calendar('shared', { access_role: 'reader' }), calendar('quiet')], [busyAndListed('work', 'standup', '14:00', '15:00'), busyAndListed('shared', 'tagged', '09:00', '10:00', 'rest')]),
       'home@example.com': account([calendar('home')], [busyAndListed('home', 'tagged', '11:00', '12:00', 'rest')], { scopes: CALENDAR_SCOPES.slice(1) }),
     });
-    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 120 });
+    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 180 });
+    // A calendar with nothing busy has no block to find, so it is not listed either.
     expect(pages).toEqual(['work']);
   }));
 

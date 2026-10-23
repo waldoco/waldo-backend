@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GoogleError, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { calendarPageSchema } from '@waldo/contracts';
+import { GoogleError, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, proxyClientOptions, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -556,5 +557,16 @@ describe('the kind of a protected block on the owner\'s calendar', () => {
     const { client } = recording(() => ({ kind: 'calendar#events', items: [event('rest', 'rest'), event('deep', 'deep_work'), event('other', 'nap'), event('plain')] }));
     const page = await client.calendarPage!('primary', '2026-10-11T00:00:00Z', '2026-10-12T00:00:00Z', 50, false);
     expect(page.events.map(item => [item.id, item.block])).toEqual([['rest', 'rest'], ['deep', 'deep_work'], ['other', undefined], ['plain', undefined]]);
+    expect(calendarPageSchema.parse(page).events.map(item => item.block)).toEqual(['rest', 'deep_work', undefined, undefined]);
+    expect(calendarPageSchema.safeParse({ ...page, events: [{ ...page.events[0], block: 'nap' }] }).success).toBe(false);
+  });
+
+  it('reports the kind through the connector proxy only to a Worker that asks, since an older one refuses a page with it', async () => {
+    const tagged = { kind: 'calendar#events', items: [{ id: 'rest', summary: 'Recharge', start: { dateTime: start }, end: { dateTime: end }, extendedProperties: { private: { waldoBlock: 'rest' } } }] };
+    const read = async (body: Parameters<typeof proxyClientOptions>[0]) => (await googleClient(app, { refresh_token: 'synthetic' }, (async (input: RequestInfo | URL) =>
+      Response.json(String(input).startsWith('https://oauth2') ? { access_token: 'synthetic' } : tagged)) as typeof fetch, undefined, { connection_id: 'c', email: 'owner@example.test' }, proxyClientOptions(body))
+      .calendarPage('primary', '2026-10-11T00:00:00Z', '2026-10-12T00:00:00Z', 50, false)).events[0];
+    expect((await read({ calendar_details: true, calendar_owner_status: true, calendar_blocks: true }))!.block).toBe('rest');
+    expect(await read({ calendar_details: true, calendar_owner_status: true })).not.toHaveProperty('block');
   });
 });

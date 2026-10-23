@@ -34,6 +34,12 @@ describe('reading a calendar that holds an event Waldo created', () => {
     expect(JSON.stringify(result)).not.toContain(marker);
   });
 
+  it('reads a block Waldo tagged with its kind, and keeps the kind to the calendar demand behind Weight', async () => {
+    const result = await read({}, [{ ...created, extendedProperties: { private: { waldoOperation: marker, waldoBlock: 'rest' } } }]);
+    expect(result.data!.events.map(event => event.id)).toEqual(['qa1']);
+    expect(result.data!.events[0]).not.toHaveProperty('block');
+  });
+
   it('keeps it out on an adapter without pages too', async () => {
     const legacy = { account: { connection_id: 'c1', email: 'owner@example.test' },
       events: async () => [{ id: 'qa1', title: 'QA', start: '2026-10-13T16:00:00+05:30', end: '2026-10-13T17:00:00+05:30', all_day: false, operation_marker: marker }] };

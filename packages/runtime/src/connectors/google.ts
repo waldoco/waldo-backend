@@ -181,7 +181,11 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
+// The kind of a block of protected time Waldo created, kept on the owner's own copy of the event: calendar demand leaves
+// rest out of Weight and counts deep work.
+export const CALENDAR_BLOCKS = ['rest', 'deep_work'] as const;
+export type CalendarBlock = (typeof CALENDAR_BLOCKS)[number];
+export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string; block?: CalendarBlock;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
@@ -193,8 +197,8 @@ export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?:
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
 // the join link, attachments and the owner's status stay out of the shared card projection; meeting
 // prep adds the link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'block' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
+  const { etag: _etag, operation_marker: _marker, block: _block, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
   return projection;
 };
 
@@ -422,7 +426,7 @@ export type GoogleClient = Readonly<{
   // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
@@ -561,16 +565,17 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
+// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status; blocks adds
+// the kind of a block Waldo created.
 // A Worker that predates a field parses calendar pages strictly and hashes every field into its prep digest,
 // so the connector-proxy maps each only when the calling Worker asks (proxyClientOptions). The Worker's own
 // clients default to on.
-export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean }>;
-export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown }>): GoogleClientOptions =>
-  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
+export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean; blocks?: boolean }>;
+export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown; calendar_blocks?: unknown }>): GoogleClientOptions =>
+  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true, blocks: body.calendar_blocks === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
-  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
+  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true, options.blocks ?? true);
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
@@ -828,9 +833,9 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
     // A Meet request is keyed to the event id, so a retried create cannot ask for a second link.
-    createEvent: async ({ title, start, end, id, operationMarker, calendarId, attendees, description, location, meet, sendUpdates }) => send(
+    createEvent: async ({ title, start, end, id, operationMarker, block, calendarId, attendees, description, location, meet, sendUpdates }) => send(
       events(calendarId, undefined, { sendUpdates, conferenceDataVersion: meet ? '1' : undefined }), 'POST', {
-        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker),
+        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarTags(operationMarker, block),
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
@@ -1022,6 +1027,9 @@ const calendarSourceUrl = (value: string | undefined): string | undefined => {
   } catch { return undefined; }
 };
 const calendarMarker = (operationMarker?: string) => operationMarker ? { extendedProperties: { private: { waldoOperation: operationMarker } } } : {};
+// Only a create names the kind. A move or cancel patches the marker alone, and a patch leaves the keys it does not name.
+const calendarTags = (operationMarker?: string, block?: CalendarBlock) => operationMarker || block
+  ? { extendedProperties: { private: { ...(operationMarker ? { waldoOperation: operationMarker } : {}), ...(block ? { waldoBlock: block } : {}) } } } : {};
 const calendarTimes = (start: string, end: string) => {
   const date = (v: string) => /^\d{4}-\d\d-\d\d$/.test(v) && new Date(v).toISOString().slice(0,10) === v;
   const allDay = date(start) && date(end);
@@ -1029,7 +1037,7 @@ const calendarTimes = (start: string, end: string) => {
   // PATCH merges nested fields, so explicitly clear the previous representation.
   return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
 };
-const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): CalendarItem => ({
+const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean, blocks: boolean): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
   all_day: event.start?.dateTime === undefined,
@@ -1039,6 +1047,7 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   ...(event.etag ? { etag: event.etag } : {}),
   // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
   ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
+  ...(blocks && (CALENDAR_BLOCKS as readonly unknown[]).includes(event.extendedProperties?.private?.waldoBlock) ? { block: event.extendedProperties!.private!.waldoBlock as CalendarBlock } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
