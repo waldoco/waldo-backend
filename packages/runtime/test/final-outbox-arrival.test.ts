@@ -300,9 +300,11 @@ describe('what the owner and the operator can see while records wait', () => {
     const kv = store(), clock = { now: Date.parse('2026-10-18T09:00:00Z') };
     await drained(kv, clock, { id: 'report', standingOrder: { runId: 'run-1', gate: 'act_and_report' } });
     await drained(kv, clock, { id: 'card', dayCard: { day: '2026-10-18', card: 'card:brief', foldUpTo: 0 } });
+    await drained(kv, clock, { id: 'reminder', reminder: { id: 'rem-1', occurrence: 0, runId: 'run-2', schedulerRunId: null, once: true } });
     observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'refused', at: clock.now }], addressed, clock.now);
     const records = new TelegramFinalOutbox(kv).records();
-    expect([...outboxRunNotes(records)]).toEqual([['run-1', 'waiting for your next message']]);
+    // An accepted record claims no send and names no surface: on iMessage it may still be in Waldo's own outbox.
+    expect([...outboxRunNotes(records)]).toEqual([['run-1', 'waiting for your next message'], ['run-2', 'queued for delivery; waiting to hear it arrived']]);
     expect([...unconfirmedCards(records, '2026-10-18')]).toEqual(['card:brief']);
     const overview = dashboardOverview({ now: clock.now, timezone: 'UTC', plans: [{ card: 'card:brief', time: '08:00', reason: 'r', sent: false }], cards: [{ id: 'card:brief', name: 'The Brief' }],
       unconfirmed: unconfirmedCards(records, '2026-10-18'), approvals: [], run: null, trace: null, grants: [] });
