@@ -226,15 +226,18 @@ export const createOwnerResponder = (
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
   let ownerTurnStartedAt = 0;
+  // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
+  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
   // out), else the plain line.
   const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
     if (typeof floor !== 'object' || !activeOwnerTurn) return MODEL_UNREACHABLE_REPLY;
     const turn = activeOwnerTurn;
-    // The same view and taint the live turn ran under: others' words stay in their labelled blocks, and a reply to someone
-    // else's message keeps its tool arguments tainted.
+    // The same view and taint the live turn had when its providers failed: others' words stay in their labelled blocks, and
+    // a turn that read someone else's words, from the start or in a round before the floor, keeps its retry tainted.
+    const tainted = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
     return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: renderForModel(turn.parts).text,
-      taint: turnReplyContext && !turnReplyOwnAuthored ? 'external' : null,
+      taint: tainted ? 'external' : null,
       ...(turn.messageRef ? { messageRef: turn.messageRef.id } : {}), receivedAt: ownerTurnStartedAt });
   };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
@@ -544,13 +547,15 @@ export const createOwnerResponder = (
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
       type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
+      const loopCtx = { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
         ...(access.toolSearch ? { stableMenu: true } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
-        ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        ctx: loopCtx,
         step: async (tools, turns) => {
           const added = await consumeRound();
           if (added === null) return { text: STOPPED_REPLY };
@@ -828,7 +833,7 @@ export const createOwnerResponder = (
       try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
       throw error;
-    } finally { activeOwnerTurn = undefined; }
+    } finally { activeOwnerTurn = undefined; turnLoopCtx = undefined; }
   };
   // A scoped turn runs in its own responder (below); its compaction runs there too, after the reply is delivered.
   let scopedCompaction: ((conversationRef: string) => Promise<void>) | undefined;

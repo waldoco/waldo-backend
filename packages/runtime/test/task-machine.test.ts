@@ -6,7 +6,7 @@ import { TOOL_PERMISSIONS, triggerTypeSchema, type CancelTaskArgs, type TaskResu
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { numericHealthIn, sanitise } from '../src/scribe/sanitiser';
 import { noteDue, taskHost, type TaskHost, type TaskHostDeps } from '../src/tasks/brain';
-import { isMachine, jobBook, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
+import { isMachine, jobBook, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_OPEN, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
@@ -52,7 +52,7 @@ const lane = (h: Harness, appliers: Partial<Record<'heartbeat' | 'update_sweep' 
   return {
     sent, turns, log, started, applied,
     deps: (over = {}) => ({
-      book: h.book, host, now: () => h.clock.at, timezone: 'UTC', log: entry => { log.push(entry); },
+      book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket.jobId); },
       turn: async (_job, trace) => { turns.push(trace); return 'An owner-facing report.'; },
       // A machine job's apply turn names its own tools: it must never be handed the owner's full apply list.
@@ -196,6 +196,18 @@ describe('a machine job never takes the owner\'s place', () => {
       const refused = await (cancel as { handle(args: CancelTaskArgs, ctx: ToolDispatcherContext): Promise<unknown> }).handle({ job_id: machine.id }, {} as ToolDispatcherContext);
       expect(refused).toMatchObject({ ok: false, code: 'not_found' });
       expect(book.get(machine.id)!.status).toBe('queued');
+    });
+  });
+
+  it('do not count toward the owner\'s open-task cap: the owner can still start a task', async () => {
+    await withBook(async ({ book }) => {
+      for (let i = 0; i < TASK_MAX_OPEN; i += 1) enqueueMachine(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
+      expect(book.taskCounts('turn-1')).toEqual({ open: 0, fromTurn: 0 });
+      const [start] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const started = await (start as { handle(args: unknown, ctx: ToolDispatcherContext): Promise<unknown> }).handle(
+        { profile: 'reader', title: 'Inbox since Monday', goal: 'Find unanswered client mail.', context: 'Clients write from company domains.', done_when: 'A list of threads.' },
+        { turnId: 'turn-1', toolCallId: 'call-1' } as ToolDispatcherContext);
+      expect(started).toMatchObject({ ok: true, data: { status: 'started' } });
     });
   });
 

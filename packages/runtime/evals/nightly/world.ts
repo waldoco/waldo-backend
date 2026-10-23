@@ -21,6 +21,9 @@ import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
 import { claimStore } from '../../src/memory/claims';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
+import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
+import { webSearchHandler } from '../../src/tools/live/web-search';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
@@ -57,6 +60,9 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
+  // consent granted or not.
+  lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
 }>;
 
@@ -279,15 +285,22 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       if (known) return { job: known, created: false };
       effect('task.start', { profile: input.profile, ...input.brief });
       const row = {
-        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey,
+        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey, origin: input.origin,
         brief_json: JSON.stringify(input.brief), taint: input.taint ?? null, status: 'queued',
       } as JobRow;
       tasks.push(row);
       return { job: row, created: true };
     },
     get: (id: string) => tasks.find((row) => row.id === id) ?? null,
+    byKey: (key: string) => tasks.find((row) => row.idempotency_key === key) ?? null,
+    taskCounts: (origin: string) => ({ open: tasks.length, fromTurn: tasks.filter((row) => row.origin === origin).length }),
     cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
   } as unknown as JobBook;
+  // The look-up as an owner reaches it: the server offers it, and the owner accepted the notice before saying yes to it.
+  const consent = consentLedger(sql, { agreementsOffered: true, lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent, now);
+  if (seed.lookup?.consent) for (const purpose of ['terms', 'privacy_notice', 'owner_lookup'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], now());
+  const searchEngine = (async () => Response.json({ web: { results: (seed.web ?? []).map((page) => ({ title: page.title, url: page.url, description: page.snippet })) } })) as unknown as typeof fetch;
+  const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, now })] : [web];
   const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
   // An approved MCP card is an effect like any other: recorded, never run.
   const mcpDesk = { proposeMcpCall: async (proposal: unknown) => { effect('mcp.card', proposal); return nextId('card'); } };
@@ -301,7 +314,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }) : []),
-    searchEpisodesHandler(episodes), web,
+    searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
       if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld);
@@ -377,6 +390,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
     }),
   };
 };

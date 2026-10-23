@@ -2,7 +2,7 @@ import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type 
 import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
-import { dispatchLoopTool, leadingNote, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
+import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
@@ -30,12 +30,15 @@ export type TaskHostDeps = Readonly<{
   serialBrowser<T>(scope: RunEffectScope, work: () => Promise<T>): Promise<T>;
   releaseBrowser(scope: RunEffectScope): void;
   log(entry: TurnLogEntry): void;
-  // The owner's month spend against their ceiling, when this object keeps one.
+  // The owner's month spend against their ceiling, when this object keeps one. It throws when it cannot be read.
   spend?(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
   // Arms the jobs lane's wake.
   wake(due: number): Promise<void>;
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
+  // Whether the directory still admits the owner, asked before each worker call as an owner job asks before each effect.
+  // Without it (no directory on this deploy) the owner stands.
+  admitted?(): Promise<'admitted' | 'dormant' | 'retry'>;
   // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
   // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
   providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
@@ -60,18 +63,41 @@ const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
-export const UNKEPT_EFFECT = 'Not kept across a restart. This step already ran; do not run it again.';
+export { UNKEPT_EFFECT };
 // The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
+// The provider items opening a round (reasoning summaries, interim words, every call of the round with its arguments) are
+// emptied when any of them carries a reading: both adapters rebuild that round from its kept records, and an empty list
+// still marks where the round starts.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
   const readingInCall = numericHealthIn(turn.call.arguments);
-  if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name) && !readingInCall && !numericHealthIn(turn.output)) return turn;
+  const readingInItems = turn.prior_items !== undefined && numericHealthIn(JSON.stringify(turn.prior_items));
+  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthIn(turn.output);
+  if (!unkeptOutput && !readingInItems) return turn;
   return {
     ...turn, call: readingInCall ? { ...turn.call, arguments: '{}' } : turn.call,
-    output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}`,
+    ...(readingInItems ? { prior_items: [] } : {}),
+    ...(unkeptOutput ? { output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}` } : {}),
   };
 };
 
+// A spend that cannot be read holds the worker at the ceiling (the cheap route, no paid tools): read as no ceiling, a worker's
+// spend would have no bound at all.
+const UNREAD_SPEND = { spentUsd: 0, ceilingUsd: 0 } as const;
+
 export const taskHost = (deps: TaskHostDeps) => {
+  // Warned once per run of failed reads, so a lasting fault is visible without a line per worker call.
+  let spendUnread = false;
+  const ownerSpend = (): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined => {
+    try {
+      const spend = deps.spend?.();
+      spendUnread = false;
+      return spend;
+    } catch {
+      if (!spendUnread) deps.log({ trace: 'task', hop: 'task_spend_unread', ms: 0, ok: false, code: 'spend_unreadable' });
+      spendUnread = true;
+      return UNREAD_SPEND;
+    }
+  };
   // One run scope per live attempt, so a cancel aborts the attempt's in-flight I/O and every later admit fails.
   const scopes = new Map<string, Readonly<{ attempt: number; scope: RunEffectScope; abort: AbortController }>>();
   const scopeFor = (ticket: TaskTicket, row: JobRow): RunEffectScope => {
@@ -94,8 +120,10 @@ export const taskHost = (deps: TaskHostDeps) => {
     held.abort.abort();
     deps.releaseBrowser(held.scope);
   };
-  // Jobs with a tool call running here now. Their worker is waiting on that call, so its lease cannot have lapsed.
+  // Tool calls running here now, by attempt. The attempt's worker is waiting on them, so its lease cannot have lapsed. An
+  // earlier attempt's call still finishing says nothing about the attempt that replaced it.
   const busy = new Map<string, number>();
+  const attemptKey = (ticket: Pick<TaskTicket, 'jobId' | 'attempt'>) => `${ticket.jobId}:${ticket.attempt}`;
   const logEvents = (events: readonly TurnLogEntry[]) => { for (const event of events) deps.log(event); };
   // Called only once the book has accepted the call's ticket: a fenced or stale call's outcomes are not replayed.
   const replay = (outcomes: readonly ProviderOutcome[]) => {
@@ -116,16 +144,22 @@ export const taskHost = (deps: TaskHostDeps) => {
     // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
     // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
     cancelled: (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); },
-    busy: (): ReadonlySet<string> => new Set(busy.keys()),
+    // Jobs whose live attempt has a call running here.
+    busy: (): ReadonlySet<string> => new Set([...busy.keys()].flatMap((key) => {
+      const split = key.lastIndexOf(':');
+      const jobId = key.slice(0, split);
+      const row = deps.book.get(jobId);
+      return row?.status === 'running' && String(row.attempt) === key.slice(split + 1) ? [jobId] : [];
+    })),
     // The worker keeps its lease while a model call runs.
     heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
       // The same attempt rejoining while the brain still serves a call of its earlier invocation (a worker alarm that fired
       // again): that call may still be waiting for the serial lane, with no intent written yet. Both are fenced, so neither
       // invocation runs a step the other may also run; the lease then lapses and a new attempt resumes from the checkpoint.
-      if (busy.has(ticket.jobId)) {
+      if (busy.has(attemptKey(ticket))) {
         const ended = deps.book.abandon(ticket);
-        // A stale ticket from an earlier attempt: the call in flight is the live attempt's, and stays its own.
+        // A stale ticket whose own call is still finishing: the job has moved past that attempt, which is only fenced.
         if (ended === 'fenced') return 'fenced';
         fence(ticket.jobId);
         const row = deps.book.get(ticket.jobId);
@@ -135,7 +169,8 @@ export const taskHost = (deps: TaskHostDeps) => {
       const row = deps.book.claim(ticket);
       if (row === 'parked') {
         fence(ticket.jobId);
-        hop(deps.book.get(ticket.jobId)!, 'task_parked', { ok: false, code: 'uncertain_effect' });
+        const parked = deps.book.get(ticket.jobId)!;
+        hop(parked, 'task_parked', { ok: false, code: parked.park_reason ?? 'uncertain_effect' });
         return 'fenced';
       }
       if (row === 'fenced' || row.kind !== 'task' || row.profile === null) return 'fenced';
@@ -148,7 +183,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       }
       scopeFor(ticket, row);
       const handlers = await profileHandlers(row);
-      const spend = deps.spend?.();
+      const spend = ownerSpend();
       return {
         jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
@@ -166,13 +201,24 @@ export const taskHost = (deps: TaskHostDeps) => {
       const started = deps.now();
       const allowed = jobTools(row).includes(call.name as never);
       const scope = scopeFor(ticket, row);
+      // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
+      const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
+      if (admission === 'dormant') {
+        deps.book.suspend(row.id);
+        fence(row.id);
+        hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' });
+        return 'fenced';
+      }
       let result: LoopToolResult;
       if (!allowed) {
         const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
         result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
+      } else if (admission === 'retry') {
+        const unchecked = toolError('transient', 'The owner\'s access could not be checked just now, so nothing ran.');
+        result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
       } else {
         const handlers = await profileHandlers(row);
-        const spend = deps.spend?.();
+        const spend = ownerSpend();
         const ctx: ToolDispatcherContext = {
           ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
           hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,
@@ -192,7 +238,8 @@ export const taskHost = (deps: TaskHostDeps) => {
           if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
           return dispatchLoopTool(call, { handlers, ctx });
         };
-        busy.set(ticket.jobId, (busy.get(ticket.jobId) ?? 0) + 1);
+        const key = attemptKey(ticket);
+        busy.set(key, (busy.get(key) ?? 0) + 1);
         try {
           result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
         } catch (error) {
@@ -200,8 +247,8 @@ export const taskHost = (deps: TaskHostDeps) => {
           const failed = toolError('handler_failed');
           result = { ok: false, error: failed.cause, error_code: failed.code, fix: failed.fix, retryable: false, code: 'transient' };
         } finally {
-          const left = (busy.get(ticket.jobId) ?? 1) - 1;
-          if (left > 0) busy.set(ticket.jobId, left); else busy.delete(ticket.jobId);
+          const left = (busy.get(key) ?? 1) - 1;
+          if (left > 0) busy.set(key, left); else busy.delete(key);
         }
         // A handler that threw may have crossed its side-effect boundary first, so the effect is uncertain whatever the
         // worker would do next: the job parks rather than hand the worker a failure it might retry.
@@ -254,12 +301,15 @@ export const taskHost = (deps: TaskHostDeps) => {
 };
 export type TaskHost = ReturnType<typeof taskHost>;
 
-// A long job tells the owner it is still running: first after two minutes, then every ten. A machine job never does: the
-// owner did not start it.
+// A long job tells the owner it is still running: first after two minutes, then ten minutes later. Each note interrupts the
+// owner, and two already say the task is alive, so after them the owner hears only its report. A machine job never sends
+// one: the owner did not start it.
 export const TASK_NOTE_AFTER_MS = 2 * 60_000;
 export const TASK_NOTE_EVERY_MS = 10 * 60_000;
-export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'origin' | 'created_at' | 'last_note_at'>): number | null =>
-  row.status !== 'running' || row.kind !== 'task' || isMachine(row) ? null : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
+export const TASK_NOTE_MAX = 2;
+export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'origin' | 'created_at' | 'last_note_at' | 'notes_sent'>): number | null =>
+  row.status !== 'running' || row.kind !== 'task' || isMachine(row) || row.notes_sent >= TASK_NOTE_MAX ? null
+    : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
 
 export const heldTopicIn = (row: Pick<JobRow, 'brief_json' | 'result_json' | 'checkpoint_json'>, topics: readonly string[]): boolean =>
   topics.some((topic) => [row.brief_json, row.result_json, row.checkpoint_json].some((value) => value !== null && (carriesTopic(value, topic) || hidesTopic(value, topic))));

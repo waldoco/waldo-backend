@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
-import { jobBook, jobCheckpoint, jobResult, TASK_LEASE_MS, TASK_MAX_CRASHES, type CreateJob, type TaskBrief } from '../src/tasks/jobs';
+import { jobBook, jobCheckpoint, jobResult, JOB_START_GRACE_MS, TASK_LEASE_MS, TASK_MAX_CRASHES, type CreateJob, type TaskBrief } from '../src/tasks/jobs';
 
 // The job book on real Durable Object SQLite. Each case drives one recovery path of the job protocol and checks that the
 // row ends where the protocol says, and that a call from the wrong attempt changes nothing.
@@ -214,6 +214,21 @@ describe('task job book', () => {
       book.cancel(queued.id, 'owner');
       expect(book.nextDue()).toBe(clock.at + TASK_LEASE_MS);
       expect(book.trim()).toBe(0);
+    });
+  });
+
+  it('a job whose deadline passed is parked instead of started or rejoined; one a wake reached just after it still starts', async () => {
+    await withBook((book, clock) => {
+      const deadline = clock.at + 3_600_000;
+      const late = book.create(job('late')).job, onTime = book.create(job('on-time')).job, rejoin = book.create(job('rejoin')).job;
+      const held = book.startAttempt(rejoin.id)!;
+      clock.at = deadline + JOB_START_GRACE_MS;
+      expect(book.startAttempt(onTime.id)).not.toBeNull();
+      clock.at += 1;
+      expect(book.startAttempt(late.id)).toBeNull();
+      expect(book.get(late.id)).toMatchObject({ status: 'reported', park_reason: 'deadline', outcome: 'failed' });
+      expect(book.claim(held)).toBe('parked');
+      expect(book.get(rejoin.id)).toMatchObject({ status: 'reported', park_reason: 'deadline' });
     });
   });
 });

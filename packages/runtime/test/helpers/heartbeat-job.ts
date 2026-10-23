@@ -39,7 +39,7 @@ export const heartbeatJobs = (storage: DurableObjectStorage, options: Readonly<{
     }
     await runJobsLane({
       book, host: { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost,
-      now: options.now, timezone: options.timezone, log: () => undefined, startWorker: async () => undefined,
+      now: options.now, timezone: options.timezone, surface: 'app', quiet: () => false, log: () => undefined, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a heartbeat job reached applyTools()'); }, deliver: refuse,
       room: () => true, heldTopics: () => [], machine: { heartbeat: applier },
     });

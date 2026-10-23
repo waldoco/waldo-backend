@@ -164,7 +164,7 @@ const applying = (h: Harness): Apply => {
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const deps: JobsLaneDeps = {
-    book: h.book, host, now: () => h.clock.at, timezone: TZ, log: entry => { log.push(entry); }, startWorker: async () => undefined,
+    book: h.book, host, now: () => h.clock.at, timezone: TZ, surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
     turn: async () => { throw new Error('a machine job took the task apply turn'); }, applyTools: () => { throw new Error('a machine job reached applyTools()'); },
     deliver: async () => { throw new Error('a machine job took the task delivery'); }, room: () => true, heldTopics: () => [], machine: { heartbeat: applier },
   };

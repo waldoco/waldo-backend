@@ -34,7 +34,7 @@ const PREVIEW_CHARS = 200;
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, proactivity or schedule setting, or a forget by memory ids). Give the exact tool name and arguments you would have passed; the owner sees both on a card, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, background task, proactivity or schedule setting, or a forget by memory ids). Give the exact tool name and arguments you would have passed; the owner sees both on a card, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,

@@ -124,6 +124,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',
+  // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
+  'list_owner_findings',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
@@ -177,7 +179,8 @@ export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTain
 // can ask for any of them, and one write would make the injection persist, so a tainted turn sends them to the owner's
 // card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
 // their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
-// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good.
+// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good. A background
+// task is a schedule too: it runs paid workers on its brief and reports to the owner later, without being asked again.
 export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_reminder',
   'cancel_reminder',
@@ -187,6 +190,7 @@ export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_proactivity',
   'set_schedule_preference',
   'forget_memory',
+  'start_task',
 ];
 
 // The owner-approval law for a tainted turn: every privileged action, and every standing change. One exception, read

@@ -170,7 +170,7 @@ const applying = (h: Harness): Apply => {
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
     turns, delivered, reply, log,
-    lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', log: entry => { log.push(entry); }, startWorker: async () => undefined,
+    lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [],
       machine: { update_sweep: handler } }).then(() => undefined),
   };

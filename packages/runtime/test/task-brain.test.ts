@@ -9,7 +9,7 @@ import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_EFFECT, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
-import { DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
+import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
@@ -27,7 +27,7 @@ const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.st
 
 type Harness = Readonly<{
   book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[];
-  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | undefined): void;
+  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
   serial<T>(work: () => Promise<T>): Promise<T>;
@@ -35,6 +35,8 @@ type Harness = Readonly<{
   handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
   // The owner's provider breaker, on the harness clock.
   health: InMemoryCircuitBreaker;
+  // What the directory says of the owner when a worker call asks.
+  admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws' };
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -43,13 +45,14 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const clock = { at: T0 };
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [], withdrawn: string[] = [];
-    let spend: { spentUsd: number; ceilingUsd: number } | undefined;
+    let spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined;
     const hold: Harness['hold'] = {};
     let queue: Promise<unknown> = Promise.resolve();
     const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
     const browse: Harness['browse'] = { ms: 0 };
     const handler: Harness['handler'] = {};
     const health = new InMemoryCircuitBreaker({ now: () => clock.at });
+    const admission: Harness['admission'] = { now: 'admitted' };
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -59,14 +62,15 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
-      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
+      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
+      admitted: async () => { if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission });
   });
 
 describe('the task brain host', () => {
@@ -294,6 +298,123 @@ describe('the task brain host', () => {
     });
   });
 
+  it('a reading in the provider items riding on a round is not kept: the round is rebuilt from its kept records on resume', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      const reading = JSON.stringify({ status: 'done', summary: 'Your LDL is 162 mg/dL.', findings: [], proposals: [], left: [] });
+      const clean = JSON.stringify({ query: 'from:lab' });
+      const turns = [
+        // An earlier round with no reading keeps its items, encrypted reasoning included, so its replay is unchanged.
+        { call: { call_id: 'c0', name: 'search_communication', arguments: clean }, output: '{"ok":true,"data":{"hits":1}}',
+          prior_items: [{ type: 'reasoning', id: 'rs_0', encrypted_content: 'opaque', summary: [] }, { type: 'function_call', id: 'fc_0', call_id: 'c0', name: 'search_communication', arguments: clean }] },
+        // The reading sits in a reasoning summary, the model's interim words and a parallel call's arguments.
+        { call: { call_id: 'c1', name: 'search_communication', arguments: clean }, output: '{"ok":true,"data":{"hits":0}}',
+          prior_items: [
+            { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [{ type: 'summary_text', text: 'The mail says LDL is 162 mg/dL; I will report it.' }] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Your LDL is 162 mg/dL; finishing.' }] },
+            { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'search_communication', arguments: clean },
+            { type: 'function_call', id: 'fc_2', call_id: 'c2', name: FINISH_TASK, arguments: reading },
+          ] },
+        { call: { call_id: 'c2', name: FINISH_TASK, arguments: reading }, output: '{"ok":false,"error":"The result names health readings with their numbers, which a task never stores."}' },
+      ];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 2, costUsd: 0 })).toBe('ok');
+      const stored = book.get(t.jobId)!.checkpoint_json!;
+      expect(stored).not.toMatch(/162/);
+      const kept = JSON.parse(stored).turns as Array<{ call: { arguments: string }; prior_items?: unknown[] }>;
+      expect(kept[0]!.prior_items).toEqual(turns[0]!.prior_items);
+      // Emptied, not removed: the turn still opens its own round, so the resumed request keeps the round boundaries.
+      expect(kept[1]!.prior_items).toEqual([]);
+      expect(kept[1]!.call.arguments).toBe(clean);
+      expect(kept[2]).toMatchObject({ call: { arguments: '{}' } });
+      expect(kept[2]).not.toHaveProperty('prior_items');
+    });
+  });
+
+  it('end to end, a refused result with a reading is not kept once the provider returns its items with the call', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      const numbers = { status: 'done', summary: 'Your LDL is 162 mg/dL.', findings: [], proposals: [], left: [] };
+      const words = { status: 'done', summary: 'Your cholesterol is above the usual range.', findings: [], proposals: [], left: [] };
+      let n = 0;
+      // The OpenAI adapter's shape: output_items is the response output, which holds each function_call with its arguments.
+      const model: TaskModel = async () => {
+        n += 1;
+        const args = JSON.stringify(n === 1 ? numbers : words);
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}`, name: FINISH_TASK, arguments: args }], output_items: [{ type: 'function_call', call_id: `c${n}`, name: FINISH_TASK, arguments: args }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: 0 })).toBe('continue');
+      const stored = book.get(t.jobId)!.checkpoint_json!;
+      expect(JSON.parse(stored).turns[0].call.arguments).toBe('{}');
+      expect(stored).not.toMatch(/162/);
+    });
+  });
+
+  it('an errand step that already succeeded is refused when repeated, in the same slice and after a resume', async () => {
+    const act = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Book the 8pm table for two.' } };
+    const other = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Add a note: window seat.' } };
+    const finish = { call: FINISH_TASK, args: { status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] } };
+    const model = (script: readonly Readonly<{ call: string; args: unknown }>[]): TaskModel => {
+      let n = 0;
+      return async () => {
+        const next = script[Math.min(n, script.length - 1)]!;
+        n += 1;
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}:${next.call}`, name: next.call, arguments: JSON.stringify(next.args) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+    };
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('errand');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act, act, finish]), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(1);
+    });
+    // Across an alarm-slice hand-over, the repeat is answered from the checkpoint; a different step still runs.
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('errand');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act]), sliceEnd: 0 })).toBe('continue');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act, other, finish]), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(2);
+    });
+  });
+
+  it('a resumed errand step whose result was cleared as succeeded, or left out, is not run again', async () => {
+    const args = JSON.stringify({ url: 'https://example.com/book', task: 'Book the 8pm table for two.' });
+    for (const output of [clearedToolResult('browse_act', { ok: true, receipt: null, repeatable: false }), UNKEPT_EFFECT]) {
+      await withHost(async ({ host, ticket, ran }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        expect(await host.checkpoint(t, 1, [{ call: { call_id: 'c1', name: 'browse_act', arguments: args }, output }], [], { rounds: 1, costUsd: 0 })).toBe('ok');
+        let n = 0;
+        const model: TaskModel = async () => {
+          n += 1;
+          const call = n === 1 ? { name: 'browse_act', arguments: args } : { name: FINISH_TASK, arguments: JSON.stringify({ status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] }) };
+          return { response: { text: '', tool_calls: [{ call_id: `r${n}`, ...call }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+        };
+        expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+        expect(ran).toEqual([]);
+      });
+    }
+  });
+
+  it('a resumed errand step whose arguments were not kept (a reading) is not run again; a step without a reading still runs', async () => {
+    const withReading = { url: 'https://example.com/clinic', task: 'Book the follow-up; pulse at check-in was 88 bpm.' };
+    const plain = { url: 'https://example.com/clinic', task: 'Add the owner\'s phone number to the booking.' };
+    await withHost(async ({ host, ticket, ran, book }) => {
+      const t = ticket('errand');
+      let n = 0;
+      const script = [withReading, withReading, plain];
+      const model = (steps: readonly unknown[]): TaskModel => async () => {
+        const step = steps[n];
+        n += 1;
+        const call = step === undefined ? { name: FINISH_TASK, arguments: JSON.stringify({ status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] }) } : { name: 'browse_act', arguments: JSON.stringify(step) };
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}`, ...call }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: 0 })).toBe('continue');
+      expect(JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns[0]).toMatchObject({ call: { arguments: '{}' }, output: UNKEPT_EFFECT });
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(2);
+    });
+  });
+
   it('a result that still carries a reading when it reaches the brain is not stored; the owner hears it was not kept', async () => {
     await withHost(async ({ host, ticket, book }) => {
       const t = ticket();
@@ -360,6 +481,80 @@ describe('the task brain host', () => {
     });
   });
 
+  it('an old attempt\'s slow read still running in the brain does not fence the fresh attempt that replaces it', async () => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t1 = ticket('reader');
+      await host.claim(t1);
+      let release!: () => void;
+      handler.search = () => new Promise(resolve => { release = () => resolve({ hits: 1 }); });
+      const slow = host.tool(t1, call('search_communication'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      // The worker's alarm re-fires while it waits on that read: the attempt ends, as designed.
+      expect(await host.claim(t1)).toBe('fenced');
+      expect(book.get(t1.jobId)).toMatchObject({ status: 'queued', crashes: 1 });
+      expect(host.busy().has(t1.jobId)).toBe(false);
+      const t2 = book.startAttempt(t1.jobId)!;
+      expect(await host.claim(t2)).not.toBe('fenced');
+      // The old call still in flight is not the live attempt's, so it does not hold the new attempt's lease open.
+      expect(host.busy().has(t1.jobId)).toBe(false);
+      release();
+      expect(await slow).toBe('fenced');
+      expect(book.get(t1.jobId)).toMatchObject({ status: 'running', attempt: 2, crashes: 1 });
+    });
+  });
+
+  it('a worker call for an owner the directory no longer admits runs nothing; the job waits in the queue, not counted as a crash', async () => {
+    await withHost(async ({ host, ticket, book, ran, released, log, admission }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      admission.now = 'dormant';
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toBe('fenced');
+      expect(ran).toEqual([]);
+      expect(released).toHaveLength(1);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 0, lease_token: null, inflight_json: null });
+      expect(log.find(entry => entry.hop === 'task_suspended')).toMatchObject({ ok: false, code: 'owner_not_admitted' });
+      // Admitted again, the lane's next attempt resumes it.
+      admission.now = 'admitted';
+      const next = book.startAttempt(t.jobId)!;
+      expect(await host.claim(next)).not.toBe('fenced');
+      expect(await host.tool(next, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('a worker call when the directory cannot be asked runs nothing and is told to try again; the attempt keeps running', async () => {
+    for (const answer of ['retry', 'throws'] as const) {
+      await withHost(async ({ host, ticket, book, ran, admission }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        admission.now = answer;
+        expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: false, retryable: true, code: 'transient' });
+        expect(ran).toEqual([]);
+        expect(book.get(t.jobId)).toMatchObject({ status: 'running', attempt: 1, inflight_json: null });
+      });
+    }
+  });
+
+  it('suspending an owner\'s running jobs requeues each attempt, and parks one whose effect was in flight', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const quiet = ticket('reader'), acting = ticket('errand');
+      expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
+      expect([...book.suspend()].sort()).toEqual([quiet.jobId, acting.jobId].sort());
+      expect(book.get(quiet.jobId)).toMatchObject({ status: 'queued', crashes: 0, lease_token: null });
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(book.suspend()).toEqual([]);
+    });
+  });
+
+  it('a worker rejoining past its job\'s deadline is parked as out of time, and the trace says so', async () => {
+    await withHost(async ({ host, ticket, book, clock, log }) => {
+      const t = ticket('reader');
+      clock.at = book.get(t.jobId)!.deadline_at + 60 * 60_000;
+      expect(await host.claim(t)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'deadline' });
+      expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ code: 'deadline' });
+    });
+  });
+
   it('a busy job past its deadline still ends: its running call is then fenced', async () => {
     await withHost(async ({ ticket, book, clock }) => {
       const t = ticket('errand');
@@ -423,6 +618,26 @@ describe('the task brain host', () => {
       expect(ran).toEqual([]);
       expect(log.find(entry => entry.hop === 'spend_hold')).toMatchObject({ cost_kind: 'worker', code: 'spend_ceiling_reached:browse_act', job_id: t.jobId });
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('when the owner\'s spend cannot be read, a worker is held at the ceiling, and the brain warns once until a read works again', async () => {
+    await withHost(async ({ host, ticket, setSpend, log, ran }) => {
+      setSpend('throws');
+      const t = ticket('errand');
+      const claim = await host.claim(t);
+      const spend = claim === 'fenced' ? null : claim.spend;
+      expect(spend!.spentUsd).toBeGreaterThanOrEqual(spend!.ceilingUsd);
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: false, error_code: 'spend_ceiling_reached' });
+      expect(ran).toEqual([]);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+      const warned = () => log.filter(entry => entry.hop === 'task_spend_unread');
+      expect(warned()).toEqual([expect.objectContaining({ ok: false, code: 'spend_unreadable' })]);
+      setSpend({ spentUsd: 1, ceilingUsd: 25 });
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+      setSpend('throws');
+      await host.tool(t, call('search_communication'), CANARIES);
+      expect(warned()).toHaveLength(2);
     });
   });
 

@@ -29,10 +29,12 @@ export type MachineBrief = Readonly<{
 }>;
 
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
-// about dates without seeing the conversation. A machine job's brief is written by the brain instead, and says so.
+// about dates without seeing the conversation. outside_text: the turn that wrote it had read someone else's words, so its
+// title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
+// A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number; machine?: MachineBrief;
+  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.
@@ -56,10 +58,19 @@ export const TASK_LEASE_MS = 120_000;
 export const TASK_MAX_CRASHES = 3;
 // A job may wait hours, such as for a live-view login, but never forever.
 export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
+// A job is not started or rejoined past its deadline: it parks, and the owner hears it ran out of time, rather than getting
+// work or an answer they stopped waiting for. A wake set for the deadline itself fires a little after it, and that last try
+// still runs, so the deadline holds after this much grace.
+export const JOB_START_GRACE_MS = 5 * 60_000;
 // Task workers one owner runs at once. Each makes model calls back to back, so more at once multiplies the owner's spend per
 // minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
 // starts when a running one reports.
 export const TASK_MAX_RUNNING = 3;
+// Tasks one owner has open (queued, running or with a report pending), and tasks one turn starts. Each task is paid worker
+// time and a later message to the owner; a runaway or injected turn could otherwise start them by the dozen. Past either
+// cap start_task refuses and says what to do instead; the brain's own retries of owner messages are not counted.
+export const TASK_MAX_OPEN = 10;
+export const TASK_MAX_PER_TURN = 3;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
@@ -114,12 +125,22 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     ).rowsWritten > 0;
   };
 
+  const byKey = (key: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', key).toArray()[0] ?? null;
+
   return {
     get,
+    byKey,
+    // Tasks the model started that are still open, and those the turn `origin` started in any state.
+    taskCounts(origin: string): Readonly<{ open: number; fromTurn: number }> {
+      const row = sql.exec<{ open: number; from_turn: number }>(
+        `SELECT COALESCE(SUM(status IN (${placeholders(OPEN)})), 0) AS open, COALESCE(SUM(origin = ?), 0) AS from_turn FROM task_jobs WHERE kind = 'task' AND NOT ${MACHINE_ROW}`, ...OPEN, origin,
+      ).toArray()[0];
+      return { open: row?.open ?? 0, fromTurn: row?.from_turn ?? 0 };
+    },
     // Intent before I/O: the row is written before any worker starts. The same idempotency key (a replayed turn's tool call)
     // returns the job it already made instead of making a second one.
     create(input: CreateJob): Readonly<{ job: JobRow; created: boolean }> {
-      const existing = sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', input.idempotencyKey).toArray()[0];
+      const existing = byKey(input.idempotencyKey);
       if (existing) return { job: existing, created: false };
       const now = deps.now();
       const id = `job_${deps.newId()}`;
@@ -140,9 +161,12 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       const now = deps.now();
       const row = sql.exec<{ attempt: number }>(
         `UPDATE task_jobs SET status = 'running', attempt = attempt + 1, lease_token = ?, lease_until = ?, due_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'queued' RETURNING attempt`, token, now + TASK_LEASE_MS, now, id,
+         WHERE id = ? AND status = 'queued' AND deadline_at + ? >= ? RETURNING attempt`, token, now + TASK_LEASE_MS, now, id, JOB_START_GRACE_MS, now,
       ).toArray()[0];
-      return row ? { jobId: id, attempt: row.attempt, token } : null;
+      if (row) return { jobId: id, attempt: row.attempt, token };
+      const late = get(id);
+      if (late?.status === 'queued' && late.deadline_at + JOB_START_GRACE_MS < now) park(id, 'deadline');
+      return null;
     },
     // Intent before an effect that cannot be replayed: the call is recorded on the job before it runs, and cleared only by
     // the checkpoint or report that records its result. Until then the worker's own copy of the result is the only one, so an
@@ -155,8 +179,9 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     claim(ticket: TaskTicket): JobRow | Fenced | 'parked' {
       if (!renew(ticket)) return 'fenced';
       const row = get(ticket.jobId)!;
-      if (row.inflight_json === null) return row;
-      return park(row.id, 'uncertain_effect') ? 'parked' : 'fenced';
+      const reason: ParkReason | null = row.inflight_json !== null ? 'uncertain_effect' : deps.now() > row.deadline_at + JOB_START_GRACE_MS ? 'deadline' : null;
+      if (reason === null) return row;
+      return park(row.id, reason) ? 'parked' : 'fenced';
     },
     // Every brain-side tool call renews the lease and records whether the job has read external content.
     touch(ticket: TaskTicket, taint: 'external' | null): boolean {
@@ -227,6 +252,19 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     // A job the brain itself parks (a retry whose promised time came, an effect that cannot be replayed, a changed brief).
     park,
+    // The owner is no longer admitted: running attempts (all, or job `id`'s) end without counting as a crash, and wait in the
+    // queue until the owner is admitted again; one with an effect in flight parks, as a lost attempt would. Answers the ids.
+    suspend(id?: string): readonly string[] {
+      const now = deps.now();
+      const running = sql.exec<Pick<JobRow, 'id' | 'inflight_json'>>(
+        `SELECT id, inflight_json FROM task_jobs WHERE status = 'running'${id === undefined ? '' : ' AND id = ?'}`, ...(id === undefined ? [] : [id]),
+      ).toArray();
+      for (const row of running) {
+        if (row.inflight_json !== null) park(row.id, 'uncertain_effect');
+        else sql.exec("UPDATE task_jobs SET status = 'queued', lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'", now, now, row.id);
+      }
+      return running.map((row) => row.id);
+    },
     // The cancellation fence: the token is cleared in the same write that settles the job, so every later call from the
     // worker is fenced and a result that arrives late is discarded.
     cancel(id: string, reason: CancelReason): boolean {
