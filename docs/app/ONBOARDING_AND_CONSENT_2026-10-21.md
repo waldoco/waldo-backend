@@ -9,7 +9,7 @@ Status: implemented on the onboarding branch; not live until it merges and ships
 | `GET /app/v1/onboarding`, `POST /app/v1/onboarding/actions` | The first run: agreements, name, Google, health, first look, Brief time, priority, chat channel. State survives a restart; every write is exactly-once by `request_id`. |
 | `GET /app/v1/onboarding/channels` | The three chat channels (iMessage, WhatsApp, Telegram) with the live link state of each, and the proactive-surface setting. |
 | `POST /app/v1/onboarding/channel-link` | A one-time code for one chat channel. No `request_id`: it returns a secret that is never stored for a replay. |
-| `GET /app/v1/consents`, `POST /app/v1/consents`, `POST /app/v1/consents/withdraw` | The consent ledger: non-health purposes only. |
+| `GET /app/v1/consents`, `POST /app/v1/consents`, `POST /app/v1/consents/withdraw` | The consent ledger: non-health purposes only. `owner_lookup_offered` says whether this server offers the look-up at all. |
 | `GET /app/v1/findings`, `POST /app/v1/findings/actions` | Owner look-up findings: keep, correct or forget. |
 
 ## One consent representation per purpose
@@ -55,12 +55,45 @@ Set no WHOOP secret and enter no client for the edge until all of these hold, no
 
 ## The chat-channel step
 
-The owner picks and links iMessage, WhatsApp or Telegram (while it is the team test channel) through one flow, so no channel is built for one surface only. The app reads `GET /app/v1/onboarding/channels`, asks `channel-link` for a code, the owner sends the text from their own phone, and the app calls `channel.linked`, which marks the step done only when the owner directory shows the provider linked. `channel.set` (app, WhatsApp or both) chooses where proactive messages go and writes the console's own `proactive_surface_v1`; skipping leaves the app.
+The owner picks and links iMessage, WhatsApp or Telegram (while it is the team test channel) through one flow, so no channel is built for one surface only. The app reads `GET /app/v1/onboarding/channels`, asks `channel-link` for a code, the owner sends the text from their own phone, and the app calls `channel.linked`, which marks the step done only when the owner directory shows the provider linked. `channel.set` (app, WhatsApp, both, or the app with an iMessage copy) chooses where proactive messages go and writes the console's own `proactive_surface_v1`; skipping leaves the app.
 
+- iMessage gives the owner the number they text, read the way the console reads it: with Photon configured, the owner's own assigned pool number; without Photon, the one configured address. An owner with Photon configured who has not enrolled yet has no number, so iMessage reads `not_offered` until they get their Waldo number in the console's iMessage view. A directory that cannot be read also reads `not_offered`, and logs the fixed code `imessage_number`.
 - Telegram is offered only while the server holds its bot token; removing it retires the channel with no contract change (`not_offered`).
 - Proactive delivery to iMessage is not wired by this step. It records the link and the owner's choice and claims nothing more.
 - Untrusted text stays untrusted: a link code is issued only on the owner's signed-in routes, never by a tool. `test/chat-channel-links.test.ts` fails if any other module (a tool, hook or turn module) calls an issuer, so adding one forces a review that it is an owner act or goes through an approval card.
 - `channel-link` needs the agreements accepted first, and rechecks the app session before the answer leaves.
+
+## The owner look-up
+
+Looking the owner up is an agent skill (`skills/owner-lookup`), not an onboarding gate: the agreements step only records the owner's yes or no to it.
+
+- **Consent order.** `owner_lookup` is disclosed in the privacy notice, so the ledger refuses it until `privacy_notice` is accepted at its current copy (`agreements_required` on the route), and a yes stops counting whenever the notice it depends on is no longer live. Every check (recording a finding, listing them, the app view) reads the same `active('owner_lookup')`.
+- **The server's switch.** `OWNER_LOOKUP` (a Worker var, `"0"` in production and staging) keeps the look-up off until the privacy notice that discloses it is published. Off, `GET /app/v1/consents` answers `owner_lookup_offered: false` and the app does not ask; a grant, or `agreements.accept` with `owner_lookup: true`, is refused `not_offered` and records nothing; a yes recorded while it was on stops counting, and the rows stay as evidence. Set `"1"` only once the notice below is published.
+- **Who decides whose page it is.** The model, then the owner. Code holds the grounding only: the page was returned by a search or read in the same run, and the quote is on that page. A finding is unconfirmed external content with its source, listed in What Waldo knows; read back by the model it is web content again. Only the owner's keep or correct makes it a claim. A namesake's page that the model records is a card the owner forgets.
+- **Forget and withdrawal.** Forgetting one finding, or withdrawing the look-up (on the consent route or by unticking it in the agreements), first hides every retained copy of the finding's text and quote wherever the memory forget reaches them (chat history, stored tool output, episodes, thread titles, iMessage records, cards and job reports), then, in one commit, erases the findings, purges any claim one became, and bars their text and quote from being recorded again. A failed hide changes nothing and the same request can be retried. A claim the owner had stated before a finding pointed at it stays.
+
+## Privacy notice, copy version 1 (draft: the owner approves the wording)
+
+These are the passages the privacy notice must carry before any owner is offered the look-up or diagnostic recording. They are written to be merged into the privacy and terms draft, which is not published. Grants are recorded against notice version 1 because no notice has been shown to any owner yet; once one has, any change to these passages is a new version, which asks every owner again.
+
+**Health details you tell Waldo**
+> If you tell Waldo about your health, such as a reading, a symptom, a medicine or a health goal, Waldo may remember it so it can plan around it. It stays in your private memory and is never written to Waldo's logs. It goes to the companies that provide Waldo's AI models (today OpenAI and Anthropic) only when it is relevant to a reply, and to no one else unless you ask Waldo to share a specific item. To delete it, ask Waldo in chat to forget it, or remove it in What Waldo knows; deleting your account deletes all of it.
+
+**iMessage**
+> If you talk to Waldo on iMessage, your messages pass through Photon, the service that runs Waldo's iMessage numbers. Photon receives your phone number, the email you signed in with and a first name taken from it, and every message you and Waldo exchange there. Apple carries iMessage itself.
+
+**Diagnostic recording (beta only)**
+> During the beta, if you agreed to diagnostic recording, the full text of your conversations, including any health details and any replies drawn from your WHOOP data, also goes to Langfuse, a service the Waldo team uses to find and fix problems, and the Waldo team can read it. You can turn diagnostic recording off at any time. Turning it off stops new recording; what was already recorded stays until it expires or you ask us to delete it.
+
+**Looking you up (only if you say yes)**
+> If you say yes, Waldo may look you up on the public web to learn about your work and public life, so it can help you better. It searches using your name and the handles, sites and email addresses you have given it, through Brave Search, which receives those search terms, and it reads the public pages it finds; those pages go to Waldo's AI model providers as part of the conversation. Everything it finds is listed in What Waldo knows with the page it came from, and stays unconfirmed until you keep, correct or forget it. Waldo never records your health, religion, caste, politics or sexuality from these pages, and does not look up other people. You can take this yes back at any time: Waldo then deletes everything it found, removes its copies from your chat history, and does not record those items again.
+
+What each passage rests on, as the code stands on this branch:
+- **Health memory:** the owner ruling of 22 October 2026 (what the owner tells Waldo may be kept, numbers included, never logged). The owner turn's model routes are OpenAI and Anthropic (`llm/owner-routes.ts`). No health-notes switch is promised: `health_memory.set` is not on `beta-mvp`.
+- **Photon:** `docs/channels/imessage/PHOTON_ONBOARDING.md` ("Data at Photon"). Deleting a Waldo account does not yet remove the owner's Photon user; until that is automated it is removed by hand, so the notice must not promise more.
+- **Diagnostic recording:** waldoco/waldo-backend#1398 (draft): staging Langfuse text only for owners who agreed. The passage ships only with it. The retention period is still open.
+- **Look-up:** `web_search` sends the query to Brave Search (`BRAVE_SEARCH_API_KEY`); page reads run from Waldo's Worker on Cloudflare (on staging through Cloudflare's browser), so the sites see a request from Cloudflare, not from the owner's device. GDPR Art. 14 asks the notice to name the sources and the categories: the categories are the seven in `appFindingCategoryV1Schema`.
+- **Not in the four items asked, for the owner to decide:** voice notes are transcribed by ElevenLabs, Smallest AI or OpenAI, whichever has a key (`llm/transcriber.ts`). The notice names none of them today.
 
 ## The consent ledger and account deletion
 
