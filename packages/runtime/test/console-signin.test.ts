@@ -548,3 +548,29 @@ describe('sign-in screens', () => {
     expect(html).not.toContain('000000');
   });
 });
+
+describe('signing in again in the same browser', () => {
+  const signedIn = 'waldo_owner=do-a.old.sig; waldo_console=old-token';
+  const verifyPost = () => new Request('https://w.test/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'owner@example.com', code: '123456' }), headers: { cookie: signedIn } });
+  const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+
+  it('a verified code ends the browser\'s old owner object session and directory row', async () => {
+    const { ns, fetch } = owners();
+    const ownerCookie = vi.fn(async (_doName: string, _presented?: Request) => 'do-a.fresh.sig');
+    const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
+    expect(response.status).toBe(303);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://telegram-owner/grant-console');
+    expect(new Headers(init.headers).get('cookie')).toBe('waldo_console=old-token');
+    expect(ownerCookie.mock.calls[0]?.[0]).toBe('do-a');
+    expect(ownerCookie.mock.calls[0]?.[1]?.headers.get('cookie')).toBe(signedIn);
+  });
+
+  it('finishes no sign-in when the old directory row cannot be revoked', async () => {
+    const { ns } = owners();
+    const ownerCookie = vi.fn(async () => { throw new Error('session revocation unavailable'); });
+    const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(await response.text()).toContain('Sign-in is having trouble');
+  });
+});

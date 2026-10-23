@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { consoleAuth, OWNER_COOKIE } from '../src/identity/console-auth';
+import { linkCodeHash } from '../src/identity/owner-directory';
 
 const DEPLOY = 'owner-synthetic-console-deploy';
 const MEMBER = 'owner-synthetic-console-member';
@@ -17,7 +18,8 @@ const directoryEnv = {
 afterEach(() => vi.unstubAllGlobals());
 
 async function fixture(owner = MEMBER, issuedAt?: number) {
-  const rpcState = { open: true, failOpen: false };
+  const rpcState = { open: true, failOpen: false, live: true, revoke: true as boolean | null };
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const messages: string[] = [];
   // Every external request fails except these fictional directory/session RPCs.
   vi.stubGlobal('fetch', vi.fn(async (input: string | Request, init?: RequestInit) => {
@@ -28,7 +30,9 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     }
     if (url.origin !== 'https://directory.invalid') throw new Error('unexpected external request');
     const args = JSON.parse(String(init?.body));
+    rpcCalls.push({ name: url.pathname.split('/rpc/')[1]!, args });
     if (url.pathname.endsWith('/assert_channel_presence')) return Response.json(true);
+    if (url.pathname.endsWith('/console_session_revoke')) return Response.json(rpcState.revoke);
     if (url.pathname.endsWith('/route_presence')) {
       expect(args.p_subject).toBe(SUBJECT);
       return Response.json([{ do_name: DEPLOY, subject: SUBJECT, timezone: null }]);
@@ -39,7 +43,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
         if (rpcState.failOpen) throw new Error('synthetic session-open failure');
         return Response.json(rpcState.open);
       }
-      return Response.json(true);
+      return Response.json(rpcState.live);
     }
     throw new Error('unexpected directory RPC');
   }));
@@ -67,7 +71,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     method: 'POST', redirect: 'manual', body: new URLSearchParams({ t: token }).toString(),
     headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
   });
-  return { member, bindings, selected, link, post, deploySession, token, rpcState, messages };
+  return { member, bindings, selected, link, post, deploySession, token, rpcState, rpcCalls, messages };
 }
 
 it('redeems a fresh member ticket through the Worker in a fresh browser', async () => {
@@ -159,11 +163,55 @@ it('rejects tampered ticket payload, signature, version and routing header', asy
   expect(f.selected).toEqual([MEMBER]);
 });
 
-it('rejects an invalid signed owner cookie without spending the member ticket', async () => {
+// The owner cookie outlives its row (30 days against 7 idle, and sign-out everywhere), so a cookie that does not name a
+// live session is no account to protect: the link signs the browser in and the new cookie replaces it.
+it('replaces an owner cookie that names no live session instead of refusing the link', async () => {
   const f = await fixture();
-  expect((await worker.fetch(f.post(`${OWNER_COOKIE}=invalid`), f.bindings)).status).toBe(403);
-  expect(f.selected).toEqual([]);
-  expect((await worker.fetch(f.post(), f.bindings)).status).toBe(303);
+  const response = await worker.fetch(f.post(`${OWNER_COOKIE}=invalid`), f.bindings);
+  expect(response.status).toBe(303);
+  expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=${MEMBER}.`);
+  expect(f.rpcCalls.map(call => call.name)).not.toContain('console_session_revoke');
+});
+
+it('redeems a link in a browser whose own owner session has ended', async () => {
+  const f = await fixture();
+  const ended = await consoleAuth(directoryEnv)!.ownerCookie(MEMBER);
+  f.rpcState.live = false;
+  const response = await worker.fetch(f.post(`${OWNER_COOKIE}=${ended}`), f.bindings);
+  expect(response.status).toBe(303);
+  expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=${MEMBER}.`);
+});
+
+it('rotates both sessions of a signed-in browser that redeems a link', async () => {
+  const f = await fixture();
+  const presented = (await consoleAuth(directoryEnv)!.ownerCookie(MEMBER))!;
+  let oldConsole = '';
+  await runInDurableObject(f.member, async (_instance, state) => { oldConsole = await consoleAccess(state.storage).grant(); });
+  f.rpcCalls.length = 0;
+  const response = await worker.fetch(f.post(`${OWNER_COOKIE}=${presented}; ${CONSOLE_COOKIE}=${oldConsole}`), f.bindings);
+  expect(response.status).toBe(303);
+  const issued = Object.fromEntries(cookies(response).split('; ').map(pair => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]));
+  expect(issued[OWNER_COOKIE]).toBeTruthy();
+  expect(issued[OWNER_COOKIE]).not.toBe(presented);
+  expect(issued[CONSOLE_COOKIE]).toBeTruthy();
+  expect(issued[CONSOLE_COOKIE]).not.toBe(oldConsole);
+  const revoked = f.rpcCalls.filter(call => call.name === 'console_session_revoke');
+  expect(revoked).toHaveLength(1);
+  expect(revoked[0]!.args).toMatchObject({ p_do_name: MEMBER, p_session_hash: await linkCodeHash(presented.split('.')[1]!) });
+  await runInDurableObject(f.member, async (_instance, state) => {
+    const access = consoleAccess(state.storage);
+    expect(await access.session(oldConsole)).toBeNull();
+    expect(await access.session(issued[CONSOLE_COOKIE]!)).not.toBeNull();
+  });
+});
+
+it('signs no one in when the presented owner session cannot be revoked', async () => {
+  const f = await fixture();
+  const presented = (await consoleAuth(directoryEnv)!.ownerCookie(MEMBER))!;
+  f.rpcState.revoke = null;
+  const response = await worker.fetch(f.post(`${OWNER_COOKIE}=${presented}`), f.bindings);
+  expect(response.status).toBe(503);
+  expect(response.headers.get('set-cookie')).toBeNull();
 });
 
 it.each(['false', 'throw'])('fails closed when owner session open returns %s and recovers with a new link', async failure => {

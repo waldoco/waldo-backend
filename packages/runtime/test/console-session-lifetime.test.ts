@@ -230,3 +230,72 @@ describe('control receipts in a long session', () => {
     } finally { clock.mockRestore(); }
   });
 });
+
+describe('a new sign-in in a browser ends that browser\'s old sessions', () => {
+  const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
+  const at = 1_790_000_000_000;
+  const directory = (answer: (name: string) => unknown = () => true) => {
+    const calls: Array<{ name: string; body: Record<string, unknown> }> = [];
+    const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+      const name = url.split('/rpc/')[1]!;
+      calls.push({ name, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify(answer(name)));
+    });
+    return { calls, auth: consoleAuth(env, fetcher as unknown as typeof fetch, () => at)! };
+  };
+  const presenting = (cookie: string) => new Request('https://w.test/console/verify', { method: 'POST', headers: { cookie } });
+
+  it('redeeming a link in a signed-in browser issues a new token and ends the old one', async () => {
+    let now = at;
+    const access = consoleAccess(memoryStore(), () => now);
+    const old = await access.grant();
+    const before = (await access.session(old))!;
+    const link = new URL(await access.mintLink('https://w.test')).searchParams.get('t')!;
+    now += HOUR;
+    const fresh = (await access.redeem(link, old))!;
+    expect(fresh).not.toBe(old);
+    expect(await access.session(old)).toBeNull();
+    const after = (await access.session(fresh))!;
+    expect(after.csrf).not.toBe(before.csrf);
+    expect(after.signed_in).toBe(now);
+    expect(await access.list()).toHaveLength(1);
+  });
+
+  it('an email sign-in in a signed-in browser ends that browser\'s old owner object session and no other', async () => {
+    const access = consoleAccess(memoryStore(), () => at);
+    const old = await access.grant();
+    const otherBrowser = await access.grant();
+    const fresh = await access.grant(old);
+    expect(await access.session(old)).toBeNull();
+    expect(await access.session(otherBrowser)).not.toBeNull();
+    expect(await access.session(fresh)).not.toBeNull();
+    expect(await access.list()).toHaveLength(2);
+  });
+
+  it('revokes the directory row of the owner cookie the browser presented, before opening the new one', async () => {
+    const d = directory();
+    const presented = (await d.auth.ownerCookie('do-a'))!;
+    d.calls.length = 0;
+    const fresh = (await d.auth.ownerCookie('do-a', presenting(`waldo_owner=${presented}`)))!;
+    expect(fresh).not.toBe(presented);
+    expect(d.calls.map(call => call.name)).toEqual(['console_session_revoke', 'console_session_open_for']);
+    expect(d.calls[0]!.body).toMatchObject({ p_do_name: 'do-a', p_session_hash: await linkCodeHash(presented.split('.')[1]!) });
+  });
+
+  it('leaves another owner\'s row, and a cookie it cannot verify, alone', async () => {
+    const d = directory();
+    const otherOwner = (await d.auth.ownerCookie('do-b'))!;
+    for (const cookie of [`waldo_owner=${otherOwner}`, 'waldo_owner=do-a.forged.0000', 'waldo_console=only']) {
+      d.calls.length = 0;
+      expect(await d.auth.ownerCookie('do-a', presenting(cookie))).not.toBeNull();
+      expect(d.calls.map(call => call.name), cookie).toEqual(['console_session_open_for']);
+    }
+  });
+
+  it('opens no new session when the presented row cannot be revoked', async () => {
+    const presented = (await directory().auth.ownerCookie('do-a'))!;
+    const d = directory(name => name === 'console_session_revoke' ? null : true);
+    await expect(d.auth.ownerCookie('do-a', presenting(`waldo_owner=${presented}`))).rejects.toThrow();
+    expect(d.calls.map(call => call.name)).toEqual(['console_session_revoke']);
+  });
+});
