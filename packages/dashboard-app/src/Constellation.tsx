@@ -2,7 +2,7 @@ import {GraphMap} from './GraphMap';
 import {buildMemoryDestination,type MemoryListDestination} from './destinations';
 import { useEffect, useMemo, useState } from 'react';
 import { fetchMemory, memoryItemLink, type Claim, type Interpretation, type MemoryPattern } from './memory-model';
-import { SignInRequired } from './model';
+import { SignInRequired, signInHref } from './model';
 
 const SUPPORT_PREVIEW_LIMIT = 6;
 const EMPTY_CLAIMS: Claim[] = [];
@@ -127,7 +127,7 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
             {activeSupport.read.failed > 0 && <p role="alert">{activeSupport.read.failed} selected supporting Spot reads unavailable. Missing details are not proof of an empty support set.</p>}
             {activeSupport.read.partial && <p className="muted">Some support reads are incomplete. Do not treat this branch as verified evidence.</p>}
             {activeSupport.read.omitted > 0 && <p>{activeSupport.read.omitted} declared support IDs omitted from this six-Spot preview.</p>}
-            {activeSupport.read.signedOut && <a href="/console/signin">Sign in to read supporting Spots</a>}
+            {activeSupport.read.signedOut && <a href={signInHref()}>Sign in to read supporting Spots</a>}
             {!scene.claims.length && !declared && <p>No saved supporting Spot IDs were returned for this pattern.</p>}
           </>}
           <ul>{scene.claims.map(claim => <li key={claim.id}><button aria-pressed={claim.id === selected} onClick={() => setSelectedId(claim.id)}>{claim.text}</button><small>{claim.kind} · {claim.source} · {origin(claim.origin)}</small></li>)}</ul>
