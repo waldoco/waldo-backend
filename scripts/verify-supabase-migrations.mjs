@@ -74,6 +74,8 @@ const expectedMigrations = [
   '20261022120000_waldo_imessage_photon_enrollment.sql',
   '20261022150000_waldo_imessage_shared_autoactivate.sql',
   '20261022170000_health_per_sample_rejection.sql',
+  '20261023060000_waldo_connect_session_handoff.sql',
+  '20261023090000_waldo_console_session_lifetime.sql',
   '20261023100000_waldo_phone_verified_by_link.sql',
   '20261023150000_waldo_phone_sms_proof.sql',
 ];

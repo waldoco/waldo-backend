@@ -132,8 +132,14 @@ describe('a first run while the agreements are held back', () => {
       expect((await on('/app/v1/consents', { request_id: `on-${purpose}-01`, purpose, version: 1, age_attested_18_plus: true })).status).toBe(200);
     }
     expect(await onboarding(on)).toMatchObject({ state: 'completed', steps: { agreements: 'done' } });
+    // A finished run keeps a done step through a later copy change, as a run finished with the agreements accepted does. The
+    // older version on the stored yes stands in for the copy bump; the consent route asks for the new copy.
+    state.storage.sql.exec("UPDATE consent_ledger SET version = 0 WHERE purpose IN ('terms', 'privacy_notice')");
+    expect(await (await on('/app/v1/onboarding/channel-link', { provider: 'telegram' })).json()).toEqual({ error: 'agreements_required' });
+    expect(await onboarding(on)).toMatchObject({ state: 'completed', steps: { agreements: 'done' } });
   }));
-  it('with the switch on, the later steps still wait for the agreements', () => owner({ APP_AGREEMENTS: '1', OWNER_LOOKUP: '1' }, async ({ call }) => {
+  // The likely launch setting is the agreements on and the look-up off: the later steps wait there too.
+  for (const lookup of ['1', '0']) it(`with the switch on and OWNER_LOOKUP ${lookup}, the later steps still wait for the agreements`, () => owner({ APP_AGREEMENTS: '1', OWNER_LOOKUP: lookup }, async ({ call }) => {
     expect((await call('/app/v1/onboarding/actions', { request_id: 'on-start-001', action: 'start' })).status).toBe(200);
     const name = await call('/app/v1/onboarding/actions', { request_id: 'on-name-0001', action: 'name.set', name: 'Sam' });
     expect([name.status, await name.json()]).toEqual([409, { error: 'agreements_required' }]);

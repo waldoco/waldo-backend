@@ -87,7 +87,7 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
     return consentPage(error ? { kind: 'denied' } : { kind: 'invalid' }, null);
   }
   // Checked before the owner object wakes, so a forwarded sign-in or an injected code neither links nor settles the attempt.
-  const browser = await checkBrowser(request, 'google', state.nonce, Date.now());
+  const browser = await checkBrowser(request, secret, 'google', state.nonce, Date.now());
   if (browser !== 'bound') {
     rejected(`browser_${browser}`);
     return callbackPage(false, UNBOUND, '', returnAction(state.surface, null));

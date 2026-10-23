@@ -1,6 +1,6 @@
 import { clientMetadataDocument, MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
 import { MCP_ATTEMPT_TTL_MS, MCP_FINISH_PATH, readMcpState, type ConnectOutcome } from '../connectors/mcp-connections';
-import { bindBrowser, checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import { checkBrowser, releaseBrowser, startRedirect } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { callbackPage } from './google-oauth';
@@ -26,10 +26,7 @@ const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth'
 
 // The console start link, followed by the signed-in owner: it sends the browser to the provider and binds the attempt
 // to that browser, so the callback accepts no other.
-export const mcpStartRedirect = async (nonce: string, target: string): Promise<Response> => new Response(null, {
-  status: 303,
-  headers: { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': await bindBrowser('mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now()) },
-});
+export const mcpStartRedirect = (secret: string, nonce: string, target: string): Promise<Response> => startRedirect(secret, 'mcp', nonce, target, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS);
 
 // The provider redirects the owner here after consent. The signed state names the owner object and a
 // single-use attempt; that object settles the attempt, so a reloaded callback never redeems the code twice.
@@ -43,7 +40,7 @@ export const handleMcpCallback = async (request: Request, env: TelegramWebhookEn
     return callbackPage(false, COPY.invalid);
   }
   // Checked before the owner object wakes, so a forwarded sign-in or an injected code neither links nor settles the attempt.
-  const browser = await checkBrowser(request, 'mcp', state.nonce, Date.now());
+  const browser = await checkBrowser(request, secret, 'mcp', state.nonce, Date.now());
   if (browser !== 'bound') {
     rejected(`browser_${browser}`);
     return callbackPage(false, UNBOUND);

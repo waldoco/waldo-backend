@@ -84,9 +84,9 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     // A name sign-up recorded answers the name step.
     const name = base.name === 'pending' && named(claims) ? 'done' : base.name;
     // While the run is open the agreements step reads from the ledger itself, however they were accepted, so a copy bump shows
-    // it pending again. A finished run keeps a done step; one finished while the agreements were held back reads the ledger, so
-    // accepting them later on the consent route shows them done.
-    const agreements = !run || (run.completed_at !== null && base.agreements === 'done') ? base.agreements : consent.agreed() ? 'done' : 'pending';
+    // it pending again. A finished run keeps its step: one finished while the agreements were held back records them done when
+    // they are accepted later on the consent route (agreementsAccepted), and keeps that through later copy changes too.
+    const agreements = !run || run.completed_at !== null ? base.agreements : consent.agreed() ? 'done' : 'pending';
     const body = {
       version: 1 as const,
       state: !run ? 'not_started' as const : run.completed_at === null ? 'in_progress' as const : 'completed' as const,
@@ -181,6 +181,11 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       }
     }
   };
-  return { view, act };
+  // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
+  const agreementsAccepted = (): void => {
+    const run = row();
+    if (run && run.completed_at !== null && steps(run).agreements !== 'done' && consent.agreed()) step(run, 'agreements', 'done');
+  };
+  return { view, act, agreementsAccepted };
 };
 export type FirstRun = ReturnType<typeof firstRun>;

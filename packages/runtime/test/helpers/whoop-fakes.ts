@@ -84,7 +84,7 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
 export type Stored = { revision: number; payload: Record<string, unknown> };
 export type Plane = {
   samples: Map<string, Stored>; requests: Map<string, { digest: string; response: unknown }>; ingests: number; consent: 'granted' | 'withdrawn' | 'none'; model: 'granted' | 'withdrawn' | 'none'; epoch: number;
-  sessions: string[]; vault: VaultFake;
+  sessions: string[]; handoffs: string[]; vault: VaultFake;
 };
 // Any owner name may link: the owner gate is the real function's job and is covered by the edge's own tests.
 const anyOwner = { includes: () => true } as unknown as readonly string[];
@@ -93,7 +93,7 @@ export const newVault = (): VaultFake => {
   vault.clients.set(`${WHOOP_ISSUER} ${CONFIG.redirectUri}`, { client_id: CONFIG.clientId, client_auth: 'client_secret_post', client_secret: CLIENT_SECRET });
   return vault;
 };
-export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, sessions: [], vault: newVault() });
+export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, sessions: [], handoffs: [], vault: newVault() });
 
 // The database's own rules, in the parts a sync depends on.
 export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
@@ -127,7 +127,7 @@ export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string,
   }
   // Of the connection functions only the listing is callable from an owner object; tokens are the edge's.
   if (fn === 'connection_list') return plane.vault.rows.filter(c => c.owner === doName && c.status !== 'revoked').map(c => ({ id: c.id, provider: c.provider, account: c.account, status: c.status }));
-  if (fn === 'connect_session_issue') { plane.sessions.push(String(args.p_ticket_hash)); return '00000000-0000-4000-a000-000000000001'; }
+  if (fn === 'connect_session_issue_handoff') { plane.sessions.push(String(args.p_ticket_hash)); plane.handoffs.push(String(args.p_handoff_hash)); return '00000000-0000-4000-a000-000000000001'; }
   throw new Error(`unfaked rpc ${fn}`);
 };
 

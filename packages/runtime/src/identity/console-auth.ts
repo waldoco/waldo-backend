@@ -2,6 +2,27 @@ import { withRequestTimeout } from './request-timeout';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
+// A console sign-in stays signed in while it is used: it ends 7 days after its last signed-in request, and 30 days
+// after sign-in however much it is used. The directory row and the owner object's own session both enforce it, and
+// the database refuses a row past 30 days. Email codes are a single factor, so 30 days is NIST SP 800-63B-4's AAL1
+// reauthentication ceiling; the app bearer keeps its own 12 hours.
+export const CONSOLE_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+// An action that creates lasting access needs an email code from the last 2 hours. That is GitHub's sudo mode ("a
+// two-hour session timeout period before prompting you for authentication again"), and OWASP's Authentication Cheat
+// Sheet asks for current credentials before sensitive features. Unlike GitHub's, the window does not restart with each
+// sensitive action: it runs from the code.
+export const CONSOLE_STEP_UP_MS = 2 * 60 * 60_000;
+// A sign-in in a browser that holds a live session (a confirm, or a link or signup there) does not end that session: by
+// owner ruling it keeps ordinary access, without its code, for 5 more minutes, so a turn running or queued under it
+// finishes, and then it ends. The directory holds the same 5 minutes in console_session_cap.
+export const CONSOLE_REPLACED_SESSION_MS = 5 * 60_000;
+// A request another site started (Fetch Metadata): under Lax it can still be a top-level visit carrying the cookies, so
+// it may read a session but never renews one, and the console refuses it any write or flow start.
+export const fromAnotherSite = (request: Request): boolean => {
+  const site = request.headers.get('sec-fetch-site');
+  return site === 'cross-site' || site === 'same-site';
+};
 
 export type AdminOverview = Readonly<{
   owners: readonly Readonly<{ id?: string; email: string | null; state: string; created_at: string; presences: readonly string[]; issued_count?: number }>[];
@@ -44,8 +65,10 @@ export type ConsoleAuth = Readonly<{
   deleteOwner(doName: string): Promise<boolean>;
   // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
   // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
-  // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie.
-  ownerCookie(doName: string): Promise<string | null>;
+  // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie. Given the sign-in request,
+  // it first caps the session of the owner cookie that browser presents, whichever owner holds it, to
+  // CONSOLE_REPLACED_SESSION_MS, and throws when that cannot be confirmed, so a copy of the old cookie runs out.
+  ownerCookie(doName: string, presented?: Request): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
   // The mobile app's bearer: the same kind of server-side session, signed under its own context so it is never
   // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
@@ -90,15 +113,18 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   const appSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `appbearer.${doName}.${sessionId}`);
-  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+  const lifetime = CONSOLE_SESSION_LIFETIME_MS / 1000, idle = CONSOLE_SESSION_IDLE_MS / 1000;
+  type Open = (doName: string, sessionHash: string) => Promise<unknown>;
+  const openLong: Open = (doName, sessionHash) => rpc('console_session_open_for', `consolesess.openfor.${doName}.${sessionHash}.${lifetime}.${idle}`, { p_do_name: doName, p_session_hash: sessionHash, p_lifetime_seconds: lifetime, p_idle_seconds: idle });
+  const openTwelveHours: Open = (doName, sessionHash) => rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>, open: Open): Promise<string | null> => {
     const sessionId = newSessionId();
     const sessionHash = await linkCodeHash(sessionId);
-    const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-    if (opened !== true) return null;
+    if (await open(doName, sessionHash) !== true) return null;
     return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
   };
   // A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
-  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+  const readSession = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<Readonly<{ doName: string; sessionHash: string }> | null> => {
     const sigDot = raw?.lastIndexOf('.') ?? -1;
     if (!raw || sigDot < 1) return null;
     const sessionDot = raw.lastIndexOf('.', sigDot - 1);
@@ -111,9 +137,48 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     let diff = expected.length ^ given.length;
     for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
     if (diff !== 0) return null;
-    const sessionHash = await linkCodeHash(sessionId);
+    return { doName, sessionHash: await linkCodeHash(sessionId) };
+  };
+  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const session = await readSession(raw, sign);
+    if (!session) return null;
+    const { doName, sessionHash } = session;
     const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
     return live === true ? doName : null;
+  };
+  const presentedOwnerCookie = (request: Request) =>
+    (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
+  const listSessions = async (doName: string): Promise<readonly ConsoleSession[]> => {
+    const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
+    // An invalid authority response cannot prove that a session is absent.
+    if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
+    const seen = new Set<string>();
+    return rows.map((raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
+      const row = raw as Record<string, unknown>;
+      if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+        || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
+        || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
+        || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+      seen.add(row.session);
+      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+    });
+  };
+  // The list holds only live rows, so membership answers liveness without moving last_seen_at.
+  const readListed = async (raw: string | null | undefined): Promise<string | null> => {
+    const session = await readSession(raw, cookieSig);
+    if (!session) return null;
+    return (await listSessions(session.doName)).some((row) => row.session === session.sessionHash) ? session.doName : null;
+  };
+  const capSession = async (doName: string, sessionHash: string): Promise<boolean> => {
+    const capped = await rpc('console_session_cap', `consolesess.cap.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (typeof capped !== 'boolean') throw new Error('session cap unavailable');
+    return capped;
+  };
+  const revokeSession = async (doName: string, sessionHash: string): Promise<boolean> => {
+    const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
+    return revoked;
   };
   const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '') => {
     const address = email.trim().toLowerCase();
@@ -184,34 +249,16 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    ownerCookie: (doName) => mint(doName, cookieSig),
-    readOwnerCookie: (request) => readSigned(
-      (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
-      cookieSig,
-    ),
-    ownerAppCredential: (doName) => mint(doName, appSig),
+    async ownerCookie(doName, presented) {
+      const previous = presented ? await readSession(presentedOwnerCookie(presented), cookieSig) : null;
+      if (previous) await capSession(previous.doName, previous.sessionHash);
+      return mint(doName, cookieSig, openLong);
+    },
+    readOwnerCookie: (request) => fromAnotherSite(request) ? readListed(presentedOwnerCookie(request)) : readSigned(presentedOwnerCookie(request), cookieSig),
+    ownerAppCredential: (doName) => mint(doName, appSig, openTwelveHours),
     readAppCredential: (credential) => readSigned(credential, appSig),
-    async listSessions(doName) {
-      const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
-      // An invalid authority response cannot prove that a session is absent.
-      if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
-      const seen = new Set<string>();
-      return rows.map((raw: unknown) => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
-        const row = raw as Record<string, unknown>;
-        if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
-          || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
-          || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
-          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
-        seen.add(row.session);
-        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
-      });
-    },
-    async revokeSession(doName, sessionHash) {
-      const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
-      return revoked;
-    },
+    listSessions,
+    revokeSession,
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
       if (typeof count !== 'number') throw new Error('session revocation unavailable');
