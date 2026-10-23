@@ -371,14 +371,16 @@ export class TelegramFinalOutbox {
   }
 }
 
-// What the console says for a job whose message is still in the outbox's hands, by the job's run id: sent and waiting for
+// What the console says for a job whose message is still in the outbox's hands, by the job's run id: queued and waiting for
 // the surface's report that it arrived, or refused for now and waiting for the owner's next message. Fixed lines only.
+// An accepted record may not have left Waldo yet (an iMessage part waits in Waldo's own outbox for the bridge), so the line
+// claims no send and names no surface.
 export const outboxRunNotes = (records: readonly FinalRecord[]): ReadonlyMap<string, string> => {
   const notes = new Map<string, string>();
   for (const record of records) {
     const runId = record.standingOrder?.runId ?? record.reminder?.runId ?? record.heartbeat?.runId;
     if (!runId) continue;
-    if (record.status === 'accepted') notes.set(runId, 'sent, waiting for your phone');
+    if (record.status === 'accepted') notes.set(runId, 'queued for delivery; waiting to hear it arrived');
     else if (record.status === 'pending' && record.reason === 'window_refused') notes.set(runId, 'waiting for your next message');
   }
   return notes;

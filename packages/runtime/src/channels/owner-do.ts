@@ -4054,7 +4054,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
         const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message',
-          superseded: 'order ran; a newer report replaced this one', provider_failed: 'order ran; WhatsApp could not deliver its report',
+          superseded: 'order ran; a newer report replaced this one', provider_failed: 'order ran; its report could not be delivered',
           surface_unlinked: 'order ran; its WhatsApp number was unlinked before the report arrived', lapsed: 'order ran; its report waited 30 days for your WhatsApp window and was not sent',
           delivery_unconfirmed: 'order report delivery unconfirmed' };
         runs.finish(record.standingOrder.runId, delivered ? 'completed' : record.status === 'quarantined' ? 'failed' : 'stopped',
@@ -4067,7 +4067,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') {
           if (forgetCancelled) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent: it named something you asked me to forget');
           else if (lapsedUnsent) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent; your WhatsApp window stayed closed for 30 days');
-          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : partlySent ? 'heartbeat partly sent; the rest was not sent' : 'heartbeat delivery unconfirmed');
+          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : partlySent ? 'heartbeat partly sent; the rest was not sent' : record.reason === 'provider_failed' ? 'heartbeat could not be delivered' : 'heartbeat delivery unconfirmed');
         }
       }
       if (record.reminder) {
@@ -4088,7 +4088,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           else if (unlinked) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent; its WhatsApp number was unlinked');
           else if (lapsedUnsent) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent; your WhatsApp window stayed closed for 30 days');
           else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
-          else runs.finish(record.reminder.runId, 'failed', partlySent ? 'reminder partly sent; the rest was not sent' : 'reminder delivery unconfirmed');
+          else runs.finish(record.reminder.runId, 'failed', partlySent ? 'reminder partly sent; the rest was not sent' : record.reason === 'provider_failed' ? 'reminder could not be delivered' : 'reminder delivery unconfirmed');
         }
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
