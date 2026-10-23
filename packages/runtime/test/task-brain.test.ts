@@ -477,6 +477,28 @@ describe('the task brain host', () => {
     });
   });
 
+  it('an old attempt\'s slow read still running in the brain does not fence the fresh attempt that replaces it', async () => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t1 = ticket('reader');
+      await host.claim(t1);
+      let release!: () => void;
+      handler.search = () => new Promise(resolve => { release = () => resolve({ hits: 1 }); });
+      const slow = host.tool(t1, call('search_communication'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      // The worker's alarm re-fires while it waits on that read: the attempt ends, as designed.
+      expect(await host.claim(t1)).toBe('fenced');
+      expect(book.get(t1.jobId)).toMatchObject({ status: 'queued', crashes: 1 });
+      expect(host.busy().has(t1.jobId)).toBe(false);
+      const t2 = book.startAttempt(t1.jobId)!;
+      expect(await host.claim(t2)).not.toBe('fenced');
+      // The old call still in flight is not the live attempt's, so it does not hold the new attempt's lease open.
+      expect(host.busy().has(t1.jobId)).toBe(false);
+      release();
+      expect(await slow).toBe('fenced');
+      expect(book.get(t1.jobId)).toMatchObject({ status: 'running', attempt: 2, crashes: 1 });
+    });
+  });
+
   it('a busy job past its deadline still ends: its running call is then fenced', async () => {
     await withHost(async ({ ticket, book, clock }) => {
       const t = ticket('errand');

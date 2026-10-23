@@ -100,8 +100,10 @@ export const taskHost = (deps: TaskHostDeps) => {
     held.abort.abort();
     deps.releaseBrowser(held.scope);
   };
-  // Jobs with a tool call running here now. Their worker is waiting on that call, so its lease cannot have lapsed.
+  // Tool calls running here now, by attempt. The attempt's worker is waiting on them, so its lease cannot have lapsed. An
+  // earlier attempt's call still finishing says nothing about the attempt that replaced it.
   const busy = new Map<string, number>();
+  const attemptKey = (ticket: Pick<TaskTicket, 'jobId' | 'attempt'>) => `${ticket.jobId}:${ticket.attempt}`;
   const logEvents = (events: readonly TurnLogEntry[]) => { for (const event of events) deps.log(event); };
   // Called only once the book has accepted the call's ticket: a fenced or stale call's outcomes are not replayed.
   const replay = (outcomes: readonly ProviderOutcome[]) => {
@@ -122,16 +124,22 @@ export const taskHost = (deps: TaskHostDeps) => {
     // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
     // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
     cancelled: (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); },
-    busy: (): ReadonlySet<string> => new Set(busy.keys()),
+    // Jobs whose live attempt has a call running here.
+    busy: (): ReadonlySet<string> => new Set([...busy.keys()].flatMap((key) => {
+      const split = key.lastIndexOf(':');
+      const jobId = key.slice(0, split);
+      const row = deps.book.get(jobId);
+      return row?.status === 'running' && String(row.attempt) === key.slice(split + 1) ? [jobId] : [];
+    })),
     // The worker keeps its lease while a model call runs.
     heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
       // The same attempt rejoining while the brain still serves a call of its earlier invocation (a worker alarm that fired
       // again): that call may still be waiting for the serial lane, with no intent written yet. Both are fenced, so neither
       // invocation runs a step the other may also run; the lease then lapses and a new attempt resumes from the checkpoint.
-      if (busy.has(ticket.jobId)) {
+      if (busy.has(attemptKey(ticket))) {
         const ended = deps.book.abandon(ticket);
-        // A stale ticket from an earlier attempt: the call in flight is the live attempt's, and stays its own.
+        // A stale ticket whose own call is still finishing: the job has moved past that attempt, which is only fenced.
         if (ended === 'fenced') return 'fenced';
         fence(ticket.jobId);
         const row = deps.book.get(ticket.jobId);
@@ -198,7 +206,8 @@ export const taskHost = (deps: TaskHostDeps) => {
           if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
           return dispatchLoopTool(call, { handlers, ctx });
         };
-        busy.set(ticket.jobId, (busy.get(ticket.jobId) ?? 0) + 1);
+        const key = attemptKey(ticket);
+        busy.set(key, (busy.get(key) ?? 0) + 1);
         try {
           result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
         } catch (error) {
@@ -206,8 +215,8 @@ export const taskHost = (deps: TaskHostDeps) => {
           const failed = toolError('handler_failed');
           result = { ok: false, error: failed.cause, error_code: failed.code, fix: failed.fix, retryable: false, code: 'transient' };
         } finally {
-          const left = (busy.get(ticket.jobId) ?? 1) - 1;
-          if (left > 0) busy.set(ticket.jobId, left); else busy.delete(ticket.jobId);
+          const left = (busy.get(key) ?? 1) - 1;
+          if (left > 0) busy.set(key, left); else busy.delete(key);
         }
         // A handler that threw may have crossed its side-effect boundary first, so the effect is uncertain whatever the
         // worker would do next: the job parks rather than hand the worker a failure it might retry.
