@@ -3,7 +3,7 @@ import { WHATSAPP_LINK_PATH, whatsappLinkToken } from '../identity/whatsapp-link
 import { MCP_START_PATH } from '../connectors/mcp-connections';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
-import { CONSOLE_ACTION_PATH, type ConsoleSession } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_GOOGLE_START_PATH, type ConsoleSession } from './console';
 import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { OWNER_CONTROLS_ACTION_PATH } from './dashboard-owner-controls';
@@ -69,6 +69,7 @@ export const STEP_UP_ROUTES: Readonly<Record<string, StepUpRule>> = {
   [BROWSER_TRIAL_PATH]: { gated: false, why: 'Consents to one 60-second public fixture session with no sign-ins; it cannot be renewed.' },
   '/console/browser-handoff': { gated: false, why: 'Shows or ends a browser run already in progress; it ends with that run.' },
   [MCP_START_PATH]: { gated: false, why: 'Follows a single-use start link that only a gated mcp.connect mints.' },
+  [CONSOLE_GOOGLE_START_PATH]: { gated: false, why: 'Follows a single-use start link that only a gated google.connect mints.' },
   '/console/workspace': { gated: false, why: 'Uploads, reads or removes the owner\'s own files; grants no access.' },
 };
 

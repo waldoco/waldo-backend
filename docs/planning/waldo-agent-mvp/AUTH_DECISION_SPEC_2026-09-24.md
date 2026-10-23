@@ -104,7 +104,7 @@ This replaces the 12-hour lifetime and `SameSite=Strict` in "Session security in
 **Forgery.** Every non-GET request under `/console` must come from the console's own origin, checked at the Worker before any handler (`console-cross-site.ts`).
 - The check uses `Sec-Fetch-Site: same-origin`, falling back to a matching `Origin`. Same-site siblings are refused.
 - This also closes login and logout forgery on `/console/verify`, the ticket POST and `/console/signout-all`. Those routes take no cookie, so they were open under `Strict` too.
-- Three GETs start a flow: MCP connect, Photon connect and the browser trial. They are refused when another site sends them.
+- Four GETs start a flow: MCP connect, Google connect, Photon connect and the browser trial. They are refused when another site sends them.
 - A new state-changing GET must join that list or become a POST.
 - Session CSRF tokens and the chat header stay as they were.
 

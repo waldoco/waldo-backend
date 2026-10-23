@@ -1,14 +1,14 @@
 import { MCP_START_PATH } from '../connectors/mcp-connections';
 import { fromAnotherSite } from '../identity/console-auth';
 import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
-import { CONSOLE_PATH } from './console';
+import { CONSOLE_GOOGLE_START_PATH, CONSOLE_PATH } from './console';
 import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 const underConsole = (path: string) => path === CONSOLE_PATH || path.startsWith(`${CONSOLE_PATH}/`);
 // GETs that begin a flow rather than read. A new one belongs here, or behind a POST.
-const startsFlow = (path: string) =>
-  (path.startsWith(MCP_START_PATH) && path.length > MCP_START_PATH.length) || path === CONSOLE_PHOTON_START_PATH || path === BROWSER_TRIAL_PATH;
+const startsFlow = (path: string) => [MCP_START_PATH, CONSOLE_GOOGLE_START_PATH].some(start => path.startsWith(start) && path.length > start.length)
+  || path === CONSOLE_PHOTON_START_PATH || path === BROWSER_TRIAL_PATH;
 
 const refused = () => new Response('This request must come from the Waldo console.', {
   status: 403, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
