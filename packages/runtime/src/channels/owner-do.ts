@@ -130,6 +130,7 @@ import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
+import { weatherHandler } from '../tools/live/weather';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
@@ -3361,7 +3362,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           };
           if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
         },
-      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), weatherHandler({ get: () => null }, { now: () => new Date() }), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();

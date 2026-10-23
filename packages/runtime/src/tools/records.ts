@@ -7,7 +7,7 @@ import type { LLMRequest, LLMTool, ToolName } from '@waldo/contracts';
 export const BRAIN_NAMESPACES = {
   calendar: 'Calendar changes and Google Tasks: free and busy time across all calendars, propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
   mail: 'Mail beyond search: read a whole message, send_email to propose an email the owner approves on a card, draft_email for a Gmail draft they edit themselves, and contacts.',
-  web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
+  web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents, connected MCP tools, and get_weather for the forecast and daylight hours.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, memory about one topic with its evidence, past conversations, stored tool output and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, and tracked responsibilities.',
@@ -75,6 +75,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.
   propose_action: { brain: 'core', scope: 'allow', claim: null, replay: unknown('proposal only: each call inserts a fresh tainted_action card; approval replays the frozen call once under the approval effect key, and a re-run raises a second card') },
   web_search: { brain: 'core', scope: 'deny', claim: null, replay: read() },
+  get_weather: { brain: 'web', scope: 'deny', claim: null, replay: read() },
   read_document: { brain: 'web', scope: 'deny', claim: null, replay: read() },
   list_artifacts: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
   read_artifact: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
