@@ -16,11 +16,19 @@ export type JobOutcome = TaskResult['status'];
 export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect' | 'deadline' | 'brief_changed';
 export type CancelReason = 'owner' | 'forgotten';
 
+// Reader jobs the brain starts on its own schedule, not because the owner asked. Their origin names the job.
+export type MachineJob = 'heartbeat' | 'update_sweep' | 'meeting_prep';
+export const MACHINE_ORIGIN = 'machine:';
+export const isMachine = (row: Pick<JobRow, 'origin'>): boolean => row.origin.startsWith(MACHINE_ORIGIN);
+// What a machine job was started on: a digest of its inputs, the scope it holds open (one open job per job and scope), the
+// connection its data came from, and the schedule run that started it.
+export type MachineBrief = Readonly<{ job: MachineJob; input_digest: string; scope: string; source?: Readonly<{ connection_id: string }>; run_id?: string }>;
+
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
-// about dates without seeing the conversation.
+// about dates without seeing the conversation. A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number;
+  effort: 'standard' | 'deep'; timezone: string; started_at: number; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.
@@ -51,6 +59,10 @@ export const TASK_MAX_RUNNING = 3;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
+// Settled machine jobs are kept apart from the owner's, so a day of background checks never evicts the owner's task
+// history: the newest MACHINE_SETTLED_KEPT, and every one settled within MACHINE_SETTLED_KEPT_MS.
+export const MACHINE_SETTLED_KEPT = 50;
+export const MACHINE_SETTLED_KEPT_MS = 48 * 60 * 60_000;
 
 export type CreateJob = Readonly<{
   kind: JobKind; profile: TaskProfile | null; idempotencyKey: string; origin: string; surface: string;
@@ -61,6 +73,8 @@ export type CreateJob = Readonly<{
 export type Fenced = 'fenced';
 
 const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
+const SETTLED = "status IN ('applied', 'cancelled', 'parked')";
+const MACHINE_ROW = `origin LIKE '${MACHINE_ORIGIN}%'`;
 type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>;
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
@@ -235,7 +249,18 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     open: (): readonly JobRow[] => sql.exec<JobRow>(`SELECT * FROM task_jobs WHERE status IN (${placeholders(OPEN)}) ORDER BY created_at`, ...OPEN).toArray(),
     running: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'running' ORDER BY created_at").toArray(),
-    runningTasks: (): number => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task'").toArray()[0]?.n ?? 0,
+    // The owner's task slots. A machine job never takes one: the owner did not start it, and must never wait behind it.
+    runningTasks: (): number => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task' AND NOT ${MACHINE_ROW}`).toArray()[0]?.n ?? 0,
+    // The open machine job of a job and scope, if any.
+    openMachine: (job: MachineJob, scope: string): JobRow | null => sql.exec<JobRow>(
+      `SELECT * FROM task_jobs WHERE origin = ? AND status IN (${placeholders(OPEN)}) AND json_extract(brief_json, '$.machine.scope') = ? ORDER BY created_at LIMIT 1`,
+      `${MACHINE_ORIGIN}${job}`, ...OPEN, scope,
+    ).toArray()[0] ?? null,
+    // The owner turned a machine job off: its open jobs are cancelled. Answers the ids, for their workers to be fenced.
+    cancelMachine(job: MachineJob): readonly string[] {
+      return sql.exec<{ id: string }>(`SELECT id FROM task_jobs WHERE origin = ? AND status IN (${placeholders(OPEN)})`, `${MACHINE_ORIGIN}${job}`, ...OPEN)
+        .toArray().filter(row => this.cancel(row.id, 'owner')).map(row => row.id);
+    },
     // Work the brain owes now: queued attempts whose time came, and reported jobs not yet applied.
     due: (): readonly JobRow[] => sql.exec<JobRow>(
       "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
@@ -253,7 +278,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       const held = [...busy];
       const row = sql.exec<{ next: number | null }>(
         `SELECT MIN(CASE WHEN status = 'running' AND id IN (${placeholders(held)}) THEN MAX(lease_until, ?) WHEN status = 'running' THEN lease_until ELSE due_at END) AS next
-         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task')`,
+         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task' AND NOT ${MACHINE_ROW})`,
         ...held, deps.now() + TASK_LEASE_MS, ...OPEN, slotsFull ? 1 : 0,
       ).toArray()[0];
       return row?.next ?? null;
@@ -270,11 +295,15 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
         `SELECT id, brief_json, checkpoint_json, result_json FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
       ).toArray().filter(row => [row.brief_json, row.checkpoint_json, row.result_json].some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);
     },
-    // TTL sweep: settled rows past the newest TASK_SETTLED_KEPT are dropped.
+    // TTL sweep: the owner's settled rows past the newest TASK_SETTLED_KEPT are dropped, and machine rows past their own.
     trim(): number {
-      return sql.exec(
-        `DELETE FROM task_jobs WHERE status IN ('applied', 'cancelled', 'parked')
-           AND id NOT IN (SELECT id FROM task_jobs WHERE status IN ('applied', 'cancelled', 'parked') ORDER BY settled_at DESC LIMIT ?)`, TASK_SETTLED_KEPT,
+      const owner = sql.exec(
+        `DELETE FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW}
+           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`, TASK_SETTLED_KEPT,
+      ).rowsWritten;
+      return owner + sql.exec(
+        `DELETE FROM task_jobs WHERE ${SETTLED} AND ${MACHINE_ROW} AND settled_at < ?
+           AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`, deps.now() - MACHINE_SETTLED_KEPT_MS, MACHINE_SETTLED_KEPT,
       ).rowsWritten;
     },
   };

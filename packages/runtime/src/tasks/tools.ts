@@ -5,7 +5,7 @@ import {
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import { TASK_DEADLINE_MS, taskBrief, type JobBook, type TaskBrief } from './jobs';
+import { isMachine, TASK_DEADLINE_MS, taskBrief, type JobBook, type TaskBrief } from './jobs';
 import { TASK_PROFILE_SPECS } from './profiles';
 
 // The brain's two task tools. Whether a piece of work becomes a task is the model's call: nothing here routes work by its
@@ -69,9 +69,10 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
     autonomy_gated: false,
     mutates_state: true,
     async handle({ job_id }: CancelTaskArgs) {
-      // Only tasks the model started: a retried owner message is the brain's own promise, kept or noticed by the jobs lane.
+      // Only tasks the model started: a retried owner message is the brain's own promise, kept or noticed by the jobs lane,
+      // and a machine job is the brain's own background check, which the owner turns off with its schedule preference.
       const row = deps.book.get(job_id);
-      if (row?.kind !== 'task') return refusal('No task has that id.', 'not_found');
+      if (row?.kind !== 'task' || isMachine(row)) return refusal('No task has that id.', 'not_found');
       const { title } = taskBrief(row);
       if (!deps.book.cancel(job_id, 'owner')) return refusal(`"${title}" already ${deps.book.get(job_id)?.status === 'cancelled' ? 'was cancelled' : 'finished'}.`);
       deps.fence(job_id);
@@ -83,7 +84,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
 
 // The running tasks, as the owner's turn sees them beside its open loops.
 export const runningTasksLine = (book: JobBook): string => {
-  const open = book.open().filter((row) => row.kind === 'task');
+  const open = book.open().filter((row) => row.kind === 'task' && !isMachine(row));
   if (!open.length) return '';
   return ['Background tasks you started that have not reported yet (ids for cancel_task):', ...open.map((row) => {
     const brief = taskBrief(row);

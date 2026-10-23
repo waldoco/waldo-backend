@@ -3,7 +3,8 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { isMachine, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { applyMachineJob, APPLY_RETRY_MS, type MachineAppliers } from './machine';
 import { fixedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
 import { retryTurnText } from './retry-turn';
 
@@ -31,6 +32,8 @@ export type JobsLaneDeps = Readonly<{
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
   heldTopics(): readonly string[];
+  // Each machine job's apply, which names its own tools and delivery; a job with none settles silently.
+  machine?: MachineAppliers;
 }>;
 
 const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
@@ -53,9 +56,6 @@ export const parkedApplyText = (row: JobRow): string => {
     'Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way. Do not start it again yourself.',
   ].join('\n\n');
 };
-
-// A report that no model could write is retried for an hour, then the fixed words go out.
-const APPLY_RETRY_MS = 60 * 60_000;
 
 export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const { book } = deps;
@@ -85,6 +85,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   };
 
   const apply = async (row: JobRow) => {
+    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop });
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
@@ -162,7 +163,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (needsTurn && !deps.room()) { leftOver = true; continue; }
     if (row.status === 'reported') { await apply(row); continue; }
     if (row.kind === 'retry_turn') { await retry(row); continue; }
-    if (book.runningTasks() >= TASK_MAX_RUNNING) { slotsFull = true; continue; }
+    if (!isMachine(row) && book.runningTasks() >= TASK_MAX_RUNNING) { slotsFull = true; continue; }
     const ticket = book.startAttempt(row.id);
     if (!ticket) continue;
     try {

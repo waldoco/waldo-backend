@@ -8,8 +8,8 @@ import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
-import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
-import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
+import { isMachine, jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { BROWSER_TOOLS, jobTools, unreplayable } from './profiles';
 import { DROPPED_STEPS_NOTE, NOTE_END, type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
@@ -95,8 +95,8 @@ export const taskHost = (deps: TaskHostDeps) => {
   const hop = (row: Pick<JobRow, 'id' | 'profile'>, hopName: string, fields: Partial<TurnLogEntry> = {}) =>
     deps.log({ trace: `task:${row.id}`, hop: hopName, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
   const profileHandlers = async (row: JobRow) => {
-    const spec = TASK_PROFILE_SPECS[row.profile!];
-    const allowed = deps.handlers(row.surface).filter((handler) => spec.tools.includes(handler.name as never));
+    const tools = jobTools(row);
+    const allowed = deps.handlers(row.surface).filter((handler) => tools.includes(handler.name as never));
     return (await eligibleHandlers(allowed)).handlers;
   };
 
@@ -153,7 +153,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const row = deps.book.get(ticket.jobId);
       if (!row || !deps.book.touch(ticket, null)) return 'fenced';
       const started = deps.now();
-      const allowed = row.profile !== null && TASK_PROFILE_SPECS[row.profile].tools.includes(call.name as never);
+      const allowed = jobTools(row).includes(call.name as never);
       const scope = scopeFor(ticket, row);
       let result: LoopToolResult;
       if (!allowed) {
@@ -243,11 +243,12 @@ export const taskHost = (deps: TaskHostDeps) => {
 };
 export type TaskHost = ReturnType<typeof taskHost>;
 
-// A long job tells the owner it is still running: first after two minutes, then every ten.
+// A long job tells the owner it is still running: first after two minutes, then every ten. A machine job never does: the
+// owner did not start it.
 export const TASK_NOTE_AFTER_MS = 2 * 60_000;
 export const TASK_NOTE_EVERY_MS = 10 * 60_000;
-export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'created_at' | 'last_note_at'>): number | null =>
-  row.status !== 'running' || row.kind !== 'task' ? null : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
+export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'origin' | 'created_at' | 'last_note_at'>): number | null =>
+  row.status !== 'running' || row.kind !== 'task' || isMachine(row) ? null : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
 
 export const heldTopicIn = (row: Pick<JobRow, 'brief_json' | 'result_json' | 'checkpoint_json'>, topics: readonly string[]): boolean =>
   topics.some((topic) => [row.brief_json, row.result_json, row.checkpoint_json].some((value) => value !== null && (carriesTopic(value, topic) || hidesTopic(value, topic))));
