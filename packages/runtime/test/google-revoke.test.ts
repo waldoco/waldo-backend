@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { googleProxy } from '../src/connectors/connections';
 import { GOOGLE_REVOKE_URL, revokeGoogleGrant } from '../src/connectors/google';
+import { REQUEST_TIMEOUT_MS } from '../src/identity/request-timeout';
 
 const TOKEN = '1//synthetic-refresh-token';
 const google = (status: number, body: unknown = {}) => vi.fn(async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }));
@@ -30,6 +31,19 @@ describe('revoking a Google grant at Google', () => {
     ['a lost connection', vi.fn(async () => { throw new TypeError(`error sending request for url (${GOOGLE_REVOKE_URL})`); })],
   ])('reads %s as failed', async (_case, fetcher) => {
     expect(await revokeGoogleGrant(fetcher as unknown as typeof fetch, TOKEN)).toBe('failed');
+  });
+
+  // A revocation is best effort and a disconnect waits on it, so an answer that never comes is a failed one, and the request is cut.
+  it('reads no answer within the request bound as failed, and aborts the request', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      const fetcher = vi.fn((_url: string, init?: RequestInit) => { signal = init?.signal ?? undefined; return new Promise<Response>(() => undefined); });
+      const outcome = revokeGoogleGrant(fetcher as unknown as typeof fetch, TOKEN);
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+      expect(await outcome).toBe('failed');
+      expect(signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it('asks nothing of Google for an empty token', async () => {
@@ -70,6 +84,9 @@ describe('the Worker side of a disconnect', () => {
   it.each([
     ['another owner holds the same mailbox', () => Response.json([{ do_name: 'owner', connection: 'conn-1' }, { do_name: 'other-owner', connection: 'conn-9' }]), 'shared'],
     ['the lookup fails', () => new Response('down', { status: 503 }), 'unavailable'],
+    // A lookup that does not list this connection does not describe this grant, so it cannot say the mailbox is unshared.
+    ['the lookup lists no live connection for the mailbox', () => Response.json([]), 'unavailable'],
+    ['the lookup lists only another owner\'s connection', () => Response.json([{ do_name: 'other-owner', connection: 'conn-9' }]), 'unavailable'],
     ['the lookup answers something else', () => Response.json({ rows: 'unexpected' }), 'unavailable'],
   ] as const)('when %s, Google is not asked and the secret is still deleted', async (_case, holders, google) => {
     const w = world(() => Response.json({ data: { provider: 'revoked' } }), true, holders);
@@ -89,6 +106,17 @@ describe('the Worker side of a disconnect', () => {
     const w = world(edge);
     expect(await w.proxy.revoke('owner', 'conn-1', 'Owner@Example.test')).toEqual({ removed: true, google });
     expect(w.calls.at(-1)).toBe('rpc:connection_revoke');
+  });
+
+  it('an edge that never answers the revoke is unavailable once the request bound passes, and the secret is still deleted', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = world(() => new Promise<Response>(() => undefined));
+      const result = w.proxy.revoke('owner', 'conn-1', 'owner@example.test');
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+      expect(await result).toEqual({ removed: true, google: 'unavailable' });
+      expect(w.calls).toEqual(['rpc:gmail_push_route:owner@example.test', 'edge:revoke', 'rpc:connection_revoke']);
+    } finally { vi.useRealTimers(); }
   });
 
   it('a delete the database refuses fails the disconnect, whatever Google said', async () => {

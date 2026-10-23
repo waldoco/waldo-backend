@@ -2,6 +2,7 @@ import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../iden
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
 import { GOOGLE_METHODS, GOOGLE_REVOKE_OUTCOMES, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleRevokeOutcome, type GoogleTokens } from './google';
 import type { CalendarWatch, GmailWatch } from './google-push';
+import { withRequestTimeout } from '../identity/request-timeout';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
@@ -95,13 +96,15 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
     // Google is asked first, and no answer of its keeps the secret: the delete runs whatever it was, and only a failed
     // delete fails the disconnect. Google's revocation ends Waldo's whole authorization for that Google user, so it would end
-    // every other owner's grant on the same mailbox: it is asked only when this is the mailbox's one live connection.
+    // every other owner's grant on the same mailbox: it is asked only when the mailbox's live connections are this one alone.
+    // A lookup that does not list this connection does not describe this grant, so it cannot say the mailbox is unshared.
     revoke: async (doName, connection, account) => {
       const mailbox = account.toLowerCase();
-      const others = await rpc('gmail_push_route', `gmailroute.${mailbox}`, { p_account: mailbox })
-        .then((rows) => Array.isArray(rows) ? rows.filter((row: { connection?: unknown }) => row?.connection !== connection).length : null)
+      const live = await rpc('gmail_push_route', `gmailroute.${mailbox}`, { p_account: mailbox })
+        .then((rows) => Array.isArray(rows) ? rows.map((row: { connection?: unknown }) => row?.connection) : null)
         .catch(() => null);
-      const google = others === null ? 'unavailable' as const : others > 0 ? 'shared' as const : await post({ do_name: doName, op: 'revoke', connection })
+      const google = live === null || !live.includes(connection) ? 'unavailable' as const
+        : live.some((held) => held !== connection) ? 'shared' as const : await withRequestTimeout(() => post({ do_name: doName, op: 'revoke', connection }))
         .then((json) => { const said = (json as { data?: { provider?: unknown } }).data?.provider; return GOOGLE_REVOKE_OUTCOMES.find((known) => known === said) ?? 'unavailable'; })
         .catch(() => 'unavailable' as const);
       return { removed: (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true, google };
