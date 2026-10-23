@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, type ConversationEntry } from '@waldo/contracts';
+import { ConversationTree, type ConversationCovers, type ConversationEntry, type ConversationModelMessage } from '@waldo/contracts';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { COMPACTION, compactedHistory, compactionPlan, liveCompaction, ownerRowsSince, supersededCompaction, type CompactionSettings } from '../src/conversation/compaction';
 
@@ -81,7 +81,11 @@ const chain = (rounds: number, chat = MAIN, start = 0, parent: string | null = n
 // What an owner turn builds from a load: the tree in load order, each chat's leaf, and the model's view of a next message
 // on the turn's chat (or of a retried message already stored).
 type ViewOptions = Readonly<{ thread?: string; retry?: string; compaction?: CompactionSettings }>;
-const turnView = async (storage: DurableObjectStorage, chat: string, options: ViewOptions = {}) => {
+type TurnView = Readonly<{
+  leafId: string | null; chatLeaf: string | null; messages: readonly ConversationModelMessage[];
+  live?: string | null; covers?: ConversationCovers | null; ownerRows?: number; plans?: boolean; ownerRowsDue?: boolean;
+}>;
+const turnView = async (storage: DurableObjectStorage, chat: string, options: ViewOptions = {}): Promise<TurnView> => {
   const settings = options.compaction ?? COMPACTION;
   const store = canonicalOwnerConversationStore(storage, contextFor(chat), undefined, options.thread, settings);
   const { entries, leafId } = await store.load();

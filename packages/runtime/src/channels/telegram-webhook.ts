@@ -21,6 +21,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
+  WALDO_COMPACTION?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;

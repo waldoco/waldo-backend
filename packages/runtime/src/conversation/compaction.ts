@@ -2,8 +2,8 @@ import { compactionMessage, conversationModelMessages, type ConversationCovers, 
 import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, windowModelMessages, type ConversationWindowStats } from './window';
 
 // A compaction row summarises the oldest part of a chain so the model's view becomes [summary] + [a verbatim tail]; the
-// transcript the owner sees keeps every row. Production never writes this object: the flip changes `enabled` in source
-// after the eval meets its bar, and off means no trigger and no view rule, the plain window exactly as before.
+// transcript the owner sees keeps every row. These are the defaults, off: a deploy turns compaction on with
+// WALDO_COMPACTION=on, and off means no trigger and no view rule, the plain window exactly as before.
 export const COMPACTION = {
   enabled: false,
   budgetTokens: CONVERSATION_INPUT_BUDGET_TOKENS,
@@ -14,6 +14,8 @@ export const COMPACTION = {
   maxOutputTokens: 2_000,
 };
 export type CompactionSettings = typeof COMPACTION;
+// Only the exact value "on" turns it on, so an unset or mistyped deploy var keeps the plain window.
+export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string }>): CompactionSettings => ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on' });
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
