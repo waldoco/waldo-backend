@@ -43,6 +43,9 @@ h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}strong{col
 // the Continue press is what stands between that browser and the owner's Waldo. Chat links carry no code, because no
 // owner session exists there.
 export const HANDOFF_PARAM = 'handoff';
+// How long a code can still be redeemed. The directory enforces it (handoff_expires_at at issue), so this is what a
+// surface tells the app about its link, not a second clock.
+export const HANDOFF_CODE_TTL_MS = 10 * 60_000;
 const HANDOFF = /^[A-Za-z0-9_-]{22}$/;
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
