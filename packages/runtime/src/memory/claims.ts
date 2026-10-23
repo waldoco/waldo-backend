@@ -1289,4 +1289,3 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
   return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
-
