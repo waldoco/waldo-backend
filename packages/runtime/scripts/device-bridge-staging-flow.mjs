@@ -119,7 +119,7 @@ export async function runDeviceBridgeTrace({ origin, cookie, report }) {
 
   const sockets = [];
   let deviceId = '', csrf = '';
-  const action = (name, id = '', fields = {}) => request('/console/action', { method: 'POST', headers: { cookie },
+  const action = (name, id = '', fields = {}) => request('/console/action', { method: 'POST', headers: { cookie, origin },
     body: new URLSearchParams({ action: name, id, value: '', csrf, ...fields }) });
   const consoleDevices = async () => {
     const page = await request('/console/devices', { headers: { cookie } });
