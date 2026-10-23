@@ -46,13 +46,16 @@ export async function ownerControlsRead(view: OwnerControlsView, deps: OwnerCont
   } catch { return unavailable(); }
 }
 
+// Each owner-controls view takes exactly one action.
+export const OWNER_CONTROL_VIEW_ACTIONS: Readonly<Record<string, string>> = { invites: 'invite.member', account: 'account.delete' };
+
 // The authenticated owner DO serializes this operation. Only content-free receipts
 // survive a request: raw invite codes and signup links never enter the durable journal.
 export async function ownerControlsAction(form: FormData, deps: OwnerControlsDeps): Promise<Response> {
   const fields = ['csrf', 'action', 'value', 'view', 'revision', 'request_id', 'confirmation'];
   if ([...form.keys()].some(key => !fields.includes(key) || form.getAll(key).length !== 1) || [...form.values()].some(value => typeof value !== 'string' || value.length > 4096)) return reply({ error: 'invalid_action' }, 400);
   const action = parseConsoleAction(form, deps.csrf), view = form.get('view');
-  if (!action || !((view === 'invites' && action.action === 'invite.member') || (view === 'account' && action.action === 'account.delete'))) return reply({ error: 'invalid_action' }, 403);
+  if (!action || typeof view !== 'string' || !Object.hasOwn(OWNER_CONTROL_VIEW_ACTIONS, view) || OWNER_CONTROL_VIEW_ACTIONS[view] !== action.action) return reply({ error: 'invalid_action' }, 403);
   if (action.action === 'account.delete' && form.get('confirmation') !== 'DELETE') return reply({ error: 'confirmation_required' }, 400);
   const requestId = String(form.get('request_id') ?? '');
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(requestId)) return reply({ error: 'request_id_required' }, 400);

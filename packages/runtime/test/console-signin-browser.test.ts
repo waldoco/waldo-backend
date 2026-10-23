@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { handleConsole } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 
-const browser = async (target = '') => {
+const browser = async (target = '', hash = '') => {
   const response = await handleConsole(new Request('https://fixture.test/console/signin'),
     { OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
   const script = (await response!.text()).match(/<script>([\s\S]*?)<\/script>/)![1]!;
@@ -20,12 +20,13 @@ const browser = async (target = '') => {
     const form = { action: `https://fixture.test/console/${phase === 'code' ? 'verify' : 'signin'}`, method: 'post', dataset: { pending: 'Working…' },
       inputs, setAttribute: (key: string, value: string) => attributes.set(key, value), removeAttribute: (key: string) => attributes.delete(key) };
     const button = { disabled: false };
+    const resend = { disabled: false, textContent: 'Send a new code' };
     const cancel = { hidden: true, disabled: false, addEventListener: (name: string, handler: () => void) => { events[`cancel-${name}`] = handler; } };
     const status = { textContent: '' };
     const download = { getAttribute: (name: string) => name === 'href' ? inputs.find(input => input.name === 'return_to')?.value : null };
-    const main: any = { phase, form, button, cancel, status, inputs, attributes,
-      querySelector: (selector: string) => selector === '#signin-download' ? phase === 'download' ? download : null : selector === 'input:not([type="hidden"])' ? inputs[0] : selector === '#signin-code' ? inputs.find(input => input.name === 'code') ?? null : selector === '#signin-progress' ? status : selector === '#signin-cancel' ? cancel : null,
-      querySelectorAll: (selector: string) => selector === 'form' ? phase === 'download' ? [] : [form] : selector === 'button' ? [button, cancel] : selector === 'input' ? inputs : [],
+    const main: any = { phase, form, button, resend, cancel, status, inputs, attributes,
+      querySelector: (selector: string) => selector === '#signin-download' ? phase === 'download' ? download : null : selector === 'input:not([type="hidden"])' ? inputs[0] : selector === '#signin-code' ? inputs.find(input => input.name === 'code') ?? null : selector === '#signin-progress' ? status : selector === '#signin-cancel' ? cancel : selector === '#signin-resend' ? phase === 'code' ? resend : null : null,
+      querySelectorAll: (selector: string) => selector === 'form' ? phase === 'download' ? [] : [form] : selector === 'button' ? phase === 'code' ? [button, resend, cancel] : [button, cancel] : selector === 'input' ? inputs : [],
       cloneNode: () => { const clone = makeMain(phase); inputs.forEach(input => { clone.inputs.find((other: any) => other.name === input.name).value = input.value; }); return clone; },
       replaceWith: (next: any) => { current = next; },
     };
@@ -33,9 +34,13 @@ const browser = async (target = '') => {
   };
   let current = makeMain();
   const listen = (name: string, handler: any) => { events[name] = handler; };
-  const location = { href: 'https://fixture.test/console/signin', origin: 'https://fixture.test', assign: (url: string) => navigations.push(url) };
+  const location = { href: `https://fixture.test/console/signin${hash}`, hash, origin: 'https://fixture.test', assign: (url: string) => navigations.push(url) };
+  let clock = 1_000_000;
+  const timers: (() => void)[] = [];
   runInNewContext(script, {
-    URL, URLSearchParams, AbortController,
+    URL, URLSearchParams, AbortController, Math,
+    Date: { now: () => clock },
+    setTimeout: (callback: () => void) => { timers.push(callback); },
     FormData: class { constructor(private form: any) {} *entries() { for (const input of this.form.inputs) yield [input.name, input.value]; } [Symbol.iterator]() { return this.entries(); } },
     DOMParser: class { parseFromString(text: string) {
       const { phase, values } = text.startsWith('{') ? JSON.parse(text) : { phase: text, values: {} };
@@ -51,7 +56,8 @@ const browser = async (target = '') => {
   });
   const submit = () => { let prevented = false; const settled = events.submit!({ target: current.form, preventDefault: () => { prevented = true; } }); return { prevented, settled }; };
   const reply = (index: number, phase: string, overrides = {}) => requests[index]!.resolve({ ok: true, redirected: false, url: requests[index]!.url, headers: new Headers({ 'content-type': 'text/html' }), text: async () => phase, ...overrides });
-  return { events, requests, history, navigations, submit, reply, ui: () => current };
+  const tick = (ms: number) => { clock += ms; for (const run of timers.splice(0)) run(); };
+  return { events, requests, history, navigations, submit, reply, tick, ui: () => current };
 };
 
 describe('sign-in async navigation', () => {
@@ -264,4 +270,39 @@ it('restores terminal and details screens on Back and Forward without repeating 
   expect(b.ui().querySelector('#signin-download').getAttribute('href')).toBe(target);
   expect(b.requests).toHaveLength(2);
   expect(b.navigations).toEqual([]);
+});
+
+it('returns to the dashboard page the owner was on before sign-in', async () => {
+  const b = await browser('', '#/memory/spots');
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console' }); await verify.settled;
+  expect(b.navigations).toEqual(['/console#/memory/spots']);
+});
+
+it('ignores a fragment that is not a dashboard page', async () => {
+  const b = await browser('', '#signin');
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console' }); await verify.settled;
+  expect(b.navigations).toEqual(['/console']);
+});
+
+it('holds a new code for a minute after one is sent, counting down, then offers it', async () => {
+  const b = await browser();
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  expect(b.ui().resend.disabled).toBe(true);
+  expect(b.ui().resend.textContent).toContain('60');
+  b.tick(30_000);
+  expect(b.ui().resend.disabled).toBe(true);
+  expect(b.ui().resend.textContent).toContain('30');
+  for (let second = 0; second < 30; second += 1) b.tick(1_000);
+  expect(b.ui().resend.disabled).toBe(false);
+  expect(b.ui().resend.textContent).toBe('Send a new code');
+});
+
+it('a wrong code does not restart the wait for a new one', async () => {
+  const b = await browser();
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  for (let second = 0; second < 61; second += 1) b.tick(1_000);
+  const verify = b.submit(); b.reply(1, 'code'); await verify.settled;
+  expect(b.ui().resend.disabled).toBe(false);
 });

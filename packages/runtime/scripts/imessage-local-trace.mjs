@@ -151,7 +151,7 @@ try {
     assert.equal(page.status, 200, 'authenticated iMessage console page');
     const csrf = (await page.text()).match(/name="csrf" value="([^"]+)"/)?.[1];
     assert.ok(csrf, 'console exposes CSRF');
-    const action = (a, fields = {}) => http('/console/action', { method: 'POST', headers: { cookie }, body: new URLSearchParams({ action: a, csrf, ...fields }) });
+    const action = (a, fields = {}) => http('/console/action', { method: 'POST', headers: { cookie, origin }, body: new URLSearchParams({ action: a, csrf, ...fields }) });
     return { cookie, action, page: () => http('/console/imessage', { headers: { cookie } }) };
   };
   const owner = await consoleSession(doName, ownerId);
