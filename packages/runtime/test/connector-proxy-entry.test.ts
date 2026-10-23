@@ -474,3 +474,46 @@ it('the exchange replies with the Google profile, and neither the store call nor
  expect(stored.join('\n')).not.toMatch(/Zo|Okonkwo|15550100777|"phone"|"profile"/);
  expect(JSON.stringify(logs.mock.calls)).not.toMatch(/Okonkwo|15550100777/);
 });
+// A disconnect asks Google to revoke the grant before the Worker deletes its Vault secret. The edge only reads the secret
+// and asks Google: it writes nothing, and every answer comes back as one outcome word, never Google's text or the token.
+const revokeWorld=(google:(init:RequestInit)=>Response|Promise<Response>,live=true)=>{
+ const hops:string[]=[];const asked:RequestInit[]=[];const printed:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);hops.push(url.split('/').at(-1)!);
+  const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};
+  if(url==='https://db.invalid/rest/v1/rpc/proxy_access')return Response.json(live&&args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:[]}]:[]);
+  if(url==='https://oauth2.googleapis.com/revoke'){asked.push(init!);return google(init!);}
+  throw new Error('unexpected fictional transport');
+ }));
+ for(const level of ['log','info','warn','error'] as const)vi.spyOn(console,level).mockImplementation((...parts:unknown[])=>{printed.push(parts.map(part=>typeof part==='string'?part:JSON.stringify(part)).join(' '));});
+ return{hops,asked,printed};
+};
+const revokeBody={do_name:'owner',op:'revoke',connection:'conn'};
+it.each([
+ ['revoked',()=>new Response('{}',{status:200})],
+ ['already_invalid',()=>Response.json({error:'invalid_token',error_description:'Token expired or revoked'},{status:400})],
+ ['failed',()=>Response.json({error:'invalid_request',error_description:'fictional-refresh is bad'},{status:400})],
+ ['failed',()=>new Response('upstream',{status:503})],
+ ['failed',()=>{throw new TypeError('error sending request for url (https://oauth2.googleapis.com/revoke)');}],
+] as const)('a signed revoke asks Google with the held token and answers %s, writing nothing',async(outcome,google)=>{
+ const w=revokeWorld(google);
+ expect(await(await serve(await request(revokeBody))).json()).toEqual({data:{provider:outcome}});
+ expect(w.asked).toHaveLength(1);
+ expect(new URLSearchParams(String(w.asked[0]!.body)).get('token')).toBe('fictional-refresh');
+ expect(w.hops.filter(hop=>hop.startsWith('proxy_')||hop.startsWith('connection_')||hop.startsWith('oauth_'))).toEqual(['proxy_access']);
+ expect(w.printed.join('\n')).not.toContain('fictional-refresh');
+ expect(w.printed.map(line=>JSON.parse(line) as Record<string,unknown>).filter(line=>line.hop==='connector_proxy')).toEqual([expect.objectContaining({op:'revoke',ok:true,outcome})]);
+});
+it('a revoke for a connection the edge holds no live secret for never reaches Google',async()=>{
+ for(const input of [revokeBody,{...revokeBody,connection:'foreign'},{...revokeBody,do_name:'foreign'}]){
+  const w=revokeWorld(()=>new Response('{}',{status:200}),input===revokeBody?false:true);
+  expect(await(await serve(await request(input))).json()).toEqual({data:{provider:'not_held'}});
+  expect(w.asked).toEqual([]);
+ }
+});
+it('an unsigned or connection-less revoke never reaches Google',async()=>{
+ const w=revokeWorld(()=>new Response('{}',{status:200}));
+ expect(await(await serve(new Request('https://edge.invalid',{method:'POST',body:JSON.stringify(revokeBody)}))).json()).toEqual({error:{status:401,message:'unsigned proxy call'}});
+ expect(await(await serve(await request({do_name:'owner',op:'revoke'}))).json()).toMatchObject({error:{message:'unknown operation'}});
+ expect(w.asked).toEqual([]);expect(w.hops).toEqual([]);
+});
