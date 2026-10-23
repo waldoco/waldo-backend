@@ -108,7 +108,8 @@ describe('dashboard control owner route and real executors',()=>{
    const read=await controls(stub,token,'day'),fields={view:'day',action:'card.pin',id:'card:close',value:'22:15',request_id:'renewed-pin-request'};
    expect((await postAction(stub,token,read,fields)).status).toBe(200);
    clock.mockReturnValue(started+5*60000);
-   await runInDurableObject(stub,async(_instance,state)=>{const access=consoleAccess(state.storage),link=await access.mintLink(root);expect(await access.redeem(new URL(link).searchParams.get('t')!,token)).toBe(token);});
+   await controls(stub,token,'day');
+   await runInDurableObject(stub,async(_instance,state)=>{expect((await state.storage.get<Record<string,{expires:number}>>('console:sessions'))![token]!.expires).toBeGreaterThan(started+20*60000);});
    const other=await seed(stub);clock.mockReturnValue(started+20*60000);
    const otherRead=await controls(stub,other,'day');
    expect((await postAction(stub,other,otherRead,{...fields,value:'22:30',request_id:'other-session-pin'})).status).toBe(200);

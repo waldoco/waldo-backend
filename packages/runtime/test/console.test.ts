@@ -64,18 +64,19 @@ describe('owner console', () => {
     expect(await access.redeem(late)).toBeNull();
   });
 
-  it('redeeming on a browser that already holds a live session refreshes it instead of stacking', async () => {
+  it('redeeming on a browser that already holds a live session replaces it instead of stacking', async () => {
     let now = 1_000;
     const access = consoleAccess(memoryStore(), () => now);
     const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     const cookie = (await access.redeem(await mint()))!;
     now += 60_000;
-    const again = await access.redeem(await mint(), cookie);
-    expect(again).toBe(cookie);
-    const refreshed = await access.session(cookie);
-    expect(refreshed?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    const again = (await access.redeem(await mint(), cookie))!;
+    expect(again).not.toBe(cookie);
+    expect(await access.session(cookie)).toBeNull();
+    expect(await access.list()).toHaveLength(1);
+    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
     now += CONSOLE_SESSION_IDLE_MS - 1;
-    expect(await access.session(cookie)).not.toBeNull();
+    expect(await access.session(again)).not.toBeNull();
   });
 
   it('keeps sessions per browser: a second browser gets its own, sign-out kills only that one', async () => {

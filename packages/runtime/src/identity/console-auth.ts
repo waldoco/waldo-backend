@@ -49,8 +49,10 @@ export type ConsoleAuth = Readonly<{
   deleteOwner(doName: string): Promise<boolean>;
   // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
   // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
-  // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie.
-  ownerCookie(doName: string): Promise<string | null>;
+  // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie. Given the sign-in request,
+  // it first revokes the session of the owner cookie that browser presents for the same owner, and throws when that
+  // cannot be confirmed, so a sign-in never leaves a copy of the old cookie working.
+  ownerCookie(doName: string, presented?: Request): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
   // The mobile app's bearer: the same kind of server-side session, signed under its own context so it is never
   // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
@@ -106,7 +108,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
   };
   // A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
-  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+  const readSession = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<Readonly<{ doName: string; sessionHash: string }> | null> => {
     const sigDot = raw?.lastIndexOf('.') ?? -1;
     if (!raw || sigDot < 1) return null;
     const sessionDot = raw.lastIndexOf('.', sigDot - 1);
@@ -119,9 +121,21 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     let diff = expected.length ^ given.length;
     for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
     if (diff !== 0) return null;
-    const sessionHash = await linkCodeHash(sessionId);
+    return { doName, sessionHash: await linkCodeHash(sessionId) };
+  };
+  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const session = await readSession(raw, sign);
+    if (!session) return null;
+    const { doName, sessionHash } = session;
     const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
     return live === true ? doName : null;
+  };
+  const presentedOwnerCookie = (request: Request) =>
+    (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
+  const revokeSession = async (doName: string, sessionHash: string): Promise<boolean> => {
+    const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
+    return revoked;
   };
   const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean) => {
     const address = email.trim().toLowerCase();
@@ -192,11 +206,12 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    ownerCookie: (doName) => mint(doName, cookieSig, openLong),
-    readOwnerCookie: (request) => readSigned(
-      (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
-      cookieSig,
-    ),
+    async ownerCookie(doName, presented) {
+      const previous = presented ? await readSession(presentedOwnerCookie(presented), cookieSig) : null;
+      if (previous?.doName === doName) await revokeSession(doName, previous.sessionHash);
+      return mint(doName, cookieSig, openLong);
+    },
+    readOwnerCookie: (request) => readSigned(presentedOwnerCookie(request), cookieSig),
     ownerAppCredential: (doName) => mint(doName, appSig, openTwelveHours),
     readAppCredential: (credential) => readSigned(credential, appSig),
     async listSessions(doName) {
@@ -215,11 +230,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
       });
     },
-    async revokeSession(doName, sessionHash) {
-      const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
-      return revoked;
-    },
+    revokeSession,
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
       if (typeof count !== 'number') throw new Error('session revocation unavailable');

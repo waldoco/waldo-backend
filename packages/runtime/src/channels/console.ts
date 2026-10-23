@@ -50,7 +50,8 @@ export const consoleSessionRows = (sessions: readonly ConsoleSession[], current:
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // One-time link from Telegram -> short session cookie. Only the owner's DM can mint a link.
-// Sessions are per browser: redeeming with a live session cookie refreshes that session instead of stacking.
+// Sessions are per browser: a sign-in in a browser that holds a session replaces it with a new token, so nothing stacks
+// and a copy of the old cookie stops working.
 export const consoleAccess = (store: Store, now: () => number = Date.now) => {
   const readSessions = async (): Promise<Record<string, ConsoleSession>> => (await store.get<Record<string, ConsoleSession>>('console:sessions')) ?? {};
   const writeSessions = async (sessions: Record<string, ConsoleSession>): Promise<void> => {
@@ -58,9 +59,10 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     if (Object.keys(live).length > 0) await store.put('console:sessions', live);
     else await store.delete('console:sessions');
   };
-  const addSession = async (): Promise<string> => {
+  const addSession = async (replacing: string | null = null): Promise<string> => {
     const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS };
     const sessions = await readSessions();
+    if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
     return session.token;
@@ -77,16 +79,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       const link = await store.get<Grant>('console:link');
       if (!link || link.token !== token || link.expires < now()) return null;
       await store.delete('console:link');
-      if (current) {
-        const sessions = await readSessions();
-        const existing = sessions[current];
-        if (existing && existing.expires >= now()) {
-          sessions[current] = { ...existing, signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS };
-          await writeSessions(sessions);
-          return current;
-        }
-      }
-      return addSession();
+      return addSession(current);
     },
     // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime.
     async session(token: string | null): Promise<ConsoleSession | null> {
@@ -102,7 +95,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       await writeSessions(sessions);
       return renewed;
     },
-    grant: addSession,
+    grant: (replacing: string | null = null) => addSession(replacing),
     async signOut(token: string): Promise<void> {
       const sessions = await readSessions();
       delete sessions[token];
@@ -127,6 +120,12 @@ export const signInPage = (token: string): Response => new Response(
 
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
+
+// A grant carries the browser's own owner object session, which the new one replaces.
+export const grantHeaders = (doName: string, request: Request): Record<string, string> => {
+  const current = sessionCookie(request);
+  return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
+};
 
 export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;

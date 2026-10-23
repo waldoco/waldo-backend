@@ -2,7 +2,7 @@ import { withRequestTimeout } from '../identity/request-timeout';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { signupAuth, SIGNUP_COOKIE, SIGNUP_TTL_SECONDS, type SignupAuth, type SignupProgress } from '../identity/console-signup';
-import { CONSOLE_COOKIE, CONSOLE_PATH, consoleCookie } from './console';
+import { CONSOLE_COOKIE, CONSOLE_PATH, consoleCookie, grantHeaders } from './console';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 
 export const CONSOLE_SIGNUP_PATH = '/console/signup';
@@ -111,11 +111,11 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       if (!doName) return withCookie(finish(saved, unavailableCompletion), value);
       const grant = await withRequestTimeout(async signal => {
         const response = await env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName))
-          .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName }, signal });
+          .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: grantHeaders(doName, request), signal });
         return response.ok ? await response.text() : null;
       });
       if (!grant) return withCookie(finish(saved, unavailable), value);
-      const ownerCookie = await auth.ownerCookie(doName);
+      const ownerCookie = await auth.ownerCookie(doName, request);
       if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
       const headers = new Headers({ location: CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' });
       headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, grant));

@@ -106,13 +106,16 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   const ticket = await readConsoleTicket(value, env.WALDO_ROUTER_HMAC_SECRET);
   const auth = consoleAuth(env);
   if (!ticket || !auth) return rejected();
-  const hasOwner = (request.headers.get('cookie') ?? '').split(';').some(part => part.trim().startsWith(`${OWNER_COOKIE}=`));
-  try { if (hasOwner && await auth.readOwnerCookie(request) !== ticket.owner) return rejected(); }
+  let presented: string | null;
+  try { presented = await auth.readOwnerCookie(request); }
   catch { return new Response('Sign-in is temporarily unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } }); }
+  // A link never switches a browser signed in to another owner. A cookie that names no live session (it outlives its
+  // row) is no account to protect: the sign-in replaces it.
+  if (presented !== null && presented !== ticket.owner) return rejected();
   const response = await forwardTicketConsole(request, env, ticket.owner);
   if (request.method !== 'POST' || response.status !== 303 || !response.headers.get('set-cookie')) return response;
   let ownerCookie: string | null;
-  try { ownerCookie = await auth.ownerCookie(ticket.owner); }
+  try { ownerCookie = await auth.ownerCookie(ticket.owner, request); }
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
   const headers = new Headers(response.headers);

@@ -108,15 +108,16 @@ describe('owner object console session', () => {
     expect(consoleSessionRows([later], later, 'UTC')).toEqual([{ signed_in: '2026-10-20 00:00', until: '2026-10-29 00:00', current: true }]);
   });
 
-  it('a Telegram link redeemed on a signed-in browser restarts both clocks', async () => {
+  it('a Telegram link redeemed on a signed-in browser starts a new session with both clocks restarted', async () => {
     let now = 1_000_000;
     const access = consoleAccess(memoryStore(), () => now);
     const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     const token = (await access.redeem(await mint()))!;
     for (let day = 0; day < 29; day += 1) { now += DAY; expect(await access.session(token)).not.toBeNull(); }
-    expect(await access.redeem(await mint(), token)).toBe(token);
+    const fresh = (await access.redeem(await mint(), token))!;
     now += 2 * DAY;
-    expect(await access.session(token)).not.toBeNull();
+    expect(await access.session(token)).toBeNull();
+    expect(await access.session(fresh)).not.toBeNull();
   });
 
   it('sign-out and sign-out everywhere end long sessions, and a later read never revives one', async () => {
@@ -251,7 +252,7 @@ describe('a new sign-in in a browser ends that browser\'s old sessions', () => {
     const old = await access.grant();
     const before = (await access.session(old))!;
     const link = new URL(await access.mintLink('https://w.test')).searchParams.get('t')!;
-    now += HOUR;
+    now += 5 * 60_000;
     const fresh = (await access.redeem(link, old))!;
     expect(fresh).not.toBe(old);
     expect(await access.session(old)).toBeNull();

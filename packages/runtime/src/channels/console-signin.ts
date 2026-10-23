@@ -7,7 +7,7 @@ import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, consoleCookie } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, consoleCookie, grantHeaders } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
@@ -305,12 +305,14 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       return finish(codeForm(email, 'That code did not work. A code works once and expires after a while: enter the newest one, or send a new code.'));
     }
     const grant = await owners.get(owners.idFromName(doName))
-      .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName } });
+      .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: grantHeaders(doName, request) });
     if (!grant.ok) {
       event('console_verify', false, 'grant_failed');
       return finish(codeForm(email, 'Sign-in is having trouble. Try again in a moment.'));
     }
-    const ownerCookieValue = await auth.ownerCookie(doName);
+    let ownerCookieValue: string | null;
+    try { ownerCookieValue = await auth.ownerCookie(doName, request); }
+    catch { ownerCookieValue = null; }
     if (ownerCookieValue === null) {
       event('console_verify', false, 'session_unavailable');
       return finish(codeForm(email, 'Sign-in is having trouble. Try again in a moment.'));
