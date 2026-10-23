@@ -25,15 +25,26 @@ export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   brief_changed: 'its instructions changed after it started',
 };
 
+// How these lines name a task. A title written in a turn that read someone else's words could say anything in Waldo's voice,
+// so that task is named by when it started.
+const taskName = (row: Pick<JobRow, 'brief_json'>, timezone: string): Readonly<{ title: string | null; started: string }> => {
+  const brief = JSON.parse(row.brief_json) as TaskBrief;
+  return { title: brief.outside_text ? null : brief.title, started: ownerTime(brief.started_at, timezone) };
+};
+
 // A task's report when no model can write it. A settled job keeps neither its result nor its progress, so the words promise
 // nothing that could be read back later.
-export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>): string => {
-  const title = (JSON.parse(row.brief_json) as TaskBrief).title;
+export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>, timezone: string): string => {
+  const { title, started } = taskName(row, timezone);
+  const name = title === null ? `The background task you started at ${started}` : `Your background task "${title}"`;
   return row.park_reason
-    ? `Your background task "${title}" stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Start it again if you still need it.`
-    : `Your background task "${title}" finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
+    ? `${name} stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Start it again if you still need it.`
+    : `${name} finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
 };
 
 // A long task's progress note.
-export const progressNote = (row: Pick<JobRow, 'brief_json' | 'rounds'>): string =>
-  `Still working on "${(JSON.parse(row.brief_json) as TaskBrief).title}" in the background (${row.rounds} step${row.rounds === 1 ? '' : 's'} so far). I'll tell you when it's done.`;
+export const progressNote = (row: Pick<JobRow, 'brief_json' | 'rounds'>, timezone: string): string => {
+  const { title, started } = taskName(row, timezone);
+  const name = title === null ? `the background task you started at ${started}` : `"${title}" in the background`;
+  return `Still working on ${name} (${row.rounds} step${row.rounds === 1 ? '' : 's'} so far). I'll tell you when it's done.`;
+};

@@ -17,10 +17,11 @@ export type ParkReason = 'crashed' | 'provider_unavailable' | 'uncertain_effect'
 export type CancelReason = 'owner' | 'forgotten';
 
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
-// about dates without seeing the conversation.
+// about dates without seeing the conversation. outside_text: the turn that wrote it had read someone else's words, so its
+// title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number;
+  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.

@@ -11,7 +11,8 @@ export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
 export const startTaskArgsSchema = z.strictObject({
   profile: taskProfileSchema.describe('reader: mail, calendar, Drive, web. errand: also a browser; submits need approval. code: unavailable.'),
-  title: z.string().min(1),
+  // A label the owner and later turns read: one short line, so it cannot run on or start a line of its own.
+  title: z.string().min(1).max(80).regex(/^[^\r\n\u2028\u2029]*$/, 'One line.'),
   goal: z.string().min(1),
   context: z.string().describe('All it needs from this chat: names, dates, links, decisions, what to avoid.'),
   done_when: z.string().min(1),
