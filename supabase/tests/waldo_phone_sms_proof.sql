@@ -53,7 +53,8 @@ select is(pg_temp.send('sms-dev', pg_temp.op('d')), 'verified', 'an owner whose 
 select is(pg_temp.challenge('sms-cai'), null, 'and no challenge is recorded');
 
 -- Asha asks for a code: the send is reserved before Twilio is called, then finished with the verification it returned.
-select is(pg_temp.send('sms-asha', pg_temp.op('1')), 'reserved', 'asha''s first send is reserved');
+select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', pg_temp.svc(), 'operation', pg_temp.op('1'))),
+  '{"kind":"reserved","phone":"+919800000001"}'::jsonb, 'asha''s first send is reserved for the number on file, which the router texts');
 select is(pg_temp.challenge('sms-asha'), 'sending', 'the challenge is in flight before the provider answers');
 select is(pg_temp.send('sms-asha', pg_temp.op('2')), 'busy', 'a second send while the first is in flight is refused');
 select is(pg_temp.sent('sms-asha', pg_temp.op('9'), 'pending', pg_temp.sid('1')), 'denied', 'a finish with another operation is denied');

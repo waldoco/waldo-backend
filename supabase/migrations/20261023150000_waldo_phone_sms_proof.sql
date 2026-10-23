@@ -147,7 +147,7 @@ begin
           operation = excluded.operation, sends = 1, checks = 0, next_send = excluded.next_send, expires_at = excluded.expires_at,
           recipient_hold_until = excluded.recipient_hold_until, approved_at = null;
     end if;
-    return jsonb_build_object('kind', 'reserved');
+    return jsonb_build_object('kind', 'reserved', 'phone', o.phone);
   end if;
 
   if c.owner_id is null or c.service <> v_service then return jsonb_build_object('kind', 'denied'); end if;
