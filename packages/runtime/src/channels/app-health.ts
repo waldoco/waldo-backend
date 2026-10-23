@@ -4,7 +4,7 @@ import {
   checkHealthChangeV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
-  healthScoresUnavailableV1Schema, healthSleepDebtV1Schema,
+  healthScoresUnavailableV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
@@ -121,14 +121,15 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   const stored = asObject(result?.scores);
   // The stored freshness is the row's at write time; the row is aged when read instead, by its compile time and its own day in its own zone.
   const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, Date.now()) : null;
-  // Sleep debt is optional at every revision, and a stored one that does not read as the contract's is left out, never
-  // passed on, so it cannot cost the owner their scores.
-  const debt = healthSleepDebtV1Schema.safeParse(stored?.sleep_debt);
-  if (stored && 'sleep_debt' in stored && !debt.success) console.error('app health scores sleep debt shape');
+  // A stored sleep debt that does not read as the contract's is left out, never passed on, so it cannot cost the owner
+  // their scores.
+  const shown = appContractRevision(input.request.headers.get(APP_CONTRACT_HEADER), 'health') >= HEALTH_SLEEP_DEBT_REVISION_V1;
+  const debt = shown && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(stored.sleep_debt) : null;
+  if (debt && !debt.success) console.error('app health scores sleep debt shape');
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
     recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
-    ...(debt.success ? { sleep_debt: debt.data } : {}),
+    ...(debt?.success ? { sleep_debt: debt.data } : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return reply(parsed.data);

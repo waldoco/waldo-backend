@@ -368,7 +368,7 @@ describe('app health scores', () => {
   it('answers without sleep debt when the row has none, or holds one it cannot read, and still serves the scores', async () => {
     for (const stored of [row, { ...row, sleep_debt: { state: 'available', debt_minutes: -1 } }, { ...row, sleep_debt: 'lots' }]) {
       rpcResult = { scores: stored };
-      const response = await get('/app/v1/health/scores');
+      const response = await get('/app/v1/health/scores', { 'x-waldo-app-contract': 'health=2' });
       const body = await response.json() as Record<string, unknown>;
       expect([response.status, 'sleep_debt' in body, pinnedScores.safeParse(body).success]).toEqual([200, false, true]);
     }

@@ -358,6 +358,9 @@ export const healthScoresV1Schema = z.strictObject({
   // Absent when the row was not computed with it, never a stand-in for zero debt.
   sleep_debt: healthSleepDebtV1Schema.optional(),
 });
+// Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
+// names health revision 2 or later, whose pin always has it.
+export const HEALTH_SLEEP_DEBT_REVISION_V1 = HEALTH_PROVIDER_REVISION_V1;
 // No row to show for the day: a 200 with the reason, never a zero score.
 export const healthScoresUnavailableV1Schema = z.strictObject({
   state: z.literal('unavailable'),
