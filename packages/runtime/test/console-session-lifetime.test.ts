@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, consoleAuth } from '../src/identity/console-auth';
+import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth } from '../src/identity/console-auth';
+import { consoleStepUpRefusal } from '../src/channels/console-step-up';
+import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 import { clearConsoleCookie, consoleAccess, consoleCookie, consoleSessionRows, signInPage } from '../src/channels/console';
 import { handleConsole } from '../src/channels/console-signin';
@@ -368,5 +370,29 @@ describe('when the browser last proved an email code', () => {
     now += 60_000;
     const again = await access.grant(relinked);
     expect((await access.session(again))!.verified_at).toBe(now);
+  });
+
+  it('renewing a session by use never moves the time of the code', async () => {
+    let now = 1_790_000_000_000;
+    const store = memoryStore();
+    const access = consoleAccess(store, () => now);
+    const proved = now;
+    const token = await access.grant();
+    now += 2 * DAY;
+    const renewed = (await access.session(token))!;
+    expect(renewed.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    expect(renewed.verified_at).toBe(proved);
+    expect((store.data.get('console:sessions') as Record<string, { verified_at?: number }>)[token]!.verified_at).toBe(proved);
+  });
+
+  it('a code counts for two hours and not a millisecond more', async () => {
+    expect(CONSOLE_STEP_UP_MS).toBe(2 * HOUR);
+    const now = 1_790_000_000_000;
+    const pair = () => new Request(`https://w.test${CONTROL_ACTION_PATH}`, { method: 'POST', headers: { accept: 'application/json' }, body: new URLSearchParams({ view: 'devices', action: 'device.pair' }) });
+    const session = (verified_at: number) => ({ token: 't', csrf: 'c', expires: now + HOUR, signed_in: verified_at, verified_at });
+    expect(await consoleStepUpRefusal(pair(), session(now - CONSOLE_STEP_UP_MS + 1), now)).toBeNull();
+    const refused = await consoleStepUpRefusal(pair(), session(now - CONSOLE_STEP_UP_MS), now);
+    expect(refused?.status).toBe(403);
+    expect(await refused?.json()).toEqual({ error: 'step_up_required' });
   });
 });
