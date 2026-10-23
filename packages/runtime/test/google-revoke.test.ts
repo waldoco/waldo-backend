@@ -1,0 +1,90 @@
+import { describe, expect, it, vi } from 'vitest';
+import { googleProxy } from '../src/connectors/connections';
+import { GOOGLE_REVOKE_URL, revokeGoogleGrant } from '../src/connectors/google';
+
+const TOKEN = '1//synthetic-refresh-token';
+const google = (status: number, body: unknown = {}) => vi.fn(async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }));
+
+describe('revoking a Google grant at Google', () => {
+  it('posts the token in a form body to the revocation endpoint, never in the URL, and reads 200 as revoked', async () => {
+    const fetcher = google(200);
+    expect(await revokeGoogleGrant(fetcher as unknown as typeof fetch, TOKEN)).toBe('revoked');
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(GOOGLE_REVOKE_URL);
+    expect(GOOGLE_REVOKE_URL).toBe('https://oauth2.googleapis.com/revoke');
+    expect(url).not.toContain(TOKEN);
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/x-www-form-urlencoded');
+    expect(new URLSearchParams(String(init.body)).get('token')).toBe(TOKEN);
+  });
+
+  it('reads invalid_token as a grant that was already dead, which is what a lapsed Testing-mode grant answers', async () => {
+    expect(await revokeGoogleGrant(google(400, { error: 'invalid_token', error_description: 'Token expired or revoked' }) as unknown as typeof fetch, TOKEN)).toBe('already_invalid');
+  });
+
+  it.each([
+    ['another 400 error', google(400, { error: 'invalid_request' })],
+    ['a 400 with no JSON', google(400, 'Bad Request')],
+    ['a server error', google(503, { error: 'backend_error' })],
+    ['a rate limit', google(429, {})],
+    ['a lost connection', vi.fn(async () => { throw new TypeError(`error sending request for url (${GOOGLE_REVOKE_URL})`); })],
+  ])('reads %s as failed', async (_case, fetcher) => {
+    expect(await revokeGoogleGrant(fetcher as unknown as typeof fetch, TOKEN)).toBe('failed');
+  });
+
+  it('asks nothing of Google for an empty token', async () => {
+    const fetcher = google(200);
+    expect(await revokeGoogleGrant(fetcher as unknown as typeof fetch, '')).toBe('failed');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('the Worker side of a disconnect', () => {
+  const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
+  // The connector-proxy answers the revoke op; the signed RPC deletes the row's Vault secret.
+  const world = (edge: (body: Record<string, unknown>) => Response | Promise<Response>, deleted: unknown = true) => {
+    const calls: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'https://db.test/functions/v1/connector-proxy') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        calls.push(`edge:${String(body.op)}`);
+        return edge(body);
+      }
+      if (url === 'https://db.test/rest/v1/rpc/connection_revoke') { calls.push('rpc:connection_revoke'); return deleted instanceof Response ? deleted : Response.json(deleted); }
+      throw new Error(`unexpected ${url}`);
+    });
+    return { proxy: googleProxy(env, fetcher as unknown as typeof fetch)!, calls, fetcher };
+  };
+
+  it('asks the edge to revoke at Google first, then deletes the secret, and reports both', async () => {
+    const w = world(body => Response.json(body.op === 'revoke' && body.connection === 'conn-1' && body.do_name === 'owner' ? { data: { provider: 'revoked' } } : { error: { status: 404, message: 'unknown operation' } }));
+    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: true, google: 'revoked' });
+    expect(w.calls).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+  });
+
+  it.each([
+    ['Google refused', () => Response.json({ data: { provider: 'failed' } }), 'failed'],
+    ['the grant was already dead', () => Response.json({ data: { provider: 'already_invalid' } }), 'already_invalid'],
+    ['the edge holds no live secret', () => Response.json({ data: { provider: 'not_held' } }), 'not_held'],
+    ['an edge that predates the op', () => Response.json({ error: { status: 404, message: 'unknown operation' } }), 'unavailable'],
+    ['an edge answering something else', () => Response.json({ data: { provider: 'gone, token=1//leak' } }), 'unavailable'],
+    ['an edge that cannot be reached', () => { throw new TypeError('network down'); }, 'unavailable'],
+    ['an edge that answers no JSON', () => new Response('<html>', { status: 502 }), 'unavailable'],
+  ] as const)('when %s, the secret is still deleted and the outcome says so', async (_case, edge, google) => {
+    const w = world(edge);
+    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: true, google });
+    expect(w.calls.at(-1)).toBe('rpc:connection_revoke');
+  });
+
+  it('a delete the database refuses fails the disconnect, whatever Google said', async () => {
+    const w = world(() => Response.json({ data: { provider: 'revoked' } }), new Response('down', { status: 503 }));
+    await expect(w.proxy.revoke('owner', 'conn-1')).rejects.toThrow();
+    expect(w.calls).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+  });
+
+  it('a row the database had already revoked reports removed: false', async () => {
+    const w = world(() => Response.json({ data: { provider: 'not_held' } }), false);
+    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: false, google: 'not_held' });
+  });
+});

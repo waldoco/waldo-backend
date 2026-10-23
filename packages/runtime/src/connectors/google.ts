@@ -560,6 +560,25 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
   return result.access_token;
 }
 
+// A disconnect asks Google to revoke the grant, which removes every scope the owner gave Waldo's project. Its answer is
+// one word: revoked, already_invalid (Google's invalid_token: the grant had lapsed, as a Testing-mode grant does after
+// seven days, or was revoked elsewhere) or failed; the connector-proxy adds not_held when it holds no live secret. The
+// token goes in the form body (RFC 7009), not in the query string Google's guide shows: a failed fetch quotes its URL.
+export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+export const GOOGLE_REVOKE_OUTCOMES = ['revoked', 'already_invalid', 'failed', 'not_held'] as const;
+export type GoogleRevokeOutcome = typeof GOOGLE_REVOKE_OUTCOMES[number];
+export const revokeGoogleGrant = async (fetcher: Fetch, token: string): Promise<Exclude<GoogleRevokeOutcome, 'not_held'>> => {
+  if (!token) return 'failed';
+  try {
+    const response = await fetcher(GOOGLE_REVOKE_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token }).toString() });
+    if (response.status === 200) { void response.body?.cancel(); return 'revoked'; }
+    const answer = await response.json().catch(() => null) as { error?: unknown } | null;
+    return response.status === 400 && answer?.error === 'invalid_token' ? 'already_invalid' : 'failed';
+  } catch {
+    return 'failed';
+  }
+};
+
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
 // calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
 // A Worker that predates a field parses calendar pages strictly and hashes every field into its prep digest,

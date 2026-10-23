@@ -1,11 +1,14 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
-import { GOOGLE_METHODS, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleTokens } from './google';
+import { GOOGLE_METHODS, GOOGLE_REVOKE_OUTCOMES, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleRevokeOutcome, type GoogleTokens } from './google';
 import type { CalendarWatch, GmailWatch } from './google-push';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
 export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly string[]; profile?: GoogleProfile }>;
+// What a disconnect did: whether the signed delete removed the row's secret, and what Google said when asked to revoke the
+// grant first. 'unavailable' is an edge that could not be asked, including one that predates the revoke operation.
+export type GoogleRevokeResult = Readonly<{ removed: boolean; google: GoogleRevokeOutcome | 'unavailable' }>;
 export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
@@ -17,7 +20,7 @@ export type GoogleProxy = Readonly<{
   calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
-  revoke(doName: string, connection: string): Promise<boolean>;
+  revoke(doName: string, connection: string): Promise<GoogleRevokeResult>;
 }>;
 
 const METHODS = GOOGLE_METHODS;
@@ -89,6 +92,13 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
       return { historyId: data.historyId, expiration: data.expiration };
     },
-    revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
+    // Google is asked first, and no answer of its keeps the secret: the delete runs whatever it was, and only a failed
+    // delete fails the disconnect.
+    revoke: async (doName, connection) => {
+      const google = await post({ do_name: doName, op: 'revoke', connection })
+        .then((json) => { const said = (json as { data?: { provider?: unknown } }).data?.provider; return GOOGLE_REVOKE_OUTCOMES.find((known) => known === said) ?? 'unavailable'; })
+        .catch(() => 'unavailable' as const);
+      return { removed: (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true, google };
+    },
   };
 };
