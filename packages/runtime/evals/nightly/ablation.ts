@@ -40,12 +40,18 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
   if (status.kind === 'boundary') throw new Error('a hard-boundary rule is never ablated');
   if (status.kind === 'uncovered') return { verdict: 'uncovered', reason: 'no scenario exercises this rule' };
   const id = status.rule.id;
+  // The label carries the model and every eval mode, so a pair whose labels differ by anything but the ablation would
+  // credit the rule with a mode's or a judge's effect.
   for (const { baseline, ablated } of runs) {
     if (baseline.trials_per_scenario !== TRIALS || ablated.trials_per_scenario !== TRIALS) return { verdict: 'inconclusive', reason: `runs need ${TRIALS} trials per scenario` };
-    if (!ablated.candidate_model.includes('+ablate:') || !ablated.candidate_model.split('+ablate:')[1]!.split(',').includes(id) || baseline.candidate_model.includes('+ablate:')) {
-      return { verdict: 'inconclusive', reason: 'a run pair is not this rule against an unablated baseline' };
+    const [candidate, ids] = ablated.candidate_model.split('+ablate:');
+    if (ids === undefined || !ids.split(',').includes(id) || baseline.candidate_model !== candidate || baseline.judge_model !== ablated.judge_model) {
+      return { verdict: 'inconclusive', reason: 'a run pair is not this rule against an unablated baseline on the same model, modes and judge' };
     }
   }
+  // A governed scenario missing or ungraded on either side is no evidence about the rule, and inconclusive keeps it.
+  const graded = (card: Scorecard) => status.scenarios.every((scenario) => card.scenarios.some((row) => row.id === scenario && row.status === 'graded'));
+  if (!runs.every(({ baseline, ablated }) => graded(baseline) && graded(ablated))) return { verdict: 'inconclusive', reason: 'a governed scenario was not graded in every run' };
   const governed = (card: Scorecard) => new Map(card.scenarios.filter((row) => status.scenarios.includes(row.id)).map((row) => [row.id, row]));
   const added = runs.map(({ baseline, ablated }) => {
     const before = governed(baseline), after = governed(ablated);

@@ -84,6 +84,7 @@ describe('the verdict on one rule', () => {
   const pair = (base: Readonly<Record<string, number>>, ablated: Readonly<Record<string, number>>): AblationRun =>
     ({ baseline: card('model', base), ablated: card(ablationLabel('model', [target.rule.id]), ablated) });
   const fullBase = { 'v03-week-one-preference': 5, 'e1-look-before-asking': 5, 't01-calendar-free-hour': 5, 't05-find-confirmation': 5, 't10-compare-flights': 5 };
+  const governedBy = (status: RuleStatus): readonly string[] => (status.kind === 'mapped' ? status.scenarios : []);
 
   it('keeps a rule whose removal adds 2 failures out of 5 on a scenario it governs, in one run', async () => {
     target = await rule('Ask almost nothing');
@@ -115,5 +116,39 @@ describe('the verdict on one rule', () => {
     expect(ablationVerdict(target, [short, short])).toMatchObject({ verdict: 'inconclusive' });
     const otherRule = { baseline: card('model', fullBase), ablated: card(ablationLabel('model', ['0badc0de']), fullBase) };
     expect(ablationVerdict(target, [otherRule, otherRule])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('does not prune when a governed scenario loses a trial that another scenario makes up overall', async () => {
+    target = await rule('Ask almost nothing');
+    const governed = governedBy(target)[0]!;
+    const spare = 't13-compare-purchase';
+    expect(governedBy(target)).not.toContain(spare);
+    const offset = pair({ ...fullBase, [spare]: 4 }, { ...fullBase, [governed]: 4, [spare]: 5 });
+    expect(ablationVerdict(target, [offset, offset])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('compares only a pair that differs by the ablation: an ablated baseline, another mode or another judge is inconclusive', async () => {
+    target = await rule('Ask almost nothing');
+    const ablatedBase = { baseline: card(ablationLabel('model', ['0badc0de']), fullBase), ablated: card(ablationLabel('model', [target.rule.id]), fullBase) };
+    expect(ablationVerdict(target, [ablatedBase, ablatedBase])).toMatchObject({ verdict: 'inconclusive' });
+    const otherMode = { baseline: card('model', fullBase), ablated: card(ablationLabel('model+tool_search', [target.rule.id]), fullBase) };
+    expect(ablationVerdict(target, [otherMode, otherMode])).toMatchObject({ verdict: 'inconclusive' });
+    const otherJudge = { baseline: { ...card('model', fullBase), judge_model: 'another-judge' }, ablated: card(ablationLabel('model', [target.rule.id]), fullBase) };
+    expect(ablationVerdict(target, [otherJudge, otherJudge])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('does not prune without graded evidence on every governed scenario in both runs of each pair', async () => {
+    target = await rule('Ask almost nothing');
+    const governed = governedBy(target)[0]!;
+    const missing = pair(fullBase, Object.fromEntries(Object.entries(fullBase).filter(([id]) => id !== governed)));
+    expect(ablationVerdict(target, [missing, missing])).toMatchObject({ verdict: 'inconclusive' });
+    const ungradedCard = (candidate: string) => scorecard(Object.keys(fullBase).map((id): ScenarioTrials =>
+      ({ id, pain: 'judgment', outcomes: id === governed ? Array(TRIALS).fill('judge_error') : trials(5) })),
+    { candidate, judge: 'judge', trials: TRIALS, usage: { candidate_calls: 0, judge_calls: 0, budget: 0, exhausted: false, candidate_tokens: 0, judge_tokens: 0 } });
+    const ungraded = { baseline: card('model', fullBase), ablated: ungradedCard(ablationLabel('model', [target.rule.id])) };
+    expect(ablationVerdict(target, [ungraded, ungraded])).toMatchObject({ verdict: 'inconclusive' });
+    const noGovernedAnywhere = Object.fromEntries(Object.entries(fullBase).filter(([id]) => !governedBy(target).includes(id)));
+    const blind = pair(noGovernedAnywhere, noGovernedAnywhere);
+    expect(ablationVerdict(target, [blind, blind])).toMatchObject({ verdict: 'inconclusive' });
   });
 });
