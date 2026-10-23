@@ -30,14 +30,14 @@ describe('tool output ledger', () => {
     const data = { keep, text: needle, padding: 'x'.repeat(900) };
     const summary = JSON.stringify(shape === 'legacy' ? { events: [{ keep, text: needle }] } : { ok: true, data, source_taint: 'external' });
     const ledger = toolOutputLedger(storage as never);
-    await ledger.record({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external', summary });
+    await ledger.record({ tool: 'read_memory', ok: true, at: 1000, taint: 'external', summary });
     const keys = [...storage.data.keys()];
     const before = [...storage.data.values()].find(value => typeof value === 'object') as { summary: string };
     if (shape !== 'legacy') { expect(before.summary).toHaveLength(503); expect(() => JSON.parse(before.summary)).toThrow(); }
     const { redactToolOutputLedger } = await import('../src/conversation/tool-output-ledger');
     expect(await redactToolOutputLedger(storage as never, [needle], '[forgotten]')).toBe(1);
     const row = [...storage.data.values()].find(value => typeof value === 'object') as { tool: string; ok: boolean; taint: string; summary: string };
-    expect(row).toMatchObject({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external' });
+    expect(row).toMatchObject({ tool: 'read_memory', ok: true, at: 1000, taint: 'external' });
     expect([...storage.data.keys()]).toEqual(keys);
     expect(row.summary).toContain(keep); expect(row.summary).toContain('[forgotten]');
     expect(row.summary).not.toContain(needle); expect(row.summary).not.toContain(JSON.stringify(needle).slice(1, -1));
@@ -328,7 +328,7 @@ describe('earlier results for the owner\'s turn', () => {
 
   it('admits a row as external data whatever its own taint, so an own result carrying a health reading is never kept', async () => {
     const storage = fakeStorage();
-    await toolOutputLedger(storage as never).record({ tool: 'read_owner_context', ok: true, at: 1000, taint: null, origin: 'owner', summary: '{"ok":true,"data":{"note":"blood pressure 128/84"}}' });
+    await toolOutputLedger(storage as never).record({ tool: 'read_memory', ok: true, at: 1000, taint: null, origin: 'owner', summary: '{"ok":true,"data":{"note":"blood pressure 128/84"}}' });
     expect([...storage.data.keys()]).toEqual([]);
   });
 

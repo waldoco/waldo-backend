@@ -399,5 +399,3 @@ export const queryAvailabilityArgsSchema=z.strictObject({
  work_windows:z.array(z.strictObject({start:iso8601Schema,end:iso8601Schema}).refine(w=>Date.parse(w.start)<Date.parse(w.end),'window must advance')).max(100).default([]),
 });
 export type QueryAvailabilityArgs=z.infer<typeof queryAvailabilityArgsSchema>;
-export const readOwnerContextArgsSchema=z.strictObject({topic:z.string().min(1).max(200),limit:z.int().min(1).max(12).default(8)});
-export type ReadOwnerContextArgs=z.infer<typeof readOwnerContextArgsSchema>;

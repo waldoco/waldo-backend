@@ -8,7 +8,7 @@ export const BRAIN_NAMESPACES = {
   calendar: 'Calendar changes and Google Tasks: free and busy time across all calendars, propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
   mail: 'Mail beyond search: read a whole message, send_email to propose an email the owner approves on a card, draft_email for a Gmail draft they edit themselves, and contacts.',
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
-  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, memory about one topic with its evidence, past conversations, stored tool output and chat threads.',
+  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, past conversations, stored tool output and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, and tracked responsibilities.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
@@ -69,7 +69,6 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   get_master_metrics: { brain: 'health', scope: 'deny', claim: null, replay: read() },
   get_context: { brain: 'core', scope: 'allow', claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
   query_availability: { brain: 'calendar', scope: 'deny', claim: null, replay: read() },
-  read_owner_context: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
   read_memory: { brain: 'core', scope: 'deny', claim: null, replay: read() },
   search_episodes: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.

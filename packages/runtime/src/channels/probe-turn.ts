@@ -42,7 +42,6 @@ export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
 export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'query_calendar',
   'query_availability',
-  'read_owner_context',
   'get_communication',
   'search_communication',
   'search_contacts',
