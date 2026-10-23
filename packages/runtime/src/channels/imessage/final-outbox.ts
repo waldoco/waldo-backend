@@ -10,6 +10,15 @@ import type { IMessageInboxRecord } from './owner-inbox';
 export const IMESSAGE_OUTBOX_DUE_KEY = 'imessage_final_outbox_due_v1';
 const PREFIX = 'imessage:outbox-record:';
 const RETRY_MS = 5_000;
+/** A reply the bridge could not take because its one mailbox slot was busy tries again this soon. */
+export const IMESSAGE_BUSY_RETRY_MS = 1_000;
+// A progress note is sent once, while its turn runs, and never after its reply. It wakes nothing: one left frozen by an
+// evicted turn is settled may_have_completed at the next drain.
+const PROGRESS = 'progress:';
+export const isProgressNote = (replyRef: string) => replyRef.startsWith(PROGRESS);
+const UNBOUND = { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' };
+const notStarted = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'rejected', disposition: 'not_started', reason });
+const mayHaveSent = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'unknown', disposition: 'may_have_completed', reason });
 /** Telegram's final-outbox bound: only settled records are evicted, oldest first; live replies are never dropped. */
 export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
@@ -48,6 +57,33 @@ export class IMessageFinalOutbox {
     return this.put(`proactive:${id}`, { ...target, commandId }, text);
   }
 
+  /**
+   * Progress note `index` of a running turn, to the sender that turn answers. Its commandId is fixed by the turn and the
+   * index, so freezing it again freezes the same record. Synchronous: it runs inside the turn's run-scope commit.
+   */
+  freezeProgress(record: IMessageInboxRecord, index: 1 | 2, text: string): IMessageOutboxRecord {
+    return this.put(`${PROGRESS}${record.id}:${index}`, { ...targetOf(record), commandId: `wpn${index}_${record.commandId}` }, text);
+  }
+  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. */
+  messageWaiting(bridgeDoName: string): boolean {
+    return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.bridgeDoName === bridgeDoName);
+  }
+  /** When Waldo last put a message on this chat's way: the newest record not proved unsent. */
+  lastSentAt(): number | null {
+    const sent = this.records().filter((r) => r.result?.state !== 'rejected');
+    return sent.length ? Math.max(...sent.map((r) => r.frozenAt)) : null;
+  }
+  /**
+   * Settles the progress notes still frozen: every one, or only the given turn's. A note's handoff starts as it freezes, so
+   * the bridge may hold a frozen one: it settles may_have_completed, unless `refused` says the bridge did not take it.
+   */
+  dropProgress(reason: string, recordId?: string, refused = false): void {
+    for (const r of this.records()) {
+      if (r.state !== 'frozen' || !isProgressNote(r.replyRef) || (recordId !== undefined && !r.replyRef.startsWith(`${PROGRESS}${recordId}:`))) continue;
+      this.update(r.replyRef, (row) => { if (row.state === 'frozen') { row.state = 'settled'; row.text = ''; row.result = (refused ? notStarted : mayHaveSent)(row.commandId, reason); } });
+    }
+  }
+
   private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string): IMessageOutboxRecord {
     const prior = this.get(replyRef);
     if (prior) {
@@ -67,15 +103,15 @@ export class IMessageFinalOutbox {
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;
   }
-  due(): IMessageOutboxRecord[] { return this.records().filter((r) => r.state === 'frozen' && r.nextAttemptAt <= this.now()); }
+  due(): IMessageOutboxRecord[] { return this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.nextAttemptAt <= this.now()); }
   markQueued(replyRef: string) { this.update(replyRef, (r) => { if (r.state === 'frozen') { r.state = 'queued'; r.attempts += 1; } }); }
-  retryLater(replyRef: string, maxAgeMs: number) {
+  retryLater(replyRef: string, maxAgeMs: number, delayMs = RETRY_MS) {
     this.update(replyRef, (r) => {
       if (r.state !== 'frozen') return;
       r.attempts += 1;
       // Bounded: a reply the bridge never accepted is proved not_started, not silently resent forever.
-      if (this.now() - r.frozenAt >= maxAgeMs) { r.state = 'settled'; r.text = ''; r.result = { version: 1, commandId: r.commandId, target: { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' }, state: 'rejected', disposition: 'not_started', reason: 'bridge_unavailable' }; }
-      else r.nextAttemptAt = this.now() + RETRY_MS;
+      if (this.now() - r.frozenAt >= maxAgeMs) { r.state = 'settled'; r.text = ''; r.result = notStarted(r.commandId, 'bridge_unavailable'); }
+      else r.nextAttemptAt = this.now() + delayMs;
     });
   }
   /** First terminal result is authoritative; a different later result is counted, never applied. */
@@ -92,7 +128,7 @@ export class IMessageFinalOutbox {
     return known;
   }
   dueAt(): number | null {
-    const open = this.records().filter((r) => r.state === 'frozen');
+    const open = this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef));
     return open.length ? Math.max(this.now() + 250, Math.min(...open.map((r) => r.nextAttemptAt))) : null;
   }
   /**
@@ -104,7 +140,7 @@ export class IMessageFinalOutbox {
     let rewritten = 0;
     for (const r of this.records()) {
       if (!r.text || !holds(r.text)) continue;
-      if (r.state === 'frozen') { r.state = 'settled'; r.text = ''; r.result = { version: 1, commandId: r.commandId, target: { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' }, state: 'rejected', disposition: 'not_started', reason: 'owner_forget' }; }
+      if (r.state === 'frozen') { r.state = 'settled'; r.text = ''; r.result = notStarted(r.commandId, 'owner_forget'); }
       else r.text = r.state === 'settled' ? '' : redact(r.text);
       this.storage.kv.put(PREFIX + r.replyRef, r); rewritten += 1;
     }
