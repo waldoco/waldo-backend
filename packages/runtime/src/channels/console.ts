@@ -9,27 +9,43 @@ import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_PATH}/google`;
+// Behind the console session, like the MCP start link: only the signed-in owner's browser turns it into a Google redirect.
+export const CONSOLE_GOOGLE_START_PATH = `${CONSOLE_GOOGLE_PATH}/start/`;
 export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
 // B9: the background task list as a first-class read-only JSON endpoint (same console session).
 export const CONSOLE_RUNS_PATH = `${CONSOLE_PATH}/runs`;
 export const CONSOLE_COOKIE = 'waldo_console';
 const LINK_MS = 10 * 60_000;
-const SESSION_MS = 12 * 60 * 60_000;
+// A session granted before the lifetime change has no signed_in and keeps its fixed 12 hours.
+const LEGACY_SESSION_MS = 12 * 60 * 60_000;
+// A used session renews at most this often, so a page that polls does not write storage on every request.
+const RENEW_STEP_MS = 60 * 60_000;
+
+// Both console cookies share one policy. Lax lets a link from mail, a website or a chat app open the console signed in;
+// a cross-site write, or a cross-site start of a flow a GET begins, is refused before any handler (console-cross-site.ts).
+// The cookie lives the absolute lifetime; the server ends the session sooner when it goes unused.
+export const consoleCookie = (name: string, value: string): string =>
+  `${name}=${value}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${CONSOLE_SESSION_LIFETIME_MS / 1000}`;
+export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
-export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number }>;
+// expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
+// signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
+export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number; ends?: number }>;
 
-// One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
-// signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
+// One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
+// name is recorded. Tokens never leave this function.
 export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
-  [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
-    signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
+  [...sessions].sort((a, b) => signedInAt(b) - signedInAt(a)).map((session) => ({
+    signed_in: localIso(signedInAt(session), timezone).slice(0, 16).replace('T', ' '),
     until: localIso(session.expires, timezone).slice(0, 16).replace('T', ' '),
     current: session.token === current.token,
   }));
@@ -37,7 +53,8 @@ export const consoleSessionRows = (sessions: readonly ConsoleSession[], current:
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // One-time link from Telegram -> short session cookie. Only the owner's DM can mint a link.
-// Sessions are per browser: redeeming with a live session cookie refreshes that session instead of stacking.
+// Sessions are per browser: a sign-in in a browser that holds a session replaces it with a new token. The old one keeps
+// ordinary access for CONSOLE_REPLACED_SESSION_MS without its code (ends), so a turn under it finishes, then it ends.
 export const consoleAccess = (store: Store, now: () => number = Date.now) => {
   const readSessions = async (): Promise<Record<string, ConsoleSession>> => (await store.get<Record<string, ConsoleSession>>('console:sessions')) ?? {};
   const writeSessions = async (sessions: Record<string, ConsoleSession>): Promise<void> => {
@@ -45,9 +62,19 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     if (Object.keys(live).length > 0) await store.put('console:sessions', live);
     else await store.delete('console:sessions');
   };
-  const addSession = async (): Promise<string> => {
-    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
+  // A browser that proved a code keeps that proof through a link sign-in that replaces its session. Only the new
+  // session carries it: the replaced one loses its code and is capped, and a later cap never lengthens it.
+  const addSession = async (replacing: string | null, verified: boolean): Promise<string> => {
     const sessions = await readSessions();
+    const replaced = replacing ? sessions[replacing] : undefined;
+    const live = replaced !== undefined && replaced.expires >= now();
+    const verifiedAt = verified ? now() : live ? replaced.verified_at : undefined;
+    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS, ...(verifiedAt === undefined ? {} : { verified_at: verifiedAt }) };
+    if (live) {
+      const { verified_at: _code, ...rest } = replaced;
+      const ends = Math.min(replaced.expires, now() + CONSOLE_REPLACED_SESSION_MS);
+      sessions[replacing!] = { ...rest, ends, expires: ends };
+    } else if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
     return session.token;
@@ -64,23 +91,25 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       const link = await store.get<Grant>('console:link');
       if (!link || link.token !== token || link.expires < now()) return null;
       await store.delete('console:link');
-      if (current) {
-        const sessions = await readSessions();
-        const existing = sessions[current];
-        if (existing && existing.expires >= now()) {
-          sessions[current] = { ...existing, expires: now() + SESSION_MS };
-          await writeSessions(sessions);
-          return current;
-        }
-      }
-      return addSession();
+      return addSession(current, false);
     },
-    async session(token: string | null): Promise<ConsoleSession | null> {
+    // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime. A read another site
+    // started is not the owner's use and renews nothing.
+    async session(token: string | null, renew = true): Promise<ConsoleSession | null> {
       if (!token) return null;
-      const session = (await readSessions())[token];
-      return session && session.expires >= now() ? session : null;
+      const sessions = await readSessions();
+      const session = sessions[token];
+      if (!session || session.expires < now()) return null;
+      if (!renew || session.signed_in === undefined) return session;
+      const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS, session.ends ?? Number.POSITIVE_INFINITY);
+      if (expires - session.expires < RENEW_STEP_MS) return session;
+      const renewed = { ...session, expires };
+      sessions[token] = renewed;
+      await writeSessions(sessions);
+      return renewed;
     },
-    grant: addSession,
+    // Only an email code grants a session, so a grant is a proven code.
+    grant: (replacing: string | null = null) => addSession(replacing, true),
     async signOut(token: string): Promise<void> {
       const sessions = await readSessions();
       delete sessions[token];
@@ -96,14 +125,21 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
 };
 
 // Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
-// link only shows a button; the token is spent by the POST that button sends.
+// link only shows a button; the token is spent by the POST that button sends. same-origin, not no-referrer: a browser
+// without Sec-Fetch-Site must still name the console as the POST's Origin, and no other site is ever sent this URL.
 export const signInPage = (token: string): Response => new Response(
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${/^c1\.[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token) && token.length <= 2048 ? token : token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
-  { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } },
+  { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
 );
 
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
+
+// A grant carries the browser's own owner object session, which the new one replaces.
+export const grantHeaders = (doName: string, request: Request): Record<string, string> => {
+  const current = sessionCookie(request);
+  return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
+};
 
 export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
@@ -580,6 +616,6 @@ ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class=
 <nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
-<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
+<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session stays signed in while you use it, for up to 30 days.</footer>
 </div></body></html>`;
 };

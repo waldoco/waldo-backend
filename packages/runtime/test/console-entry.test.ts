@@ -17,7 +17,7 @@ describe('console entry across actual owner sessions', () => {
     const bindings = { ...env, WALDO_OWNER_TELEGRAM_ID: name };
     const preview = await worker.fetch(new Request(ticket), bindings);
     expect(await preview.text()).toContain('Open console');
-    const redeem = () => worker.fetch(new Request(origin + '/console', { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: new URL(ticket).searchParams.get('t')! }) }), bindings);
+    const redeem = () => worker.fetch(new Request(origin + '/console', { method: 'POST', redirect: 'manual', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: new URL(ticket).searchParams.get('t')! }) }), bindings);
     const receipt = await redeem();
     expect(receipt.status).toBe(303);
     expect(receipt.headers.get('location')).toBe('/console');
@@ -59,9 +59,9 @@ describe('console entry across actual owner sessions', () => {
     expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), cache: missingFile.headers.get('cache-control'), body: await missingFile.text() })
       .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', cache: 'no-store', body: NOTICES['file.unavailable'] });
     expect((await worker.fetch(new Request(origin + '/console/unknown', { headers: { cookie } }), bindings)).status).toBe(404);
-    const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
+    const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
     expect({ status: denied.status, location: denied.headers.get('location'), body: await denied.text() }).toEqual({ status: 400, location: null, body: NOTICES.invalid });
-    const adminFormFailure = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'invite.revoke', csrf: current.csrf, id: 'no-such-invite' }) }), bindings);
+    const adminFormFailure = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'invite.revoke', csrf: current.csrf, id: 'no-such-invite' }) }), bindings);
     expect({ status: adminFormFailure.status, location: adminFormFailure.headers.get('location'), body: await adminFormFailure.text() }).toEqual({ status: 400, location: null, body: NOTICES.invalid });
     expect((await json('/console')).timezone).toBe(current.timezone);
     const other = { ...bindings, WALDO_OWNER_TELEGRAM_ID: 'console-entry-other' };

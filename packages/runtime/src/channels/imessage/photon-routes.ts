@@ -1,4 +1,5 @@
 import { bindBrowser, checkBrowser, releaseBrowser } from '../../connectors/oauth-browser-binding';
+import { oauthStateSecret, type OAuthStateEnv } from '../../connectors/oauth-state-secret';
 import { consoleAuth } from '../../identity/console-auth';
 import { callbackPage } from '../google-oauth';
 import type { IMessageEnv } from './bridge-do';
@@ -20,20 +21,22 @@ const COPY: Record<PhotonFinish | 'unbound', Readonly<{ status: number; title: s
 };
 
 /** Operator only: any other owner gets a 404, as if the route did not exist. */
-export async function photonStart(env: IMessageEnv, owner: string, origin: string): Promise<Response> {
+export async function photonStart(env: IMessageEnv & OAuthStateEnv, owner: string, origin: string): Promise<Response> {
   const admin = await consoleAuth(env)?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
   if (!admin) return new Response('not found', { status: 404, headers: TEXT });
-  const started = await photonConnectStart(env, owner, origin, PHOTON_CALLBACK_PATH).catch(() => null);
-  if (!started) return new Response('Photon is not configured on this server.', { status: 503, headers: TEXT });
+  const bindingSecret = oauthStateSecret(env);
+  const started = bindingSecret ? await photonConnectStart(env, owner, origin, PHOTON_CALLBACK_PATH).catch(() => null) : null;
+  if (!started || !bindingSecret) return new Response('Photon is not configured on this server.', { status: 503, headers: TEXT });
   return new Response(null, { status: 303, headers: { location: started.url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
-    'set-cookie': await bindBrowser('photon', started.nonce, PHOTON_CALLBACK_PATH, PHOTON_ATTEMPT_TTL_MS, Date.now()) } });
+    'set-cookie': await bindBrowser(bindingSecret, 'photon', started.nonce, PHOTON_CALLBACK_PATH, PHOTON_ATTEMPT_TTL_MS, Date.now()) } });
 }
 
-export async function photonCallback(request: Request, env: IMessageEnv): Promise<Response> {
-  if (request.method !== 'GET') return new Response('not found', { status: 404, headers: TEXT });
+export async function photonCallback(request: Request, env: IMessageEnv & OAuthStateEnv): Promise<Response> {
+  const bindingSecret = oauthStateSecret(env);
+  if (request.method !== 'GET' || !bindingSecret) return new Response('not found', { status: 404, headers: TEXT });
   const url = new URL(request.url), nonce = url.searchParams.get('state') ?? '';
   if (!NONCE.test(nonce)) return callbackPage(false, COPY.invalid);
-  if (await checkBrowser(request, 'photon', nonce, Date.now()) !== 'bound') return callbackPage(false, COPY.unbound);
+  if (await checkBrowser(request, bindingSecret, 'photon', nonce, Date.now()) !== 'bound') return callbackPage(false, COPY.unbound);
   const outcome = await photonConnectFinish(env, nonce, url.searchParams.toString()).catch(() => 'failed' as const);
   const page = callbackPage(outcome === 'linked', COPY[outcome]);
   page.headers.append('set-cookie', await releaseBrowser('photon', nonce, PHOTON_CALLBACK_PATH));

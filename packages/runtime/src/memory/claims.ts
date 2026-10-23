@@ -68,6 +68,8 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
+  // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
+  ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
 // Of those, the owner's goals are the owner's own record and keep their rows; the rest are Waldo's derived text and a row
 // that carries a forgotten text is deleted.
