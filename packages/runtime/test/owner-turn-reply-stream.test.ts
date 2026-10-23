@@ -114,3 +114,13 @@ it('a side call in the same turn (a subagent, a title, a reaction) never feeds t
   await owner.chooseReaction(turn('stream-5', { replyStream: stream }));
   expect(requests.filter((request) => 'stream' in request)).toHaveLength(1);
 });
+
+it('records the answering call\'s time to first token on its reply hop', async () => {
+  const base = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 };
+  const gateway: LLMGatewayAdapter = { complete: async (input) => ({ ok: true, data: { ...base, model: input.request.model, text: 'Done.', ...(input.stream ? { ttft_ms: 420 } : {}) } }) };
+  const hops: TurnLogEntry[] = [];
+  const { stream } = drafts();
+  await responder(gateway, (entry) => hops.push(entry)).respond(turn('stream-6', { replyStream: stream }), time);
+  await responder(gateway, (entry) => hops.push(entry)).respond(turn('stream-7'), time);
+  expect(hops.filter((entry) => entry.hop === 'llm_reply').map((entry) => entry.ttft_ms)).toEqual([420, undefined]);
+});
