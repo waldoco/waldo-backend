@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { CancelTaskArgs, StartTaskArgs } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
-import { jobBook, type JobBook } from '../src/tasks/jobs';
+import { jobBook, TASK_MAX_OPEN, TASK_MAX_PER_TURN, type JobBook } from '../src/tasks/jobs';
+import { dispatchLoopTool } from '../src/conversation/tool-loop';
 import { promiseRetry } from '../src/tasks/retry-turn';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -94,6 +95,38 @@ describe('start_task', () => {
       expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('reader or errand profile') });
       expect(book.open()).toHaveLength(0);
       expect(await start.handle(args, ctx({ toolCallId: 'call-2' }))).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    });
+  });
+});
+
+describe('start_task caps', () => {
+  it(`one turn starts at most ${TASK_MAX_PER_TURN} tasks; the next is refused with the cap and what to do, and a later turn starts it`, async () => {
+    await withTools(async ({ book, start }) => {
+      for (let i = 0; i < TASK_MAX_PER_TURN; i += 1) expect(await start.handle({ ...args, title: `Part ${i}` }, ctx({ toolCallId: `c${i}` }))).toMatchObject({ ok: true });
+      const refused = await start.handle({ ...args, title: 'One more' }, ctx({ toolCallId: 'c-extra' }));
+      expect(refused).toMatchObject({ ok: false, code: 'rate_limited', error: expect.stringContaining(`${TASK_MAX_PER_TURN}`) });
+      expect((refused as { error: string }).error).toMatch(/brief/);
+      // A replay of a call that already started its task still returns the original receipt.
+      expect(await start.handle({ ...args, title: 'Part 0' }, ctx({ toolCallId: 'c0' }))).toMatchObject({ ok: true, data: { title: 'Part 0' } });
+      expect(book.open()).toHaveLength(TASK_MAX_PER_TURN);
+      expect(await start.handle({ ...args, title: 'One more' }, ctx({ turnId: 'turn-2', toolCallId: 'c-extra' }))).toMatchObject({ ok: true });
+    });
+  });
+
+  it(`at most ${TASK_MAX_OPEN} tasks are open per owner; the next is refused naming the cap, and after a cancel it starts`, async () => {
+    await withTools(async ({ book, start, cancel }) => {
+      // The brain's own retry of an owner message is not a task the model started, so it does not count.
+      book.create({ kind: 'retry_turn', profile: null, idempotencyKey: 'retry:x', origin: 'x', surface: 'app', dueAt: T0, deadlineAt: T0 + 1, brief: { message_ref: 'x', text: 'hi', conversation_ref: 'c', said_at: T0, promised_by: T0 + 1 } });
+      const ids: string[] = [];
+      for (let i = 0; i < TASK_MAX_OPEN; i += 1) {
+        const made = await start.handle({ ...args, title: `Task ${i}` }, ctx({ turnId: `turn-${i}`, toolCallId: 'c' }));
+        ids.push((made as { data: { job_id: string } }).data.job_id);
+      }
+      const refused = await start.handle({ ...args, title: 'Eleventh' }, ctx({ turnId: 'turn-x', toolCallId: 'c' }));
+      expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(`${TASK_MAX_OPEN}`) });
+      expect((refused as { error: string }).error).toMatch(/cancel_task/);
+      expect(await cancel.handle({ job_id: ids[0]! }, ctx())).toMatchObject({ ok: true });
+      expect(await start.handle({ ...args, title: 'Eleventh' }, ctx({ turnId: 'turn-x', toolCallId: 'c' }))).toMatchObject({ ok: true });
     });
   });
 });

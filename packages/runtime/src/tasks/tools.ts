@@ -5,7 +5,7 @@ import {
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import { TASK_DEADLINE_MS, taskBrief, type JobBook, type TaskBrief } from './jobs';
+import { TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, taskBrief, type JobBook, type TaskBrief } from './jobs';
 import { TASK_PROFILE_SPECS } from './profiles';
 import { quoted } from '../prompt/turn-prompt';
 
@@ -13,7 +13,7 @@ import { quoted } from '../prompt/turn-prompt';
 // size or kind. start_task writes the job and wakes the jobs lane, which starts the worker after the write commits.
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
-const refusal = (error: string, code: 'rejected' | 'not_found' = 'rejected') => ({ ok: false as const, error, code, source_taint: null });
+const refusal = (error: string, code: 'rejected' | 'not_found' | 'rate_limited' = 'rejected') => ({ ok: false as const, error, code, source_taint: null });
 
 export type TaskToolDeps = Readonly<{
   book: JobBook;
@@ -50,6 +50,11 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       // The job is keyed by the turn and its tool call, so a replayed turn's same call returns the job it already made.
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const key = `${ctx.turnId}:${ctx.toolCallId}`;
+      if (!deps.book.byKey(key)) {
+        const counts = deps.book.taskCounts(ctx.turnId);
+        if (counts.fromTurn >= TASK_MAX_PER_TURN) return refusal(`This turn already started ${TASK_MAX_PER_TURN} background tasks, the most one turn starts. Put the rest of the work in one of those briefs next time, or start it in a later turn.`, 'rate_limited');
+        if (counts.open >= TASK_MAX_OPEN) return refusal(`${TASK_MAX_OPEN} background tasks are already open, the most at once. Wait for one to report, or cancel one the owner no longer needs with cancel_task, then start this one.`);
+      }
       const { job, created } = deps.book.create({
         kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId, surface: deps.surface,
         brief, dueAt: now, deadlineAt: now + TASK_DEADLINE_MS,

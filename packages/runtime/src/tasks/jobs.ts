@@ -49,6 +49,11 @@ export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
 // minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
 // starts when a running one reports.
 export const TASK_MAX_RUNNING = 3;
+// Tasks one owner has open (queued, running or with a report pending), and tasks one turn starts. Each task is paid worker
+// time and a later message to the owner; a runaway or injected turn could otherwise start them by the dozen. Past either
+// cap start_task refuses and says what to do instead; the brain's own retries of owner messages are not counted.
+export const TASK_MAX_OPEN = 10;
+export const TASK_MAX_PER_TURN = 3;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
@@ -97,12 +102,22 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     ).rowsWritten > 0;
   };
 
+  const byKey = (key: string): JobRow | null => sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', key).toArray()[0] ?? null;
+
   return {
     get,
+    byKey,
+    // Tasks the model started that are still open, and those the turn `origin` started in any state.
+    taskCounts(origin: string): Readonly<{ open: number; fromTurn: number }> {
+      const row = sql.exec<{ open: number; from_turn: number }>(
+        `SELECT COALESCE(SUM(status IN (${placeholders(OPEN)})), 0) AS open, COALESCE(SUM(origin = ?), 0) AS from_turn FROM task_jobs WHERE kind = 'task'`, ...OPEN, origin,
+      ).toArray()[0];
+      return { open: row?.open ?? 0, fromTurn: row?.from_turn ?? 0 };
+    },
     // Intent before I/O: the row is written before any worker starts. The same idempotency key (a replayed turn's tool call)
     // returns the job it already made instead of making a second one.
     create(input: CreateJob): Readonly<{ job: JobRow; created: boolean }> {
-      const existing = sql.exec<JobRow>('SELECT * FROM task_jobs WHERE idempotency_key = ?', input.idempotencyKey).toArray()[0];
+      const existing = byKey(input.idempotencyKey);
       if (existing) return { job: existing, created: false };
       const now = deps.now();
       const id = `job_${deps.newId()}`;

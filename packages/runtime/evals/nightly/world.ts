@@ -279,13 +279,15 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       if (known) return { job: known, created: false };
       effect('task.start', { profile: input.profile, ...input.brief });
       const row = {
-        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey,
+        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey, origin: input.origin,
         brief_json: JSON.stringify(input.brief), taint: input.taint ?? null, status: 'queued',
       } as JobRow;
       tasks.push(row);
       return { job: row, created: true };
     },
     get: (id: string) => tasks.find((row) => row.id === id) ?? null,
+    byKey: (key: string) => tasks.find((row) => row.idempotency_key === key) ?? null,
+    taskCounts: (origin: string) => ({ open: tasks.length, fromTurn: tasks.filter((row) => row.origin === origin).length }),
     cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
   } as unknown as JobBook;
   const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
