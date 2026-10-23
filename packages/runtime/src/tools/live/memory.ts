@@ -1,7 +1,9 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
 import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
+import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
+import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // Supplied by the authenticated conversation host, never by model arguments. Each text is
@@ -47,13 +49,17 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act.'), schema: rememberArgsSchema, mutates_state: true,
+    { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => part.includes(args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         if (!source) return fail('Evidence quote is not grounded in an owner-authored message.');
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
+        // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected
+        // tool), a reading may have come from there, so none is stored from this turn: neither one the scribe left in these
+        // arguments nor the marker of one it withheld. The evidence and aliases sit beside the text.
+        if (ctx.toolArgSourceTaint === 'external' && [args.text, args.evidence_quote, ...(args.aliases ?? [])].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
         const claims = store.claims();
         const previous = args.replaces_id === undefined ? undefined : claims.find(claim => claim.id === args.replaces_id);
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');
@@ -88,17 +94,20 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, or an exact stored owner-message span using UTF-16 offsets. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
-        if (!turn) return fail('Authenticated owner memory context is unavailable.');
+        // A forget by ids from a turn that read outside text runs only from the owner's card. That replay has no
+        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select.
+        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.topic === undefined && args.source === undefined;
+        if (!turn && !approvedById) return fail('Authenticated owner memory context is unavailable.');
         const claims = store.allClaims(); const selected = new Map<number, Claim>(); const texts = new Set<string>();
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }
         if (args.topic) {
-          if (!ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
+          if (!turn || !ownerParts(turn.current).some(part => part.includes(args.topic!))) return fail('Forget topic is not a literal substring of the current owner message.');
           texts.add(args.topic);
           for (const claim of claims) if (carriesTopic(claim.text, args.topic) || carriesTopic(claim.evidence, args.topic)) selected.set(claim.id, claim);
         }
         if (args.source) {
           const span = args.source;
-          const message = deps.resolveSource ? await deps.resolveSource(span.message_ref, ctx) : [turn.current, ...turn.recent].find(row => row.message_ref === span.message_ref);
+          const message = deps.resolveSource ? await deps.resolveSource(span.message_ref, ctx) : turn && [turn.current, ...turn.recent].find(row => row.message_ref === span.message_ref);
           if (!message || span.end > message.text.length || (message.sourceQuoteRanges ?? []).some(range => range.start < span.end && range.end > span.start)) return fail('Source ref or UTF-16 span is not owner-authored or in bounds.');
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);

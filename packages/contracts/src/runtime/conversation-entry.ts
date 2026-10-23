@@ -47,12 +47,66 @@ export type ConversationReceipt = Readonly<{
   more: number;
 }>;
 
+// The one rule every forget redactor and verifier matches by: the literal in any Unicode case, as a whole word where a word
+// edge can be read. That is only between letters of a space-delimited alphabet (Latin, Greek, Cyrillic), so forgetting "tea"
+// leaves "team" and "steady" whole. Everywhere else the literal matches inside the text, as substring matching did: scripts
+// written without spaces (Chinese, Japanese, Korean, Thai), Indic words that take suffixes (मुंबईत), and a literal whose edge is
+// a digit or symbol (a number inside +91..., "sarah2024", "C++17"). Under-forgetting is the worse failure, so the boundary
+// applies only where its absence is known to break words. A combining mark continues the letter before it.
+// Stored text can be raw JSON: a real escape (\n, \t, \u00a0) before the literal separates it like the character it decodes
+// to (read case-sensitively, so C:\Ntea is one word). In a stored JSON object or array a match never starts on the continuation of
+// an escape, which would leave a broken escape behind. Everywhere else a backslash is a character (C:\Users\tom), since
+// keeping a prose escape whole would leave the topic behind and report it gone. `openEnd` drops the end boundary,
+// for a literal cut short of its end. Case folds as Unicode simple folding, and dotted capital I also matches the i plus
+// combining dot it lowercases to, the one letter whose lowercase is longer, so the fold is a superset of toLowerCase.
+const ALPHABETIC = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]`;
+const ESCAPING_BACKSLASH = String.raw`(?<!\\)(?:\\\\)*\\`;
+const alphabeticEdge = new RegExp(`^${ALPHABETIC}$`, 'u');
+const afterLetter = new RegExp(`(?<=${ALPHABETIC}\\p{M}*)`, 'uy');
+const afterEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH}(?:[bfnrt]|u[0-9A-Fa-f]{4}))`, 'uy');
+// In text that parses as JSON every escaping backslash starts a valid escape, so nothing may start right after one.
+const insideEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH})`, 'uy');
+const beforeLetter = new RegExp(`\\p{M}|${ALPHABETIC}`, 'uy');
+const at = (pattern: RegExp, value: string, index: number) => { pattern.lastIndex = index; return pattern.test(value); };
+// Raw JSON here is a stored object or array. A lone quoted string is how claim evidence is kept, so it is text.
+const parsesAsJson = (value: string) => { try { const parsed: unknown = JSON.parse(value); return typeof parsed === 'object' && parsed !== null; } catch { return false; } };
+
+function* literalTextSpans(value: string, text: string, openEnd: boolean): Generator<readonly [number, number]> {
+  if (!text) return;
+  const body = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\u0130|i\u0307/gi, '(?:\\u0130|i\\u0307)');
+  const [first] = text, last = [...text.replace(/\p{M}+$/u, '')].at(-1);
+  const leading = first !== undefined && alphabeticEdge.test(first), trailing = !openEnd && last !== undefined && alphabeticEdge.test(last);
+  const json = value.includes('\\') && parsesAsJson(value);
+  let free = 0;
+  // Every start position is a candidate, so a candidate the boundary rejects cannot hide an overlapping one that passes.
+  for (const candidate of value.matchAll(new RegExp(`(?=(${body}))`, 'giu'))) {
+    const start = candidate.index, end = start + candidate[1]!.length;
+    if (start < free || (json && at(insideEscape, value, start))) continue;
+    if (leading && at(afterLetter, value, start) && !at(afterEscape, value, start)) continue;
+    if (trailing && at(beforeLetter, value, end)) continue;
+    free = end;
+    yield [start, end];
+  }
+}
+
+// Where the literal first occurs by that rule, or -1.
+export const literalTextIndex = (value: string, text: string, openEnd = false): number => {
+  const found = literalTextSpans(value, text, openEnd).next();
+  return found.done ? -1 : found.value[0];
+};
+
+// The value with every occurrence of the literal by that rule replaced.
+export const replaceLiteralText = (value: string, text: string, marker: string): string => {
+  let out = '', from = 0;
+  for (const [start, end] of literalTextSpans(value, text, false)) { out += value.slice(from, start) + marker; from = end; }
+  return from === 0 ? value : out + value.slice(from);
+};
+
 // Privacy redaction uses literal text only; it never decides what the owner meant.
 export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
   const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
-    .sort((a, b) => b.length - a.length)
-    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
-  return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
+    .sort((a, b) => b.length - a.length);
+  return value => patterns.reduce((text, pattern) => replaceLiteralText(text, pattern, marker), value);
 };
 
 // Protocol wrappers are preserved; arbitrary data keys are only data.

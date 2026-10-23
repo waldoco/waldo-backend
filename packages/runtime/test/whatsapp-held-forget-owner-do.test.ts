@@ -96,6 +96,8 @@ type Steps = Readonly<{
   report(kind: 'delivered' | 'refused'): Promise<void>;
   // The owner unlinks WhatsApp from the console.
   unlink(): Promise<void>;
+  // Every record in the outbox was queued this long ago, so the window has stayed closed that long without the clock moving.
+  age(ms: number): void;
   remember(text: string, status?: 'purging'): void;
   outbox(): Row[];
   // The job's background run and the scheduler's run row for the occurrence that ran. The heartbeat's interval sits on the
@@ -187,6 +189,10 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           } finally { settings.TELEGRAM_BOT_TOKEN = undefined; }
           await internals.serial(async () => undefined);
         },
+        age: ms => {
+          const rows = state.storage.kv.get<{ createdAt: number; dueAt: number }[]>('telegram_final_outbox_v1') ?? [];
+          state.storage.kv.put('telegram_final_outbox_v1', rows.map(row => ({ ...row, createdAt: row.createdAt - ms, dueAt: Date.now() })));
+        },
         remember: (text, status) => {
           memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
           if (status) memory.setStatus(memory.claims().find(row => row.text === text)!.id, status);
@@ -267,6 +273,50 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events.filter(event => event.includes(SECRET))).toEqual([]);
+    });
+  });
+});
+
+describe('a heartbeat check-back Meta took, and one whose window never reopens', { timeout: 30_000 }, () => {
+  // Forget that reaches a record Meta has already accepted leaves it to arrive: the check-back was sent, so its run says so.
+  it('finishes "heartbeat sent" when forget reaches an accepted check-back that then arrives', async () => {
+    await owned('wa-forget-heartbeat-accepted-arrived', async ({ alarms, write, heartbeat, forget, report, outbox, job }) => {
+      await heartbeat();
+      await alarms(3);
+      await write('hi');
+      expect(outbox()).toMatchObject([{ status: 'accepted' }]);
+      expect(await forget('node', SECRET)).toBe(true);
+      expect(outbox()).toMatchObject([{ status: 'accepted', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
+      await report('delivered');
+      await alarms(1);
+      expect(outbox()).toMatchObject([{ status: 'delivered' }]);
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'heartbeat sent' }], scheduled: [{ outcome: 'ok', delivery: 'sent' }] });
+    });
+  });
+
+  it('ends by forget when Meta then refuses the forgotten, accepted check-back', async () => {
+    await owned('wa-forget-heartbeat-accepted-refused', async ({ alarms, write, heartbeat, forget, report, outbox, job }) => {
+      await heartbeat();
+      await alarms(3);
+      await write('hi');
+      expect(await forget('node', SECRET)).toBe(true);
+      await report('refused');
+      await alarms(1);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
+    });
+  });
+
+  // Nothing was attempted, so a lapse is neither a failure nor "delivery unconfirmed": the run stopped, as for a reminder.
+  it('a check-back that waited out Meta\'s 30 days for the window ends stopped with the lapse line, not failed as unconfirmed', async () => {
+    await owned('wa-heartbeat-lapsed', async ({ alarms, heartbeat, age, outbox, job }) => {
+      await heartbeat();
+      await alarms(3);
+      expect(outbox()).toMatchObject([{ status: 'pending' }]);
+      age(31 * 24 * HOUR);
+      await alarms(2);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'lapsed' }]);
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: 'heartbeat not sent; your WhatsApp window stayed closed for 30 days' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 });
@@ -394,15 +444,17 @@ describe('the job-report redactor covers heartbeat check-backs and reminders', (
     ]);
   });
 
-  // The redactor folds case as a non-Unicode regex does and the remaining check as toLowerCase does, so the Kelvin sign
-  // (U+212A, which lowercases to "k") survives the scrub. The forget must count that copy, not report itself complete.
-  it('counts a waiting check-back the scrub could not clean', async () => {
+  // The redactor and the remaining check share one pattern: a Unicode case variant (the Kelvin sign folds to "k") is scrubbed,
+  // and a copy the scrub cannot clean, where the marker itself carries the topic, is counted, never reported complete.
+  it('scrubs a Unicode case variant and counts a waiting check-back the scrub could not clean', async () => {
     const { TelegramFinalOutbox, redactJobReportEntries } = await import('../src/channels/telegram-final-outbox');
     const values = new Map<string, unknown>();
     const kv = { get: <T>(key: string) => structuredClone(values.get(key)) as T | undefined, put: (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
-    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: 'Your Kite lesson is still open.' }, ownerSubject: '42', doName: 'owner',
+    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: `Your ${String.fromCharCode(0x212a)}ite lesson is still open.` }, ownerSubject: '42', doName: 'owner',
       heartbeat: { id: HEARTBEAT_ID, occurrence: 900, schedulerRunId: 'run', loops: [{ id: 'o1', due: '2026-10-18T08:00', status: 'open' }] } });
-    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 0, remaining: 1 });
+    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 0 });
+    expect(new TelegramFinalOutbox(kv).records()[0]!.payload.text).toBe(`Your ${FORGOTTEN} lesson is still open.`);
+    expect(redactJobReportEntries(kv, ['forgotten'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 1 });
   });
 });
 

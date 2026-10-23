@@ -99,7 +99,8 @@ import {
   sessionStateSchema,
   sessionToolAllowed,
   sourceTaintSchema,
-  taintGateBlocksDirectExecution,
+  STANDING_CHANGE_TOOLS,
+  taintGateNeedsOwnerApproval,
   toolNameSchema,
   triggerTypeSchema,
   rememberArgsSchema,
@@ -433,7 +434,7 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
 // Every external-tainted privileged call is pointed at propose_action: the owner's approval replays exactly that call
 // with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
 // tool outside its handler set), so no dead card reaches the owner.
-export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval; propose it for approval with propose_action';
+export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
@@ -449,7 +450,8 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return tool.result;
     }
 
-    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) {
+    const gated = PRIVILEGED_ACTION_TOOLS.includes(tool.data) || STANDING_CHANGE_TOOLS.includes(tool.data);
+    if (!gated) {
       return ok();
     }
 
@@ -460,9 +462,12 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
 
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
-    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data) && ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
+    if (taintGateNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args) && ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
       return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
+
+    // A standing change is not privileged: past the taint law it runs on the owner's own turn as any tool does.
+    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) return ok();
 
     // This admits a request only; native Mac custody authorizes each effect.
     if (tool.data === 'use_mac') return ok();
