@@ -24,7 +24,7 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
-import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
+import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
@@ -207,6 +207,15 @@ const replyFor = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
   expect((await w.host.send(w.host.message(text))).status).toBe(200);
   await w.pump();
 };
+// An owner whose only surface is iMessage arms their own scheduled work (day cards, memory, follow-up ticks) on their first
+// turn, and it runs on the clock. A test that moves the faked clock forward holds that work first, so a card whose time the
+// jump crosses doesn't run inside a test about something else. Reminders the test set stay armed.
+const moveClock = async (w: Awaited<ReturnType<typeof world>>, at: number) => {
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    if (state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length) state.storage.sql.exec("DELETE FROM schedule WHERE kind <> 'reminder'");
+  });
+  vi.setSystemTime(at);
+};
 
 it('lost pull and result ACKs, bridge/owner eviction and terminal repeats never produce a second native send', async () => {
   const w = await world();
@@ -241,7 +250,7 @@ it('deadlines and races keep proved not_started distinct from uncertain, and qua
   try {
     // Never pulled within the delivery deadline -> withdrawn as proved not_started.
     await replyFor(w, 'First question');
-    vi.setSystemTime(t0 + 21_000);
+    await moveClock(w, t0 + 21_000);
     expect((await w.host.heartbeat()).status).toBe(200); expect((await w.host.capabilities()).status).toBe(200);
     await w.pump(3);
     expect((await outbox(w.ownerStub))[0]).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'host_not_pulled' } });
@@ -252,7 +261,7 @@ it('deadlines and races keep proved not_started distinct from uncertain, and qua
     const r = await w.host.execute(d);
     expect((await w.host.postResult(d, r, '0'.repeat(64))).status).toBe(409); // wrong digest never accepted
     expect((await w.host.postResult(d, { ...r, target: { ...r.target, chatGuid: 'iMessage;-;other@example.invalid' } })).status).toBe(409); // wrong target
-    vi.setSystemTime(t0 + 21_000 + 31_000);
+    await moveClock(w, t0 + 21_000 + 31_000);
     expect((await w.host.heartbeat()).status).toBe(200); expect((await w.host.capabilities()).status).toBe(200);
     await w.pump(3);
     const rows = await outbox(w.ownerStub);
@@ -277,12 +286,12 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   const t0 = Date.now();
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
-    vi.setSystemTime(t0 + 91_000); // heartbeat and capability reports are now stale
+    await moveClock(w, t0 + 91_000); // heartbeat and capability reports are now stale
     expect((await w.host.send(w.host.message('Are you there?'))).status).toBe(200);
     await w.pump(3);
     expect((await outbox(w.ownerStub))[0]).toMatchObject({ state: 'frozen' });
     expect((await w.host.pull()).delivery).toBeNull();
-    vi.setSystemTime(t0 + 91_000 + 600_001);
+    await moveClock(w, t0 + 91_000 + 600_001);
     await w.pump(2);
     expect((await outbox(w.ownerStub))[0]).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'bridge_unavailable' } });
     expect((await w.host.heartbeat()).status).toBe(200); expect((await w.host.capabilities()).status).toBe(200);
@@ -494,7 +503,7 @@ it('quarantine recovery is revoke + re-pair: the new bridge has a clean lane and
   try {
   await replyFor(w, 'Before the quarantine');
   expect((await w.host.pull()).delivery).not.toBeNull(); // pulled, never resulted
-  vi.setSystemTime(t0 + PROPOSED_LOCAL_TEST_POLICY.mutationDeadlineMs + 2_000);
+  await moveClock(w, t0 + PROPOSED_LOCAL_TEST_POLICY.mutationDeadlineMs + 2_000);
   expect((await w.host.heartbeat()).status).toBe(200);
   await w.pump(3);
   expect((await w.bridgeStub().status()).quarantine).toBe('mutation_deadline');
@@ -543,7 +552,7 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   expect(link).toMatchObject({ operation: 'send', allowSMSFallback: false, attachments: [], target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
   expect(link.text.startsWith(`Console (link works once, for 10 minutes): ${HOST_ORIGIN}/console?t=c1.`)).toBe(true);
   expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
-  vi.setSystemTime(t0 + 6_000);
+  await moveClock(w, t0 + 6_000);
   await w.pump(3);
   const second = (await w.host.pull()).delivery!;
   const reply = JSON.parse(second.body);
@@ -646,6 +655,7 @@ const dueReminder = async (w: Awaited<ReturnType<typeof world>>, surface: string
 const REMINDER = 'Time to call Sam, as you asked.';
 const copies = (state: DurableObjectState) => new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:'));
 const reminderRuns = (state: DurableObjectState) => state.storage.sql.exec<{ status: string }>("SELECT status FROM background_runs WHERE kind = 'reminder'").toArray().map((row) => row.status);
+const reminderRunSummaries = (state: DurableObjectState) => state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder'").toArray();
 // What the console's day view reports as iMessage's link state, read the way it does.
 const imessageLinked = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (instance) =>
   (instance as unknown as { imessageLinked(auth: unknown): Promise<boolean | null> }).imessageLinked(consoleAuth(env)!));
@@ -874,7 +884,10 @@ it('an iMessage-only owner\'s due reminder goes out on iMessage and settles once
   // The part is in Waldo's custody for the bridge: frozen here, waking the owner to hand it over, or already handed over by a
   // platform alarm that fired meanwhile.
   const custody = await runInDurableObject(w.ownerStub, async (_i, state) => {
-    expect(deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status)).toEqual(['accepted']);
+    const records = deliveryRecords(state).filter((row) => row.reminder);
+    expect(records.map((row) => row.status)).toEqual(['accepted']);
+    // Until the bridge reports, the console says only that the reminder is queued: nothing claims it was sent.
+    expect(outboxRunNotes(records).get(records[0]!.reminder!.runId)).toBe('queued for delivery; waiting to hear it arrived');
     return new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:reminder:')).map((row) => row.state);
   });
   expect(custody).toHaveLength(1);
@@ -906,8 +919,95 @@ it('an iMessage-only owner\'s reminder that the bridge proves it never sent fail
   const delivery = await scheduledOnIMessage(w, REMINDER);
   await hostReports(w, delivery, Date.now() + 24 * 3_600_000);
   await runInDurableObject(w.ownerStub, async (_i, state) => {
-    expect(reminderRuns(state)).toEqual(['failed']);
+    expect(reminderRunSummaries(state)).toEqual([{ status: 'failed', summary: 'reminder could not be delivered' }]);
     expect(state.storage.sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().map((row) => row.note)).toEqual(['call Sam']);
+  });
+});
+
+// The Mac host is offline when a scheduled message falls due: the bridge refuses every hand-off, and once the hand-off age
+// passes the owner side proves the message never went. No bridge report comes for it, so the alarm pass is what carries that
+// result to the delivery record, and wakes the owner straight away to settle the job: the reminder fails just past the
+// hand-off age, not a day later as unconfirmed.
+it('an iMessage-only owner\'s reminder whose host stays offline fails just past the hand-off age', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  expect((await w.host.heartbeat('offline')).status).toBe(200);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  const t0 = Date.now(), maxAge = PROPOSED_LOCAL_TEST_POLICY.replyHandoffMaxAgeMs;
+  const reminderParts = (state: DurableObjectState) => new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:reminder:'));
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    proof.reply = REMINDER;
+    try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+    await moveClock(w, t0 + 1_000);
+    await w.pump(2);
+    const frozenAt = await runInDurableObject(w.ownerStub, async (_i, state) => {
+      const records = deliveryRecords(state).filter((row) => row.reminder);
+      expect(records.map((row) => row.status)).toEqual(['accepted']);
+      expect(outboxRunNotes(records).get(records[0]!.reminder!.runId)).toBe('queued for delivery; waiting to hear it arrived');
+      expect(reminderParts(state).map((row) => row.state)).toEqual(['frozen']);
+      expect(reminderRuns(state)).toEqual(['running']);
+      // The owner keeps a wake for the next hand-off try, well inside the hand-off age.
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + 60_000);
+      return reminderParts(state)[0]!.frozenAt;
+    });
+    expect((await w.host.pull()).delivery).toBeNull();
+    await moveClock(w, frozenAt + maxAge + 1);
+    await runDurableObjectAlarm(w.ownerStub); await w.settle();
+    await runInDurableObject(w.ownerStub, async (_i, state) => {
+      expect(reminderParts(state)).toMatchObject([{ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'bridge_unavailable' } }]);
+      expect(deliveryRecords(state).filter((row) => row.reminder)).toMatchObject([{ status: 'blocked', reason: 'provider_failed' }]);
+    });
+    // The job settles on the transport lane, which the passes take in turn: in this pass, or on a wake due at once.
+    for (let pass = 0; pass < 3 && await runInDurableObject(w.ownerStub, async (_i, state) => reminderRuns(state)[0] === 'running'); pass++) {
+      await runInDurableObject(w.ownerStub, async (_i, state) => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + 1_000));
+      await runDurableObjectAlarm(w.ownerStub); await w.settle();
+    }
+    await runInDurableObject(w.ownerStub, async (_i, state) => {
+      expect(reminderRunSummaries(state)).toEqual([{ status: 'failed', summary: 'reminder could not be delivered' }]);
+      expect(state.storage.sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().map((row) => row.note)).toEqual(['call Sam']);
+    });
+  } finally { vi.useRealTimers(); }
+});
+
+// A reminder longer than one message goes to the bridge as two commands, one per part, each frozen under its own key; the
+// record arrives only once the bridge has reported both.
+it('an iMessage-only owner\'s reminder too long for one message goes out in two parts and settles once both arrive', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  const long = 'Call Sam about the harbour fund before lunch. '.repeat(120).trim();
+  expect(long.length).toBeGreaterThan(4_096);
+  const status = () => runInDurableObject(w.ownerStub, async (_i, state) => deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status));
+  const sent: string[] = [], commands: string[] = [];
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    proof.reply = long;
+    try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+    await moveClock(w, t0 + 1_000);
+    for (const part of [0, 1]) {
+      await w.pump();
+      const { delivery } = await w.host.pull();
+      expect(delivery, `part ${part} reached the bridge`).not.toBeNull();
+      const command = JSON.parse(delivery!.body) as { text: string; commandId: string };
+      sent.push(command.text); commands.push(command.commandId);
+      expect(await status()).toEqual(['accepted']);
+      await hostReports(w, delivery!);
+      // The bridge takes one command at a time, so the next part goes on the owner's next hand-off try, seconds later.
+      await moveClock(w, Date.now() + 6_000);
+    }
+  } finally { vi.useRealTimers(); }
+  expect(new Set(commands).size).toBe(2);
+  expect(long.startsWith(sent[0]!)).toBe(true);
+  expect(long.endsWith(sent[1]!)).toBe(true);
+  expect(await status()).toEqual(['delivered']);
+  await w.pump(2);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const [record] = deliveryRecords(state).filter((row) => row.reminder);
+    expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:reminder:')).map((row) => row.replyRef))
+      .toEqual([`proactive:${record!.id}:0`, `proactive:${record!.id}:1`]);
+    expect(reminderRuns(state)).toEqual(['completed']);
   });
 });
 
