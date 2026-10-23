@@ -2,7 +2,7 @@ import {
   buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
-import { DROPPED_STEPS_NOTE, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
+import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
@@ -103,12 +103,14 @@ const TOOL_OUTPUT_MAX = 32_768;
 const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {
   const acted: string[] = [], carried: string[] = [], counts = new Map<string, number>();
   for (const turn of dropped) {
-    if (turn.output.startsWith(DROPPED_STEPS_NOTE)) carried.push(turn.output.slice(DROPPED_STEPS_NOTE.length, turn.output.indexOf(NOTE_END)));
+    const note = leadingNote(turn.output);
+    if (note) carried.push(note.slice(DROPPED_STEPS_NOTE.length, -NOTE_END.length));
     // The note is checkpointed, and arguments that carry a health reading are not stored.
     if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${numericHealthIn(turn.call.arguments) ? '(arguments not kept)' : turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
     else counts.set(turn.call.name, (counts.get(turn.call.name) ?? 0) + 1);
   }
-  const listed = [...carried, ...acted, ...[...counts].map(([name, count]) => `${name} x${count}`)].join('; ');
+  // On one line, so the note ends at its first NOTE_END whatever the arguments it quotes hold.
+  const listed = [...carried, ...acted, ...[...counts].map(([name, count]) => `${name} x${count}`)].join('; ').replace(/\s*\n\s*/g, ' ');
   return `${DROPPED_STEPS_NOTE}${listed.length > NOTE_MAX ? `${listed.slice(0, NOTE_MAX)}…` : listed}${NOTE_END}`;
 };
 export const checkpointTurns = (turns: readonly LLMToolTurn[]): readonly LLMToolTurn[] => {

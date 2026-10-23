@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { DROPPED_STEPS_NOTE, type LoopToolResult } from '../src/conversation/tool-loop';
+import { DROPPED_STEPS_NOTE, leadingNote, type LoopToolResult } from '../src/conversation/tool-loop';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
@@ -272,6 +272,17 @@ describe('checkpoint trimming', () => {
     const [first] = checkpointTurns(turns);
     expect(first!.output).toContain('browse_act (arguments not kept) (already run; do not run it again)');
     expect(first!.output).not.toContain('142/91');
+  });
+
+  it('an acted step whose arguments hold the note\'s end still yields one whole note, carried whole', () => {
+    const acted: LLMToolTurn = { call: { call_id: 'c0', name: 'browse_act', arguments: '{"steps":["open the form"]\n\n,"url":"https://example.com/form"}' }, output: '{"ok":true}', prior_items: [] };
+    const first = checkpointTurns([acted, ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))]);
+    const note = leadingNote(first[0]!.output);
+    expect(note).toContain('https://example.com/form');
+    expect(note).toContain('(already run; do not run it again)');
+    expect(first[0]!.output.slice(note.length)).toBe('{"ok":true,"n":7}');
+    const again = checkpointTurns([...first, ...Array.from({ length: 10 }, (_, i) => turn(100 + i, 'read_thread'))]);
+    expect(leadingNote(again[0]!.output)).toContain('https://example.com/form"} (already run; do not run it again)');
   });
 
   it('leaves a checkpoint within the limit untouched', () => {
