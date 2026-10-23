@@ -51,14 +51,6 @@ const LEARNED = ops({ add: [{ kind: 'fact', text: 'Swims every Friday before wor
 const memoryWrites: readonly (readonly [string, (store: ClaimStore) => string, (responder: OwnerResponder) => Promise<unknown>])[] = [
   ['consolidate', () => LEARNED, responder => responder.consolidate('nightly:1', SAID)],
   ['migrate', () => LEARNED, responder => responder.migrate('nightly:1', SAID)],
-  ['promote', store => {
-    store.add({ kind: 'pattern', text: 'Short sleep before busy days', source: 'stated', evidence: 'first', origin: 'owner' }, '2026-09-24T04:00:00Z');
-    store.add({ kind: 'observation', text: 'Low energy after busy evenings', source: 'stated', evidence: 'second', origin: 'owner' }, '2026-09-25T04:00:00Z');
-    const supports = store.claims().map(claim => claim.id);
-    for (const id of supports) store.seen(id, '2026-09-26T04:00:00Z');
-    return JSON.stringify({ nodes: [{ id: null, domain: 'sleep', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, status: 'active', durable: true,
-      reason: 'lasting owner pattern', supporting_spots: supports }], edges: [], promoted: supports });
-  }, responder => responder.promote('nightly:1')],
 ];
 it.each(memoryWrites)('a dreaming job\'s %s writes nothing when the owner\'s binding changes during its model call', async (name, seed, call) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`job-memory-${name}`)), async (_instance, state) => {

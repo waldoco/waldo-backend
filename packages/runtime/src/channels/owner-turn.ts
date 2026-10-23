@@ -41,7 +41,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
@@ -964,20 +964,6 @@ export const createOwnerResponder = (
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
-    },
-    async promote(trace) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace));
-      if (asOwner !== undefined) return asOwner;
-      if (!memory || memory.claims().length === 0) return 'no claims';
-      // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
-      const visible = promptMemory()!;
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(visible), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
-      await assertFresh();
-      return applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
-        trace, hop: 'constellation_evidence', ms: 0, ok: true,
-        code: receipt.reason ?? receipt.outcome,
-        detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
-      }));
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))

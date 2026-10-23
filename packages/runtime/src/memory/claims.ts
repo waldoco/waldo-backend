@@ -7,7 +7,6 @@ import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
-export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null }>;
 
@@ -1291,81 +1290,3 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
-export const PROMOTION_INSTRUCTION = [
-  'It is night. Review Waldo\'s active claims and the owner\'s constellation, and bring the constellation up to date.',
-  'A node is a lasting pattern in one domain (sleep, energy, work rhythm, relationships, stress, training, food, or another plain word). Create or edit a node only when at least two distinct owner-grounded observation or pattern claims from different days support it; list their ids in supporting_spots. A seen_count alone is not two independent sightings. Do not cite shared, inferred-agent or legacy claims as proof. Weaken a node that claims contradict only with eligible support. Mark a node stale when eligible support shows staleness; never drop it.',
-  'An edge links two nodes that the evidence shows move together. Use node ids; a new node in this reply is referenced as \'new:<index in nodes>\'.',
-  'Strength is your 0-1 confidence from the evidence. List under promoted only eligible owner-grounded claims supported by an admitted node.',
-  'For each node set durable to whether the pattern should persist, and give a reason. Only durable nodes are admitted.',
-  'Never build a node about anything the owner asked to forget. Never turn an inferred claim into a diagnosis. Reply with empty lists when nothing should change.',
-].join('\n');
-
-export const promotionInput = (store: ClaimStore): string => `${memoryPrompt(store)}\n\n${barrierPrompt(store)}`;
-
-export const PROMOTION_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['nodes', 'edges', 'promoted'],
-  properties: {
-    nodes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'domain', 'label', 'summary', 'strength', 'status', 'supporting_spots', 'durable', 'reason'],
-      properties: { durable: { type: 'boolean' }, reason: { type: 'string' }, id: { type: ['integer', 'null'] }, domain: { type: 'string' }, label: { type: 'string' }, summary: { type: 'string' }, strength: { type: 'number' }, status: { type: 'string', enum: ['active', 'stale'] }, supporting_spots: { type: 'array', items: { type: 'integer' } } } } },
-    edges: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['from', 'to', 'relation', 'strength', 'evidence_count'],
-      properties: { from: { type: 'string' }, to: { type: 'string' }, relation: { type: 'string', enum: [...EDGE_RELATIONS] }, strength: { type: 'number' }, evidence_count: { type: 'integer' } } } },
-    promoted: { type: 'array', items: { type: 'integer' } },
-  },
-};
-
-type Promotion = Readonly<{
-  nodes: readonly { durable: boolean; reason: string; id: number | null; domain: string; label: string; summary: string; strength: number; status: string; supporting_spots: readonly number[] }[];
-  edges: readonly { from: string; to: string; relation: string; strength: number; evidence_count: number }[];
-  promoted: readonly number[];
-}>;
-
-export type PromotionEvidenceReason = 'not_durable' | 'untrusted_or_missing' | 'too_few_claims' | 'same_day';
-export type PromotionEvidenceReceipt = Readonly<{ outcome: 'admitted' | 'held'; reason?: PromotionEvidenceReason; source_kind: 'owner_observation_pattern'; count: number }>;
-
-export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvidence?: (receipt: PromotionEvidenceReceipt) => void): string => {
-  const plan = JSON.parse(raw) as Promotion;
-  // Validation at the consolidation seam: model output is a proposal. Strengths
-  // clamp to [0,1]; supporting_spots must name real claims; edge endpoints must
-  // resolve to nodes that exist after the save.
-  const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
-  // The model cannot assert recurrence. A new node needs two separate, owner-grounded
-  // observations/patterns from different dates. Until source refs arrive, seen_count alone
-  // cannot prove two sightings and legacy rows have no trusted provenance.
-  const eligible = new Map([...store.claims('active'), ...store.claims('promoted')]
-    .filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin === 'owner')
-    .map((claim) => [claim.id, claim]));
-  const existing = new Set(store.nodes().map((node) => node.id));
-  const supported = new Set<number>();
-  const ids = plan.nodes.map((node) => {
-    if (node.durable !== true) {
-      onEvidence?.({ outcome: 'held', reason: 'not_durable', source_kind: 'owner_observation_pattern', count: 1 });
-      return undefined;
-    }
-    const valid = [...new Set(node.supporting_spots)].filter((id) => eligible.has(id));
-    const dates = new Set(valid.map((id) => eligible.get(id)!.created_at.slice(0, 10)));
-    if (valid.length < 2 || dates.size < 2) {
-      const reason: PromotionEvidenceReason = valid.length < 2
-        ? node.supporting_spots.length > valid.length ? 'untrusted_or_missing' : 'too_few_claims'
-        : 'same_day';
-      onEvidence?.({ outcome: 'held', reason, source_kind: 'owner_observation_pattern', count: 1 });
-      return undefined; // preserve existing node; reject any new:<index> edge
-    }
-    onEvidence?.({ outcome: 'admitted', source_kind: 'owner_observation_pattern', count: 1 });
-    for (const id of valid) supported.add(id);
-    return store.saveNode({ ...node, strength: clamp01(node.strength), supporting_spots: valid, id: node.id !== null && existing.has(node.id) ? node.id : null }, at);
-  });
-  const resolve = (ref: string) => ref.startsWith('new:') ? ids[Number(ref.slice(4))] : Number(ref);
-  // Only endpoints admitted in this pass may establish or refresh an association.
-  // An existing node is not a license to attach a new edge without fresh support.
-  const all = new Set(ids.filter((id): id is number => id !== undefined));
-  const edges = plan.edges.map((edge) => ({ ...edge, strength: clamp01(edge.strength), evidence_count: Math.max(1, Math.floor(edge.evidence_count) || 1), from_id: resolve(edge.from), to_id: resolve(edge.to) }))
-    .filter((edge): edge is typeof edge & { from_id: number; to_id: number } => edge.from_id !== undefined && edge.to_id !== undefined && all.has(edge.from_id) && all.has(edge.to_id) && edge.from_id !== edge.to_id);
-  for (const edge of edges) store.saveEdge({ from_id: edge.from_id, to_id: edge.to_id, relation: edge.relation, strength: edge.strength, evidence_count: edge.evidence_count });
-  // Claim status promotion remains separate from node admission. It requires owner
-  // provenance and recurrence, but distinct source refs arrive in the next slice.
-  const promotable = new Set([...eligible.values()].filter((claim) => claim.seen_count >= 2 && supported.has(claim.id)).map((claim) => claim.id));
-  const promoted = plan.promoted.filter((id) => promotable.has(id));
-  const rejected = plan.promoted.length - promoted.length;
-  for (const id of promoted) store.setStatus(id, 'promoted');
-  return `nodes${ids.filter((id) => id !== undefined).length} edges${edges.length} promoted${promoted.length}${rejected ? ` rejected${rejected}` : ''}`;
-};

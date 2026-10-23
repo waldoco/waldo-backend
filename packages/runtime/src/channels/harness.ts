@@ -47,7 +47,6 @@ export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[
   { step: 'Fetch update card', hops: ['update_card'], scope: 'job' },
   { step: 'Pre-event brief', hops: ['brief_sweep'], scope: 'job' },
   { step: 'Nightly memory', hops: ['nightly_memory'], scope: 'job' },
-  { step: 'Constellation promotion', hops: ['constellation'], scope: 'job' },
 ];
 
 export type E2EStep = Readonly<{ step: string; state: 'ok' | 'failed' | 'unseen'; at: string | null; note: string | null }>;

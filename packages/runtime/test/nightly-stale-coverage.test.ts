@@ -7,14 +7,13 @@ const seen = vi.hoisted(() => ({ inputs: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const input = JSON.stringify(body);
   seen.inputs.push(input);
-  const output_text = input.includes('"name":"promotion"') ? '{"nodes":[],"edges":[],"promoted":[]}'
-    : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null,"pin":[],"unpin":[]}';
+  const output_text = '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null,"pin":[],"unpin":[]}';
   return { id: 'fixture', output_text, output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 beforeEach(() => { seen.inputs.length = 0; });
 
 // An older build kept a topic the owner asked to forget as "coverage incomplete" until a span selector had proved its
-// sources. The selector is gone, so such a row could never clear, and it deferred every nightly pass and promotion.
+// sources. The selector is gone, so such a row could never clear, and it deferred every nightly pass.
 it('a stale coverage-incomplete row becomes an ordinary pending forget with a barrier, and the nightly pass runs and purges it', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-stale-coverage')), async (_i, state) => {
     const sql = state.storage.sql;
@@ -41,8 +40,6 @@ it('a stale coverage-incomplete row becomes an ordinary pending forget with a ba
     // The nightly pass retries pending topics through the literal purge, so the old forget finally lands and settles.
     expect(memory.allClaims().map(claim => claim.text)).toEqual([`Prefers ${FORGOTTEN} tea`]);
     expect(memory.pendingTopics()).toEqual([]);
-    memory.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'Pune', origin: 'owner', source_ref: 'owner, tg-2' }, '2026-10-19T08:00:00Z');
-    expect(await responder.promote('promote-1')).not.toContain('deferred');
   });
 });
 
