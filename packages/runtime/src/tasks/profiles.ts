@@ -25,9 +25,13 @@ export const TASK_PROFILE_SPECS: Readonly<Record<TaskProfile, ProfileSpec>> = {
   },
 };
 
+// The worker's own tool that hands its result to Waldo. It runs in the worker and changes nothing outside it.
+export const FINISH_TASK = 'finish_task';
+
 // Tools whose effect cannot be told apart from a crash (TOOL_REPLAY_CLASS): a resumed attempt must not run one again
 // blind. A job that crashed after starting one parks with that effect named as uncertain.
 export const unreplayable = (name: string): boolean => {
+  if (name === FINISH_TASK) return false;
   const row = TOOL_REPLAY_CLASS[name as ToolName];
   return row === undefined || (row.replay !== 'safe_read' && row.replay !== 'provider_idempotent');
 };

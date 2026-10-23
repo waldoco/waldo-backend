@@ -10,7 +10,7 @@ import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type BreakerSnapshot, type CircuitBreaker, type LLMGatewayAdapter } from '../llm/provider';
 import { sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
-import { unreplayable } from './profiles';
+import { FINISH_TASK, unreplayable } from './profiles';
 
 // One attempt of a task, as a worker runs it. The worker holds no handler, owner credential or memory, only the model
 // provider access its own calls need: the brain sends the tool definitions of the job's profile when the worker claims its
@@ -72,7 +72,6 @@ export const TASK_MAX_ROUNDS = 200;
 // A third of the lease, so two missed beats still leave the lease held.
 export const TASK_HEARTBEAT_MS = TASK_LEASE_MS / 3;
 
-export const FINISH_TASK = 'finish_task';
 const FINISH_TOOL: LLMTool = {
   name: FINISH_TASK,
   description: 'Hand your result to Waldo and end the task. status: done when the task is complete; partial when you did some and could not finish; blocked when something outside you stops it (a connection, a login, the owner); failed when nothing usable came of it. findings carry where each came from (message or thread id, URL, file id). proposals are actions you suggest; Waldo decides and asks the owner. left names what you did not get to.',

@@ -3,7 +3,8 @@ import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENA
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
 import { DROPPED_STEPS_NOTE, type LoopToolResult } from '../src/conversation/tool-loop';
-import { checkpointTurns, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { FINISH_TASK } from '../src/tasks/profiles';
+import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -160,6 +161,15 @@ describe('a resumed attempt whose earlier results get cleared', () => {
     expect(checkpoint[0]!.output).toContain('already run; do not run it again');
     expect(checkpoint).toHaveLength(12);
   });
+
+  it('a resumed finish_task that was refused, once cleared, may still be called again', async () => {
+    const refused: LLMToolTurn = { call: { call_id: 'f0', name: FINISH_TASK, arguments: '{"status":"done"}' }, output: `{"ok":false,"error":"${'x'.repeat(16_000)}"}` };
+    const { brain } = fakeBrain({ turns: [refused, ...resumed.slice(1)], seq: 3 });
+    const seen: Parameters<typeof scripted>[1] = [];
+    await runTaskAttempt(ticket, { brain, model: scripted([{ call: FINISH_TASK, args: result }], seen), sliceEnd: Date.now() + 60_000 });
+    expect(seen[0]!.turns[0]!.output).toContain('finish task result from earlier in this turn (it failed)');
+    expect(seen[0]!.turns[0]!.output).not.toContain('Do not repeat the call');
+  });
 });
 
 describe('the production task model step', () => {
@@ -248,6 +258,13 @@ describe('checkpoint trimming', () => {
     const again = checkpointTurns([...first, ...Array.from({ length: 10 }, (_, i) => turn(100 + i, 'read_thread'))]);
     expect(again).toHaveLength(LLM_TOOL_TURNS_MAX);
     expect(again[0]!.output).toContain('browse_act {"url":"https://example.com/book"} (already run; do not run it again)');
+  });
+
+  it('a dropped finish_task that was refused is never named as a step not to run again', () => {
+    const refused: LLMToolTurn = { call: { call_id: 'f0', name: FINISH_TASK, arguments: '{"status":"done"}' }, output: '{"ok":false,"error":"The result did not match finish_task."}', prior_items: [] };
+    const [first] = checkpointTurns([refused, ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))]);
+    expect(first!.output).not.toContain('already run');
+    expect(first!.output).toContain(`${FINISH_TASK} x1`);
   });
 
   it('leaves a checkpoint within the limit untouched', () => {
