@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { consoleAuth, OWNER_COOKIE } from '../src/identity/console-auth';
@@ -207,4 +207,36 @@ it.each([true, false])('actual Telegram /console command issues a routed ticket 
   const response = await worker.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: token }).toString() }), f.bindings);
   expect(response.status).toBe(303);
   expect(f.selected).toEqual([MEMBER]);
+});
+
+describe('the cross-site guard, through the Worker', () => {
+  const GUARD = 'This request must come from the Waldo console.';
+
+  it('refuses a sign-in posted from another site', async () => {
+    const f = await fixture();
+    const response = await worker.fetch(new Request(`${ORIGIN}/console/verify`, {
+      method: 'POST', redirect: 'manual',
+      headers: { origin: 'https://evil.test', 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'owner@example.test', code: '123456' }).toString(),
+    }), f.bindings);
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe(GUARD);
+    expect(f.selected).toEqual([]);
+  });
+
+  it('refuses a Photon start that another site sends', async () => {
+    const f = await fixture();
+    const response = await worker.fetch(new Request(`${ORIGIN}/console/imessage/photon/start`, { redirect: 'manual', headers: { 'sec-fetch-site': 'cross-site' } }), f.bindings);
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe(GUARD);
+  });
+
+  it('lets the console page post its own form', async () => {
+    const f = await fixture();
+    const post = f.post();
+    post.headers.set('sec-fetch-site', 'same-origin');
+    const response = await worker.fetch(post, f.bindings);
+    expect(response.status).toBe(303);
+    expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=`);
+  });
 });
