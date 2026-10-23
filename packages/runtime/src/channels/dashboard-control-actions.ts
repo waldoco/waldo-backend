@@ -1,4 +1,5 @@
-import {parseConsoleAction,NOTICES,consoleMayApprove,type ConsoleAction,type ConsoleView} from './console';
+import {parseConsoleAction,NOTICES,consoleMayApprove,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
+import {HANDOFF_PARAM} from './connect-confirm';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
@@ -8,20 +9,23 @@ export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'u
 // the receipt without it, so a replayed request never shows the value again.
 export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string;to?:string}>;
 export type RevealingReceipt=Readonly<{receipt:ControlReceipt;reveal:ControlReveal}>;
-export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;approval_state?:string}>;
+export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;kept_until?:number;approval_state?:string}>;
 type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,value:unknown):Promise<void>}>;
 export const RECEIPT_BOOK_KEY='console:control-receipts';
-// One receipt book per owner: rows live while their session does, and a session's capacity is bounded.
+// One receipt book per owner: rows live while their session does, but no longer than RECEIPT_RETENTION_MS after they
+// were written, and a session's capacity is bounded. A console session lasts up to 30 days, so without that bound a busy
+// session would fill its capacity and refuse changes for weeks.
+export const RECEIPT_RETENTION_MS=12*60*60_000;
 export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly {csrf:string;expires:number}[]>,key=RECEIPT_BOOK_KEY):Promise<Record<string,StoredReceipt>>{
  const book=await store.get<Record<string,StoredReceipt>>(key)??{};
  const live=new Map(await Promise.all((await sessions()).map(async session=>[await controlRevision(session.csrf),session.expires] as const)));
- for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:renewed};if((book[id]?.expires??0)<Date.now())delete book[id];}
+ for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:Math.min(renewed,row.kept_until??renewed)};if((book[id]?.expires??0)<Date.now())delete book[id];}
  return book;
 }
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity']};
@@ -35,12 +39,15 @@ const listedAction=(action:ConsoleAction,data:unknown,rows:string):boolean=>{
  return Array.isArray(items)&&items.some((item:Readonly<{id?:unknown;actions?:unknown}>)=>item?.id===action.id&&has(item.actions));
 };
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
-// The only destination a Google connect receipt may carry is this deployment's own /c/<ticket> path.
+// A Google connect receipt carries one of this deployment's own start links and nothing else: the console's start path,
+// which only the signed-in owner's browser can follow, or a /c/<ticket> link with the one-time handoff code that binds
+// the browser the app opens it in.
+const GOOGLE_STARTS=[new RegExp(`^${CONSOLE_GOOGLE_START_PATH}[A-Za-z0-9_-]{43}$`),new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`)];
 export const googleConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
  if(!link)return {state:'rejected',message:NOTICES['google.connect.failed']!};
- const destination=new URL(link);
- if(!origin||destination.origin!==origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
- return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
+ const destination=origin?new URL(link,origin):null;
+ if(!destination||destination.origin!==origin||destination.hash||!GOOGLE_STARTS.some(start=>start.test(destination.pathname+destination.search)))return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
+ return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname+destination.search};
 };
 // An MCP connect either finished without sign-in or continues on this deployment's own start link,
 // which redirects to the provider only for the signed-in owner. No other destination is ever returned.
@@ -100,7 +107,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  const fields=['csrf','action','id','value','quiet_start','quiet_end','volume','view','revision','request_id',...extra];
  if([...form.keys()].some(k=>!fields.includes(k)||form.getAll(k).length!==1)||[...form.values()].some(v=>typeof v!=='string'||v.length>4096))return reply({error:'invalid_action'},400);
  const action=parseConsoleAction(form,deps.csrf),requestId=String(form.get('request_id')??'');
- if(!action||!Object.hasOwn(allowed,view)||!allowed[view]!.includes(action.action))return reply({error:'invalid_action'},403);
+ if(!action||!Object.hasOwn(CONTROL_VIEW_ACTIONS,view)||!CONTROL_VIEW_ACTIONS[view]!.includes(action.action))return reply({error:'invalid_action'},403);
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
  const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:values}:{view,action,revision:form.get('revision')});
@@ -114,7 +121,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(await controlRevision(projection)!==form.get('revision'))return reply({error:'stale_read',message:'These records changed. Refresh and review again before applying a change.'},409);
  const rows=Object.hasOwn(listedRows,view)?listedRows[view]:undefined;
  if(rows?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
- const pending:StoredReceipt={fingerprint,expires:deps.expires,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
+ const kept_until=Date.now()+RECEIPT_RETENTION_MS,expires=Math.min(deps.expires,kept_until);
+ const pending:StoredReceipt={fingerprint,expires,kept_until,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
  book[key]=pending;await deps.store.put(bookKey,book);
  let receipt:ControlReceipt,status=200,reveal:ControlReveal|undefined;
  try{
@@ -123,7 +131,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
   receipt=typeof result==='object'?result:typeof result==='string'?result===action.action?{state:'recorded',message:NOTICES[result]??'The change was recorded.'}:(result==='spot.forget.incomplete'||result==='node.forget.incomplete')?{state:'incomplete',message:NOTICES[result]!}:result==='invalid'||result.endsWith('.failed')?{state:'rejected',message:NOTICES[result]??'The change could not be applied.'}:pending.receipt:result?{state:'recorded',message:NOTICES[action.action]??'The change was recorded.'}:{state:'rejected',message:'That change could not be applied. Refresh the records and try again.'};
   if(receipt.state==='rejected')status=409;else if(receipt.state==='unconfirmed')status=503;
  }catch{receipt=pending.receipt;status=503;}
- book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put(bookKey,book);
+ book[key]={fingerprint,status,receipt,expires,kept_until};await deps.store.put(bookKey,book);
  return reply({receipt,duplicate:false,...(reveal&&receipt.state==='recorded'?{reveal}:{})},status);
 }
 
