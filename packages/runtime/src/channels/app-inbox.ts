@@ -3,6 +3,9 @@ import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
+import { APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { REPLY_TEXT_MAX_CHARS } from '../../../contracts/src/app/parts';
+import type { ReplyDraftSurface } from '../conversation/reply-stream';
 export const APP_TURN_DEADLINE_MS = 15 * 60_000;
 
 const PREFIX = 'app:inbox-record:';
@@ -31,6 +34,12 @@ export type AppInboxRecord = {
   // A thread message's thread revision when it was admitted: its turn stops once the thread is archived or deleted.
   threadRevision?: number;
 };
+// The reply a running message's turn has written so far. Memory only, one per owner object (its turns run one at a time),
+// and served on that message's receipt only while the same attempt runs.
+type ReplyDraft = Readonly<{ id: string; attempt: string; text: string }>;
+const replyDrafts = new WeakMap<DurableObjectStorage, ReplyDraft>();
+// A client that reads chat revision 2 gets the draft; installed builds parse receipts strictly and never see it.
+export const wantsReplyDraft = (request: Request): boolean => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'chat') >= APP_CHAT_DRAFT_REVISION;
 const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
 const clear = (row: AppInboxRecord) => { row.text = ''; };
 // One durable writer: admitted payload, digest, sequence and alarm commit before ACK.
@@ -39,9 +48,17 @@ export class AppInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
   records(): AppInboxRecord[] { return [...this.storage.kv.list<AppInboxRecord>({prefix:PREFIX})].map(([,row])=>row).sort((a,b)=>a.updateId-b.updateId); }
   // With a chat, only that chat's message answers.
-  receipt(owner: string, clientId: string, conversationRef?: string) {
+  receipt(owner: string, clientId: string, conversationRef?: string, withDraft = false) {
     const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId&&(conversationRef===undefined||row.conversationRef===conversationRef));
-    return row?{accepted:true as const,message_id:row.id,state:row.state,...(row.closedReason?{closed_reason:row.closedReason}:{}),...(row.effectsUnconfirmed!==undefined?{effects_unconfirmed:row.effectsUnconfirmed}:{})}:null;
+    const draft=withDraft&&row?.state==='running'?replyDrafts.get(this.storage):undefined;
+    return row?{accepted:true as const,message_id:row.id,state:row.state,...(row.closedReason?{closed_reason:row.closedReason}:{}),...(row.effectsUnconfirmed!==undefined?{effects_unconfirmed:row.effectsUnconfirmed}:{}),
+      ...(draft&&draft.id===row.id&&draft.attempt===row.attempt&&draft.text?{draft:draft.text}:{})}:null;
+  }
+  // Where a running turn's reply is shown while it is written. '' withdraws it.
+  replyDraft(record: AppInboxRecord | null): ReplyDraftSurface | undefined {
+    if(!record?.attempt)return undefined;
+    const {id,attempt}=record;
+    return {show:async text=>{replyDrafts.set(this.storage,{id,attempt,text});},minIntervalMs:250,maxUpdates:2_000,maxChars:REPLY_TEXT_MAX_CHARS};
   }
   async admit(owner:string,sessionHash:string,clientId:string,text:string,conversationRef:string,assertCurrent?:()=>void,threadRevision?:number) {
     const digest=await sha256Hex(stableJson({text,conversationRef}));

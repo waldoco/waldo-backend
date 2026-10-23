@@ -109,6 +109,9 @@ describe('message times, cancel and ratings', () => {
     expect(routes).toContain('PUT /app/v1/chat/main/messages/{message_id}/rating');
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', closed_reason: 'cancelled', effects_unconfirmed: true }).success).toBe(true);
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', steps: [] }).success).toBe(false);
+    expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'running', draft: 'Here is the plan' }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'running', draft: '' }).success).toBe(false);
+    expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'running', draft: 'x'.repeat(32_001) }).success).toBe(false);
   });
 });
 

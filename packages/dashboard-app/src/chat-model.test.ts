@@ -19,6 +19,8 @@ describe('reading the app chat page', () => {
     expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: true })).toEqual({ message_id: 'app-9', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: true });
     expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running' })).toEqual({ message_id: 'app-9', state: 'running', closed_reason: null, effects_unconfirmed: false });
     expect(() => readReceipt({ accepted: true, message_id: 'app-9', state: 'done' })).toThrow();
+    expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', draft: 'Here is the plan' })).toMatchObject({ state: 'running', draft: 'Here is the plan' });
+    expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', draft: 7 })).not.toHaveProperty('draft');
   });
 });
 
