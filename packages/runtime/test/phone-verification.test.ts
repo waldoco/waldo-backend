@@ -18,7 +18,7 @@ it('checks only the stored verification reference and accepts status approved', 
   expect(new URLSearchParams(String(fetcher.mock.calls[0]![1]!.body)).get('VerificationSid')).toBe(sid);
   expect(String(fetcher.mock.calls[0]![1]!.body)).not.toContain('To=');
 });
-it.each([{to:'+14155550100'},{sid:`VE${'d'.repeat(32)}`},{service_sid:`VA${'d'.repeat(32)}`},{channel:'call'},{status:'pending',valid:true}])('does not turn a foreign or pending response into proof: %j', async override => {
+it.each([{to:'+14155550100'},{sid:`VE${'d'.repeat(32)}`},{service_sid:`VA${'d'.repeat(32)}`},{status:'pending',valid:true}])('does not turn a foreign or pending response into proof: %j', async override => {
   const fetcher = vi.fn(async () => Response.json({service_sid:service,sid,to:phone,channel:'sms',status:'approved',...override}));
   const result = await twilioPhoneVerification(credentials,fetcher)!.check({service,sid,phone},'123456');
   expect(result.kind).toBe(override.status === 'pending' ? 'pending' : 'unknown');

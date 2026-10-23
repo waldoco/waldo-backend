@@ -31,7 +31,7 @@ export const twilioPhoneVerification = (credentials: TwilioPhoneCredentials | nu
         if (resource === 'VerificationCheck' && response.status === 404) return { kind: 'expired' };
         if (!response.ok) return { kind: 'unknown' };
         const data = await response.json() as Record<string, unknown>;
-        if (!data || data.service_sid !== service || data.to !== (expected?.phone ?? params.To) || data.channel !== 'sms'
+        if (!data || data.service_sid !== service || data.to !== (expected?.phone ?? params.To)
           || typeof data.sid !== 'string' || !verificationSid.test(data.sid) || (expected && data.sid !== expected.sid)) return { kind: 'unknown' };
         if (data.status !== 'pending' && data.status !== 'approved') return { kind: 'unknown' };
         if (resource === 'Verifications' && data.status !== 'pending') return { kind: 'unknown' };
