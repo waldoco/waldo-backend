@@ -2295,7 +2295,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
-      await lane('mac', () => this.drainMacDeliveries(channel));
+      // A pass that reaches here with the app bound but no app targets runs on the owner's Telegram link; their scheduled work
+      // is delivered in the app with a plain Telegram copy, and owner jobs are admitted through the app binding, so the report
+      // goes to the app too.
+      await lane('mac', () => this.drainMacDeliveries(whatsappTarget === null && consoleAuth(this.env) && this.appBound() ? 'app' : channel));
       // Results the iMessage outbox already holds, including hand-offs that aged out there, reach the records waiting on them.
       observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now());
       await lane('transport', () => finalOutbox.maintain());
@@ -2469,9 +2472,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const inbox=macInbox(this.ctx.storage);
     // The alarm calls this for every owner: with nothing pending it must not touch any runtime.
     if(!inbox.pending().length)return;
-    // An owner linked on Telegram who also uses the app has their scheduled work delivered in the app with a plain Telegram
-    // copy, and the job is admitted through the app binding either way; the report goes there too.
-    if(channel==='telegram' && consoleAuth(this.env) && this.appBound())channel='app';
     // A surface this deploy cannot run, or one with no owner bound, keeps the rows pending and backs off, instead of throwing
     // out of the alarm or spinning on it.
     let runtime:OwnerRuntime|null=null;
