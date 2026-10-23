@@ -382,6 +382,17 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
     }, 30 * HOUR);
   });
 
+  // The same order runs for an owner on iMessage, so the line names no surface.
+  it('a report Meta accepted and then failed says it could not be delivered, naming no surface', async () => {
+    await owned('wa-order-failed', async ({ alarms, order, status, ids, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      await status('failed', ids());
+      expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed' });
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
+    });
+  });
+
   it('a card and a report still waiting for Meta\'s report never hold back their next occurrence', async () => {
     await owned('wa-accepted-next', async ({ alarms, later, card, order, outbox, runs }) => {
       await card();

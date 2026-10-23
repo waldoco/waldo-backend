@@ -81,7 +81,7 @@ async function world() {
     const action = (actionName: string, fields: Record<string, string> = {}) => {
       const form = new FormData(); form.set('action', actionName); form.set('csrf', csrf);
       for (const [k, v] of Object.entries(fields)) form.set(k, v);
-      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
     };
     type Controls = { csrf: string; revision: string; data: { address: string | null; phone: string | null; photon: string | null; actions: string[] } };
     const controls = async () => (await get('/console/dashboard/api/v1/controls?view=imessage')).json() as Promise<Controls>;
@@ -89,7 +89,7 @@ async function world() {
     const act = async (actionName: string, fields: Record<string, string> = {}) => {
       const current = await controls();
       const body = new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'imessage', action: actionName, request_id: `photon-${name}-${++n}`, ...fields });
-      const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+      const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, origin: HOST_ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
       return { status: response.status, body: await response.json() as { receipt?: { state: string; message: string }; reveal?: { kind: string; value: string; to?: string } } };
     };
     return { stub, get, action, controls, act, name };

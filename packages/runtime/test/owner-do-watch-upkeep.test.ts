@@ -27,7 +27,7 @@ const START = Date.parse('2030-11-04T09:00:00Z');
 const ALL_OFF = ['daily_brief', 'event_briefs', 'nightly', 'heartbeat'];
 const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: 'router-secret-fixture-0000000000',
-  SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
+  SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', GMAIL_PUSH_PROJECT: 'waldo-dev' };
 
 const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[], email: '' }, failing: new Set<string>(),
   sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[] }));
@@ -43,7 +43,7 @@ vi.mock('../src/connectors/google', async load => {
 });
 vi.mock('../src/connectors/google-push', async load => {
   const original = await load<typeof import('../src/connectors/google-push')>();
-  return { ...original, gmailPush: () => original.gmailPush('waldo-dev') };
+  return { ...original, gmailPush: (project?: string) => original.gmailPush(project) };
 });
 // A watch that throws once, before it can record anything, the way an unguarded call did.
 vi.mock('../src/channels/calendar-push', async load => {
@@ -119,7 +119,7 @@ type World = Readonly<{
   // A verified Gmail push for this owner: 'wake' when it was admitted and pulled the sweep.
   push(connection: string, history: string): Promise<'wake' | 'ignore'>;
 }>;
-type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[] }>;
+type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[]; pushProject?: string }>;
 
 const world = async (name: string, setup: Setup, run: (world: World) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -131,7 +131,7 @@ const world = async (name: string, setup: Setup, run: (world: World) => Promise<
     if (setup.accounts) await state.storage.put('google:accounts', setup.accounts);
     state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
     for (const kind of setup.off ?? []) state.storage.sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, 0)', kind);
-    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7' }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }) }) as unknown as Owner;
     const logs: MockInstance = vi.spyOn(console, 'log');
     const connect = async (id: string, scopes: readonly string[], email = EMAIL) => {
       edge.exchange = { id, scopes: [...scopes], email };
@@ -182,6 +182,16 @@ describe('Gmail and Calendar watch upkeep', () => {
       expect(w.row(BRIEF_SWEEP_ID), 'the owner\'s choice stands: no event-brief sweep').toBeNull();
       expect(w.row(WATCH_UPKEEP_ID)).toMatchObject({ status: 'armed', due_at: expect.any(Number) });
       expect(w.row(WATCH_UPKEEP_ID)!.due_at, 'the next check is an hour on').toBeGreaterThanOrEqual(connected + HOUR);
+    });
+  });
+
+  it('an environment that names no Gmail push project starts no Gmail watch, and Calendar is unaffected', async () => {
+    await world('upkeep-push-unconfigured', { off: ['event_briefs'], pushProject: '' }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('gmail_watch'), 'no watch into any project').toEqual([]);
+      expect(codes(w, 'gmail_watch')).toEqual(['gmail_watch_skipped:unconfigured']);
+      expect(w.watches('calendar_watch')).toEqual(['conn-1']);
     });
   });
 

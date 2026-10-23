@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Dashboard, DashboardNavigation, DashboardFeedback, isSettingsRoute, resolveRoute } from './App';
 import type { OverviewV1 } from './model';
@@ -97,6 +97,11 @@ describe('dashboard routing and overview boundaries', () => {
     const signedOut = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'Sign in to see your dashboard.', signedOut: true }} onRetry={() => {}}/>);
     expect(signedOut).toContain('href="/console/signin"');
     expect(signedOut).not.toContain('Try again');
+    vi.stubGlobal('window', { location: { hash: '#/memory/spots' } });
+    try {
+      const back = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'Sign in to see your dashboard.', signedOut: true }} onRetry={() => {}}/>);
+      expect(back).toContain('href="/console/signin#/memory/spots"');
+    } finally { vi.unstubAllGlobals(); }
     const unavailable = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'The dashboard could not load right now.', signedOut: false }} onRetry={() => {}}/>);
     expect(unavailable).toContain('Try again');
     expect(unavailable).not.toMatch(/Not available yet|Nothing waiting|No saved Spots/);
@@ -125,13 +130,13 @@ describe('dashboard routing and overview boundaries', () => {
     expect(html).toContain('href="#/waiting"');
     expect(html).not.toMatch(/<button|>Approve|action="\/console\/action"/);
   });
-  it('says a Brief WhatsApp took is sent and waiting for the phone, not delivered', () => {
+  it('says a Brief waiting for its arrival report is queued, not sent or delivered, and names no surface', () => {
     const record: OverviewV1 = { ...empty, brief: { status: 'sent_unconfirmed', at: null } };
     const html = renderToStaticMarkup(<Dashboard data={record} route="today"/>);
-    expect(html).toContain('Sent, waiting for your phone.');
-    // The body agrees with the title: it is already sent, and what it waits for is the report that it arrived.
+    expect(html).toContain('Waiting to hear it arrived.');
     expect(html).toContain('records it as arrived once it does');
-    expect(html).not.toMatch(/Not sent yet|Sent, as recorded|counts as sent/);
+    // An iMessage Brief can still be in Waldo's own outbox here, so nothing claims it left, and no one surface is named.
+    expect(html).not.toMatch(/\bsent\b|\bSent\b|WhatsApp|iMessage|Telegram/);
   });
   it('does not mistake a completed heartbeat for owner-facing activity while preserving failed attempts', () => {
     const heartbeat: OverviewV1 = { ...empty, latest_activity: { kind: 'heartbeat', status: 'completed', at: empty.as_of, summary: 'tick completed' } };

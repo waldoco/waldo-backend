@@ -1,5 +1,8 @@
+import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { gmailPush, gmailWatchDue, GMAIL_PUSH_PROJECT, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
+import { gmailPush, gmailWatchDue, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 
 const AUD = 'https://w.test/events/gmail';
 const SA = 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com';
@@ -82,8 +85,18 @@ describe('Gmail watch', () => {
     expect(gmailPush('')).toBeNull();
     expect(gmailPush('waldo-dev')).toEqual({ topic: 'projects/waldo-dev/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com' });
   });
-  it('ships naming the Cloud project that holds the push topic and the push service account', () => {
-    expect(GMAIL_PUSH_PROJECT).toBe('waldo-dev-492217');
-    expect(gmailPush()).toEqual({ topic: 'projects/waldo-dev-492217/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev-492217.iam.gserviceaccount.com' });
+  it('names no project by default: an environment without GMAIL_PUSH_PROJECT has push off', () => {
+    expect(gmailPush()).toBeNull();
+    expect(gmailPush(undefined)).toBeNull();
+    expect(gmailPush('Waldo_Dev')).toBeNull();
+  });
+  it('staging names the dev project and production names none until the owner creates its own', () => {
+    const vars = (block: { vars?: Record<string, string> } | undefined) => block?.vars ?? {};
+    const wrangler = parseJsonc(config) as { vars?: Record<string, string>; env?: Record<string, { vars?: Record<string, string> }> };
+    expect(vars(wrangler.env?.staging).GMAIL_PUSH_PROJECT).toBe('waldo-dev-492217');
+    expect(gmailPush(vars(wrangler.env?.staging).GMAIL_PUSH_PROJECT)).toEqual({ topic: 'projects/waldo-dev-492217/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev-492217.iam.gserviceaccount.com' });
+    expect(vars(wrangler).GMAIL_PUSH_PROJECT).toBe('');
+    expect(gmailPush(vars(wrangler).GMAIL_PUSH_PROJECT)).toBeNull();
+    expect((env as { GMAIL_PUSH_PROJECT?: string }).GMAIL_PUSH_PROJECT, 'the test pool runs the production block').toBe('');
   });
 });
