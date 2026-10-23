@@ -27,7 +27,7 @@ const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.st
 
 type Harness = Readonly<{
   book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[]; withdrawn: string[];
-  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | undefined): void;
+  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
   // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
   serial<T>(work: () => Promise<T>): Promise<T>;
@@ -45,7 +45,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const clock = { at: T0 };
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [], withdrawn: string[] = [];
-    let spend: { spentUsd: number; ceilingUsd: number } | undefined;
+    let spend: { spentUsd: number; ceilingUsd: number } | 'throws' | undefined;
     const hold: Harness['hold'] = {};
     let queue: Promise<unknown> = Promise.resolve();
     const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
@@ -62,7 +62,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
-      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
+      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
       admitted: async () => { if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
     });
@@ -618,6 +618,26 @@ describe('the task brain host', () => {
       expect(ran).toEqual([]);
       expect(log.find(entry => entry.hop === 'spend_hold')).toMatchObject({ cost_kind: 'worker', code: 'spend_ceiling_reached:browse_act', job_id: t.jobId });
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('when the owner\'s spend cannot be read, a worker is held at the ceiling, and the brain warns once until a read works again', async () => {
+    await withHost(async ({ host, ticket, setSpend, log, ran }) => {
+      setSpend('throws');
+      const t = ticket('errand');
+      const claim = await host.claim(t);
+      const spend = claim === 'fenced' ? null : claim.spend;
+      expect(spend!.spentUsd).toBeGreaterThanOrEqual(spend!.ceilingUsd);
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: false, error_code: 'spend_ceiling_reached' });
+      expect(ran).toEqual([]);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+      const warned = () => log.filter(entry => entry.hop === 'task_spend_unread');
+      expect(warned()).toEqual([expect.objectContaining({ ok: false, code: 'spend_unreadable' })]);
+      setSpend({ spentUsd: 1, ceilingUsd: 25 });
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+      setSpend('throws');
+      await host.tool(t, call('search_communication'), CANARIES);
+      expect(warned()).toHaveLength(2);
     });
   });
 

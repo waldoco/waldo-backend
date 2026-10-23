@@ -30,7 +30,7 @@ export type TaskHostDeps = Readonly<{
   serialBrowser<T>(scope: RunEffectScope, work: () => Promise<T>): Promise<T>;
   releaseBrowser(scope: RunEffectScope): void;
   log(entry: TurnLogEntry): void;
-  // The owner's month spend against their ceiling, when this object keeps one.
+  // The owner's month spend against their ceiling, when this object keeps one. It throws when it cannot be read.
   spend?(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
   // Arms the jobs lane's wake.
   wake(due: number): Promise<void>;
@@ -80,7 +80,24 @@ const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
   };
 };
 
+// A spend that cannot be read holds the worker at the ceiling (the cheap route, no paid tools): read as no ceiling, a worker's
+// spend would have no bound at all.
+const UNREAD_SPEND = { spentUsd: 0, ceilingUsd: 0 } as const;
+
 export const taskHost = (deps: TaskHostDeps) => {
+  // Warned once per run of failed reads, so a lasting fault is visible without a line per worker call.
+  let spendUnread = false;
+  const ownerSpend = (): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined => {
+    try {
+      const spend = deps.spend?.();
+      spendUnread = false;
+      return spend;
+    } catch {
+      if (!spendUnread) deps.log({ trace: 'task', hop: 'task_spend_unread', ms: 0, ok: false, code: 'spend_unreadable' });
+      spendUnread = true;
+      return UNREAD_SPEND;
+    }
+  };
   // One run scope per live attempt, so a cancel aborts the attempt's in-flight I/O and every later admit fails.
   const scopes = new Map<string, Readonly<{ attempt: number; scope: RunEffectScope; abort: AbortController }>>();
   const scopeFor = (ticket: TaskTicket, row: JobRow): RunEffectScope => {
@@ -166,7 +183,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       }
       scopeFor(ticket, row);
       const handlers = await profileHandlers(row);
-      const spend = deps.spend?.();
+      const spend = ownerSpend();
       return {
         jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
@@ -201,7 +218,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
       } else {
         const handlers = await profileHandlers(row);
-        const spend = deps.spend?.();
+        const spend = ownerSpend();
         const ctx: ToolDispatcherContext = {
           ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
           hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,

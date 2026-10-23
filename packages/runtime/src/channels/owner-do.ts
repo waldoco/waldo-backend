@@ -418,7 +418,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }),
       releaseBrowser: scope => { self.ctx.waitUntil(self.ownerBrowser.finish(scope).catch(() => undefined)); },
       log: entry => self.taskLog(entry),
-      spend: () => { try { return self.setup(self.taskChannel()).monthSpend(); } catch { return undefined; } },
+      spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
       providerHealth: self.providerHealth,
