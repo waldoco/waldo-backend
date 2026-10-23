@@ -42,6 +42,11 @@ describe('a structured block', () => {
     expect(toolErrorSchema.safeParse(toolError('rejected')).success).toBe(true);
   });
 
+  it('parses device_offline as a block and rejects a near miss', () => {
+    expect(rungBlockedOutcomeSchema.safeParse('device_offline').success).toBe(true);
+    expect(rungBlockedOutcomeSchema.safeParse('mac_offline').success).toBe(false);
+  });
+
   it('rejects a block outside the vocabulary', () => {
     expect(toolErrorSchema.safeParse({ ...toolError('rejected'), blocked: 'captcha' }).success).toBe(false);
   });

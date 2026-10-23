@@ -20,6 +20,11 @@ describe('turn event schema v13', () => {
     expect(costKindSchema.options).toEqual(['turn', 'background', 'worker', 'heartbeat', 'eval']);
   });
 
+  it('a tool hop can name device_offline as its blocked reason, and nothing outside the vocabulary', () => {
+    expect(turnEventSchema.safeParse({ ...minimal, hop: 'tool', rung: 'mac', blocked_reason: 'device_offline' }).success).toBe(true);
+    expect(turnEventSchema.safeParse({ ...minimal, hop: 'tool', rung: 'mac', blocked_reason: 'mac_offline' }).success).toBe(false);
+  });
+
   it('accepts every v8 field unchanged', () => {
     const v8 = {
       ...minimal, owner: 'do-1', owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'a@test.invalid', owner_identity: 'verified',
