@@ -554,7 +554,7 @@ describe('signing in again in the same browser', () => {
   const verifyPost = () => new Request('https://w.test/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'owner@example.com', code: '123456' }), headers: { cookie: signedIn } });
   const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
 
-  it('a verified code ends the browser\'s old owner object session and directory row', async () => {
+  it('a verified code passes the browser\'s old sessions on to be capped: its console token to the grant, its owner cookie to ownerCookie', async () => {
     const { ns, fetch } = owners();
     const ownerCookie = vi.fn(async (_doName: string, _presented?: Request) => 'do-a.fresh.sig');
     const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
@@ -566,9 +566,9 @@ describe('signing in again in the same browser', () => {
     expect(ownerCookie.mock.calls[0]?.[1]?.headers.get('cookie')).toBe(signedIn);
   });
 
-  it('finishes no sign-in when the old directory row cannot be revoked', async () => {
+  it('finishes no sign-in when the old directory row cannot be capped', async () => {
     const { ns } = owners();
-    const ownerCookie = vi.fn(async () => { throw new Error('session revocation unavailable'); });
+    const ownerCookie = vi.fn(async () => { throw new Error('session cap unavailable'); });
     const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(await response.text()).toContain('Sign-in is having trouble');
