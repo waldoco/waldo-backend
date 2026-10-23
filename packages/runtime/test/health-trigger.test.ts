@@ -278,6 +278,37 @@ describe('the health trigger', () => {
     });
   });
 
+  it('refuses, uncharged, a change it already put up that day while the owner is still deciding on it, put it off or skipped it', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      const same = move('2026-10-21T15:00', '2026-10-21T16:00');
+      let cards = 0;
+      const propose = async (args: ProposeCalendarChangeArgs) => {
+        h.proposals.push(args);
+        const id = `p${++cards}`;
+        h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES (?, 'calendar_change', 'card_unconfirmed', 's', ?, ?)", id, JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+        return id;
+      };
+      const run = (at: number, day: string, answer = same) => proposeOn(h, at, day, { decide: async () => answer, propose });
+      const hour = HEALTH_TRIGGER_FLOOR_MS;
+      expect(await run(NOW, '2026-10-21')).toBe('proposed');
+      // The model words its reason anew; the change is the same one, still waiting on its card.
+      const reworded = JSON.stringify({ ...JSON.parse(same), reason: 'Still compromised; the later slot still helps.' });
+      expect(await run(NOW + hour, '2026-10-21', reworded)).toBe('duplicate');
+      h.sql.exec("UPDATE ledger SET status = 'open', deferred_at = ? WHERE id = 'p1'", NOW + hour);
+      expect(await run(NOW + 2 * hour, '2026-10-21')).toBe('duplicate');
+      h.sql.exec("UPDATE ledger SET status = 'skipped', decided_at = ? WHERE id = 'p1'", NOW + 2 * hour);
+      expect(await run(NOW + 3 * hour, '2026-10-21')).toBe('duplicate');
+      expect([h.proposals.length, h.charged.length]).toEqual([1, 1]);
+      expect(h.sql.exec('SELECT outcome FROM health_trigger_runs ORDER BY at').toArray().map(row => row.outcome)).toEqual(['proposed', 'duplicate', 'duplicate', 'duplicate']);
+      // Another time for the same event is another change, and a new owner-local day starts afresh.
+      expect(await run(NOW + 4 * hour, '2026-10-21', move('2026-10-21T17:00', '2026-10-21T18:00'))).toBe('proposed');
+      const nextDay = Date.parse('2026-10-21T19:00:00Z'); // 00:30 on the 22nd in Kolkata
+      expect(await run(nextDay, '2026-10-22', move('2026-10-22T15:00', '2026-10-22T16:00'))).toBe('proposed');
+      expect([h.proposals.length, h.charged.length]).toEqual([3, 3]);
+    });
+  });
+
   it('leaves room for the question: a reason too long to carry it is refused, not trimmed', async () => {
     await withTrigger(async h => {
       ledgerTable(h.sql);
