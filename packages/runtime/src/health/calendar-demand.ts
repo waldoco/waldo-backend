@@ -46,11 +46,19 @@ export const busyMinutesByDay = (busy: readonly Readonly<{ start: string; end: s
 
 const dayRange = (from: string, to: string): string[] => Array.from({ length: daysBetween(from, to) + 1 }, (_, i) => shiftDay(from, i));
 
-export const calendarDemand = (deps: CalendarDemandDeps) => {
-  const { sql } = deps;
-  sql.exec(`CREATE TABLE IF NOT EXISTS calendar_demand (
+const demandTable = (sql: Pick<SqlStorage, 'exec'>) => sql.exec(`CREATE TABLE IF NOT EXISTS calendar_demand (
     day TEXT NOT NULL, timezone TEXT NOT NULL, calendars TEXT NOT NULL, busy_minutes INTEGER NOT NULL, partial INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
     PRIMARY KEY (day, timezone, calendars))`);
+
+// A calendar change on a cached day: the next read fetches that day again, in whatever zone and calendar set it runs.
+export const forgetDemandDay = (sql: Pick<SqlStorage, 'exec'>, day: string): void => {
+  demandTable(sql);
+  sql.exec('DELETE FROM calendar_demand WHERE day = ?', day);
+};
+
+export const calendarDemand = (deps: CalendarDemandDeps) => {
+  const { sql } = deps;
+  demandTable(sql);
 
   const selectedCalendars = async (client: DemandClient): Promise<string[] | null> => {
     if (!client.calendarListsPage) return null;
