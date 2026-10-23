@@ -12,7 +12,7 @@ const vars = {
   TWILIO_ACCOUNT_SID: `AC${'c'.repeat(32)}`, TWILIO_AUTH_TOKEN: TOKEN, TWILIO_VERIFY_SERVICE_SID: SERVICE,
 };
 type Read = { csrf: string; revision: string; data: { phone: string | null; verified: boolean; sms: boolean; challenge: { state: string } | null; actions: string[] } };
-type Acted = { status: number; body: { receipt?: { state: string; message: string }; error?: string } };
+type Acted = { status: number; body: { receipt?: { state: string; message: string }; error?: string; duplicate?: boolean } };
 
 // A ledger that keeps one owner's number and challenge, and a Twilio that approves only CODE.
 function world(phone: string | null) {
@@ -47,7 +47,7 @@ function world(phone: string | null) {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 let n = 0;
-const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; state: DurableObjectState }) => Promise<void>) => {
+const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; state: DurableObjectState }) => Promise<void>) => {
   const name = `phone-console-${n++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
@@ -59,13 +59,15 @@ const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Pr
       return response.json();
     };
     let request = 0;
-    const act = async (action: string, fields: Record<string, string> = {}): Promise<Acted> => {
+    const actAs = async (requestId: string, action: string, fields: Record<string, string> = {}, revision?: string): Promise<Acted & { revision: string }> => {
       const current = await read();
-      const body = new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'phone', action, request_id: `phone-request-${++request}`, ...fields });
+      const used = revision ?? current.revision;
+      const body = new URLSearchParams({ csrf: current.csrf, revision: used, view: 'phone', action, request_id: requestId, ...fields });
       const response = await object.fetch(new Request('https://owner/console/dashboard/api/v1/actions', { method: 'POST', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body }));
-      return { status: response.status, body: await response.json() };
+      return { status: response.status, body: await response.json(), revision: used };
     };
-    await work({ read, act, state });
+    const act = (action: string, fields: Record<string, string> = {}): Promise<Acted> => actAs(`phone-request-${++request}`, action, fields);
+    await work({ read, act, actAs, state });
   });
 };
 
@@ -82,6 +84,16 @@ describe('the console phone view', () => {
       expect((await read()).data).toMatchObject({ verified: true, actions: [] });
       const stored = JSON.stringify([...(await state.storage.list()).entries()]);
       for (const secret of [CODE, '111111', TOKEN]) expect(stored).not.toContain(secret);
+    });
+  });
+
+  it('keeps the code out of the receipt book: a retried request reads back its receipt whatever code it carries', async () => {
+    world('+919800000001');
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act, actAs }) => {
+      await act('phone.sms_send');
+      const first = await actAs('phone-retry', 'phone.sms_check', { code: '111111' });
+      expect(first).toMatchObject({ status: 409, body: { receipt: { message: 'That code did not match. Check it and try again.' } } });
+      expect(await actAs('phone-retry', 'phone.sms_check', { code: '222222' }, first.revision)).toMatchObject({ status: 409, body: { duplicate: true, receipt: first.body.receipt } });
     });
   });
 

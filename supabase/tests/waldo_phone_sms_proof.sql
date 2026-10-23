@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(97);
+select plan(99);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -51,6 +51,9 @@ select is(pg_temp.state('sms-nobody'), null, 'an unknown owner reads nothing');
 select is(pg_temp.send('sms-cai', pg_temp.op('c')), 'no_number', 'an owner with no number on file is sent nothing');
 select is(pg_temp.send('sms-dev', pg_temp.op('d')), 'verified', 'an owner whose number is verified is sent nothing');
 select is(pg_temp.challenge('sms-cai'), null, 'and no challenge is recorded');
+insert into waldo.owners (do_name, email, phone) values ('sms-old', 'old@test.invalid', '98000 00001');
+select is(pg_temp.state('sms-old'), '{"phone":null,"verified":false,"challenge":null}'::jsonb, 'a number on file that is not E.164 reads as none');
+select is(pg_temp.send('sms-old', pg_temp.op('c')), 'no_number', 'and is sent nothing');
 
 -- Asha asks for a code: the send is reserved before Twilio is called, then finished with the verification it returned.
 select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', pg_temp.svc(), 'operation', pg_temp.op('1'))),

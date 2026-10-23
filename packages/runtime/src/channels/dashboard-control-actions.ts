@@ -25,6 +25,8 @@ const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm'
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
+// One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
+const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
 // targets (null: top level only). The fresh read's list is the eligibility check, so the console view is never built.
 const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null};
@@ -103,7 +105,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!action||!Object.hasOwn(allowed,view)||!allowed[view]!.includes(action.action))return reply({error:'invalid_action'},403);
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
- const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:values}:{view,action,revision:form.get('revision')});
+ const kept=Object.fromEntries(Object.entries(values).filter(([key])=>!unfingerprinted[view]?.includes(key)));
+ const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:kept}:{view,action,revision:form.get('revision')});
  const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`,bookKey=deps.book??RECEIPT_BOOK_KEY;
  const book=await loadReceiptBook(deps.store,deps.sessions,bookKey);
  const prior=book[key];

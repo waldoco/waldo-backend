@@ -113,7 +113,8 @@ begin
   if o.state <> 'active' then return jsonb_build_object('kind', 'denied'); end if;
 
   if p_action = 'reserve_send' then
-    if o.phone is null then return jsonb_build_object('kind', 'no_number'); end if;
+    -- Rows from before sign-up checked the format can hold a number that is not E.164: there is nothing to text.
+    if o.phone is null or o.phone !~ '^\+[1-9][0-9]{6,14}$' then return jsonb_build_object('kind', 'no_number'); end if;
     if o.phone_verified_at is not null then return jsonb_build_object('kind', 'verified'); end if;
     if exists (select 1 from waldo.owners other where other.id <> o.id and other.state = 'active'
         and other.phone = o.phone and other.phone_verified_at is not null) then
@@ -235,7 +236,7 @@ begin
   v_retry := case
     when v_state in ('pending', 'checking') then case when c.sends >= 3 then c.expires_at else c.next_send end
     when v_state = 'sending' or c.state = 'unknown' then c.recipient_hold_until end;
-  return jsonb_build_object('phone', o.phone, 'verified', o.phone_verified_at is not null,
+  return jsonb_build_object('phone', case when o.phone ~ '^\+[1-9][0-9]{6,14}$' then o.phone end, 'verified', o.phone_verified_at is not null,
     'challenge', case when v_state is null then null
       else jsonb_build_object('state', v_state, 'expires_at', extract(epoch from c.expires_at)::bigint,
         'retry_at', case when v_retry > now() then extract(epoch from v_retry)::bigint end, 'checks_left', 5 - c.checks) end);
