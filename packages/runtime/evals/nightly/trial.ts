@@ -61,7 +61,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
-        // After the reply, as the owner object runs it; a store built with compaction off makes this a no-op.
+        // The post-reply compaction hook; a store built with compaction off makes it a no-op.
         await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);

@@ -114,9 +114,8 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   // A turn reads rows newest first, a page at a time, and stops once the rows read hold the window of the turn's chat and
   // of the stored leaf: the path back from each until it passes the window budget, counted from its newest owner message so
   // a retried message keeps its own window, or, with compaction on and a live summary on that chat, until the row the
-  // summary covers. Rows are written
-  // after their parents, so every row on that path is in the newest slots. A row read whose parent lies in the older slots
-  // not read hangs on no parent, in memory only. The page reads every row.
+  // summary covers. Rows are written after their parents, so every row on that path is in the newest slots. A row read
+  // whose parent lies in the older slots not read hangs on no parent, in memory only. The page reads every row.
   const read = async (turn: boolean, chat?: string): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;

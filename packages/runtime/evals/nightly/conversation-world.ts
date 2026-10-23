@@ -1,7 +1,7 @@
 // The chat a nightly world keeps. By default the store the eval has always used. With compaction on
 // (WALDO_EVAL_COMPACTION=on) it is the canonical store the app chat runs on, built with the run's compaction settings,
-// so the trial's post-reply hook can write a summary row and the next turn reads it first, as an app turn does. A
-// scenario may seed earlier rounds of the chat, stored before its first step.
+// so the trial's post-reply hook can write a summary row and the next turn reads it first. A scenario may seed earlier
+// rounds of the chat, stored before its first step.
 import type { ConversationEntry } from '@waldo/contracts';
 import type { ConversationStore } from '../../src/channels/conversation-store';
 import { canonicalOwnerConversationStore } from '../../src/conversation/canonical-owner-store';
