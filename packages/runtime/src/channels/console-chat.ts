@@ -111,7 +111,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   });
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); } catch { return answer(503, { error: 'chat_unavailable' }); }
-  // The owner object refuses a session past its 12 hours or revoked since the cookie check: to the console that is a sign-in.
+  // The owner object refuses a session that has ended or was revoked since the cookie check: to the console that is a sign-in.
   if (response.status === 403) return answer(401, { error: 'sign_in_required' });
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);

@@ -26,7 +26,7 @@ begin
     raise exception 'console session lifetime out of range' using errcode = '22023';
   end if;
   v_owner := waldo.owner_id_for(p_do_name);
-  if v_owner is null or p_session_hash = '' then return false; end if;
+  if v_owner is null or p_session_hash !~ '^[a-f0-9]{64}$' then return false; end if;
   insert into waldo.console_sessions (owner_id, session_hash, lifetime, idle_timeout)
     values (v_owner, p_session_hash, make_interval(secs => p_lifetime_seconds), make_interval(secs => p_idle_seconds))
     on conflict (session_hash) do nothing;
