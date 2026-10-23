@@ -36,6 +36,9 @@ export type TaskHostDeps = Readonly<{
   wake(due: number): Promise<void>;
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
+  // Whether the directory still admits the owner, asked before each worker call as an owner job asks before each effect.
+  // Without it (no directory on this deploy) the owner stands.
+  admitted?(): Promise<'admitted' | 'dormant' | 'retry'>;
   // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
   // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
   providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
@@ -180,10 +183,21 @@ export const taskHost = (deps: TaskHostDeps) => {
       const started = deps.now();
       const allowed = row.profile !== null && TASK_PROFILE_SPECS[row.profile].tools.includes(call.name as never);
       const scope = scopeFor(ticket, row);
+      // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
+      const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
+      if (admission === 'dormant') {
+        deps.book.suspend(row.id);
+        fence(row.id);
+        hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' });
+        return 'fenced';
+      }
       let result: LoopToolResult;
       if (!allowed) {
         const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
         result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
+      } else if (admission === 'retry') {
+        const unchecked = toolError('transient', 'The owner\'s access could not be checked just now, so nothing ran.');
+        result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
       } else {
         const handlers = await profileHandlers(row);
         const spend = deps.spend?.();

@@ -289,6 +289,9 @@ const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
 type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
+// An owner the directory no longer admits keeps their open background tasks; the jobs lane looks again this often, so a task
+// resumes once the owner is admitted again.
+const TASK_JOBS_DORMANT_RECHECK_MS = 15 * 60_000;
 type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding; authority?: OwnerRuntimeAuthority; current(): boolean }> | Readonly<{ kind: 'dormant' | 'retry' }>;
 
 // The notice for a run that stopped before it finished, so its outcome is unknown.
@@ -419,8 +422,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
       providerHealth: self.providerHealth,
+      admitted: () => self.taskOwnerAdmitted(),
     });
   })();
+
+  // The directory's answer for this object's owner, asked fresh, the way a scheduled job's every read asks it.
+  private async taskOwnerAdmitted(): Promise<'admitted' | 'dormant' | 'retry'> {
+    if (!consoleAuth(this.env)) return 'admitted';
+    const owner = await this.lookupScheduledOwner();
+    return owner.kind !== 'admitted' ? owner.kind : owner.current() ? 'admitted' : 'dormant';
+  }
+  // The jobs lane does not run for an owner the directory does not admit. Running attempts go back to the queue, so no worker
+  // keeps acting; a due wake moves to a later look, rather than staying due and re-arming the alarm every pass, so open jobs
+  // resume once the owner is admitted again. A directory outage looks again soon and leaves running attempts alone: each of
+  // their calls asks the directory itself.
+  private async holdJobs(owner: 'dormant' | 'retry'): Promise<number | null> {
+    const jobs = this.jobs();
+    if (owner === 'dormant') for (const id of jobs.suspend()) { this.tasks.fence(id); this.taskLog({ trace: `task:${id}`, hop: 'task_suspended', ms: 0, ok: false, job_id: id, code: 'owner_not_admitted' }); }
+    return jobs.open().length ? Date.now() + (owner === 'retry' ? APP_ADMISSION_RETRY_MS : TASK_JOBS_DORMANT_RECHECK_MS) : null;
+  }
 
   // Task telemetry and the worker's spend ceiling go through the runtime of the surface that takes this owner's proactive
   // work, the one the jobs lane reports on; an object with no runtime to log through keeps the outcome fields only, never a
@@ -2301,6 +2321,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           // own settle failed) is settled here, and asked for again until it is.
           const owing = (): readonly string[] => new TelegramFinalOutbox(this.ctx.storage.kv).records().filter(r => r.status !== 'pending' && r.status !== 'accepted' && r.status !== 'attempting' && r.settled === false).map(r => r.id);
           if (owing().length) await this.settleRetiredWhatsApp(owing(), 'whatsapp');
+          const jobsDue = await this.ctx.storage.get<number | null>(TASK_JOBS_DUE_KEY);
+          if (typeof jobsDue === 'number' && jobsDue <= Date.now()) await this.ctx.storage.put(TASK_JOBS_DUE_KEY, await this.holdJobs(appOwner?.kind === 'retry' || targets === 'retry' ? 'retry' : 'dormant'));
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' || targets === 'retry' || owing().length ? Date.now() + APP_ADMISSION_RETRY_MS : NO_SCHEDULE_WAKE, Date.now(), 30_000);
@@ -2532,9 +2554,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try {
       if (consoleAuth(this.env)) {
         const owner = await this.scheduledOwner();
-        // An owner the directory no longer admits runs no jobs; a directory outage asks again soon. A later report or task
-        // arms the wake again.
-        if (owner.kind !== 'admitted') { next = owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null; return; }
+        if (owner.kind !== 'admitted') { next = await this.holdJobs(owner.kind); return; }
         runtime = await this.appRunsOwnerJobs(channel, owner) ?? runtime;
       }
       const kv = storage.kv, jobs = this.jobs();

@@ -225,6 +225,19 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     // A job the brain itself parks (a retry whose promised time came, an effect that cannot be replayed, a changed brief).
     park,
+    // The owner is no longer admitted: running attempts (all, or job `id`'s) end without counting as a crash, and wait in the
+    // queue until the owner is admitted again; one with an effect in flight parks, as a lost attempt would. Answers the ids.
+    suspend(id?: string): readonly string[] {
+      const now = deps.now();
+      const running = sql.exec<Pick<JobRow, 'id' | 'inflight_json'>>(
+        `SELECT id, inflight_json FROM task_jobs WHERE status = 'running'${id === undefined ? '' : ' AND id = ?'}`, ...(id === undefined ? [] : [id]),
+      ).toArray();
+      for (const row of running) {
+        if (row.inflight_json !== null) park(row.id, 'uncertain_effect');
+        else sql.exec("UPDATE task_jobs SET status = 'queued', lease_token = NULL, lease_until = NULL, due_at = ?, updated_at = ? WHERE id = ? AND status = 'running'", now, now, row.id);
+      }
+      return running.map((row) => row.id);
+    },
     // The cancellation fence: the token is cleared in the same write that settles the job, so every later call from the
     // worker is fenced and a result that arrives late is discarded.
     cancel(id: string, reason: CancelReason): boolean {

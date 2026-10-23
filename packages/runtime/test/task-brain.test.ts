@@ -35,6 +35,8 @@ type Harness = Readonly<{
   handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
   // The owner's provider breaker, on the harness clock.
   health: InMemoryCircuitBreaker;
+  // What the directory says of the owner when a worker call asks.
+  admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws' };
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -50,6 +52,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const browse: Harness['browse'] = { ms: 0 };
     const handler: Harness['handler'] = {};
     const health = new InMemoryCircuitBreaker({ now: () => clock.at });
+    const admission: Harness['admission'] = { now: 'admitted' };
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -61,12 +64,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
+      admitted: async () => { if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission });
   });
 
 describe('the task brain host', () => {
@@ -496,6 +500,48 @@ describe('the task brain host', () => {
       release();
       expect(await slow).toBe('fenced');
       expect(book.get(t1.jobId)).toMatchObject({ status: 'running', attempt: 2, crashes: 1 });
+    });
+  });
+
+  it('a worker call for an owner the directory no longer admits runs nothing; the job waits in the queue, not counted as a crash', async () => {
+    await withHost(async ({ host, ticket, book, ran, released, log, admission }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      admission.now = 'dormant';
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toBe('fenced');
+      expect(ran).toEqual([]);
+      expect(released).toHaveLength(1);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 0, lease_token: null, inflight_json: null });
+      expect(log.find(entry => entry.hop === 'task_suspended')).toMatchObject({ ok: false, code: 'owner_not_admitted' });
+      // Admitted again, the lane's next attempt resumes it.
+      admission.now = 'admitted';
+      const next = book.startAttempt(t.jobId)!;
+      expect(await host.claim(next)).not.toBe('fenced');
+      expect(await host.tool(next, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('a worker call when the directory cannot be asked runs nothing and is told to try again; the attempt keeps running', async () => {
+    for (const answer of ['retry', 'throws'] as const) {
+      await withHost(async ({ host, ticket, book, ran, admission }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        admission.now = answer;
+        expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: false, retryable: true, code: 'transient' });
+        expect(ran).toEqual([]);
+        expect(book.get(t.jobId)).toMatchObject({ status: 'running', attempt: 1, inflight_json: null });
+      });
+    }
+  });
+
+  it('suspending an owner\'s running jobs requeues each attempt, and parks one whose effect was in flight', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const quiet = ticket('reader'), acting = ticket('errand');
+      expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
+      expect([...book.suspend()].sort()).toEqual([quiet.jobId, acting.jobId].sort());
+      expect(book.get(quiet.jobId)).toMatchObject({ status: 'queued', crashes: 0, lease_token: null });
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(book.suspend()).toEqual([]);
     });
   });
 
