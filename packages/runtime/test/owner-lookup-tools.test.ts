@@ -1,13 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName } from '@waldo/contracts';
+import { browsePageArgsSchema, buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName } from '@waldo/contracts';
 import { dispatchTool } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { claimStore } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../src/onboarding/findings';
 import { webSearchHandler } from '../src/tools/live/web-search';
+import { OPEN_PUBLIC } from '../src/hooks/egress-policy';
 import type { MemoryToolContext } from '../src/tools/live/memory';
 
 let sequence = 0;
@@ -20,18 +21,23 @@ const brave = (results: readonly object[]) => (async () => Response.json({ web: 
 // One owner turn: web_search (observed), the look-up tools, and the dispatcher's real schema, ACL and taint checks.
 const sent: unknown[] = [];
 const sendMessage: ToolHandler<any, unknown, MemoryToolContext> = { name: 'send_message', description: 'test send', schema: sendMessageArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('send_message')), autonomy_gated: true, async handle(args) { sent.push(args); return { ok: true, data: {}, source_taint: null }; } };
-const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonly<{ pages?: ReturnType<typeof observedPages>; runId?: string }> = {}) => {
+// browse_page as the Cloudflare reader answers it: the page's title and its text, never one string.
+const TALK = { title: 'Sam Rivera: "Plan the week, not the day"', text: 'Sam Rivera gave the talk "Plan the week, not the day"\nat PuneConf 2025.' };
+const browsePage: ToolHandler<any, unknown, MemoryToolContext> = { name: 'browse_page', description: 'test browse', schema: browsePageArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('browse_page')), autonomy_gated: false,
+  async handle({ url }: { url: string }) { return { ok: true, data: { url, provider: 'cloudflare_playwright', data: TALK }, source_taint: 'external' }; } };
+const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonly<{ pages?: ReturnType<typeof observedPages>; runId?: string; lookupOffered?: boolean }> = {}) => {
   const results = [ownSite, namesake, injected];
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: true }), pages = options.pages ?? observedPages();
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: options.lookupOffered ?? true }), pages = options.pages ?? observedPages();
   const findings = findingStore(storage.sql, claims, consent);
   const handlers: ToolHandler<any, unknown, MemoryToolContext>[] = [
     observeReads(webSearchHandler('test-brave-key', brave(results)), pages) as ToolHandler<any, unknown, MemoryToolContext>,
+    observeReads(browsePage, pages),
     ...ownerLookupHandlers({ store: findingStore(storage.sql, claims, consent), pages, transaction: work => storage.transactionSync(work) }),
     sendMessage,
   ];
   const runScope = { runId: options.runId ?? `run-${sequence}`, attempt: 'a1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => storage.transactionSync(work) };
   const context: MemoryToolContext = {
-    authenticatedUserId: OWNER, trigger: 'user_message', sourceTaint: null, toolArgSourceTaint: null, hasApproval: () => false, sanitise, runScope,
+    authenticatedUserId: OWNER, trigger: 'user_message', sourceTaint: null, toolArgSourceTaint: null, egressAllowlist: [OPEN_PUBLIC], hasApproval: () => false, sanitise, runScope,
     session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }),
     memoryTurn: { ownerId: OWNER, conversationRef: 'app:main', current: { message_ref: 'm1', text: ownerSaid }, recent: [] },
   };
@@ -78,6 +84,23 @@ describe('owner look-up tools', () => {
     const again = await t.run('record_owner_finding', dentist) as { ok: false; error: string };
     expect(again).toMatchObject({ ok: false });
     expect(again.error).toContain('forget');
+    expect(t.findings.page(50).total).toBe(0);
+  }));
+  it("reads a page the Cloudflare reader returned by its own title and text, so a quote is matched as the page shows it", () => withStorage(async storage => {
+    const t = turn(storage, 'Look me up. My site is samrivera.dev.');
+    t.agree();
+    expect(await t.run('browse_page', { url: 'https://samrivera.dev/talks', instruction: 'Read the page' }, null)).toMatchObject({ ok: true, source_taint: 'external' });
+    expect(await t.run('record_owner_finding', { category: 'public_work', text: 'Spoke at PuneConf 2025', source_url: 'https://samrivera.dev/talks', evidence_quote: 'the talk "Plan the week, not the day" at PuneConf' })).toMatchObject({ ok: true });
+    expect(t.findings.page(50).items).toMatchObject([{ text: 'Spoke at PuneConf 2025', source: { url: 'https://samrivera.dev/talks', title: TALK.title } }]);
+  }));
+  it('tells the model the look-up is not offered while the server has it off, whatever the ledger holds', () => withStorage(async storage => {
+    turn(storage, 'Look me up.').agree();
+    const t = turn(storage, 'Look me up. My site is samrivera.dev.', { lookupOffered: false });
+    expect(await t.run('list_owner_findings', {}, null)).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 0, findings: [] } });
+    await t.run('web_search', { query: 'Sam Rivera' }, null);
+    const refused = await t.run('record_owner_finding', work) as { ok: false; error: string };
+    expect(refused).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(refused.error).toContain('not offered');
     expect(t.findings.page(50).total).toBe(0);
   }));
   it('has no category for a sensitive trait, so the dispatcher refuses it before the store', () => withStorage(async storage => {

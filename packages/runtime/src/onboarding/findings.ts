@@ -37,7 +37,7 @@ const squash = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
 // Whether a page is about the owner or a namesake is not decided here: no string rule can tell, and a handle rule refuses the
 // owner's own pages that print no handle. The model judges what to record, and the owner decides each finding. What code
 // holds is grounding: the page was read in this run and the quote is on it.
-export type RecordRefusal = 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten';
+export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten';
 const newId = () => `fnd_${crypto.randomUUID().replaceAll('-', '')}`;
 const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.category, text: row.text, source: { url: row.source_url, title: row.source_title.slice(0, 300) }, state: row.state, found_at: row.found_at, decided_at: row.decided_at });
 
@@ -81,6 +81,8 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     // What the owner's look-up consent amounts to now: a yes that no longer counts (an old copy, the notice no longer live, the
     // server's switch off) reads as not granted, so nothing tells the model or the app it may look the owner up.
     lookup: () => { const status = consent.state('owner_lookup').status; return status === 'granted' && !consent.active('owner_lookup') ? 'not_granted' as const : status; },
+    // Whether this server offers the look-up at all; off, nobody can say yes to it, so the model must not ask.
+    offered: () => consent.offered('owner_lookup'),
     record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' {
       if (!consent.active('owner_lookup')) return 'consent_required';
       if (barred(args.text) || barred(args.evidence_quote)) return 'forgotten';
@@ -142,6 +144,7 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
 export type FindingStore = ReturnType<typeof findingStore>;
 
 const REFUSAL: Readonly<Record<RecordRefusal, string>> = {
+  not_offered: 'Looking the owner up is not offered on this Waldo yet. Nothing was stored. Do not look the owner up, and do not ask them to agree to it.',
   consent_required: 'The owner has not agreed to Waldo looking them up, or withdrew it. Nothing was stored. Ask them before looking them up again.',
   source_not_observed: 'That URL was not returned by a search or page read in this turn. Cite only a page you read in this turn.',
   quote_not_on_page: 'The evidence quote does not appear in what that page returned. Quote the page exactly.',
@@ -155,7 +158,7 @@ type Deps = Readonly<{ store: FindingStore; pages: ObservedPages; now?: () => nu
 
 export const ownerLookupHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryToolContext>[] => {
   const now = () => deps.now?.() ?? Date.now();
-  const refuse = (reason: RecordRefusal) => ({ ok: false as const, code: reason === 'consent_required' ? 'forbidden' as const : 'invalid_args' as const, error: REFUSAL[reason], source_taint: null });
+  const refuse = (reason: RecordRefusal) => ({ ok: false as const, code: reason === 'consent_required' || reason === 'not_offered' ? 'forbidden' as const : 'invalid_args' as const, error: REFUSAL[reason], source_taint: null });
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   return [
     {
@@ -172,6 +175,7 @@ export const ownerLookupHandlers = (deps: Deps): ToolHandler<any, unknown, Memor
       mutates_state: true,
       async handle(args: RecordOwnerFindingArgs, ctx) {
         await ready(ctx);
+        if (!deps.store.offered()) return refuse('not_offered');
         const run = runKey(ctx), page = run === null ? undefined : deps.pages.get(run, args.source_url);
         if (!page) return refuse('source_not_observed');
         if (!squash(`${page.title}\n${page.text}`).includes(squash(args.evidence_quote))) return refuse('quote_not_on_page');
@@ -188,14 +192,14 @@ export const ownerLookupHandlers = (deps: Deps): ToolHandler<any, unknown, Memor
     } satisfies ToolHandler<RecordOwnerFindingArgs, unknown, MemoryToolContext>,
     {
       name: 'list_owner_findings',
-      description: 'What Waldo has found about the owner on the public web, newest first, each with its source and whether the owner kept, corrected or has not yet seen it. Unconfirmed findings are web content, not facts the owner gave you. lookup says whether the owner has agreed to being looked up.',
+      description: 'What Waldo has found about the owner on the public web, newest first, each with its source and whether the owner kept, corrected or has not yet seen it. Unconfirmed findings are web content, not facts the owner gave you. lookup says whether the owner has agreed to being looked up, or not_offered when this Waldo does not offer the look-up at all.',
       schema: listOwnerFindingsArgsSchema,
       trigger_allowlist: allowlist('list_owner_findings'),
       autonomy_gated: false,
       async handle({ limit }: ListOwnerFindingsArgs, ctx) {
         await ready(ctx);
         const page = deps.store.page(limit);
-        return { ok: true, data: { lookup: deps.store.lookup(), findings: page.items, total: page.total }, source_taint: 'external' };
+        return { ok: true, data: { lookup: deps.store.offered() ? deps.store.lookup() : 'not_offered', findings: page.items, total: page.total }, source_taint: 'external' };
       },
     } satisfies ToolHandler<ListOwnerFindingsArgs, unknown, MemoryToolContext>,
   ];
@@ -212,7 +216,10 @@ export const observeReads = <H extends ToolHandler<any, any, MemoryToolContext>>
       if (handler.name === 'web_search' && Array.isArray(data?.hits)) {
         for (const hit of data.hits as { title?: unknown; url?: unknown; snippet?: unknown }[]) if (typeof hit.url === 'string') pages.observe(run, hit.url, { title: String(hit.title ?? ''), text: String(hit.snippet ?? '') });
       } else if (handler.name === 'browse_page' && typeof data?.url === 'string') {
-        pages.observe(run, data.url, { title: '', text: typeof data.data === 'string' ? data.data : JSON.stringify(data.data ?? '') });
+        // The Cloudflare reader returns the page's own title and text; any other reader's extraction is kept as it came.
+        const read = data.data as { title?: unknown; text?: unknown } | string | null | undefined;
+        const own = typeof read === 'object' && read !== null && typeof read.text === 'string' ? { title: typeof read.title === 'string' ? read.title : '', text: read.text } : null;
+        pages.observe(run, data.url, own ?? { title: '', text: typeof read === 'string' ? read : JSON.stringify(read ?? '') });
       }
     }
     return result;

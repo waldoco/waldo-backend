@@ -83,6 +83,14 @@ describe('look-up erasure through the owner object', () => {
     expect((state.storage.kv.get('app:thread:th_1') as { title: string }).title).toBe(FORGOTTEN);
     expect(JSON.stringify(state.storage.kv.get('conv:0000000001'))).not.toContain(FOUND.evidence_quote);
   }));
+  it('answers nothing when the app session ends while the answer is being built', () => owner('onboarding-session-answer', async ({ call }) => {
+    // Admitted by the route and by the onboarding host's first check; the recheck right before the answer finds the session gone.
+    wire.authorityLimit = 2;
+    const response = await call('/app/v1/onboarding');
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'unavailable' });
+    expect(wire.authorityReads).toBe(3);
+  }));
   it('answers nothing once the app session stops being current during the route', () => owner('onboarding-session-recheck', async ({ call }) => {
     // The route is admitted on the first read; the recheck before the answer finds the session gone.
     wire.authorityLimit = 1;
