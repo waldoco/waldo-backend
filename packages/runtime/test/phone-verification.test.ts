@@ -48,3 +48,7 @@ it('fences stalled decoder/fetch and malformed JSON with an unknown result', asy
     }
   } finally {vi.useRealTimers();}
 });
+it('never reads a send as approved: only a pending verification counts as sent', async () => {
+  const fetcher = vi.fn(async () => Response.json({service_sid:service,sid,to:phone,channel:'sms',status:'approved'}));
+  expect(await twilioPhoneVerification(credentials,fetcher)!.start(phone)).toEqual({kind:'unknown'});
+});

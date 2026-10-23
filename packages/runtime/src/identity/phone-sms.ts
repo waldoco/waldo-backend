@@ -23,7 +23,6 @@ export type PhoneSms = Readonly<{
 }>;
 
 const E164 = /^\+[1-9]\d{6,14}$/;
-const VERIFICATION = /^VE[0-9a-fA-F]{32}$/;
 const shapeError = () => new Error('phone state shape');
 const readState = (row: unknown, sms: boolean): OwnerPhoneState | null => {
   if (row === null) return null;
@@ -60,21 +59,17 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     try { reserved = await transition(doName, `reserve_${action}`, { operation }); }
     catch { return { kind: 'unknown' }; }
     if (reserved.kind !== 'reserved') return known(reserved.kind, OUTCOMES.filter((kind) => kind !== 'approved' && kind !== 'pending'));
-    const ref = reserved.reference as PhoneReference | undefined;
-    const target = action === 'send' ? reserved.phone : ref?.phone;
-    const usable = typeof target === 'string' && E164.test(target)
-      && (action === 'send' || (ref!.service === provider!.service && VERIFICATION.test(ref!.sid)));
+    // The provider texts or checks only a well-formed number and verification, and answers pending or approved only for
+    // the number, service and verification it was asked about; anything else comes back unknown.
+    const ref = reserved.reference;
     let response: PhoneProviderOutcome = { kind: 'unknown' };
-    if (usable) {
-      try { response = action === 'send' ? await provider!.start(target) : await provider!.check(ref!, code); }
-      catch { response = { kind: 'unknown' }; }
-    }
-    const answer = 'reference' in response ? response.reference : undefined;
-    const matches = !!answer && answer.phone === target && answer.service === provider!.service && VERIFICATION.test(answer.sid)
-      && (action === 'send' || answer.sid === ref!.sid);
-    const outcome = usable && (matches || !answer) ? response.kind : 'unknown';
     try {
-      const finished = await transition(doName, `finish_${action}`, { operation, outcome, sid: matches ? answer!.sid : '' });
+      if (action === 'send' && typeof reserved.phone === 'string') response = await provider!.start(reserved.phone);
+      if (action === 'check' && ref && typeof ref === 'object') response = await provider!.check(ref as PhoneReference, code);
+    } catch { response = { kind: 'unknown' }; }
+    const sid = 'reference' in response ? response.reference.sid : '';
+    try {
+      const finished = await transition(doName, `finish_${action}`, { operation, outcome: response.kind, sid });
       return known(finished.kind, action === 'send' ? OUTCOMES.filter((kind) => kind !== 'approved') : OUTCOMES);
     } catch { return { kind: 'unknown' }; }
   };

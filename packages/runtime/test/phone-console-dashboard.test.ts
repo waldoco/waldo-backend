@@ -119,6 +119,10 @@ describe('the console phone view', () => {
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_send']); });
     w.ledger.challenge = { state: 'unknown', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) + 3600, checks_left: 5 };
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+    for (const state of ['sending', 'checking']) {
+      w.ledger.challenge = { state, expires_at: 1, retry_at: null, checks_left: 5 };
+      await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+    }
   });
 
   it('asks for six digits before asking Twilio', async () => {
