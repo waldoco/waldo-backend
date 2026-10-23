@@ -71,3 +71,22 @@ it('with the barrier on, a memory read drops the held item and keeps the rest', 
   expect(output).toContain('Climbs on Thursdays');
   expect(output).not.toMatch(/coffee/i);
 });
+
+it('a cleaning pass that throws before the turn is logged without content, and the turn still reaches the model', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('barrier-pass-throws')), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    holdTopic(state.storage.sql, 'coffee', '2026-10-21T08:00:00Z');
+    const { gateway } = scripted([]);
+    const logged: Record<string, unknown>[] = [];
+    let passes = 0;
+    type Args = Parameters<typeof createOwnerResponder>;
+    const args: Args = [{ openaiApiKey: 'fixture-openai', floorReply: true }];
+    args[2] = memory; args[3] = (entry) => { logged.push({ ...entry }); }; args[10] = gateway;
+    args[21] = { forgetBarrier: 'items', forgetPass: async () => { passes += 1; throw new Error('the coffee row is locked'); } };
+    const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'pass-throws-turn', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today?', memoryWrites: false }), time);
+    expect(passes).toBe(1);
+    expect(reply).toBeTruthy();
+    expect(logged).toContainEqual(expect.objectContaining({ hop: 'memory_cleanup', ok: false, code: 'retained_cleanup_incomplete' }));
+    expect(JSON.stringify(logged)).not.toMatch(/coffee/i);
+  });
+});

@@ -703,7 +703,13 @@ export const createOwnerResponder = (
     await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
     // A turn can open a channel's window or flush a waiting card, so an unfinished forget gets a cleaning pass first: the
     // barrier guards what the model reads, not text already written into a card that is waiting to send.
-    if (heldTopics().length) await privateOwner?.forgetPass?.();
+    // A pass that fails leaves the job to retry and the barrier to guard the view, so the turn goes on.
+    if (heldTopics().length) {
+      try { await privateOwner?.forgetPass?.(); } catch (error) {
+        if (error instanceof ClosedRunError) throw error;
+        log({ trace: traceId, hop: 'memory_cleanup', ms: 0, ok: false, code: 'retained_cleanup_incomplete' });
+      }
+    }
   };
   // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
   // composed context and tools' authenticated owner are that owner's. A job that converses passes its surface's chain, and
