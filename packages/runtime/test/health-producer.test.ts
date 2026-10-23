@@ -647,6 +647,18 @@ describe('produceHealthScores', () => {
       expect([todayRow(read).drivers, todayRow(failing).drivers]).toEqual([['breathing rate far above usual'], []]);
     });
 
+    it('reaches the prompt through the existing reader: the stored phrase, word for word, and no value', async () => {
+      const h = harness(seriesOf([...history(25), ...nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 30) : breathing(day, i)))]));
+      await run(h);
+      const written = todayRow(h);
+      const material = toContextHealthMaterial({
+        context: { id: 'ctx', day: TODAY, form: written.form, recovery: written.recovery, weight: written.weight, drivers: written.drivers, confidence: written.confidence ?? null, freshness: written.freshness, tags: written.tags ?? [], compiled_at: '2026-03-20T12:00:01.000Z' },
+        previous: null,
+      }, { timezone: 'UTC', now: () => new Date(NOW + 5_000) });
+      expect(material!.narrative.day_summary).toContain('Drivers: breathing rate far above usual.');
+      expect(material!.narrative.day_summary).not.toMatch(/\d/);
+    });
+
     it('takes a vital reading only from the consent epoch the scores were read under', async () => {
       const vitals = nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 30) : breathing(day, i)));
       const main = seriesOf(history(25));
