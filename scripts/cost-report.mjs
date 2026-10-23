@@ -16,7 +16,8 @@
 //
 // Cache share is cached input tokens over all input tokens, the hit rate the prefix-stability work is judged by.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -27,21 +28,26 @@ export const parseWindow = (text) => {
 };
 
 const inWindow = (day, { from, to }) => day >= from && day <= to;
-const empty = () => ({ calls: 0, input: 0, cached: 0, output: 0, usd: 0, traces: new Set(), holds: 0 });
+const empty = () => ({ calls: 0, input: 0, cached: 0, output: 0, usd: 0, traces: new Set(), holds: 0, unpriced: 0, unpricedModels: new Set() });
 const add = (into, row) => {
   into.calls += row.calls; into.input += row.input; into.cached += row.cached; into.output += row.output; into.usd += row.usd;
   if (row.traceId) into.traces.add(row.traceId);
   into.holds += row.holds ?? 0;
+  if (row.unpriced) { into.unpriced += row.calls; into.unpricedModels.add(row.model || '(unnamed)'); }
 };
+
+// Tokens billed at 0 USD mean the model has no row in pricing.ts; the total is then a floor, so say so.
+const isUnpriced = ({ input, output, usd }) => usd === 0 && input + output > 0;
 
 // One row per model call (Langfuse) or per ledger bucket, normalised to the same fields; input counts cached tokens.
 export const ledgerCalls = (rows) => rows.map((row) => {
   const held = String(row.model).startsWith('held:');
-  return {
+  const call = {
     source: 'ledger', owner: String(row.owner), day: String(row.day).slice(0, 10), model: String(row.model),
     calls: held ? 0 : Number(row.calls), holds: held ? Number(row.calls) : 0,
     input: Number(row.input_tokens), cached: Number(row.cached_tokens), output: Number(row.output_tokens), usd: Number(row.usd_estimate),
   };
+  return { ...call, unpriced: !held && isUnpriced(call) };
 });
 
 export const langfuseCalls = (observations) => observations.map((item) => {
@@ -49,16 +55,17 @@ export const langfuseCalls = (observations) => observations.map((item) => {
   if (!usage || typeof usage !== 'object') throw new Error(`Langfuse observation ${item.id} has no usageDetails; request fields=core,basic,usage`);
   if (!item.userId) throw new Error(`Langfuse observation ${item.id} has no userId; request fields=core,basic,usage`);
   const cached = Number(usage.input_cached_tokens ?? 0);
-  return {
-    source: 'langfuse', owner: String(item.userId), day: String(item.startTime).slice(0, 10), model: '', traceId: item.traceId,
-    calls: 1, holds: 0, input: Number(usage.input ?? 0) + cached, cached, output: Number(usage.output ?? 0),
+  const call = {
+    source: 'langfuse', owner: String(item.userId), day: String(item.startTime).slice(0, 10), model: String(item.providedModelName ?? item.model ?? ''),
+    traceId: item.traceId, calls: 1, holds: 0, input: Number(usage.input ?? 0) + cached, cached, output: Number(usage.output ?? 0),
     usd: Number(item.totalCost ?? item.costDetails?.total ?? 0),
   };
+  return { ...call, unpriced: isUnpriced(call) };
 });
 
 const share = (cached, input) => (input > 0 ? cached / input : null);
 const summary = (bucket) => ({
-  calls: bucket.calls, traces: bucket.traces.size, holds: bucket.holds, input: bucket.input, cached: bucket.cached, output: bucket.output,
+  calls: bucket.calls, traces: bucket.traces.size, holds: bucket.holds, unpriced_calls: bucket.unpriced, unpriced_models: [...bucket.unpricedModels].sort(), input: bucket.input, cached: bucket.cached, output: bucket.output,
   usd: bucket.usd, cache_share: share(bucket.cached, bucket.input),
   usd_per_trace: bucket.traces.size > 0 ? bucket.usd / bucket.traces.size : null,
 });
@@ -100,6 +107,9 @@ export const render = (source, current, baseline) => {
   }
   const t = current.total;
   lines.push('', `Total: ${t.calls} calls, ${usd(t.usd)}, cache share ${pct(t.cache_share)}, ${usd(t.usd_per_trace)} per trace.`);
+  if (t.unpriced_calls > 0) {
+    lines.push(`Unpriced: ${t.unpriced_calls} ${t.unpriced_calls === 1 ? 'call' : 'calls'} on ${t.unpriced_models.join(', ')} had tokens and no price, counted as $0, so the USD above is a floor.`);
+  }
   if (baseline) {
     const b = baseline.total, d = delta(b, t);
     lines.push(`Baseline ${baseline.window.from} to ${baseline.window.to}: ${b.calls} calls, ${usd(b.usd)}, cache share ${pct(b.cache_share)}, ${usd(b.usd_per_trace)} per trace.`,
@@ -149,6 +159,6 @@ const main = async (argv) => {
   console.log(argv.includes('--json') ? JSON.stringify(json, null, 2) : sections.join('\n\n'));
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main(process.argv.slice(2)).catch((error) => { console.error(`FAIL ${error.message}`); process.exit(1); });
 }

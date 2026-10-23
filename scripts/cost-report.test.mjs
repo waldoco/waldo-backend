@@ -1,5 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { delta, fetchLangfuse, langfuseCalls, ledgerCalls, parseWindow, render, report } from './cost-report.mjs';
 
 const ledgerRows = [
@@ -80,4 +85,49 @@ test('fetchLangfuse follows the cursor and asks for usage fields', async () => {
 test('fetchLangfuse stops on an error status', async () => {
   await assert.rejects(fetchLangfuse({ base: 'https://lf.example', publicKey: 'pk', secretKey: 'sk', from: '2026-10-20', to: '2026-10-20',
     fetchImpl: async () => ({ ok: false, status: 401 }) }), /401/);
+});
+
+test('the script prints its report when run through a symlinked path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cost-report-'));
+  try {
+    const ledger = join(dir, 'ledger.json');
+    writeFileSync(ledger, JSON.stringify(ledgerRows));
+    const link = join(dir, 'cost-report-link.mjs');
+    symlinkSync(fileURLToPath(new URL('./cost-report.mjs', import.meta.url)), link);
+    const run = spawnSync(process.execPath, [link, '--window', '2026-10-20..2026-10-21', '--ledger', ledger], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /## Cost ledger: 2026-10-20 to 2026-10-21/);
+    assert.match(run.stdout, /do-a/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ledger rows with tokens and no price are counted as unpriced and named, not passed off as free', () => {
+  const rows = [
+    ...ledgerRows,
+    { owner: 'do-a', day: '2026-10-20', kind: 'turn', model: 'new-model', calls: 3, input_tokens: 9000, cached_tokens: 0, output_tokens: 400, usd_estimate: 0 },
+  ];
+  const result = report(ledgerCalls(rows), parseWindow('2026-10-20..2026-10-21'));
+  assert.equal(result.total.unpriced_calls, 3, 'holds and priced rows are not unpriced');
+  assert.deepEqual(result.total.unpriced_models, ['new-model']);
+  assert.equal(result.days.find((row) => row.owner === 'do-b').unpriced_calls, 0);
+  assert.match(render('Cost ledger', result), /Unpriced: 3 calls on new-model.*floor/);
+});
+
+test('Langfuse generations with tokens and zero cost are counted as unpriced and named', () => {
+  const calls = langfuseCalls([
+    generation('o1', 'u', 't1', '2026-10-20T08:00:00Z', 60000, 0, 0.12),
+    { ...generation('o2', 'u', 't1', '2026-10-20T08:00:05Z', 6000, 0, undefined), providedModelName: 'new-model' },
+  ]);
+  const result = report(calls, parseWindow('2026-10-20..2026-10-20'));
+  assert.equal(result.total.unpriced_calls, 1);
+  assert.deepEqual(result.total.unpriced_models, ['new-model']);
+  assert.match(render('Langfuse', result), /Unpriced: 1 call on new-model/);
+});
+
+test('a report with every call priced prints no unpriced line', () => {
+  const result = report(ledgerCalls(ledgerRows), parseWindow('2026-10-20..2026-10-21'));
+  assert.equal(result.total.unpriced_calls, 0);
+  assert.doesNotMatch(render('Cost ledger', result), /Unpriced/);
 });
