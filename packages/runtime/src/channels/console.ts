@@ -594,6 +594,6 @@ ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class=
 <nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
-<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
+<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session stays signed in while you use it, for up to 30 days.</footer>
 </div></body></html>`;
 };
