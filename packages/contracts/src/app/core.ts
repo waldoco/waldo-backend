@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
-  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
+  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
@@ -57,7 +57,10 @@ export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
   state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']).optional(),
 });
-export const appMessageReceiptV1Schema=appSendResultV1Schema.extend({state:z.enum(['admitted','running','completed','interrupted','revoked']),closed_reason:z.enum(['interrupted','session_revoked','cancelled','archived','deleted','thread_changed']).optional(),effects_unconfirmed:z.boolean().optional()});
+// Chat revision 2 (`chat=2`): a running message's receipt carries `draft`, the reply written so far, a prefix of the reply
+// its transcript row will hold. Revision 1 clients never receive the field.
+export const APP_CHAT_DRAFT_REVISION = 2;
+export const appMessageReceiptV1Schema=appSendResultV1Schema.extend({state:z.enum(['admitted','running','completed','interrupted','revoked']),closed_reason:z.enum(['interrupted','session_revoked','cancelled','archived','deleted','thread_changed']).optional(),effects_unconfirmed:z.boolean().optional(),draft:z.string().min(1).max(REPLY_TEXT_MAX_CHARS).optional()});
 export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
