@@ -2548,6 +2548,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (due === undefined || due === null || due > Date.now()) return;
     await storage.put(TASK_JOBS_DUE_KEY, null);
     let runtime = this.setup(channel);
+    let surface: ChannelKind = channel;
     const previous = this.scheduledAppDelivery;
     // A lane that throws keeps its due time, so the failing-lane retry finds it due again.
     let next: number | null = due;
@@ -2555,11 +2556,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (consoleAuth(this.env)) {
         const owner = await this.scheduledOwner();
         if (owner.kind !== 'admitted') { next = await this.holdJobs(owner.kind); return; }
-        runtime = await this.appRunsOwnerJobs(channel, owner) ?? runtime;
+        const app = await this.appRunsOwnerJobs(channel, owner);
+        if (app) { runtime = app; surface = 'app'; }
       }
       const kv = storage.kv, jobs = this.jobs();
       const ran = await runJobsLane({
-        book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, log: runtime.log,
+        book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, surface, log: runtime.log,
         startWorker: async ticket => {
           const workers = this.env.TASK_WORKER_DO;
           if (!workers) throw new Error('task workers are not configured');

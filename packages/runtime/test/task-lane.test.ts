@@ -32,7 +32,7 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const busy = new Set<string>();
     const host = { fence: (id: string) => { fenced.push(id); }, cancelled: (id: string) => { fenced.push(id); }, busy: () => busy } as unknown as TaskHost;
     const deps = (over: Partial<JobsLaneDeps> = {}): JobsLaneDeps => ({
-      book, host, now: () => clock.at, timezone: 'UTC', log: entry => { log.push(entry); },
+      book, host, now: () => clock.at, timezone: 'UTC', surface: 'app', log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket); },
       turn: async (_job, trace, text) => { turns.push(trace); return `Reply to ${text.slice(1, 40)}`; },
       applyTools: () => ['search_communication'] as ToolName[],
@@ -313,6 +313,23 @@ describe('R-4: the retried turn', () => {
       expect(retryParkedNotice(brief, 'UTC', reason)).not.toMatch(/model/);
       expect(retryParkedNotice(brief, 'UTC', reason)).toMatch(/08:00/);
     }
+  });
+
+  it('a retry answered on another surface than the message came from says where it was sent, and never that it is in this conversation', async () => {
+    await withLane(async ({ book, clock, deps }) => {
+      promiseRetry(book, { traceId: 'tg-3', conversationRef: 'telegram-42', surface: 'telegram', text: 'Move my 3pm to Friday', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
+      promiseRetry(book, { traceId: 'tg-4', conversationRef: 'telegram-42', surface: 'telegram', text: 'My HRV was 38 ms today, should I train?', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
+      clock.at += 2 * 60_000;
+      const asked: string[] = [];
+      await runJobsLane(deps({ turn: async (_job, _trace, text) => { asked.push(text); return 'ok'; } }));
+      expect(asked).toHaveLength(2);
+      for (const text of asked) {
+        expect(text).toContain('on Telegram');
+        expect(text).toMatch(/not shown here/);
+        expect(text).not.toMatch(/may be in this conversation|the conversation after it/);
+      }
+      expect(asked.find(text => !text.includes('<owner_message>'))).toMatch(/ask them to send it again/);
+    });
   });
 
   it('a message with health values is not kept in the job; the retry says where to find it', async () => {

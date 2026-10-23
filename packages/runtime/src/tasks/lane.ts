@@ -17,6 +17,8 @@ export type JobsLaneDeps = Readonly<{
   host: TaskHost;
   now(): number;
   timezone: string;
+  // The surface this pass's turns run on and deliver to.
+  surface: string;
   log(entry: TurnLogEntry): void;
   startWorker(ticket: TaskTicket): Promise<void>;
   // A machine turn on the owner's chain (responder.prompt): the job's text, the tools it may use, a check that the job is
@@ -137,7 +139,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     try {
       // The owner's own message, answered late: the tools their turn would hold, under the taint that message carried, so the
       // taint gate decides exactly as it would have then.
-      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone), current, row.taint, deps.applyTools()));
+      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone, { asked: row.surface, here: deps.surface }), current, row.taint, deps.applyTools()));
     } catch (error) {
       if (error instanceof ClosedRunError) return;
       const last = deps.now() >= brief.promised_by;
