@@ -94,6 +94,8 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     if (!run) return 'not_started';
     if (run.completed_at !== null) return 'completed';
     if (action.action === 'agreements.accept') {
+      // While the server holds the copy back there is nothing to accept, and nothing is recorded or withdrawn.
+      if (!consent.offered('terms')) return 'not_offered';
       if (action.terms_version !== CURRENT_CONSENT_VERSION.terms || action.notice_version !== CURRENT_CONSENT_VERSION.privacy_notice) return 'stale_version';
       // A yes the server does not offer records nothing, so the step is never half accepted.
       if (action.owner_lookup && !consent.offered('owner_lookup')) return 'not_offered';

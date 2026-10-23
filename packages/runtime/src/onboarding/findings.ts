@@ -2,7 +2,7 @@ import {
   listOwnerFindingsArgsSchema, recordOwnerFindingArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ListOwnerFindingsArgs, type RecordOwnerFindingArgs, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
-import type { AppFindingCategoryV1, AppFindingV1 } from '../../../contracts/src/app/onboarding';
+import { APP_FINDING_UNCONFIRMED_DAYS_V1, type AppFindingCategoryV1, type AppFindingV1 } from '../../../contracts/src/app/onboarding';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { MemoryToolContext } from '../tools/live/memory';
@@ -41,11 +41,15 @@ export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_obs
 const newId = () => `fnd_${crypto.randomUUID().replaceAll('-', '')}`;
 const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.category, text: row.text, source: { url: row.source_url, title: row.source_title.slice(0, 300) }, state: row.state, found_at: row.found_at, decided_at: row.decided_at });
 
+const UNCONFIRMED_MS = APP_FINDING_UNCONFIRMED_DAYS_V1 * 86_400_000;
+
 // Findings about the owner from the public web. They are external content: kept apart from owner memory and never put in a
 // prompt, until the owner keeps or corrects one, which turns it into an owner claim through the claim store. Forgetting one,
 // or withdrawing the look-up consent, which erases them all, bars their text from being recorded again and purges any claim
-// one became. The caller hides retained copies of texts() before it commits either.
-export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedger) => {
+// one became. The caller hides retained copies of texts() before it commits either. When the look-up stops counting any other
+// way, what was found stays listed so the owner can still forget it. One left unconfirmed past its age limit is deleted at
+// the first read or write after that.
+export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedger, now: () => number) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS owner_findings (
     id TEXT PRIMARY KEY, category TEXT NOT NULL, text TEXT NOT NULL, evidence TEXT NOT NULL, source_url TEXT NOT NULL, source_title TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('unconfirmed', 'kept', 'corrected')), claim_id INTEGER, found_at INTEGER NOT NULL, decided_at INTEGER)`);
@@ -54,8 +58,10 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     return [text.trim(), text.trim().toLowerCase().replace(/\s+/g, ' ')].some(form => hashes.has(textFingerprint(form)));
   };
   // A literal forget redacts this table with the other stores, and a forget by claim id removes a kept finding's claim. Either
-  // way the finding is gone for the owner, so it is deleted here before anything reads it.
+  // way the finding is gone for the owner, so it is deleted here before anything reads it, as is one left unconfirmed too long.
+  // Expiry is not the owner's no, so it bars nothing: the same page found again is a new finding.
   const settle = () => {
+    sql.exec("DELETE FROM owner_findings WHERE state = 'unconfirmed' AND found_at <= ?", now() - UNCONFIRMED_MS);
     sql.exec(`DELETE FROM owner_findings WHERE instr(text, ?) > 0 OR instr(evidence, ?) > 0 OR instr(source_url, ?) > 0 OR instr(source_title, ?) > 0`, FORGOTTEN, FORGOTTEN, FORGOTTEN, FORGOTTEN);
     sql.exec(`DELETE FROM owner_findings WHERE claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted'))`);
   };
@@ -73,6 +79,9 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     for (const row of rows) sql.exec('DELETE FROM owner_findings WHERE id = ?', row.id);
     return texts;
   };
+  // The owner object builds this store when it wakes (alarms included) and for each app request, so a finding past its age
+  // limit goes even if the owner never opens What Waldo knows.
+  settle();
   const claimFor = (row: Row, text: string, kept: boolean) => ({
     kind: row.category === 'interest' ? 'preference' : 'fact', text, origin: 'owner', source: kept ? 'confirmed' : 'stated',
     evidence: kept ? `kept by the owner from ${row.source_url}` : text, source_ref: lookupRef(row),
@@ -85,6 +94,7 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     offered: () => consent.offered('owner_lookup'),
     record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' {
       if (!consent.active('owner_lookup')) return 'consent_required';
+      settle();
       if (barred(args.text) || barred(args.evidence_quote)) return 'forgotten';
       const existing = sql.exec<Row>('SELECT * FROM owner_findings WHERE source_url = ?', args.source_url).toArray().find(row => squash(row.text) === squash(args.text));
       if (existing) return { id: existing.id, duplicate: true };
@@ -95,7 +105,6 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     },
     page(limit: number, cursor?: string): Readonly<{ items: readonly AppFindingV1[]; total: number; next_cursor: string | null }> {
       settle();
-      if (!consent.active('owner_lookup')) return { items: [], total: 0, next_cursor: null };
       const total = sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings').one().n;
       const after = cursor ? byId(cursor) : null;
       const rows = (after

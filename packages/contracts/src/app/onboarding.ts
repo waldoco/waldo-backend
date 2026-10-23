@@ -38,10 +38,14 @@ export const appConsentStateV1Schema = z.strictObject({
   if (state.status === 'withdrawn' && state.purpose !== 'owner_lookup') ctx.addIssue({ code: 'custom', path: ['status'], message: 'only owner_lookup can be withdrawn; terms and the notice end with the account' });
 });
 // age_attested_18_plus is true once the owner has said they are 18 or over; it is recorded on the account, never only ticked.
-// owner_lookup_offered is false while this server does not offer the look-up (until the notice that discloses it is published):
-// the app then does not ask, and a grant is refused not_offered. owner_lookup can be granted only after privacy_notice.
+// agreements_offered is false while this server holds back the terms and the notice (until their copy is approved): the app
+// then shows no agreements step, terms and privacy_notice are refused not_offered, and nothing after the agreements can be
+// answered. owner_lookup_offered is false while this server does not offer the look-up (until the notice that discloses it is
+// published, and whenever the agreements are held back): the app then does not ask, and a grant is refused not_offered.
+// owner_lookup can be granted only after privacy_notice.
 export const appConsentListV1Schema = z.strictObject({
   age_attested_18_plus: z.boolean(),
+  agreements_offered: z.boolean(),
   owner_lookup_offered: z.boolean(),
   consents: z.array(appConsentStateV1Schema).length(appConsentPurposeV1Schema.options.length)
     .refine(rows => new Set(rows.map(row => row.purpose)).size === rows.length, 'each purpose is listed once'),
@@ -142,6 +146,8 @@ export const appFindingCategoryV1Schema = z.enum(['work', 'education', 'public_w
 export const appFindingIdV1Schema = z.string().regex(/^fnd_[a-f0-9]{32}$/);
 export const APP_FINDING_TEXT_MAX_V1 = 300;
 export const APP_FINDINGS_PAGE_MAX_V1 = 50;
+// An unconfirmed finding is deleted this many days after found_at; one the owner kept or corrected stays.
+export const APP_FINDING_UNCONFIRMED_DAYS_V1 = 30;
 const httpUrl = z.url({ protocol: /^https?$/ }).max(2048);
 export const appFindingV1Schema = z.strictObject({
   finding_id: appFindingIdV1Schema,
@@ -152,7 +158,9 @@ export const appFindingV1Schema = z.strictObject({
   found_at: epoch,
   decided_at: epoch.nullable(),
 }).refine(finding => (finding.state === 'unconfirmed') === (finding.decided_at === null), { error: 'decided_at exists exactly once the owner kept or corrected it', path: ['decided_at'] });
-// Newest first. lookup is the owner_lookup consent status; with it withdrawn or never granted the list is empty.
+// Newest first. lookup is the owner_lookup consent status as it counts now. A withdrawal erases every finding, so the list is
+// empty after one; when the look-up stops counting another way (the server's switch, a newer notice), what was found stays
+// listed, and forgettable, with lookup not_granted.
 export const appFindingListV1Schema = z.strictObject({
   lookup: appConsentStateV1Schema.shape.status,
   items: z.array(appFindingV1Schema).max(APP_FINDINGS_PAGE_MAX_V1),
@@ -173,7 +181,7 @@ export const appFindingResultV1Schema = z.strictObject({
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
-// channel, or does not offer the look-up. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
+// channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
 // request_id came back with a different body. not_found: no such finding.
 export const appOnboardingErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable']),

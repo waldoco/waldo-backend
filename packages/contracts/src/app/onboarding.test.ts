@@ -23,8 +23,9 @@ describe('consent ledger', () => {
   });
   it('lists each purpose exactly once with the 18+ attestation', () => {
     const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }));
-    accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, owner_lookup_offered: false, consents }, { age_attested_18_plus: true, owner_lookup_offered: true, consents }]);
-    rejected(appConsentListV1Schema, [{ consents, owner_lookup_offered: false }, { age_attested_18_plus: false, consents }, { age_attested_18_plus: false, owner_lookup_offered: 'yes', consents }, { age_attested_18_plus: false, owner_lookup_offered: false, consents: consents.slice(1) }, { age_attested_18_plus: false, owner_lookup_offered: false, consents: [consents[0], consents[0], consents[1]] }]);
+    const offered = { agreements_offered: true, owner_lookup_offered: false };
+    accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, ...offered, consents }, { age_attested_18_plus: true, agreements_offered: false, owner_lookup_offered: true, consents }]);
+    rejected(appConsentListV1Schema, [{ consents, ...offered }, { age_attested_18_plus: false, consents }, { age_attested_18_plus: false, owner_lookup_offered: false, consents }, { age_attested_18_plus: false, ...offered, agreements_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, owner_lookup_offered: 'yes', consents }, { age_attested_18_plus: false, ...offered, consents: consents.slice(1) }, { age_attested_18_plus: false, ...offered, consents: [consents[0], consents[0], consents[1]] }]);
   });
   it('grants name a copy version and always carry the 18+ attestation; only the look-up can be withdrawn', () => {
     const grant = { request_id: 'consent-001', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true };

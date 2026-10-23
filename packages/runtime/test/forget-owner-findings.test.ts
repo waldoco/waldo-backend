@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { APP_FINDING_UNCONFIRMED_DAYS_V1 } from '../../contracts/src/app/onboarding';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
@@ -9,10 +10,12 @@ import { episodeIndex } from '../src/channels/episodes';
 let sequence = 0;
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`owner-findings-${sequence++}`)), (_instance, state) => fn(state.storage));
-const stores = (storage: DurableObjectStorage, lookupOffered = true) => {
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered });
-  return { claims, consent, findings: findingStore(storage.sql, claims, consent) };
+type Switches = Readonly<{ lookupOffered?: boolean; agreementsOffered?: boolean; now?: () => number }>;
+const stores = (storage: DurableObjectStorage, { lookupOffered = true, agreementsOffered = true, now = () => 1_000 }: Switches = {}) => {
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered, agreementsOffered });
+  return { claims, consent, findings: findingStore(storage.sql, claims, consent, now) };
 };
+const DAY = 86_400_000;
 // The look-up depends on the accepted notice that discloses it.
 const agree = (consent: ReturnType<typeof consentLedger>, at = 1) => { consent.grant('terms', 1, at); consent.grant('privacy_notice', 1, at); return consent.grant('owner_lookup', 1, at); };
 const finding = { category: 'work' as const, text: 'Product manager at Acme', source_url: 'https://acme.example/team', evidence_quote: 'Sam Rivera, product manager at Acme' };
@@ -63,20 +66,39 @@ describe('consent ledger', () => {
     expect(findings.lookup()).toBe('not_granted');
   }));
   it('offers no look-up while this server has it off, and a yes recorded before then stops counting', () => withStorage(storage => {
-    const off = stores(storage, false);
+    const off = stores(storage, { lookupOffered: false });
     off.consent.grant('terms', 1, 1); off.consent.grant('privacy_notice', 1, 1);
     expect(off.consent.grant('owner_lookup', 1, 2)).toBe('not_offered');
     expect(off.consent.list()).toMatchObject({ owner_lookup_offered: false });
     expect(storage.sql.exec("SELECT 1 FROM consent_ledger WHERE purpose = 'owner_lookup'").toArray()).toEqual([]);
-    const on = stores(storage, true);
+    const on = stores(storage);
     expect(on.consent.grant('owner_lookup', 1, 3)).toMatchObject({ changed: true });
     expect(on.consent.list()).toMatchObject({ owner_lookup_offered: true });
     expect(on.findings.record(finding, 'Team', 4)).toMatchObject({ duplicate: false });
-    // Switched off again: the row stays as evidence, but nothing is recorded or shown under it.
-    const offAgain = stores(storage, false);
+    // Switched off again: the row stays as evidence and nothing new is recorded, but what was found stays listed for the owner
+    // to forget.
+    const offAgain = stores(storage, { lookupOffered: false });
     expect(offAgain.consent.active('owner_lookup')).toBe(false);
     expect(offAgain.findings.record({ ...finding, text: 'Runs 10Ks' }, 'Team', 5)).toBe('consent_required');
+    const listed = offAgain.findings.page(50);
+    expect(listed.items.map(item => item.text)).toEqual([finding.text]);
+    expect(offAgain.findings.forget(listed.items[0]!.finding_id, 6)).toEqual([finding.text, finding.evidence_quote]);
     expect(offAgain.findings.page(50).total).toBe(0);
+  }));
+  it('offers no agreements while this server holds their copy back, and the look-up goes with them', () => withStorage(storage => {
+    const held = stores(storage, { agreementsOffered: false });
+    expect(held.consent.grant('terms', 1, 1)).toBe('not_offered');
+    expect(held.consent.grant('privacy_notice', 1, 1)).toBe('not_offered');
+    expect(held.consent.grant('owner_lookup', 1, 1)).toBe('not_offered');
+    expect(held.consent.list()).toMatchObject({ agreements_offered: false, owner_lookup_offered: false });
+    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+    // A yes recorded while the copy was offered stops counting once it is held back again; the rows stay as evidence.
+    agree(stores(storage).consent);
+    const again = stores(storage, { agreementsOffered: false });
+    expect(again.consent.agreed()).toBe(false);
+    expect(again.consent.active('owner_lookup')).toBe(false);
+    expect(again.consent.state('terms').status).toBe('granted');
+    expect(stores(storage).consent.agreed()).toBe(true);
   }));
 });
 
@@ -88,7 +110,49 @@ describe('owner findings', () => {
     expect(findings.record(finding, 'Team', 2)).toMatchObject({ duplicate: false });
     consent.withdraw('owner_lookup', 3);
     expect(findings.record({ ...finding, text: 'Runs 10Ks' }, 'Team', 4)).toBe('consent_required');
-    expect(findings.page(50)).toEqual({ items: [], total: 0, next_cursor: null });
+    // The ledger alone erases nothing: a withdrawal erases in its own commit (below).
+    expect(findings.page(50).total).toBe(1);
+  }));
+  it('keeps what was found listed and forgettable after a notice bump stops the look-up counting', () => withStorage(storage => {
+    const { consent, findings } = stores(storage);
+    agree(consent);
+    const { id } = findings.record(finding, 'Team', 2) as { id: string };
+    storage.sql.exec("INSERT INTO consent_ledger (purpose, action, version, at) VALUES ('privacy_notice', 'granted', 0, 3)");
+    expect(findings.lookup()).toBe('not_granted');
+    expect(findings.page(50)).toMatchObject({ total: 1, items: [{ finding_id: id, state: 'unconfirmed' }] });
+    expect(findings.forget(id, 4)).toEqual([finding.text, finding.evidence_quote]);
+    expect(findings.page(50).total).toBe(0);
+  }));
+  it('deletes an unconfirmed finding 30 days after it was found, keeps one the owner decided, and bars nothing', () => withStorage(storage => {
+    const found = 5 * DAY;
+    let clock = found;
+    const { consent, findings } = stores(storage, { now: () => clock });
+    agree(consent);
+    const left = findings.record(finding, 'Team', found) as { id: string };
+    const kept = findings.record({ ...finding, text: 'Based in Pune', category: 'based_in' }, 'Team', found) as { id: string };
+    findings.decide(kept.id, { action: 'keep' }, found + DAY);
+    clock = found + APP_FINDING_UNCONFIRMED_DAYS_V1 * DAY - 1;
+    expect(findings.page(50).total).toBe(2);
+    clock += 1;
+    // The owner object builds the store when it wakes, alarms included, so expiry does not wait for the owner to look.
+    stores(storage, { now: () => clock });
+    expect(storage.sql.exec<{ id: string }>('SELECT id FROM owner_findings').toArray().map(row => row.id)).toEqual([kept.id]);
+    expect(findings.page(50).items.map(item => item.finding_id)).toEqual([kept.id]);
+    expect(findings.get(left.id)).toBeNull();
+    expect(findings.decide(left.id, { action: 'keep' }, clock)).toBe('not_found');
+    // Expiry is not the owner's no: the same page found again is recorded afresh.
+    expect(findings.record(finding, 'Team', clock)).toMatchObject({ duplicate: false });
+  }));
+  it('records a page found again after its finding expired as a new finding, even before anything read the old one', () => withStorage(storage => {
+    let clock = DAY;
+    const { consent, findings } = stores(storage, { now: () => clock });
+    agree(consent);
+    const old = findings.record(finding, 'Team', clock) as { id: string };
+    clock += APP_FINDING_UNCONFIRMED_DAYS_V1 * DAY;
+    const again = findings.record(finding, 'Team', clock) as { id: string; duplicate: boolean };
+    expect(again.duplicate).toBe(false);
+    expect(findings.page(50).items).toMatchObject([{ finding_id: again.id, found_at: clock }]);
+    expect(again.id).not.toBe(old.id);
   }));
   it('keeps one finding per page and fact, and pages newest first', () => withStorage(storage => {
     const { consent, findings } = stores(storage);

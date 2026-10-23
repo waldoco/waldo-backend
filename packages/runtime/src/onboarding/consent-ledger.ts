@@ -18,9 +18,10 @@ const LEDGER_PURPOSES = [...appConsentPurposeV1Schema.options, AGE].map(purpose 
 
 type Row = Readonly<{ purpose: string; action: 'granted' | 'withdrawn'; version: number | null; at: number }>;
 export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean }> | 'stale_version' | 'notice_required' | 'not_offered';
-// lookupOffered is the server's switch for the look-up, off until the notice that discloses it is published. Off, the look-up
-// cannot be granted and a yes recorded earlier does not count; the rows stay as evidence.
-export type ConsentOptions = Readonly<{ lookupOffered: boolean }>;
+// The server's switches, each off until the owner approves the copy it rests on: agreementsOffered for the terms and the notice,
+// lookupOffered for the look-up the notice discloses. Off, a purpose cannot be granted and a yes recorded earlier does not
+// count; the rows stay as evidence. The look-up rests on the notice, so it is offered only while the agreements are too.
+export type ConsentOptions = Readonly<{ agreementsOffered: boolean; lookupOffered: boolean }>;
 
 // The owner's consent ledger in the owner object, next to the data it governs, so a check and the write it guards can share
 // one transaction. Rows are only ever appended: a withdrawal is a new row, and the current state is the newest row per purpose.
@@ -40,7 +41,7 @@ export const consentLedger = (sql: Sql, options: ConsentOptions) => {
     const granted = lastGrant(purpose)!;
     return { purpose, version: granted.version, status: 'withdrawn', granted_at: granted.at, withdrawn_at: row.at };
   };
-  const offered = (purpose: AppConsentPurposeV1) => purpose !== 'owner_lookup' || options.lookupOffered;
+  const offered = (purpose: AppConsentPurposeV1) => options.agreementsOffered && (purpose !== 'owner_lookup' || options.lookupOffered);
   // Live only for the copy that is current now, while the server offers it and the copy it depends on is live too.
   const active = (purpose: AppConsentPurposeV1): boolean => {
     const current = state(purpose), prerequisite = DEPENDS_ON[purpose];
@@ -56,7 +57,7 @@ export const consentLedger = (sql: Sql, options: ConsentOptions) => {
     active,
     // The terms and the notice, both at their current copy: what every step after the agreements needs.
     agreed: (): boolean => active('terms') && active('privacy_notice'),
-    list: () => ({ age_attested_18_plus: ageAttested(), owner_lookup_offered: offered('owner_lookup'), consents: appConsentPurposeV1Schema.options.map(state) }),
+    list: () => ({ age_attested_18_plus: ageAttested(), agreements_offered: offered('terms'), owner_lookup_offered: offered('owner_lookup'), consents: appConsentPurposeV1Schema.options.map(state) }),
     attestAge(at: number): void { if (!ageAttested()) append(AGE, 'granted', 1, at); },
     // Granting what is already granted at this version changes nothing, so a repeated yes leaves one record.
     grant(purpose: AppConsentPurposeV1, version: number, at: number): ConsentGrant {

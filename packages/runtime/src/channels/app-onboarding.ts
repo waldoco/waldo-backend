@@ -146,7 +146,9 @@ export type OwnerOnboardingDeps = Readonly<{
   assertCurrent(): Promise<void>;
   // The chat channels the owner can link.
   chat: ChatChannels;
-  // The server's switch for the look-up, off until the notice that discloses it is published.
+  // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
+  // discloses it is published.
+  agreementsOffered: boolean;
   lookupOffered: boolean;
   // Hides retained copies of these texts wherever the owner's memory forget reaches them (chat history, stored tool output,
   // episodes, thread titles and the rest), and throws when it cannot verify that it did.
@@ -157,7 +159,8 @@ export const FIRST_RUN_QUIET_FROM = '22:00';
 const HIDE_TEXT_MIN_CHARS = 12;
 export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHost => {
   const { storage, now } = deps, sql = storage.sql, transaction = <T>(work: () => T) => storage.transactionSync(work);
-  const claims = claimStore(sql, transaction), consent = consentLedger(sql, { lookupOffered: deps.lookupOffered }), findings = findingStore(sql, claims, consent);
+  const claims = claimStore(sql, transaction), consent = consentLedger(sql, { agreementsOffered: deps.agreementsOffered, lookupOffered: deps.lookupOffered });
+  const findings = findingStore(sql, claims, consent, now);
   // A short literal would hide every chat line that happens to contain it, so only passages of the length the owner-evidence
   // rule uses are swept; the finding itself is gone either way.
   const hide = async (all: readonly string[]) => {

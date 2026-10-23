@@ -275,7 +275,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
   // The look-up as an owner reaches it: the server offers it, and the owner accepted the notice before saying yes to it.
-  const consent = consentLedger(sql, { lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent);
+  const consent = consentLedger(sql, { agreementsOffered: true, lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent, now);
   if (seed.lookup?.consent) for (const purpose of ['terms', 'privacy_notice', 'owner_lookup'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], now());
   const searchEngine = (async () => Response.json({ web: { results: (seed.web ?? []).map((page) => ({ title: page.title, url: page.url, description: page.snippet })) } })) as unknown as typeof fetch;
   const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, now })] : [web];

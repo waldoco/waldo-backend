@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema } from '../../contracts/src/app/onboarding';
+import { APP_FINDING_UNCONFIRMED_DAYS_V1, appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema } from '../../contracts/src/app/onboarding';
 import { PROACTIVE_SURFACES } from '../src/channels/proactive-surface';
 import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
@@ -12,15 +12,15 @@ import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now'>>;
 const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
     const calls: Calls = { acts: [], admitted: [], rpc: 0, hidden: [] };
     let clock = 1_000;
     const deps: OwnerOnboardingDeps = {
-      storage: state.storage, doName: 'owner-name', now: () => clock++, assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
-      lookupOffered: fakes.lookupOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }),
+      storage: state.storage, doName: 'owner-name', now: fakes.now ?? (() => clock++), assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
+      lookupOffered: fakes.lookupOffered ?? true, agreementsOffered: fakes.agreementsOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }),
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
@@ -256,7 +256,7 @@ describe('one consent representation per purpose', () => {
     expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
   }));
   it('cannot store a health purpose even by a direct write', () => owner(async ({ storage }) => {
-    const ledger = consentLedger(storage.sql, { lookupOffered: true });
+    const ledger = consentLedger(storage.sql, { lookupOffered: true, agreementsOffered: true });
     expect(ledger.grant('storage_compute' as never, 1, 1)).toBe('stale_version');
     for (const purpose of ['storage_compute', 'model_processing', 'whoop']) {
       expect(() => storage.sql.exec("INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, 'granted', 1, 1)", purpose)).toThrow();
@@ -300,10 +300,10 @@ describe('health step reads both grants a cloud wearable needs', () => {
 });
 
 describe('consent and findings routes', () => {
-  const ledger = (storage: DurableObjectStorage) => consentLedger(storage.sql, { lookupOffered: true });
+  const ledger = (storage: DurableObjectStorage) => consentLedger(storage.sql, { lookupOffered: true, agreementsOffered: true });
   const stores = (storage: DurableObjectStorage) => {
     const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = ledger(storage);
-    return { claims, consent, findings: findingStore(storage.sql, claims, consent) };
+    return { claims, consent, findings: findingStore(storage.sql, claims, consent, () => 1_000) };
   };
   const ACME = { category: 'work', text: 'Product manager at Acme', source_url: 'https://samrivera.dev/about', evidence_quote: 'product manager at Acme' } as const;
   const PUNE = { category: 'based_in', text: 'Based in Pune since 2019', source_url: 'https://samrivera.dev/about', evidence_quote: 'Sam Rivera lives in Pune' } as const;
@@ -393,6 +393,39 @@ describe('consent and findings routes', () => {
     expect(storage.sql.exec<{ purpose: string }>("SELECT purpose FROM consent_ledger WHERE purpose IN ('terms', 'owner_lookup')").toArray()).toEqual([]);
     expect((await run(await act({ ...agree, owner_lookup: false }))).steps.agreements).toBe('done');
   }, { lookupOffered: false }));
+  it('holds the agreements back while the server has their copy off: the app is told, nothing is recorded, and no step after them runs', () => owner(async ({ storage, calls, send, act }) => {
+    expect(appConsentListV1Schema.parse(await (await send('/app/v1/consents')).json())).toMatchObject({ agreements_offered: false, owner_lookup_offered: false });
+    const terms = await send('/app/v1/consents', { request_id: 'grant-held-1', purpose: 'terms', version: 1, age_attested_18_plus: true });
+    expect([terms.status, await terms.json()]).toEqual([409, { error: 'not_offered' }]);
+    await act({ action: 'start' });
+    for (const owner_lookup of [true, false]) {
+      const yes = await act({ ...agree, owner_lookup });
+      expect([yes.status, await yes.json()]).toEqual([409, { error: 'not_offered' }]);
+    }
+    expect(await (await act({ action: 'name.set', name: 'Sam' })).json()).toEqual({ error: 'agreements_required' });
+    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+    expect(calls.hidden).toEqual([]);
+    expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.agreements).toBe('pending');
+  }, { agreementsOffered: false }));
+  it('keeps what was found listed and forgettable while the server has the look-up off', () => owner(async ({ storage, calls, send }) => {
+    const { id } = seed(storage);
+    expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json())).toMatchObject({ lookup: 'not_granted', total: 1, items: [{ finding_id: id, text: ACME.text }] });
+    expect((await send('/app/v1/findings/actions', { request_id: 'finding-forget-off', finding_id: id, action: 'forget' })).status).toBe(200);
+    expect(calls.hidden).toEqual([[ACME.text, ACME.evidence_quote]]);
+    expect(count(storage)).toBe(0);
+  }, { lookupOffered: false }));
+  it('stops listing an unconfirmed finding 30 days after it was found, by the server clock', () => {
+    const DAY = 86_400_000;
+    let clock = 1_000;
+    return owner(async ({ storage, send }) => {
+      seed(storage);
+      clock = 2 + APP_FINDING_UNCONFIRMED_DAYS_V1 * DAY - 1;
+      expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json()).total).toBe(1);
+      clock += 1;
+      expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json())).toMatchObject({ lookup: 'granted', total: 0, items: [] });
+      expect(count(storage)).toBe(0);
+    }, { now: () => clock });
+  });
   it('refuses a grant that names its own time: the server records when', () => owner(async ({ storage, send }) => {
     const forged = await send('/app/v1/consents', { request_id: 'grant-forged-1', purpose: 'privacy_notice', version: 1, age_attested_18_plus: true, granted_at: 1 });
     expect(forged.status).toBe(400);

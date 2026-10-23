@@ -27,12 +27,12 @@ const browsePage: ToolHandler<any, unknown, MemoryToolContext> = { name: 'browse
   async handle({ url }: { url: string }) { return { ok: true, data: { url, provider: 'cloudflare_playwright', data: TALK }, source_taint: 'external' }; } };
 const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonly<{ pages?: ReturnType<typeof observedPages>; runId?: string; lookupOffered?: boolean }> = {}) => {
   const results = [ownSite, namesake, injected];
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: options.lookupOffered ?? true }), pages = options.pages ?? observedPages();
-  const findings = findingStore(storage.sql, claims, consent);
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: options.lookupOffered ?? true, agreementsOffered: true }), pages = options.pages ?? observedPages();
+  const findings = findingStore(storage.sql, claims, consent, Date.now);
   const handlers: ToolHandler<any, unknown, MemoryToolContext>[] = [
     observeReads(webSearchHandler('test-brave-key', brave(results)), pages) as ToolHandler<any, unknown, MemoryToolContext>,
     observeReads(browsePage, pages),
-    ...ownerLookupHandlers({ store: findingStore(storage.sql, claims, consent), pages, transaction: work => storage.transactionSync(work) }),
+    ...ownerLookupHandlers({ store: findingStore(storage.sql, claims, consent, Date.now), pages, transaction: work => storage.transactionSync(work) }),
     sendMessage,
   ];
   const runScope = { runId: options.runId ?? `run-${sequence}`, attempt: 'a1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => storage.transactionSync(work) };
