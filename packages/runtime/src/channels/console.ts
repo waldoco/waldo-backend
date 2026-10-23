@@ -8,7 +8,7 @@ import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
-import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
@@ -34,7 +34,7 @@ type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: st
 type Grant = Readonly<{ token: string; expires: number }>;
 // expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
 // signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
-export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number }>;
+export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number; ends?: number }>;
 
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
 // name is recorded. Tokens never leave this function.
@@ -50,8 +50,8 @@ export const consoleSessionRows = (sessions: readonly ConsoleSession[], current:
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // One-time link from Telegram -> short session cookie. Only the owner's DM can mint a link.
-// Sessions are per browser: a sign-in in a browser that holds a session replaces it with a new token, so nothing stacks
-// and a copy of the old cookie stops working.
+// Sessions are per browser: a sign-in in a browser that holds a session replaces it with a new token. The old one keeps
+// ordinary access for CONSOLE_REPLACED_SESSION_MS without its code (ends), so a turn under it finishes, then it ends.
 export const consoleAccess = (store: Store, now: () => number = Date.now) => {
   const readSessions = async (): Promise<Record<string, ConsoleSession>> => (await store.get<Record<string, ConsoleSession>>('console:sessions')) ?? {};
   const writeSessions = async (sessions: Record<string, ConsoleSession>): Promise<void> => {
@@ -59,13 +59,19 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     if (Object.keys(live).length > 0) await store.put('console:sessions', live);
     else await store.delete('console:sessions');
   };
-  // A browser that proved a code keeps that proof through a link sign-in that replaces its session.
+  // A browser that proved a code keeps that proof through a link sign-in that replaces its session. Only the new
+  // session carries it: the replaced one loses its code and is capped, and a later cap never lengthens it.
   const addSession = async (replacing: string | null, verified: boolean): Promise<string> => {
     const sessions = await readSessions();
     const replaced = replacing ? sessions[replacing] : undefined;
-    const verifiedAt = verified ? now() : replaced && replaced.expires >= now() ? replaced.verified_at : undefined;
+    const live = replaced !== undefined && replaced.expires >= now();
+    const verifiedAt = verified ? now() : live ? replaced.verified_at : undefined;
     const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS, ...(verifiedAt === undefined ? {} : { verified_at: verifiedAt }) };
-    if (replacing) delete sessions[replacing];
+    if (live) {
+      const { verified_at: _code, ...rest } = replaced;
+      const ends = Math.min(replaced.ends ?? Number.POSITIVE_INFINITY, now() + CONSOLE_REPLACED_SESSION_MS);
+      sessions[replacing!] = { ...rest, ends, expires: Math.min(replaced.expires, ends) };
+    } else if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
     return session.token;
@@ -92,7 +98,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       const session = sessions[token];
       if (!session || session.expires < now()) return null;
       if (!renew || session.signed_in === undefined) return session;
-      const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS);
+      const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS, session.ends ?? Number.POSITIVE_INFINITY);
       if (expires - session.expires < RENEW_STEP_MS) return session;
       const renewed = { ...session, expires };
       sessions[token] = renewed;

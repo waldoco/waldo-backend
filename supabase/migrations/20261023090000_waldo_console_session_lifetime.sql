@@ -5,8 +5,12 @@
 -- console_session_open_for, whose signed message names the lifetimes; the database refuses anything past 30 days.
 -- console_session_list keeps its three keys, so the Worker deployed before this migration still reads it.
 --
+-- A sign-in in a browser that presents a live session caps that session through console_session_cap instead of ending
+-- it: 5 more minutes of ordinary access, so a console chat turn running or queued under it finishes.
+--
 -- Rollback: a forward migration restoring the three function bodies from 20261010010000 and 20260929030000
--- (created_at > now() - interval '12 hours') ends every long session at its 12th hour. The columns can stay.
+-- (created_at > now() - interval '12 hours') ends every long session at its 12th hour, and drops console_session_cap,
+-- which an older Worker never calls. The columns can stay.
 alter table waldo.console_sessions
   add column lifetime interval not null default interval '12 hours',
   add column idle_timeout interval;
@@ -88,5 +92,27 @@ begin
   return result;
 end $$;
 
+-- The caller names no duration: the 5 minutes live here, and the cap only ever shortens. The idle limit is cut to fit, so
+-- the row keeps idle_timeout <= lifetime; a row with no idle limit keeps none. Sign-out (console_session_revoke) still
+-- ends a session at once.
+create function waldo.console_session_cap(p_do_name text, p_session_hash text, p_at bigint, p_sig text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not waldo.router_signed('consolesess.cap.' || p_do_name || '.' || p_session_hash, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  if p_session_hash !~ '^[a-f0-9]{64}$' then return false; end if;
+  update waldo.console_sessions s
+    set lifetime = least(s.lifetime, now() - s.created_at + interval '5 minutes'),
+        idle_timeout = case when s.idle_timeout is null then null else least(s.idle_timeout, s.lifetime, now() - s.created_at + interval '5 minutes') end
+    from waldo.owners o
+    where s.session_hash = p_session_hash and s.owner_id = o.id and o.do_name = p_do_name
+      and s.created_at > now() - s.lifetime
+      and (s.idle_timeout is null or s.last_seen_at > now() - s.idle_timeout);
+  return found;
+end $$;
+
+revoke all on function waldo.console_session_cap(text, text, bigint, text) from public, anon, authenticated, service_role;
+grant execute on function waldo.console_session_cap(text, text, bigint, text) to anon;
 revoke all on function waldo.console_session_open_for(text, text, integer, integer, bigint, text) from public, anon, authenticated, service_role;
 grant execute on function waldo.console_session_open_for(text, text, integer, integer, bigint, text) to anon;

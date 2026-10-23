@@ -2,7 +2,7 @@ import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
-import { CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
 
 const memoryStore = () => {
   const data = new Map<string, unknown>();
@@ -64,7 +64,7 @@ describe('owner console', () => {
     expect(await access.redeem(late)).toBeNull();
   });
 
-  it('redeeming on a browser that already holds a live session replaces it instead of stacking', async () => {
+  it('redeeming on a browser that already holds a live session replaces it, and the old one runs out instead of stacking', async () => {
     let now = 1_000;
     const access = consoleAccess(memoryStore(), () => now);
     const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
@@ -72,10 +72,13 @@ describe('owner console', () => {
     now += 60_000;
     const again = (await access.redeem(await mint(), cookie))!;
     expect(again).not.toBe(cookie);
+    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    expect((await access.session(cookie))?.expires).toBe(now + CONSOLE_REPLACED_SESSION_MS);
+    const signedIn = now;
+    now += CONSOLE_REPLACED_SESSION_MS + 1;
     expect(await access.session(cookie)).toBeNull();
     expect(await access.list()).toHaveLength(1);
-    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
-    now += CONSOLE_SESSION_IDLE_MS - 1;
+    now = signedIn + CONSOLE_SESSION_IDLE_MS - 1;
     expect(await access.session(again)).not.toBeNull();
   });
 

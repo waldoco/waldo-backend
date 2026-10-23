@@ -13,6 +13,10 @@ export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
 // Sheet asks for current credentials before sensitive features. Unlike GitHub's, the window does not restart with each
 // sensitive action: it runs from the code.
 export const CONSOLE_STEP_UP_MS = 2 * 60 * 60_000;
+// A sign-in in a browser that holds a live session (a confirm, or a link or signup there) does not end that session: by
+// owner ruling it keeps ordinary access, without its code, for 5 more minutes, so a turn running or queued under it
+// finishes, and then it ends. The directory holds the same 5 minutes in console_session_cap.
+export const CONSOLE_REPLACED_SESSION_MS = 5 * 60_000;
 // A request another site started (Fetch Metadata): under Lax it can still be a top-level visit carrying the cookies, so
 // it may read a session but never renews one, and the console refuses it any write or flow start.
 export const fromAnotherSite = (request: Request): boolean => {
@@ -61,8 +65,8 @@ export type ConsoleAuth = Readonly<{
   // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
   // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
   // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie. Given the sign-in request,
-  // it first revokes the session of the owner cookie that browser presents for the same owner, and throws when that
-  // cannot be confirmed, so a sign-in never leaves a copy of the old cookie working.
+  // it first caps the session of the owner cookie that browser presents, whichever owner holds it, to
+  // CONSOLE_REPLACED_SESSION_MS, and throws when that cannot be confirmed, so a copy of the old cookie runs out.
   ownerCookie(doName: string, presented?: Request): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
   // The mobile app's bearer: the same kind of server-side session, signed under its own context so it is never
@@ -165,6 +169,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (!session) return null;
     return (await listSessions(session.doName)).some((row) => row.session === session.sessionHash) ? session.doName : null;
   };
+  const capSession = async (doName: string, sessionHash: string): Promise<boolean> => {
+    const capped = await rpc('console_session_cap', `consolesess.cap.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (typeof capped !== 'boolean') throw new Error('session cap unavailable');
+    return capped;
+  };
   const revokeSession = async (doName: string, sessionHash: string): Promise<boolean> => {
     const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
@@ -241,7 +250,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
     async ownerCookie(doName, presented) {
       const previous = presented ? await readSession(presentedOwnerCookie(presented), cookieSig) : null;
-      if (previous?.doName === doName) await revokeSession(doName, previous.sessionHash);
+      if (previous) await capSession(previous.doName, previous.sessionHash);
       return mint(doName, cookieSig, openLong);
     },
     readOwnerCookie: (request) => fromAnotherSite(request) ? readListed(presentedOwnerCookie(request)) : readSigned(presentedOwnerCookie(request), cookieSig),
