@@ -400,7 +400,7 @@ describe('owner console', () => {
     expect(spots).not.toContain('<zz>');
     expect(spots).toContain('value="spot.forget"');
     const connections = renderConsole(view, 'connections');
-    // S5: connect is a CSRF-checked POST that 303s to a /c/<ticket>; no GET link that a preview could mint from.
+    // S5: connect is a CSRF-checked POST that 303s to the console start path; no GET link that a preview could mint from.
     expect(connections).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
     expect(connections).not.toContain('href="/console/google');
     expect(connections).toContain(`name="csrf" value="${view.csrf}"`);
