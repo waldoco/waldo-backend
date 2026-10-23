@@ -337,15 +337,31 @@ const pinnedScores = z.strictObject({
     z.strictObject({ state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average']), ...pinnedVersion })]).optional(),
 });
 
+// Builds pinned before the app took sleep_debt parse the scores with no such key, strictly.
+const pinnedBeforeSleepDebt = pinnedScores.omit({ sleep_debt: true });
+
 describe('app health scores', () => {
-  it('serves stored sleep debt at every health revision, in a shape an installed build parses with its own pin', async () => {
-    const version = { algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
-    for (const sleep_debt of [{ state: 'unavailable', reason: 'missing_sleep' }, { state: 'partial', confidence: 0.6, ...version }, { state: 'available', debt_minutes: 315.5, need_basis: 'own_average', ...version }]) {
+  const version = { algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
+  const debts = [{ state: 'unavailable', reason: 'missing_sleep' }, { state: 'partial', confidence: 0.6, ...version }, { state: 'available', debt_minutes: 315.5, need_basis: 'own_average', ...version }];
+  it('serves stored sleep debt from health revision 2, in a shape an installed build parses with its own pin', async () => {
+    for (const sleep_debt of debts) {
       rpcResult = { scores: { ...row, sleep_debt } };
-      for (const contract of [{}, { 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=3' }] as Record<string, string>[]) {
+      for (const contract of [{ 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=3' }, { 'x-waldo-app-contract': 'approvals=3,health=3' }] as Record<string, string>[]) {
         const body = await (await get('/app/v1/health/scores', contract)).json() as Record<string, unknown>;
         expect(pinnedScores.safeParse(body).success, `${sleep_debt.state} ${JSON.stringify(contract)}`).toBe(true);
         expect(body.sleep_debt).toEqual(sleep_debt);
+      }
+    }
+  });
+  it('never shows sleep debt to a build below health revision 2, which keeps all three scores', async () => {
+    for (const sleep_debt of debts) {
+      rpcResult = { scores: { ...row, sleep_debt } };
+      for (const contract of [{}, { 'x-waldo-app-contract': 'health=1' }, { 'x-waldo-app-contract': 'approvals=3' }, { 'x-waldo-app-contract': 'health=two' }] as Record<string, string>[]) {
+        const response = await get('/app/v1/health/scores', contract);
+        const body = await response.json() as Record<string, unknown>;
+        const label = `${sleep_debt.state} ${JSON.stringify(contract)}`;
+        expect([response.status, 'sleep_debt' in body], label).toEqual([200, false]);
+        expect(pinnedBeforeSleepDebt.safeParse(body).success, label).toBe(true);
       }
     }
   });
