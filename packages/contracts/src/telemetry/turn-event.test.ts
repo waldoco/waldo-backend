@@ -11,11 +11,11 @@ import {
 
 const minimal = { trace: 'tg-1', hop: 'llm_reply', ms: 12, ok: true };
 
-describe('turn event schema v12', () => {
+describe('turn event schema v13', () => {
   it('pins the schema version and the ladder, outcome and cost vocabularies', () => {
-    expect(TURN_EVENT_SCHEMA_VERSION).toBe('12');
+    expect(TURN_EVENT_SCHEMA_VERSION).toBe('13');
     expect(executionRungSchema.options).toEqual(['memory', 'connector', 'email', 'fetch', 'browser', 'sandbox', 'mac', 'human']);
-    expect(rungBlockedReasonSchema.options).toEqual(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required']);
+    expect(rungBlockedReasonSchema.options).toEqual(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required', 'device_offline']);
     expect(turnOutcomeSchema.options).toEqual(['answered', 'completed', 'failed', 'dropped', 'delivery_pending', 'blocked']);
     expect(costKindSchema.options).toEqual(['turn', 'background', 'worker', 'heartbeat', 'eval']);
   });
