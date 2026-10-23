@@ -197,7 +197,7 @@ describe('a Mac result follow-up goes where the owner\'s proactive work goes', (
   });
   // An owner on the app (and WhatsApp, when bound) with no Telegram link, the clock pinned and no scheduled jobs, so each pass
   // runs only the Mac lane and the delivery outbox.
-  const withOwner = (name: string, binding: Readonly<{ whatsapp?: boolean; surface?: string; telegramUnlinked?: boolean }>, run: (owner: Owner, state: DurableObjectState, wire: Wire, pass: (lane: 'mac' | 'outbox') => Promise<void>) => Promise<void>) =>
+  const withOwner = (name: string, binding: Readonly<{ whatsapp?: boolean; surface?: string; telegramUnlinked?: boolean; telegram?: boolean }>, run: (owner: Owner, state: DurableObjectState, wire: Wire, pass: (lane: 'mac' | 'outbox') => Promise<void>) => Promise<void>) =>
     runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const originalNow = Date.now, wire: Wire = { whatsapp: [], telegram: [] };
       let now = AT;
@@ -210,6 +210,7 @@ describe('a Mac result follow-up goes where the owner\'s proactive work goes', (
         kv.put('app_subject', String(appSubjectFor(name)));
         if (binding.whatsapp) bindWhatsAppNumber(kv, WA);
         if (binding.telegramUnlinked) { kv.put('telegram_subject', '700000002'); kv.put('telegram_unlinked', true); }
+        if (binding.telegram) kv.put('telegram_subject', '700000003');
         if (binding.surface) kv.put(PROACTIVE_SURFACE_KEY, binding.surface);
         kv.put('timezone', 'UTC'); kv.put('timezone_confirmed', true);
         kv.put('wa_last_inbound_ms', AT - 60 * 60_000);
@@ -250,6 +251,17 @@ describe('a Mac result follow-up goes where the owner\'s proactive work goes', (
       expect(inboxStates(state)).toEqual(['finished']);
       expect(await appChat(owner, name)).toEqual([NOTICE]);
       expect(wire.telegram).toEqual([]);
+    });
+  }, 30_000);
+
+  it('an owner linked on Telegram who also uses the app gets the report in the app, with Telegram\'s plain copy, as scheduled work does', async () => {
+    const name = 'mac_surface_app_telegram';
+    await withOwner(name, { telegram: true }, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(await appChat(owner, name)).toEqual([NOTICE]);
+      expect(wire.telegram).toEqual([NOTICE]);
     });
   }, 30_000);
 
