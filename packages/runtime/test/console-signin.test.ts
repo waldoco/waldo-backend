@@ -27,7 +27,7 @@ it('finishes download OTP with an HTML link and unchanged cookie protections', a
     auth({ verify: async () => 'do-a' })))!;
   expect(response.status).toBe(200);
   expect(response.headers.get('location')).toBeNull();
-  expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+  expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
   expect(await response.text()).toContain('id="signin-download"');
 });
 
@@ -45,7 +45,7 @@ it('returns a signed-out owner to the devices page after sign-in so Kennel pairi
     auth({ verify: async () => 'do-a' })))!;
   expect(verified.status).toBe(303);
   expect(verified.headers.get('location')).toBe('/console/devices');
-  expect(verified.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+  expect(verified.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
 });
 it('accepts exactly the devices path as a non-download continuation', () => {
   expect(consoleReturnTarget(['/console/devices'])).toBe('/console/devices');
@@ -243,8 +243,8 @@ describe('handleConsole', () => {
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
     const cookies = [...response.headers].filter(([name]) => name === 'set-cookie').map(([, value]) => value);
-    expect(cookies.some((cookie) => cookie.startsWith('waldo_console=session-token;') && cookie.includes('HttpOnly') && cookie.includes('SameSite=Strict'))).toBe(true);
-    expect(cookies.some((cookie) => cookie.startsWith('waldo_owner=do-a.session.sig;'))).toBe(true);
+    expect(cookies).toContain('waldo_console=session-token; Path=/console; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
+    expect(cookies).toContain('waldo_owner=do-a.session.sig; Path=/console; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
   });
 
   it('a wrong code wakes no owner DO', async () => {
@@ -265,48 +265,48 @@ describe('handleConsole', () => {
 });
 
 describe('invite-gated signup', () => {
-  it('carries an invite through OTP send and verify and escapes it in the hidden field', async () => {
+  it('never echoes a posted invite or phone back into the page', async () => {
     const sendCode = vi.fn(async () => true);
     const verify = vi.fn(async () => 'owner-1');
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
     const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
-    const signIn = await handleConsole(form('/console/signin', { email: 'invitee@example.com', phone: '+14155550100', invite: ' abc<123 ' }), env, auth({ sendCode, verify }));
-    expect(sendCode).toHaveBeenCalledWith('invitee@example.com', 'ABC<123');
-    expect(await signIn!.text()).toContain('name="invite" value="ABC&#60;123"');
+    const signIn = await (await handleConsole(form('/console/signin', { email: 'invitee@example.com', phone: '+14155550100', invite: ' abc<123 ' }), env, auth({ sendCode, verify })))!.text();
+    expect(sendCode).toHaveBeenCalledWith('invitee@example.com');
+    expect(signIn).not.toMatch(/ABC|abc&#60;|abc<|\+14155550100/);
     const done = await handleConsole(form('/console/verify', { email: 'invitee@example.com', phone: '+14155550100', invite: ' ABC<123 ', code: '123456' }), env, auth({ sendCode, verify }));
     expect(done?.status).toBe(303);
-    expect(verify).toHaveBeenCalledWith('invitee@example.com', '123456', '+14155550100', 'ABC<123');
+    expect(verify).toHaveBeenCalledWith('invitee@example.com', '123456');
   });
 
-  it('legacy existing-owner signin retains normalized phone fields without asserting provisioning', async () => {
+  it('an existing member signs in with email alone; a legacy phone field is ignored', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
     const limiter = { limit: vi.fn(async () => ({ success: true })) as unknown as RateLimit['limit'] } as unknown as RateLimit;
     const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
     const send = await handleConsole(form('/console/signin', { email: 'New@Example.com', phone: '+91 98765 43210' }), env, a);
     const html = await send!.text();
-    expect(html).toContain('name="phone" value="+919876543210"');
+    expect(html).not.toContain('name="phone"');
     expect(html).toContain('name="email" value="new@example.com"');
     const done = await handleConsole(form('/console/verify', { email: 'new@example.com', phone: '+91 98765 43210', code: '123456' }), env, a);
     expect(done?.status).toBe(303);
-    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210', '');
+    expect(verify).toHaveBeenCalledWith('new@example.com', '123456');
   });
 
-  it('allows code send without a phone, and refuses an un-normalizable supplied phone', async () => {
+  it('sends a code without a phone, and ignores any phone field', async () => {
     const sendCode = vi.fn(async () => true);
     const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
     const missing = await handleConsole(form('/console/signin', { email: 'a@b.com' }), env, auth({ sendCode }));
     expect(await missing!.text()).toContain('Email sign-in code');
-    const bad = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
-    expect(await bad!.text()).toContain('Enter your phone number');
-    expect(sendCode).toHaveBeenCalledTimes(1);
+    const stray = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
+    expect(await stray!.text()).toContain('Email sign-in code');
+    expect(sendCode).toHaveBeenCalledTimes(2);
   });
 
-  it('a tampered verify form with an invalid hidden phone never reaches auth.verify', async () => {
+  it('a tampered verify form cannot pass a phone or invite to auth.verify', async () => {
     const verify = vi.fn(async () => 'owner-abc');
-    const done = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '1', code: '123456' }), { OWNER_DO: owners().ns }, auth({ verify }));
-    expect(await done!.text()).toContain('Enter your phone number');
-    expect(verify).not.toHaveBeenCalled();
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
+    await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '1', invite: 'X', code: '123456' }), env, auth({ verify }));
+    expect(verify.mock.calls).toEqual([['a@b.com', '123456']]);
   });
 
   it('throttles code sends per email and per IP', async () => {
@@ -322,7 +322,7 @@ describe('invite-gated signup', () => {
     expect(limit).toHaveBeenCalledWith({ key: 'console-signin-ip:1.2.3.4' });
     const allowed = await handleConsole(form('/console/signin', { email: 'fresh@x.com', phone: '+14155550100' }), env, auth({ sendCode }));
     expect(await allowed!.text()).toContain('name="code"');
-    expect(sendCode).toHaveBeenCalledWith('fresh@x.com', '');
+    expect(sendCode).toHaveBeenCalledWith('fresh@x.com');
   });
 
   it('throttles verify attempts per email and per IP: auth.verify never runs', async () => {
@@ -334,7 +334,7 @@ describe('invite-gated signup', () => {
       env, auth({ verify }));
     const html = await blocked!.text();
     expect(html).toContain('Too many attempts');
-    expect(html).toContain('name="phone" value="+14155550100"');
+    expect(html).toContain('name="email" value="guess@x.com"');
     expect(verify).not.toHaveBeenCalled();
     expect(limit).toHaveBeenCalledWith({ key: 'console-verify:guess@x.com' });
     expect(limit).toHaveBeenCalledWith({ key: 'console-verify-ip:1.2.3.4' });
@@ -345,11 +345,11 @@ describe('invite-gated signup', () => {
     const response = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }), { OWNER_DO: owners().ns }, auth({ verify }));
     const html = await response!.text();
     expect(html).toContain('temporarily unavailable');
-    expect(html).toContain('name="phone" value="+14155550100"');
+    expect(html).toContain('name="email" value="a@b.com"');
     expect(verify).not.toHaveBeenCalled();
   });
 
-  it('a session-storage failure keeps the phone on the retry form instead of swallowing the error text', async () => {
+  it('a session-storage failure keeps the email on the retry form instead of swallowing the error text', async () => {
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
     const response = await handleConsole(
       form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }),
@@ -357,8 +357,8 @@ describe('invite-gated signup', () => {
       auth({ verify: vi.fn(async () => 'do-a'), ownerCookie: vi.fn(async () => null) }));
     const html = await response!.text();
     expect(html).toContain('having trouble');
-    expect(html).toContain('name="phone" value="+14155550100"');
-    expect(html).not.toContain('name="phone" value="Sign-in is having trouble');
+    expect(html).toContain('name="email" value="a@b.com"');
+    expect(html).not.toContain('value="Sign-in is having trouble');
   });
 
   it('fails CLOSED without the limiter binding: no code is sent on a public endpoint', async () => {
@@ -369,15 +369,14 @@ describe('invite-gated signup', () => {
   });
 });
 
-it('associates visible legacy labels and preserves a labelled OTP retry after transport failure', async () => {
+it('labels the email field, offers no legacy fields, and preserves a labelled OTP retry after transport failure', async () => {
   const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
   const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
   const a = auth({ verify: vi.fn(async () => { throw new Error('synthetic timeout'); }) });
   const html = await (await handleConsole(new Request('https://w.test/console/signin'), env, a))!.text();
-  for (const control of ['email', 'phone', 'invite']) {
-    expect(html).toContain(`<label for="signin-${control}">`);
-    expect(html).toContain(`id="signin-${control}" name="${control}"`);
-  }
+  expect(html).toContain('<label for="signin-email">');
+  expect(html).toContain('id="signin-email" name="email"');
+  for (const control of ['phone', 'invite']) expect(html).not.toContain(`name="${control}"`);
   const failed = (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', code: '123456' }), env, a))!;
   expect(failed.headers.get('set-cookie')).toBeNull();
   const retry = await failed.text();
@@ -392,8 +391,8 @@ it('keeps editable details after a send refusal without retaining an OTP', async
   }), { OWNER_DO: owners().ns }, auth());
   const html = await response!.text();
   expect(html).toContain('value="person@test.invalid"');
-  expect(html).toContain('value="bad phone"');
-  expect(html).toContain('value="A&#60;&#34;B"');
+  expect(html).not.toContain('bad phone');
+  expect(html).not.toContain('A&#60;&#34;B');
   expect(html).not.toContain('synthetic-secret-otp');
 });
 
@@ -408,8 +407,7 @@ it('opens populated resend details without requesting or checking a code', async
   vi.clearAllMocks();
   const edited = await (await handleConsole(form('/console/signin', { intent: 'edit', email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }), env, a))!.text();
   expect(edited).toContain('id="signin-email" name="email" value="person@test.invalid"');
-  expect(edited).toContain('id="signin-phone" name="phone" value="+14155550100"');
-  expect(edited).toContain('id="signin-invite" name="invite" value="ABC"');
+  expect(edited).not.toMatch(/name="(phone|invite)"/);
   expect(a.sendCode).not.toHaveBeenCalled();
   expect(a.verify).not.toHaveBeenCalled();
   expect(a.throttle).not.toHaveBeenCalled();
@@ -418,7 +416,6 @@ it('opens populated resend details without requesting or checking a code', async
 
 it.each([
   ['email', { email: 'invalid', phone: '+14155550100', invite: 'ABC' }, 'email'],
-  ['phone', { email: 'person@test.invalid', phone: 'bad', invite: 'ABC' }, 'phone'],
   ['limiter absent', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'absent'],
   ['binding throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'binding'],
   ['durable throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'durable'],
@@ -426,7 +423,7 @@ it.each([
   const a = auth({ throttle: vi.fn(async () => mode !== 'durable') });
   const env = { OWNER_DO: owners().ns, ...(mode === 'absent' ? {} : { RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: mode !== 'binding' })) } as unknown as RateLimit }) };
   const html = await (await handleConsole(form('/console/signin', details), env, a))!.text();
-  for (const value of Object.values(details)) expect(html).toContain(`value="${value}"`);
+  expect(html).toContain(`value="${details.email}"`);
   expect(a.sendCode).not.toHaveBeenCalled();
 });
 
@@ -439,8 +436,8 @@ it('offers explicit loading messages on request, verify and edit forms', async (
   expect(retry).toContain('data-pending="Opening your details…"');
 });
 
-it.each(['send unavailable', 'verify unavailable', 'invalid or expired code', 'invalid verify phone'])('%s preserves retry details and omits the submitted OTP', async mode => {
-  const fields = { email: 'person@test.invalid', phone: mode === 'invalid verify phone' ? 'bad phone' : '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' };
+it.each(['send unavailable', 'verify unavailable', 'invalid or expired code'])('%s preserves retry details and omits the submitted OTP', async mode => {
+  const fields = { email: 'person@test.invalid', code: 'synthetic-secret-otp' };
   const a = auth({
     sendCode: async () => { throw new Error('synthetic send unavailable'); },
     verify: async () => { if (mode === 'verify unavailable') throw new Error('synthetic verify unavailable'); return null; },
@@ -448,7 +445,7 @@ it.each(['send unavailable', 'verify unavailable', 'invalid or expired code', 'i
   const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
   const response = (await handleConsole(form(mode === 'send unavailable' ? '/console/signin' : '/console/verify', fields), env, a))!;
   const html = await response.text();
-  for (const value of [fields.email, fields.phone, fields.invite]) expect(html).toContain(`value="${value}"`);
+  expect(html).toContain(`value="${fields.email}"`);
   expect(html).not.toContain(fields.code);
   expect(response.headers.get('set-cookie')).toBeNull();
 });
@@ -499,4 +496,93 @@ it('keeps dashboard control JSON authentication failures private without downloa
   const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{OWNER_DO:ns.ns},auth()))!;
   expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toBe('private, no-store');expect(response.headers.get('location')).toBeNull();expect(ns.fetch).not.toHaveBeenCalled();
  }
+});
+
+describe('sign-in screens', () => {
+  const env = () => ({ OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit });
+
+  it('asks only for an email, says how long sign-in lasts, and sends new members to their invite signup', async () => {
+    const html = await (await handleConsole(new Request('https://w.test/console/signin'), env(), auth()))!.text();
+    expect(html).toContain('id="signin-email" name="email"');
+    expect(html).not.toMatch(/name="(invite|phone)"/);
+    expect(html).toContain('href="/console/signup"');
+    expect(html).toContain('up to 30 days');
+    expect(html).toContain('after 7 days away');
+  });
+
+  it('never sends an invite through sign-in, so a new member is not handed a code that cannot sign them in', async () => {
+    const sendCode = vi.fn(async () => true), verify = vi.fn(async () => null);
+    await handleConsole(form('/console/signin', { email: 'new@example.com', invite: 'ABCDEFGHJKLMNPQRSTUV' }), env(), auth({ sendCode }));
+    expect(sendCode).toHaveBeenCalledWith('new@example.com');
+    await handleConsole(form('/console/verify', { email: 'new@example.com', invite: 'ABCDEFGHJKLMNPQRSTUV', code: '123456' }), env(), auth({ verify }));
+    expect(verify).toHaveBeenCalledWith('new@example.com', '123456');
+  });
+
+  it('gives the same code screen whether the address is a member, unknown, or asked again too soon', async () => {
+    const member = auth({ sendCode: vi.fn(async () => true) });
+    const unknown = auth({ sendCode: vi.fn(async () => false) });
+    const tooSoon = auth({ sendCode: vi.fn(async () => { throw new Error('otp send 429'); }) });
+    const screens = await Promise.all([member, unknown, tooSoon].map(async (a) => (await handleConsole(form('/console/signin', { email: 'Owner@Example.com' }), env(), a))!.text()));
+    expect(screens[1]).toBe(screens[0]);
+    expect(screens[2]).toBe(screens[0]);
+    expect(screens[0]).toContain('If owner@example.com belongs to a Waldo member');
+  });
+
+  it('offers a new code to the same address and a different email, on the code screen', async () => {
+    const html = await (await handleConsole(form('/console/signin', { email: 'owner@example.com' }), env(), auth({ sendCode: vi.fn(async () => true) })))!.text();
+    const forms = html.split('<form').slice(1);
+    const resend = forms.find((part) => part.includes('id="signin-resend"'))!;
+    expect(resend).toContain('action="/console/signin"');
+    expect(resend).toContain('name="email" value="owner@example.com"');
+    expect(resend).not.toContain('name="intent"');
+    const other = forms.find((part) => part.includes('name="intent" value="edit"'))!;
+    expect(other).toContain('Use a different email');
+    expect(html).toContain('autocomplete="one-time-code"');
+  });
+
+  it('says why a code may not work and offers a new one', async () => {
+    const html = await (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '000000' }), env(), auth()))!.text();
+    expect(html).toContain('That code did not work.');
+    expect(html).toContain('works once');
+    expect(html).toContain('id="signin-resend"');
+    expect(html).not.toContain('000000');
+  });
+});
+
+describe('signing in again in the same browser', () => {
+  const signedIn = 'waldo_owner=do-a.old.sig; waldo_console=old-token';
+  const verifyPost = () => new Request('https://w.test/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'owner@example.com', code: '123456' }), headers: { cookie: signedIn } });
+  const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+
+  it('a verified code ends the browser\'s old owner object session and directory row', async () => {
+    const { ns, fetch } = owners();
+    const ownerCookie = vi.fn(async (_doName: string, _presented?: Request) => 'do-a.fresh.sig');
+    const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
+    expect(response.status).toBe(303);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://telegram-owner/grant-console');
+    expect(new Headers(init.headers).get('cookie')).toBe('waldo_console=old-token');
+    expect(ownerCookie.mock.calls[0]?.[0]).toBe('do-a');
+    expect(ownerCookie.mock.calls[0]?.[1]?.headers.get('cookie')).toBe(signedIn);
+  });
+
+  it('finishes no sign-in when the old directory row cannot be revoked', async () => {
+    const { ns } = owners();
+    const ownerCookie = vi.fn(async () => { throw new Error('session revocation unavailable'); });
+    const response = (await handleConsole(verifyPost(), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie })))!;
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(await response.text()).toContain('Sign-in is having trouble');
+  });
+});
+
+describe('confirming it is you before an action that creates lasting access', () => {
+  it('the sign-in page in confirm mode says why it asks, and still sends the code by email', async () => {
+    const html = await (await handleConsole(new Request('https://w.test/console/signin?confirm=1'), { OWNER_DO: owners().ns }, auth()))!.text();
+    expect(html).toContain('<h1>Confirm it\'s you</h1>');
+    expect(html).toContain('an email code from the last 2 hours');
+    expect(html).toContain('action="/console/signin"');
+    expect(html).not.toContain('Join with your invite');
+    const plain = await (await handleConsole(new Request('https://w.test/console/signin'), { OWNER_DO: owners().ns }, auth()))!.text();
+    expect(plain).toContain('<h1>Sign in to Waldo</h1>');
+  });
 });

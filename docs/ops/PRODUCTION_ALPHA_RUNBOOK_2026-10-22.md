@@ -329,7 +329,7 @@ Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, *
   - 30 attempts per IP per 15 minutes.
 
   A group onboarding behind one office network will meet the IP limit [inference].
-- **Sessions last 12 hours** (`console-signin.ts:306`, `app-api.ts:87`), so 50 daily users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4).
+- **App sessions last 12 hours** (`app-api.ts:87`), so 50 daily app users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4). Console sessions stay signed in for up to 30 days while used (`identity/console-auth.ts`).
 
 **Cost ceiling.**
 - **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
