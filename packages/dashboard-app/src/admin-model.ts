@@ -1,3 +1,4 @@
+import { isStepUpRefusal, StepUpRequired } from './model';
 export type AdminRecord = {
   csrf: string; as_of: string;
   current_issuer: { id: string; email: string | null; issued_count: number };
@@ -37,7 +38,7 @@ export async function submitInvite(data: AdminRecord, action: 'invite.create'|'i
   try { response=await fetch('/console/action',{method:'POST',headers:{accept:'application/json'},credentials:'same-origin',cache:'no-store',redirect:'error',body:new URLSearchParams({csrf:data.csrf,action,[action==='invite.create'?'value':'id']:value})}); }
   catch { throw new Error('The action result is unavailable. Refresh records before retrying; a code cannot be recovered.'); }
   if(response.status===409)throw new Error('Not completed. Refresh records: the quota, recipient or invite state may have changed.');
-  if(response.status===403)throw new Error('Not completed. Reload this page to renew the session before trying again.');
+  if(response.status===403){let body:unknown=null;try{body=await response.json();}catch{body=null;}if(isStepUpRefusal(403,body))throw new StepUpRequired();throw new Error('Not completed. Reload this page to renew the session before trying again.');}
   if(!response.ok)throw new Error('The action result is unavailable. Refresh records before retrying; a code cannot be recovered.');
   let receipt: unknown;
   try { receipt=await response.json(); }
