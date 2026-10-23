@@ -225,6 +225,29 @@ export const readMemoryArgsSchema = z.strictObject({
   query: z.string().min(1).max(500).optional(),
 });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
+// A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
+// return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.
+export const readMemoryClaimSchema = z.strictObject({
+  id: z.int().positive(),
+  kind: z.string().min(1),
+  text: z.string(),
+  evidence: z.string(),
+  source: z.string(),
+  origin: z.string().refine(origin => origin !== 'untrusted').nullable(),
+  source_ref: z.string().nullable(),
+  learned_at: z.string(),
+  valid_from: z.string().nullable(),
+  verification_status: z.string(),
+  supersedes_id: z.int().positive().nullable(),
+  last_seen_at: z.string(),
+});
+export const readMemoryResultSchema = z.strictObject({
+  claims: z.array(readMemoryClaimSchema),
+  omitted_claim_ids: z.array(z.int().positive()),
+  complete: z.boolean(),
+  authority: z.literal('context_only_not_action_approval'),
+}).refine(result => result.complete === (result.omitted_claim_ids.length === 0), 'complete means no claim was omitted');
+export type ReadMemoryResult = z.infer<typeof readMemoryResultSchema>;
 
 // The model-facing bound of the episode FTS5 leg — episodeSearchArgsSchema (memory/episode)
 // is the internal gateway shape; this seam additionally caps what the model may request.
