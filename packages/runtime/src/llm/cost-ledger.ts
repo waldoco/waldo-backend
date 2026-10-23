@@ -24,6 +24,11 @@ export const LOW_EFFORT_FRACTION = 0.8;
 // Each owner's monthly spend ceiling in USD; the owner can change it here. Past it an owner turn degrades to the
 // auxiliary model and paid tools are held. It is inert while WALDO_COST_LEDGER_SYNC is off, since nothing counts the month.
 export const MONTHLY_SPEND_CEILING_USD = 25;
+// Staging carries the owner's heavy test account. At the production ceiling a deliberate long test would cross it
+// mid-run and quietly move every reply to the auxiliary model, so the test would no longer measure the chat model.
+export const STAGING_MONTHLY_SPEND_CEILING_USD = 250;
+export const monthlySpendCeilingUsd = (environment: string | undefined): number =>
+  environment === 'staging' ? STAGING_MONTHLY_SPEND_CEILING_USD : MONTHLY_SPEND_CEILING_USD;
 
 export type SpendPosture = Readonly<{
   effort: 'normal' | 'low';
