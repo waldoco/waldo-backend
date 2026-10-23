@@ -43,7 +43,9 @@ export type CompactionSpan = Readonly<{ conversationRef: string; covers: Convers
 export type SpanMemory = Readonly<{
   save(span: string, sides: ClaimGrounding, policy: Readonly<{ health: boolean }>): Promise<readonly Readonly<{ id: number; kind: string }>[]>;
 }>;
-export type CompactionFlush = (span: CompactionSpan, memory: SpanMemory) => Promise<void>;
+// It returns the owner's own words in the span as it read them (none when it read no rows), so the summary floor can tell
+// a reading the owner wrote from one Waldo relayed or someone else sent.
+export type CompactionFlush = (span: CompactionSpan, memory: SpanMemory) => Promise<Readonly<{ owner: string }> | void>;
 
 export type CompactedStats = ConversationWindowStats & Readonly<{ compacted: 0 | 1 }>;
 

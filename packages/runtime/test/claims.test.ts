@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, HEALTH_NOTES_OFF, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
+import { HEALTH_MEMORY_RULES } from '../src/memory/health-rules';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -879,18 +880,69 @@ it('keeps a reading or goal the owner stated, and holds a reading from any other
       ],
       corrections: [{ old_id: 1, kind: 'goal', text: 'Aims for 7 hours of sleep', evidence: 'I aim for 7 hours of sleep now' }],
     }), AT, 'owner, tg-1', undefined, { owner, shared });
+    // The alias would carry the forwarded glucose reading into memory beside an owner-grounded claim, so that claim is held too.
     expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([
-      ['Aims for 7 hours of sleep', 'owner', 'stated'], ['Checks heart rate in the mornings', 'owner', 'stated'], ['On 24 Sep said resting HR was 52', 'owner', 'stated'],
+      ['Aims for 7 hours of sleep', 'owner', 'stated'], ['On 24 Sep said resting HR was 52', 'owner', 'stated'],
     ]);
     expect(store.claims().find((claim) => claim.text === 'Aims for 7 hours of sleep')?.supersedes_id).toBe(1);
     // A held reading is counted once, as held, never also as downgraded.
-    expect(detail).toMatch(/held2\(numeric-health\)/);
+    expect(detail).toMatch(/held3\(numeric-health\)/);
     expect(detail).not.toContain('downgraded');
     const held = store.holds().filter((hold) => hold.reason === 'numeric-health');
-    expect(held).toHaveLength(2);
+    expect(held).toHaveLength(3);
     // A held reading leaves no trace of its words: every numeric-health hold carries the same fingerprint.
     expect(new Set(held.map((hold) => hold.fingerprint)).size).toBe(1);
     expect(held[0]!.fingerprint).not.toBe(textFingerprint('Lab report on 24 Sep: resting HR 48 bpm'));
+  });
+});
+
+// The hold keys on where each number of a reading came from, not on what the evidence quotes: every number in a reading
+// must be one the owner wrote in their own words of this exchange. Probes from the gate; synthetic values only.
+const reading = (text: string, evidence: string, aliases: string[] = []) => ({ kind: 'health', text, source: 'stated', evidence, aliases, touches_forgotten: false });
+it.each([
+  ['N1: the reading only in forwarded text, evidence the owner\'s request', { owner: 'Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],
+  ['N1b: the same, evidence one letter', { owner: 'Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'e')],
+  ['N2: a wearable reading Waldo relayed', { owner: 'How am I doing today', waldo: 'Your resting HR was 58 and you slept 6.5 hours.' }, reading('On 24 Sep resting HR was 58', 'How am I doing today')],
+  ['N4: one owner number beside one forwarded number', { owner: 'My resting HR was 52 this morning', shared: 'Fwd: A1c 6.1' }, reading('Resting HR 52, A1c 6.1', 'My resting HR was 52 this morning')],
+  ['N4b: a forwarded number in an alias', { owner: 'My resting HR was 52 this morning', shared: 'Fwd: A1c 6.1' }, reading('On 24 Sep said resting HR was 52', 'My resting HR was 52 this morning', ['A1c 6.1'])],
+  ['N6: mail Waldo relayed, then "note that"', { owner: 'note that', waldo: 'The clinic wrote that your blood pressure was 130/85.' }, reading('Blood pressure 130/85', 'note that')],
+  ['a reading found nowhere', { owner: 'Remember my heart rate' }, reading('Resting HR 61', 'Remember my heart rate')],
+] as const)('holds %s', async (_probe, sides, claim) => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    const detail = applyClaimOps(store, ops({ add: [claim] }), AT, 'owner, day of fixture', undefined, sides);
+    expect(store.claims()).toEqual([]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+it('N3: holds a correction that replaces the owner\'s goal with a forwarded lab value', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 92 mg/dL', evidence: 'Update my goal with the lab result' }] }), AT, 'owner, day of fixture', undefined,
+      { owner: 'Update my goal with the lab result', shared: 'Fwd: Lab report. Fasting glucose 92 mg/dL', ownerMessages: [{ ref: 'tg-1', text: 'Update my goal with the lab result' }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// The other side of the same rule: a reading the owner wrote is kept with the day the model dates it by, and a correction
+// to a goal in the owner's own numbers applies.
+it('keeps a reading and a goal correction in the owner\'s own numbers, dated', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'My blood pressure was 120/80 today. I aim for 7 hours of sleep now.';
+    applyClaimOps(store, ops({ add: [reading('On 24 Sep said blood pressure was 120/80', 'My blood pressure was 120/80 today')],
+      corrections: [{ old_id: 1, kind: 'goal', text: 'Aims for 7 hours of sleep', evidence: 'I aim for 7 hours of sleep now' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: blood pressure 135/90', waldo: 'Your HRV was 120.', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([
+      ['Aims for 7 hours of sleep', 'owner', 'stated'], ['On 24 Sep said blood pressure was 120/80', 'owner', 'stated'],
+    ]);
+    expect(store.holds()).toEqual([]);
   });
 });
 
@@ -981,4 +1033,9 @@ it('every forget moves the forget generation; adding a claim or a node does not'
       expect(store.forgetGeneration()).toBe(index + 1);
     }
   });
+});
+
+// The notes-file migration is a background writer too: it gets the same health rules as the flush and the nightly pass.
+it('the notes-file migration carries the health memory rules', () => {
+  for (const rule of HEALTH_MEMORY_RULES) expect(MIGRATION_INSTRUCTION).toContain(rule);
 });

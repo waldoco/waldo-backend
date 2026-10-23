@@ -30,7 +30,7 @@ import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveR
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
@@ -830,8 +830,12 @@ export const createOwnerResponder = (
     const started = Date.now();
     const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     await assertFresh();
+    // A forget the owner started during the model call holds its topic from here on.
+    if (holdsHeldTopic(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
     privateRunScope?.admit();
-    const detail = applyClaimOps(memory, policy.health ? raw : withoutHealthClaims(raw), new Date().toISOString(), `owner, day of ${traceId}`, undefined, sides, false, undefined, false);
+    // The flush cannot verify retained text is clean, so a pending forget its purge touches stays pending (a no-op onPurged
+    // never settles); the turn path that verifies settles it.
+    const detail = applyClaimOps(memory, policy.health ? raw : withoutHealthClaims(raw), new Date().toISOString(), `owner, day of ${traceId}`, () => undefined, sides, false, undefined, false);
     log({ trace: traceId, hop: 'memory_flush', ms: Date.now() - started, ok: true, detail });
     return memory.allClaims().filter(claim => !before.has(claim.id)).map(claim => ({ id: claim.id, kind: claim.kind }));
   };
@@ -855,8 +859,9 @@ export const createOwnerResponder = (
       const plan = compactionPlan(tree, leafId, live);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
+      let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
-        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }); }
+        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
@@ -865,8 +870,10 @@ export const createOwnerResponder = (
       const summary = response.text.trim();
       if (response.truncated || summary.length > COMPACTION.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
-      // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
-      if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }
+      // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here, by
+      // source: a reading the owner wrote in the span is ordinary chat, while one whose number came from Waldo's reply (a
+      // relayed device reading), shared content or nowhere is refused. Without the owner's words, every reading is refused.
+      if (readingBeyondOwner(summary, ownerWords)) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
       await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);

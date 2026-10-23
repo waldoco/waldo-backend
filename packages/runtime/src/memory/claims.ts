@@ -1,4 +1,4 @@
-import { numericHealthIn } from '../scribe/sanitiser';
+import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
 import { replaceLiteralText } from '@waldo/contracts';
 import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
@@ -1087,6 +1087,7 @@ export const MIGRATION_INSTRUCTION = [
   'Each evidence cites the file and revision and quotes the line, like: MEMORY_CORE r3: "Gym usually 11am".',
   'Skip anything an existing claim already covers, and anything the owner asked to forget.',
   ...CLAIM_RULES.slice(1, 2),
+  ...HEALTH_MEMORY_RULES,
   'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty and forget_topic is null.',
   'pin and unpin stay empty.',
 ].join('\n');
@@ -1222,10 +1223,13 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
     const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
-    // closed reason, so the reply can say the memory was not updated instead of the skip being silent.
-    if (ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim()))) {
-      store.recordHold(correction.kind, 'correction-not-applied', correction.text, at);
-      holdReasons.add('correction-not-applied');
+    // closed reason, so the reply can say the memory was not updated instead of the skip being silent. A replacement
+    // carrying a reading the owner did not write is held as one, as an add would be.
+    const reason = [correction.text, correction.evidence].some((text) => readingBeyondOwner(text, grounding?.owner)) ? 'numeric-health'
+      : ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim())) ? 'correction-not-applied' : undefined;
+    if (reason) {
+      store.recordHold(correction.kind, reason, correction.text, at);
+      holdReasons.add(reason);
       heldCorrections += 1;
       replacements.set(normalizeForGrounding(correction.text), 'held');
       continue;
@@ -1248,10 +1252,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     let origin: string | null = null;
     const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
     if (replacement === 'held' && verdict !== 'owner') continue;
-    // A health reading is kept only as something the owner said: stated, on evidence in their own words. One from shared
-    // content (forwarded mail, a file), an ungrounded paraphrase or an inference is held, keyed on that source, never on
-    // wording; one that grounds only in Waldo's reply is held below as a self-report.
-    if (verdict !== 'waldo' && (verdict !== 'owner' || claim.source === 'inferred') && [claim.text, claim.evidence, ...(claim.aliases ?? [])].some(numericHealthIn)) {
+    // A health reading is kept only as something the owner said: stated, on evidence in their own words, with every number
+    // of the reading one they wrote. A number only in shared content (forwarded mail, a file) or Waldo's reply (a relayed
+    // device reading), or in nothing they said, is held, keyed on that source, never on wording; so is a reading from an
+    // ungrounded paraphrase or an inference. One whose evidence grounds only in Waldo's reply is held below as a self-report.
+    const texts = [claim.text, claim.evidence, ...(claim.aliases ?? [])];
+    if (verdict !== 'waldo' && texts.some(numericHealthIn) && (verdict !== 'owner' || claim.source === 'inferred' || texts.some((text) => readingBeyondOwner(text, grounding?.owner)))) {
       store.recordHold(claim.kind, 'numeric-health', claim.text, at);
       held.push(claim);
       holdReasons.add('numeric-health');

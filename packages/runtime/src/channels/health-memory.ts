@@ -52,13 +52,25 @@ export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id' | '
 // span: the owner's own words split from what they quoted, as the nightly pass reads them. The rows are bounded like a
 // nightly chunk; rows past it wait for the nightly pass, which reads the same rows. Health notes kept this way are named
 // to the owner in their next reply.
+// A span whose summary is refused stays in the window and is offered again, grown by any newer rows. Each row is flushed
+// once: the conversation's flushed-through mark is the last row of the last span flushed, and only rows after it are saved.
+// The mark is written once the save returns, so a flush that fails is tried again.
 export const FLUSH_SPAN_CHARS = 40_000;
+const FLUSHED_THROUGH_PREFIX = 'memory_flushed_through_v1:';
 export const memoryFlushHooks = (deps: Readonly<{ kv: Kv; episodes: Pick<EpisodeIndex, 'of'>; claims: () => readonly Pick<Claim, 'id' | 'text'>[]; timezone: () => string }>) => ({
   compactionFlush: (async (span, keep) => {
     const day = consolidationDay(deps.episodes.of(span.entryIds, FLUSH_SPAN_CHARS));
     if (!day.length) return;
-    const saved = await keep.save(transcript(day, deps.timezone()), consolidationSides(day), { health: healthMemoryOn(deps.kv) });
-    noteHealthSaved(deps.kv, saved.filter((claim) => claim.kind === 'health').map((claim) => claim.id));
+    const sides = consolidationSides(day);
+    const mark = FLUSHED_THROUGH_PREFIX + span.conversationRef;
+    const fresh = new Set(span.entryIds.slice(span.entryIds.indexOf(deps.kv.get<string>(mark) ?? '') + 1));
+    const unsaved = day.filter((episode) => fresh.has(episode.entry_id));
+    if (unsaved.length) {
+      const saved = await keep.save(transcript(unsaved, deps.timezone()), consolidationSides(unsaved), { health: healthMemoryOn(deps.kv) });
+      deps.kv.put(mark, span.covers.to_id);
+      noteHealthSaved(deps.kv, saved.filter((claim) => claim.kind === 'health').map((claim) => claim.id));
+    }
+    return { owner: sides.owner };
   }) satisfies CompactionFlush,
   memoryNotice: () => healthNotice(deps.kv, deps.claims),
 });

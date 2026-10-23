@@ -109,8 +109,38 @@ describe('the flush before older chat leaves Waldo\'s view', () => {
     expect(hooks.memoryNotice()).toBeNull();
 
     setHealthMemory(kv, 'off');
-    await hooks.compactionFlush(span, { save: async (...args) => { calls.push(args); return []; } });
+    await hooks.compactionFlush({ ...span, covers: { from_id: 'tg-9', to_id: 'tg-9', rows: 1 }, entryIds: ['tg-9'] }, { save: async (...args) => { calls.push(args); return []; } });
     expect(calls[1]![2]).toEqual({ health: false });
+  }));
+
+  // A span whose summary is refused is offered again, and may have grown. Each row is saved once; the owner's words of the
+  // whole span still come back for the summary floor.
+  it('saves each row of a span offered again once, and returns the owner\'s words of the whole span every time', () => inOwner(async (state) => {
+    const kv = kvOf(state);
+    const memory = claimStore(state.storage.sql);
+    const hooks = memoryFlushHooks({ kv, episodes: seed(state), claims: () => memory.claims(), timezone: () => 'UTC' });
+    const transcripts: string[] = [];
+    const keep: SpanMemory = { save: async (text) => {
+      transcripts.push(text);
+      memory.add({ kind: 'preference', text: `Claim ${transcripts.length}`, source: 'stated', evidence: 'late coffee', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      return [];
+    } };
+    expect(await hooks.compactionFlush(span, keep)).toEqual({ owner: 'I sleep badly after late coffee' });
+    expect(await hooks.compactionFlush(span, keep)).toEqual({ owner: 'I sleep badly after late coffee' });
+    expect(memory.claims().map((claim) => claim.text)).toEqual(['Claim 1']);
+    const grown = { ...span, covers: { ...span.covers, to_id: 'tg-9' }, entryIds: [...span.entryIds, 'tg-9'] };
+    expect(await hooks.compactionFlush(grown, keep)).toEqual({ owner: 'I sleep badly after late coffee\nThis message is not in the span' });
+    expect(transcripts).toHaveLength(2);
+    expect(transcripts[1]).toContain('This message is not in the span');
+    expect(transcripts[1]).not.toContain('late coffee');
+  }));
+
+  it('tries a span again when its save failed', () => inOwner(async (state) => {
+    const hooks = memoryFlushHooks({ kv: kvOf(state), episodes: seed(state), claims: () => [], timezone: () => 'UTC' });
+    let saves = 0;
+    await expect(hooks.compactionFlush(span, { save: async () => { saves += 1; throw new Error('model unavailable'); } })).rejects.toThrow('model unavailable');
+    await hooks.compactionFlush(span, { save: async () => { saves += 1; return []; } });
+    expect(saves).toBe(2);
   }));
 
   it('asks nothing of memory when no row of the span was stored', () => inOwner(async (state) => {

@@ -11,7 +11,7 @@ import { productionDeps } from '../src/seams/deps';
 // The owner's health notes setting reaches the nightly pass the owner object runs: off, the model is told and no health
 // note is kept; on, it is. Synthetic words only.
 const SAID = 'I sleep badly after late coffee. Please keep my evenings calm.';
-const asked = vi.hoisted(() => ({ inputs: [] as string[] }));
+const asked = vi.hoisted(() => ({ inputs: [] as string[], add: null as unknown[] | null }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number }) => method === 'sendMessage' ? { message_id: 900, chat: { id: payload.chat_id } } : true };
@@ -21,7 +21,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const gateway: LLMGatewayAdapter = { async complete({ request }) {
     const nightly = request.response_format?.name === 'claim_ops';
     if (nightly) asked.inputs.push(JSON.stringify(request.messages));
-    const add = [
+    const add = asked.add ?? [
       { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: '"I sleep badly after late coffee"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
       { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: '"Please keep my evenings calm"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
     ];
@@ -75,4 +75,35 @@ it.each([['off', ['preference'], true], ['on', ['health', 'preference'], false]]
       const migration = asked.inputs.filter((input) => input.includes('Notes files to split'));
       expect(migration.some((input) => input.includes(HEALTH_NOTES_OFF))).toBe(told);
     } finally { await state.storage.deleteAlarm(); }
+  }));
+
+// Probe N7 from the gate: a reading the owner forwarded, saved by the live nightly pass on evidence of the owner's own
+// request. The number is in the forwarded text alone, so it is held, whatever the evidence quotes.
+it('the nightly pass holds a reading that only forwarded text carries', () =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-nightly-forwarded')), async (_instance, state) => {
+    const realNow = Date.now;
+    let now = Date.parse('2026-10-13T05:00:00Z');
+    Date.now = () => now;
+    asked.inputs.length = 0;
+    asked.add = [{ kind: 'health', text: 'Resting HR 58 bpm', source: 'stated', evidence: '"Keep this for me please"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }];
+    try {
+      const build = () => new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+      const owner = build();
+      state.storage.kv.put('do_name', 'health-nightly-forwarded'); state.storage.kv.put('telegram_subject', '7');
+      const forwarded = { update_id: 310, message: { message_id: 51, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'Lab report. Resting HR 58 bpm', forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Clinic' }, forward_sender_name: 'Clinic', forward_date: 1 } };
+      const request = { update_id: 311, message: { message_id: 52, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'Keep this for me please' } };
+      for (const update of [forwarded, request]) {
+        expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
+        for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
+      }
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, now - 10_800_000);
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: NIGHTLY_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_ID }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
+      state.storage.kv.put('owner_alarm_last_v1', 0);
+      await build().alarm();
+      expect(asked.inputs.some((input) => input.includes('Resting HR 58 bpm'))).toBe(true);
+      const memory = claimStore(state.storage.sql);
+      expect(memory.claims()).toEqual([]);
+      expect(memory.holds().map((hold) => [hold.kind, hold.reason])).toEqual([['health', 'numeric-health']]);
+    } finally { Date.now = realNow; asked.add = null; await state.storage.deleteAlarm(); }
   }));

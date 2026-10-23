@@ -162,16 +162,28 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
 // "Motion 2". Here a match counts only as a serialized field: a quoted key, an `=`, or a snake or camel key
 // (a quoted `"steps"`, `heartRate=`, `hrv_ms:`); prose readings are OWNER_HEALTH_READINGS' job.
 const SERIALIZED_FIELD = /["'=_]|[a-z][A-Z]/;
-const serializedSensorField = (text: string): boolean =>
-  RAW_SENSOR_PATTERNS.some((pattern) => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].some(([field]) => SERIALIZED_FIELD.test(field)));
+const everyMatch = (pattern: RegExp, text: string): string[] => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].map(([match]) => match);
+// Each reading in text, as the words the floor matched.
+const numericHealthReadings = (text: string): string[] => [
+  ...OWNER_HEALTH_READINGS.flatMap((pattern) => everyMatch(pattern, text)),
+  ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
+];
 
 // The one numeric health floor for memory written from outside content and for stored summaries, where a match drops the
 // write. What the owner says goes into memory without it. Precision wins over recall here: a false match loses an ordinary
 // fact, so it is narrower than the egress scans, which may over-redact. It decides only whether text carries a reading,
 // never whether text is about health; that is the model's judgment. Fresh regexes per call, so a shared `g` pattern never
 // carries lastIndex from one call into the next.
-export const numericHealthIn = (text: string): boolean =>
-  OWNER_HEALTH_READINGS.some((pattern) => matches(pattern, text)) || serializedSensorField(text);
+export const numericHealthIn = (text: string): boolean => numericHealthReadings(text).length > 0;
+
+// Whether text carries a reading with a number the owner did not write in `owner`, their own words: a reading that came
+// from shared content, Waldo's reply or a device. It keys on where a reading's numbers came from, never on its wording; a
+// date beside a reading is not part of it. With no owner words, every reading is one.
+const NUMBER = /\d+(?:[.,]\d+)*/g;
+export const readingBeyondOwner = (text: string, owner: string | undefined): boolean => {
+  const said = new Set(owner?.match(NUMBER) ?? []);
+  return numericHealthReadings(text).some((reading) => (reading.match(NUMBER) ?? []).some((number) => !said.has(number)));
+};
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
