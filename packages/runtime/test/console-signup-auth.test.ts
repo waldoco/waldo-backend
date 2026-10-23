@@ -47,6 +47,7 @@ it('rejects tampered/oversize cookies and exact expiry; pending never extends th
   clock += 300_000;
   const proof = await auth.verifyEmail(initial, '123456');
   const p = (await auth.read(request(proof!)))!;
+  for (const name of ['', '   ', 'x'.repeat(81), 'Sam\u0007Rivera']) expect(await auth.collectContact(p, name, '+14155550100')).toBeNull();
   const phone = await auth.collectContact(p, 'Sam Rivera', '+14155550100');
   expect(await auth.read(request(phone!))).toMatchObject({ emailVerified: true, name: 'Sam Rivera', phone: '+14155550100', phoneVerification: 'not_configured', complete: false, expires: initial.expires });
   expect(fetcher.mock.calls.every(c => !String(c[0]).includes('owner_for_auth'))).toBe(true);
