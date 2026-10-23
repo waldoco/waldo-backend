@@ -217,3 +217,37 @@ it('R-4: when no model answers the owner, the floor reply promises a time and th
     expect(outbox.filter(record => record.id === `retry:${settled.id}`)).toHaveLength(1);
   });
 }, 30_000);
+
+it('one owner\'s provider failures open only that owner\'s breaker: another owner\'s workers and turns still ask the provider', async () => {
+  type Rpc = { drainInbox(): Promise<void>; taskClaim(...args: unknown[]): Promise<{ providerHealth?: unknown } | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const health = (instance: unknown) => (instance as { providerHealth: { snapshot(): { provider: string; failures: number; opened_at: number | null }[] } }).providerHealth.snapshot();
+  // A job's attempt claims, then reports that no provider answered, with the misses its worker saw.
+  const attempt = (name: string, misses: number) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: crypto.randomUUID(), origin: 'tg-1', surface: 'telegram', brief: { ...BRIEF, effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    const claim = await (instance as Rpc).taskClaim(ticket);
+    expect(await (instance as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, Array.from({ length: misses }, () => ({ provider: 'openai', ok: false })))).toBe('deferred');
+    await state.storage.deleteAlarm();
+    return { seed: claim === 'fenced' ? null : claim.providerHealth, after: health(instance).find(entry => entry.provider === 'openai') };
+  });
+  const a = await attempt('breaker-owner-a', 3);
+  expect(a.after).toMatchObject({ failures: 3, opened_at: expect.any(Number) });
+  const b = await attempt('breaker-owner-b', 0);
+  expect(b.seed).toEqual([]);
+  expect(b.after).toBeUndefined();
+  // Owner B's own turn asks the provider and gets an answer, not the floor reply.
+  const before = seen.bodies.length;
+  seen.outputs.push([]);
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('breaker-owner-b')), async (instance, state) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: 'breaker-owner-b' }, 1,
+      JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: 1, text: 'What should I pack for Goa?' } }));
+    await (instance as Rpc).drainInbox();
+    await state.storage.deleteAlarm();
+    const queued = (state.storage.kv.get<{ payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
+    expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(false);
+  });
+  expect(seen.bodies.length).toBeGreaterThan(before);
+}, 30_000);
