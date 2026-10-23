@@ -6,6 +6,7 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
+import { numericHealthIn } from '../scribe/sanitiser';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -95,8 +96,9 @@ export const COLD_CACHE_KEEP_ROUNDS = 3;
 // A cleared result stays one call away: the note keeps whether it worked and any receipt link, and names the stored
 // copy read_tool_output reads back. Without a store, a read can run again; a browse or a write cannot be repeated.
 export type ClearedResult = Readonly<{ ok: boolean; receipt: string | null; stored?: StoredPut; repeatable: boolean }>;
+const clearedHead = (name: string, ok: boolean) => `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn (${ok ? 'it succeeded' : 'it failed'}) is no longer shown.`;
 export const clearedToolResult = (name: string, result: ClearedResult): string => {
-  const head = `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn (${result.ok ? 'it succeeded' : 'it failed'}) is no longer shown.`;
+  const head = clearedHead(name, result.ok);
   const receipt = result.receipt ? ` Its link: ${result.receipt}.` : '';
   const back = result.stored
     ? ` Its full output is stored as ${result.stored.id}${result.stored.truncated ? ` (first ${result.stored.stored_chars} of ${result.stored.original_chars} characters)` : ''}; call read_tool_output with this id to read it again.`
@@ -112,6 +114,14 @@ export const leadingNote = (output: string): string => {
   if (!output.startsWith(DROPPED_STEPS_NOTE)) return '';
   const end = output.indexOf(NOTE_END);
   return end === -1 ? '' : output.slice(0, end + NOTE_END.length);
+};
+// A checkpointed step that cannot be repeated and whose output was left out (it may carry a health reading).
+export const UNKEPT_EFFECT = 'Not kept across a restart. This step already ran; do not run it again.';
+// Whether a checkpointed call ran to success, or ran with its output left out: its result as it came back, cleared as
+// succeeded, or the unkept-effect note.
+const ranBefore = (turn: LLMToolTurn): boolean => {
+  const output = turn.output.slice(leadingNote(turn.output).length);
+  return output.startsWith('{"ok":true') || output === UNKEPT_EFFECT || output.startsWith(clearedHead(turn.call.name, true));
 };
 
 // Set once by the first loop of a turn, from the run it serves, and shared with its child loops through the budget.
@@ -156,6 +166,15 @@ export async function runToolLoop(input: Readonly<{
   const tools = input.remote ? [...input.remote.tools] : toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
   const seen = new Map<string, LoopToolResult>();
+  // A resumed step that cannot be repeated and already ran is refused if called again, as it is within one slice. One whose
+  // arguments were left out (they carried a health reading) no longer matches its repeat, so any later call of that tool
+  // with a reading in its arguments is taken as the same step.
+  const unkeptSteps = new Set<string>();
+  for (const turn of input.resume?.turns ?? []) {
+    if (input.resume!.repeatable(turn.call.name) || !ranBefore(turn)) continue;
+    seen.set(`${turn.call.name}\u0000${turn.call.arguments}`, { ok: true });
+    if (turn.call.arguments === '{}' && turn.output.endsWith(UNKEPT_EFFECT)) unkeptSteps.add(turn.call.name);
+  }
   const offered = new Map<string, string>();
   const browserActions = new Map<string, number>();
   const browserReads = new Map<string, {handle:string; epoch:number}>();
@@ -300,7 +319,7 @@ export async function runToolLoop(input: Readonly<{
       }
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
-      const cached = seen.get(key);
+      const cached = seen.get(key) ?? (unkeptSteps.has(call.name) && numericHealthIn(call.arguments) ? { ok: true } : undefined);
       // Only a completed host action in this exact retained session opens another
       // identical read. Reads and unrelated mutation successes are not action proof.
       const anchor = browserReads.get(key);

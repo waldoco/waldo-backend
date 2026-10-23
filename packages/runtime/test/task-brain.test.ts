@@ -9,7 +9,7 @@ import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_EFFECT, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
-import { DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
+import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
@@ -343,6 +343,71 @@ describe('the task brain host', () => {
       const stored = book.get(t.jobId)!.checkpoint_json!;
       expect(JSON.parse(stored).turns[0].call.arguments).toBe('{}');
       expect(stored).not.toMatch(/162/);
+    });
+  });
+
+  it('an errand step that already succeeded is refused when repeated, in the same slice and after a resume', async () => {
+    const act = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Book the 8pm table for two.' } };
+    const other = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Add a note: window seat.' } };
+    const finish = { call: FINISH_TASK, args: { status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] } };
+    const model = (script: readonly Readonly<{ call: string; args: unknown }>[]): TaskModel => {
+      let n = 0;
+      return async () => {
+        const next = script[Math.min(n, script.length - 1)]!;
+        n += 1;
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}:${next.call}`, name: next.call, arguments: JSON.stringify(next.args) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+    };
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('errand');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act, act, finish]), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(1);
+    });
+    // Across an alarm-slice hand-over, the repeat is answered from the checkpoint; a different step still runs.
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('errand');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act]), sliceEnd: 0 })).toBe('continue');
+      expect(await runTaskAttempt(t, { brain: host, model: model([act, other, finish]), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(2);
+    });
+  });
+
+  it('a resumed errand step whose result was cleared as succeeded, or left out, is not run again', async () => {
+    const args = JSON.stringify({ url: 'https://example.com/book', task: 'Book the 8pm table for two.' });
+    for (const output of [clearedToolResult('browse_act', { ok: true, receipt: null, repeatable: false }), UNKEPT_EFFECT]) {
+      await withHost(async ({ host, ticket, ran }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        expect(await host.checkpoint(t, 1, [{ call: { call_id: 'c1', name: 'browse_act', arguments: args }, output }], [], { rounds: 1, costUsd: 0 })).toBe('ok');
+        let n = 0;
+        const model: TaskModel = async () => {
+          n += 1;
+          const call = n === 1 ? { name: 'browse_act', arguments: args } : { name: FINISH_TASK, arguments: JSON.stringify({ status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] }) };
+          return { response: { text: '', tool_calls: [{ call_id: `r${n}`, ...call }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+        };
+        expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+        expect(ran).toEqual([]);
+      });
+    }
+  });
+
+  it('a resumed errand step whose arguments were not kept (a reading) is not run again; a step without a reading still runs', async () => {
+    const withReading = { url: 'https://example.com/clinic', task: 'Book the follow-up; pulse at check-in was 88 bpm.' };
+    const plain = { url: 'https://example.com/clinic', task: 'Add the owner\'s phone number to the booking.' };
+    await withHost(async ({ host, ticket, ran, book }) => {
+      const t = ticket('errand');
+      let n = 0;
+      const script = [withReading, withReading, plain];
+      const model = (steps: readonly unknown[]): TaskModel => async () => {
+        const step = steps[n];
+        n += 1;
+        const call = step === undefined ? { name: FINISH_TASK, arguments: JSON.stringify({ status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] }) } : { name: 'browse_act', arguments: JSON.stringify(step) };
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}`, ...call }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: 0 })).toBe('continue');
+      expect(JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns[0]).toMatchObject({ call: { arguments: '{}' }, output: UNKEPT_EFFECT });
+      expect(await runTaskAttempt(t, { brain: host, model: model(script), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran.filter(name => name === 'browse_act')).toHaveLength(2);
     });
   });
 

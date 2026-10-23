@@ -2,7 +2,7 @@ import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type 
 import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
-import { dispatchLoopTool, leadingNote, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
+import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
@@ -60,7 +60,7 @@ const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
-export const UNKEPT_EFFECT = 'Not kept across a restart. This step already ran; do not run it again.';
+export { UNKEPT_EFFECT };
 // The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
 // The provider items opening a round (reasoning summaries, interim words, every call of the round with its arguments) are
 // emptied when any of them carries a reading: both adapters rebuild that round from its kept records, and an empty list
