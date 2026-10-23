@@ -12,8 +12,9 @@ import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
 type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 
 // Every action a console registry accepts. An action whose effect outlives this browser's session (a bound chat, a paired
-// Mac, a connected account or tool, a standing grant, an invite, the account's removal) needs an email code from the last
-// two hours, so a copied 30-day cookie cannot do it. Reading, arranging, deciding one item once, and removing access do not.
+// Mac, a connected account or tool, a standing grant, an invite, the account's removal), or that sends to other people as the
+// owner, needs an email code from the last two hours, so a copied 30-day cookie cannot do it. Reading, arranging, deciding
+// one change to the owner's own things once, and removing access do not.
 // A test fails when a registry gains an action this table does not name.
 export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
@@ -31,6 +32,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'approval.approve': { gated: false, why: 'Decides one held calendar change once; leaves no standing grant.' },
   'approval.skip': { gated: false, why: 'Declines one held change.' },
   'approval.undo': { gated: false, why: 'Reverses one decision.' },
+  'approval.send': { gated: true, why: 'Sends one held email or message to other people as the owner; it cannot be called back.' },
+  'approval.edit': { gated: false, why: 'Asks Waldo for a new draft of one held send; sends nothing.' },
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },

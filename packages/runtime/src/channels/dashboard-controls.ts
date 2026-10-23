@@ -1,5 +1,5 @@
 import type { ApprovalReview } from './approvals';
-import { waitingMayApprove, waitingMayChange, type ConsoleView } from './console';
+import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
@@ -59,9 +59,9 @@ const projections = {
     timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
-      const canApprove = waitingMayApprove(item) && review !== null;
+      const canApprove = consoleMayApprove(item) && review !== null, canSend = waitingMaySend(item) && review !== null;
       const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
-      const actions = canApprove ? ['approval.approve', ...(waitingMayChange(item) ? ['approval.edit'] : []), 'approval.skip']
+      const actions = canApprove ? ['approval.approve', 'approval.skip'] : canSend ? ['approval.send', 'approval.edit', 'approval.skip']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions };

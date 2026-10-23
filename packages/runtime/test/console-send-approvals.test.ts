@@ -55,11 +55,15 @@ it('the console Waiting view shows an email draft exactly, and approves, skips a
         review: { kind: 'email_send', account: 'owner@example.test', to: draft.to, cc: draft.cc, bcc: [], subject: draft.subject, body: draft.body } });
 
       // Sending as the owner needs an email code from the last two hours, so a copied session cookie cannot send.
+      const codeAt = async (at: number) => {
+        const sessions = (await state.storage.get<Record<string, Record<string, unknown>>>('console:sessions'))!;
+        await state.storage.put('console:sessions', { ...sessions, [token]: { ...sessions[token]!, verified_at: at } });
+      };
+      await codeAt(Date.now() - 3 * 60 * 60_000);
       const unconfirmed = await act(first, 'approval.send', sendId, 'console-send-0000');
       expect([unconfirmed.status, JSON.parse(unconfirmed.text)]).toEqual([403, { error: 'step_up_required' }]);
       expect([proof.sentRaw, row(sendId).status]).toEqual([[], 'open']);
-      const sessions = (await state.storage.get<Record<string, Record<string, unknown>>>('console:sessions'))!;
-      await state.storage.put('console:sessions', { ...sessions, [token]: { ...sessions[token]!, verified_at: Date.now() } });
+      await codeAt(Date.now());
       const approved = await act(first, 'approval.send', sendId, 'console-send-0001');
       expect([approved.status, JSON.parse(approved.text).receipt]).toEqual([200, { state: 'recorded', message: 'Sent. This cannot be undone.' }]);
       expect(proof.sentRaw).toHaveLength(1);

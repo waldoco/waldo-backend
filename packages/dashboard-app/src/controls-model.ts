@@ -23,7 +23,7 @@ export type McpServerRecord = { id: string; name: string; host: string; server_u
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
-export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
+export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
 export type ActivityCursors = { trace_before?: number | null; runs_before?: number | null };
 export type LastRequest = { at: string; ok: boolean; partial: boolean; recorded_steps: number; hops: { hop: string; ok: boolean; ms: number; note: string }[] };
 export type ActivityRecord = Base<'activity', {
@@ -50,7 +50,7 @@ export type DevicesRecord = Base<'devices', {
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -116,12 +116,12 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     // An absent or unreadable zone is carried as null; the panel then says its illustration is in UTC.
     const timezone = string(data.timezone) && validZone(data.timezone) ? data.timezone : null;
     const proposals = data.proposals.map(item => {
-      if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.edit', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
+      if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.send', 'approval.edit', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
       const review = readProposalReview(item.review);
       // Send and Change it need the open draft itself on the page; approving a calendar change needs its change.
       const draft = item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && review?.kind === item.kind;
-      if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && !draft && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change')
-        || item.actions.includes('approval.edit') && !draft || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
+      if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change')
+        || (item.actions.includes('approval.send') || item.actions.includes('approval.edit')) && !draft || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions: [...item.actions] };
     });
     return { ...base, view: 'waiting', data: { timezone, proposals } } as Records[V];

@@ -59,7 +59,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
       const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || approvable(item.review.start)) && (!item.review.end || approvable(item.review.end));
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
       const draft = send && item.state === 'open' && item.review?.kind === item.kind;
-      const sendApprove = draft && item.actions.includes('approval.approve'), sendChange = draft && item.actions.includes('approval.edit');
+      const sendApprove = draft && item.actions.includes('approval.send'), sendChange = draft && item.actions.includes('approval.edit');
       const note = item.state === 'review_only' ? 'Too long for a chat card, so there’s no Send it button. Ask Waldo for a shorter version or a draft.'
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'
           : sendApprove ? 'Sending can’t be undone, so check the sender, recipients and words above. Change it asks Waldo for a new draft; this one stays as it is.'
@@ -72,7 +72,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
           {note && <p className="meta">{note}</p>}
           <div className="control-actions">
             {calendarApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>Approve this calendar change</button>}
-            {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>{item.kind === 'email_send' ? 'Send this email' : 'Send this message'}</button>}
+            {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.send', { id: item.id })}>{item.kind === 'email_send' ? 'Send this email' : 'Send this message'}</button>}
             {sendChange && <button disabled={busy} onClick={() => onAction('approval.edit', { id: item.id })}>Change it</button>}
             {item.actions.includes('approval.skip') && <button disabled={busy} onClick={() => onAction('approval.skip', { id: item.id })}>{send ? 'Dismiss proposal' : 'Not now'}</button>}
             {calendarUndo && <button disabled={busy} onClick={() => { if (window.confirm('Undo this calendar change?')) onAction('approval.undo', { id: item.id }); }}>Undo calendar change</button>}
