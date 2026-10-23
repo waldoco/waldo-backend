@@ -12,10 +12,10 @@ Measured by `test/brain-tool-surface.test.ts` (`BRAIN_TOOL_SURFACE`), at about 4
 
 | Menu | Tool-definition tokens per reply round |
 | --- | --- |
-| Off (54 tools) | ~14,190 |
-| On, as OpenAI sees it | ~3,410 |
-| On, as Anthropic sees it | ~3,450 |
-| On, OpenAI, after loading the calendar namespace | ~5,140 |
+| Off (54 tools) | ~14,380 |
+| On, as OpenAI sees it | ~3,610 |
+| On, as Anthropic sees it | ~3,650 |
+| On, OpenAI, after loading the calendar namespace | ~5,330 |
 
 The trace's `tools_tokens_est` counts the whole menu, deferred tools included, so it does not fall. The figure that falls is the provider's **input tokens per reply call**.
 
