@@ -294,6 +294,58 @@ describe('the task brain host', () => {
     });
   });
 
+  it('a reading in the provider items riding on a round is not kept: the round is rebuilt from its kept records on resume', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      const reading = JSON.stringify({ status: 'done', summary: 'Your LDL is 162 mg/dL.', findings: [], proposals: [], left: [] });
+      const clean = JSON.stringify({ query: 'from:lab' });
+      const turns = [
+        // An earlier round with no reading keeps its items, encrypted reasoning included, so its replay is unchanged.
+        { call: { call_id: 'c0', name: 'search_communication', arguments: clean }, output: '{"ok":true,"data":{"hits":1}}',
+          prior_items: [{ type: 'reasoning', id: 'rs_0', encrypted_content: 'opaque', summary: [] }, { type: 'function_call', id: 'fc_0', call_id: 'c0', name: 'search_communication', arguments: clean }] },
+        // The reading sits in a reasoning summary, the model's interim words and a parallel call's arguments.
+        { call: { call_id: 'c1', name: 'search_communication', arguments: clean }, output: '{"ok":true,"data":{"hits":0}}',
+          prior_items: [
+            { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [{ type: 'summary_text', text: 'The mail says LDL is 162 mg/dL; I will report it.' }] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Your LDL is 162 mg/dL; finishing.' }] },
+            { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'search_communication', arguments: clean },
+            { type: 'function_call', id: 'fc_2', call_id: 'c2', name: FINISH_TASK, arguments: reading },
+          ] },
+        { call: { call_id: 'c2', name: FINISH_TASK, arguments: reading }, output: '{"ok":false,"error":"The result names health readings with their numbers, which a task never stores."}' },
+      ];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 2, costUsd: 0 })).toBe('ok');
+      const stored = book.get(t.jobId)!.checkpoint_json!;
+      expect(stored).not.toMatch(/162/);
+      const kept = JSON.parse(stored).turns as Array<{ call: { arguments: string }; prior_items?: unknown[] }>;
+      expect(kept[0]!.prior_items).toEqual(turns[0]!.prior_items);
+      // Emptied, not removed: the turn still opens its own round, so the resumed request keeps the round boundaries.
+      expect(kept[1]!.prior_items).toEqual([]);
+      expect(kept[1]!.call.arguments).toBe(clean);
+      expect(kept[2]).toMatchObject({ call: { arguments: '{}' } });
+      expect(kept[2]).not.toHaveProperty('prior_items');
+    });
+  });
+
+  it('end to end, a refused result with a reading is not kept once the provider returns its items with the call', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      const numbers = { status: 'done', summary: 'Your LDL is 162 mg/dL.', findings: [], proposals: [], left: [] };
+      const words = { status: 'done', summary: 'Your cholesterol is above the usual range.', findings: [], proposals: [], left: [] };
+      let n = 0;
+      // The OpenAI adapter's shape: output_items is the response output, which holds each function_call with its arguments.
+      const model: TaskModel = async () => {
+        n += 1;
+        const args = JSON.stringify(n === 1 ? numbers : words);
+        return { response: { text: '', tool_calls: [{ call_id: `c${n}`, name: FINISH_TASK, arguments: args }], output_items: [{ type: 'function_call', call_id: `c${n}`, name: FINISH_TASK, arguments: args }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+      };
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: 0 })).toBe('continue');
+      const stored = book.get(t.jobId)!.checkpoint_json!;
+      expect(JSON.parse(stored).turns[0].call.arguments).toBe('{}');
+      expect(stored).not.toMatch(/162/);
+    });
+  });
+
   it('a result that still carries a reading when it reaches the brain is not stored; the owner hears it was not kept', async () => {
     await withHost(async ({ host, ticket, book }) => {
       const t = ticket();

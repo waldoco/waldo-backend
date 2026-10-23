@@ -225,12 +225,13 @@ function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
   return history;
 }
 
-// A turn carrying the model's output items opens a round; the parallel calls that follow it belong to that round.
+// A turn carrying the model's output items opens a round; the parallel calls that follow it belong to that round. A turn
+// whose items were not kept carries an empty list, and still opens its round.
 function toolRounds(turns: readonly LLMToolTurn[]): Array<{ prior: readonly Record<string, unknown>[]; turns: LLMToolTurn[] }> {
   const rounds: Array<{ prior: readonly Record<string, unknown>[]; turns: LLMToolTurn[] }> = [];
   for (const turn of turns) {
     const current = rounds[rounds.length - 1];
-    if (current === undefined || turn.prior_items?.length) rounds.push({ prior: turn.prior_items ?? [], turns: [turn] });
+    if (current === undefined || turn.prior_items !== undefined) rounds.push({ prior: turn.prior_items ?? [], turns: [turn] });
     else current.turns.push(turn);
   }
   return rounds;

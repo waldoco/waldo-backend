@@ -62,12 +62,18 @@ const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
 export const UNKEPT_EFFECT = 'Not kept across a restart. This step already ran; do not run it again.';
 // The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
+// The provider items opening a round (reasoning summaries, interim words, every call of the round with its arguments) are
+// emptied when any of them carries a reading: both adapters rebuild that round from its kept records, and an empty list
+// still marks where the round starts.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
   const readingInCall = numericHealthIn(turn.call.arguments);
-  if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name) && !readingInCall && !numericHealthIn(turn.output)) return turn;
+  const readingInItems = turn.prior_items !== undefined && numericHealthIn(JSON.stringify(turn.prior_items));
+  const unkeptOutput = UNKEPT_OUTPUT_TOOLS.has(turn.call.name) || readingInCall || numericHealthIn(turn.output);
+  if (!unkeptOutput && !readingInItems) return turn;
   return {
     ...turn, call: readingInCall ? { ...turn.call, arguments: '{}' } : turn.call,
-    output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}`,
+    ...(readingInItems ? { prior_items: [] } : {}),
+    ...(unkeptOutput ? { output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}` } : {}),
   };
 };
 

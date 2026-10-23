@@ -188,6 +188,26 @@ describe('OpenAIResponsesAdapter', () => {
     });
     expect(calls).toBe(1);
   });
+  it('a round whose items were not kept (empty) is rebuilt from its records: no id, no reasoning, the kept arguments', async () => {
+    let sent: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: { input: unknown }) => { sent = body.input as typeof sent; return { id: 'r', status: 'completed', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } } as never; }),
+    });
+    const input = gatewayRequest();
+    await adapter.complete({ ...input, request: { ...input.request, tool_turns: [
+      { call: { call_id: 'c0', name: 'tool', arguments: '{"q":1}' }, output: 'o0', prior_items: [{ type: 'reasoning', id: 'rs_0', encrypted_content: 'opaque', summary: [] }, { type: 'function_call', id: 'fc_0', call_id: 'c0', name: 'tool', arguments: '{"q":1}' }] },
+      { call: { call_id: 'c1', name: 'tool', arguments: '{}' }, output: 'o1', prior_items: [] },
+    ] } });
+    expect(sent.slice(1)).toEqual([
+      { type: 'reasoning', id: 'rs_0', encrypted_content: 'opaque', summary: [] },
+      { type: 'function_call', id: 'fc_0', call_id: 'c0', name: 'tool', arguments: '{"q":1}' },
+      { type: 'function_call_output', call_id: 'c0', output: 'o0' },
+      // A function_call sent with its fc_ id needs the reasoning item before it; one rebuilt without an id does not.
+      { type: 'function_call', call_id: 'c1', name: 'tool', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: 'o1' },
+    ]);
+  });
   it('parallel tool calls in one round are replayed once each, not once from the model output and again per call', async () => {
     let sent: Array<{ type?: string; call_id?: string }> = [];
     const adapter = new OpenAIResponsesAdapter({

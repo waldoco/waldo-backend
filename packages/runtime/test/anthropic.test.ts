@@ -112,6 +112,22 @@ describe('AnthropicMessagesAdapter tool rounds', () => {
     ]);
   });
 
+  it('a round whose items were not kept (empty) still opens its own round, rebuilt from its call records', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Done.' }])]);
+    const base = gatewayRequest();
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_turns: [
+      { call: call(1), output: 'o1', prior_items: [{ type: 'tool_use', provider: ANTHROPIC_PROVIDER, block: { type: 'tool_use', id: 'c1', name: 'get_context', input: { n: 1 } } }] },
+      { call: { call_id: 'c2', name: 'get_context', arguments: '{}' }, output: 'o2', prior_items: [] },
+    ] } });
+    expect(bodies[0]!.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'Say hello.' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'get_context', input: { n: 1 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'o1' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'c2', name: 'get_context', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c2', content: 'o2' }] },
+    ]);
+  });
+
   it('rebuilds a round another provider ran from its call records, dropping that provider reasoning items', async () => {
     const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Done.' }])]);
     const base = gatewayRequest();
