@@ -29,11 +29,13 @@ import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-fi
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
 import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
+import { reconnectNoticeText } from '../src/connectors/google-reconnect';
+import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][],
-  notes: [] as (string | null)[], progressInputs: [] as string[], progressHold: null as null | (() => Promise<void>) }));
+  notes: [] as (string | null)[], progressInputs: [] as string[], progressHold: null as null | (() => Promise<void>), googleDead: false }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
   if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); proof.systems.push(String(input.instructions ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
@@ -44,9 +46,11 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   }
   return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
-vi.mock('../src/connectors/google', async load => ({ ...await load<typeof import('../src/connectors/google')>(), googleClient: () => ({
+// A dead grant, when a test asks for one: the calendar read reports invalid_grant to the host and fails 401.
+vi.mock('../src/connectors/google', async load => { const original = await load<typeof import('../src/connectors/google')>(); return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health?: (error: string) => void) => ({
   event: async (id: string) => ({ id, etag: 'etag-3pm', title: 'Design review', status: 'confirmed', start: '2030-01-02T15:00:00Z', end: '2030-01-02T16:00:00Z' }),
-}) }));
+  ...(proof.googleDead ? { calendarPage: async () => { health?.('google token failed: invalid_grant'); throw new original.GoogleError(401, 'google token failed: invalid_grant'); } } : {}),
+}) }; });
 
 const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional-imessage-router-secret-0000000000';
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
@@ -54,14 +58,14 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
   forbiddenEgress.length = 0;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
-    if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
+    if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
     if (fn === 'admin_overview') return Response.json(null);
     return null;
@@ -94,7 +98,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const action = (name: string, fields: Record<string, string> = {}, token = csrf) => {
     const form = new FormData(); form.set('action', name); form.set('csrf', token);
     for (const [k, v] of Object.entries(fields)) form.set(k, v);
-    return call(new Request('https://imessage.fixture.invalid/console/action', { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+    return call(new Request('https://imessage.fixture.invalid/console/action', { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
   };
   const host = new SimulatedHost(call, HOST_ORIGIN);
   const bridgeStub = () => env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', host.bridgeId, host.accountId)));
@@ -119,7 +123,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     const read = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }));
     const controls = await read.json() as { csrf: string; revision: string };
     const body = new URLSearchParams({ csrf: controls.csrf, revision: controls.revision, view: 'imessage', action: name, request_id: `e2e-${crypto.randomUUID()}`, ...fields });
-    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', headers: { cookie, origin: HOST_ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
     return { status: response.status, body: await response.json() };
   };
   return { fx, ownerName, ownerStub, action, dashboard, host, bridgeStub, call, pump, settle, pairAndActivate, csrf };
@@ -429,7 +433,7 @@ it('two owners on two bridges are isolated: keys, commands, replies and status n
   let bSession = '', bCsrf = '';
   await runInDurableObject(bStub, async (_i, state) => { state.storage.kv.put('do_name', bName); bSession = await consoleAccess(state.storage).grant(); bCsrf = (await consoleAccess(state.storage).session(bSession))!.csrf; });
   const bCookie = `waldo_console=${bSession}; waldo_owner=${bName}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${bName}.session_fixture`)}`;
-  const bAction = (name: string, fields: Record<string, string> = {}) => { const f = new FormData(); f.set('action', name); f.set('csrf', bCsrf); for (const [k, v] of Object.entries(fields)) f.set(k, v); return a.call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: f, headers: { cookie: bCookie }, redirect: 'manual' })); };
+  const bAction = (name: string, fields: Record<string, string> = {}) => { const f = new FormData(); f.set('action', name); f.set('csrf', bCsrf); for (const [k, v] of Object.entries(fields)) f.set(k, v); return a.call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: f, headers: { cookie: bCookie, origin: HOST_ORIGIN }, redirect: 'manual' })); };
   const hostB = new SimulatedHost(a.call, HOST_ORIGIN);
   const code = (await (await bAction('imessage.pair')).text()).split('\n')[0]!;
   expect((await hostB.redeem(code)).status).toBe(200);
@@ -586,7 +590,7 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   expect(seen).toContain('"sent":true,"surface":"imessage"');
   expect(seen).not.toContain(ticket);
   // The ticket is the issuing owner's, and it opens the console once.
-  const redeem = async () => (await w.call(new Request(`${HOST_ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: ticket }) }))).status;
+  const redeem = async () => (await w.call(new Request(`${HOST_ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { origin: HOST_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: ticket }) }))).status;
   expect(await redeem()).toBe(303);
   expect(await redeem()).toBe(403);
   expect(w.host.nativeSends).toHaveLength(1);
@@ -872,6 +876,55 @@ const seedDueReminder = (state: DurableObjectState) => {
   return reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-1')
     .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
 };
+
+// A Google grant that stops working: iMessage carries no connect button, so the notice is plain text through the delivery
+// outbox, sent once per failure episode, and no connect link is minted (a new one would revoke the owner's open ones).
+const deadGrantRead = async (w: Awaited<ReturnType<typeof world>>) => {
+  proof.googleDead = true;
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    await state.storage.put('origin', HOST_ORIGIN);
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    const runtime = (instance as unknown as { setup(channel: string): { ready: Promise<unknown>; google: { client(feature: string): Promise<{ calendarPage(): Promise<unknown> } | null> } } }).setup('imessage');
+    await runtime.ready;
+    await (await runtime.google.client('calendar'))!.calendarPage().catch(() => undefined);
+    await vi.waitFor(async () => expect(Object.keys(await state.storage.get<Record<string, number>>('google:reauth-noticed') ?? {})).toEqual(['local:owner@example.test']), { timeout: 5_000, interval: 20 });
+  });
+};
+
+it('an iMessage-only owner whose Google grant stops working gets one plain reconnect notice on iMessage, and no link is minted', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await deadGrantRead(w);
+  expect(w.fx.calls).not.toContain('connect_session_issue');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await w.pump();
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the notice reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: reconnectNoticeText('console', 'owner@example.test'), binding: { subject: SUBJECT, chatGuid: CHAT } });
+  await w.host.postResult(delivery!, await w.host.execute(delivery!));
+  await w.pump(2);
+  // The probe the circuit lets through fails again in the same episode, and says nothing more.
+  await runInDurableObject(w.ownerStub, async (instance) => {
+    const runtime = (instance as unknown as { setup(channel: string): { google: { client(feature: string): Promise<{ calendarPage(): Promise<unknown> } | null> } } }).setup('imessage');
+    await (await runtime.google.client('calendar'))!.calendarPage().catch(() => undefined);
+    expect(await runtime.google.client('calendar'), 'then the circuit keeps the dead grant out').toBeNull();
+  });
+  await w.pump(2);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(forbiddenEgress).toEqual([]);
+}, 15_000);
+
+it('an iMessage turn that needs Google is told no button can be sent there, and mints no link', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  proof.outputs.push([{ type: 'function_call', call_id: 'connect', name: 'connect_service', arguments: JSON.stringify({ service: 'google', feature: 'calendar' }) }], []);
+  await handedTurn(w, 'Connect my Google calendar');
+  const told = proof.turns.at(-1) ?? '';
+  expect(told).toContain('No connect button was sent');
+  expect(told).toContain('console');
+  expect(told).not.toContain(CONNECT_BUTTON_SENT);
+  expect(w.fx.calls).not.toContain('connect_session_issue');
+});
 
 it('an iMessage-only owner who asks for a reminder two hours out has it scheduled, and the alarm keeps the schedule\'s next entry', async () => {
   const w = await world();
