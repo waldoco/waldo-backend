@@ -67,7 +67,9 @@ describe('OpenAI streaming', () => {
     expect(bodies[1]).not.toHaveProperty('stream');
     expect(streamed.ok && plain.ok).toBe(true);
     if (!streamed.ok || !plain.ok) return;
-    expect({ ...streamed.data, latency_ms: 0 }).toEqual({ ...plain.data, latency_ms: 0 });
+    const { ttft_ms: ttft, ...streamedData } = streamed.data;
+    expect(ttft).toBeGreaterThanOrEqual(0);
+    expect({ ...streamedData, latency_ms: 0 }).toEqual({ ...plain.data, latency_ms: 0 });
   });
 
   it.each([

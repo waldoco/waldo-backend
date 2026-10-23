@@ -75,6 +75,9 @@ export type LLMGatewayRequest = {
   headers: GatewayConstantHeaders;
   // Set only for a reply shown while it is written. An adapter that cannot stream ignores it.
   stream?: ReplyDeltaSink;
+  // A later step on another provider can answer now (not settled, circuit closed), so a streamed call whose first token is
+  // late has somewhere to go. Without it the call keeps its whole limit.
+  failoverAhead?: true;
 };
 
 // V2 runtime effects are prepared and durably keyed by RunLoopDO before an adapter may issue
@@ -148,8 +151,10 @@ export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean
 
 // A failed attempt as an adapter reports it. `spent` carries the tokens of an attempt the provider still billed, such as
 // a reply with neither text nor a tool call; they join the usage of the attempt that succeeds, so a retried model step
-// is metered whole. `retry` carries the provider's own retry headers to the one retry owner.
-export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice }>;
+// is metered whole. `retry` carries the provider's own retry headers to the one retry owner. `firstTokenLate`: a streamed
+// call showed nothing within the first-token window and was cut to fail over; the provider was slow, not failing, so it
+// does not count against the provider's circuit.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true }>;
 
 export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
 
@@ -521,9 +526,12 @@ export class RuntimeLLMProvider {
       let gatewayResult: LLMGatewayResult;
       let searchDegraded = false;
       try {
+        const failoverAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider
+          && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
         const send = (request: LLMRequest) => {
           input.runScope?.admit();
           return this.gateway.complete({
+            ...(failoverAhead ? { failoverAhead: true as const } : {}),
             ...(input.runScope ? { runScope: input.runScope } : {}),
             request,
             route: effectiveRoute,
@@ -560,7 +568,7 @@ export class RuntimeLLMProvider {
 
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
-        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code)) this.circuitBreaker.recordFailure(plan.step.provider);
+        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
           model: plan.step.model,
