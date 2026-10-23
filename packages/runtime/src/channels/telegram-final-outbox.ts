@@ -385,7 +385,7 @@ export const outboxRunNotes = (records: readonly FinalRecord[]): ReadonlyMap<str
   }
   return notes;
 };
-// The day cards of one day that went out and are waiting for the surface's report that they arrived.
+// The day cards of one day that are queued for delivery and waiting for the surface's report that they arrived.
 export const unconfirmedCards = (records: readonly FinalRecord[], day: string): ReadonlySet<CardId> =>
   new Set(records.flatMap(record => record.status === 'accepted' && record.dayCard?.day === day ? [record.dayCard.card] : []));
 

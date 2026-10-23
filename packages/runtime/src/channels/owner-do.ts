@@ -4034,9 +4034,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Forget ended the record only when its own status says so: forget that reached a record already sent leaves it to arrive.
       const delivered = record.status === 'delivered', forgetCancelled = record.status === 'blocked' && record.reason === 'owner_forget';
       // Ended without going out again: a window that stayed closed past Meta's 30 days is nothing that failed (nothing was
-      // attempted), but a record any part of which the provider took is on the owner's phone in part, never "not sent".
+      // attempted), but a record any part of which the provider took is on the owner's phone in part, never "not sent". So is
+      // one whose surface failed a later part after reporting an earlier one arrived.
       const lapsedUnsent = record.status === 'blocked' && record.reason === 'lapsed';
-      const partlySent = record.status === 'quarantined' && tookPart(record) && ['lapsed', 'expired', 'owner_binding'].includes(record.reason ?? '');
+      const partlySent = (record.status === 'quarantined' && tookPart(record) && ['lapsed', 'expired', 'owner_binding'].includes(record.reason ?? ''))
+        || (record.status === 'blocked' && record.reason === 'provider_failed' && (record.arrived ?? []).some(Boolean));
       // Accepted by a surface that reports arrival later: nothing is recorded until that report, a refusal, or the lapse.
       if (record.status === 'accepted') { log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: true, detail: 'accepted', code: 'awaiting_arrival' }); return; }
       if (record.inbox && record.status !== 'pending') {

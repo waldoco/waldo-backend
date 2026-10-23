@@ -209,10 +209,13 @@ const replyFor = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
 };
 // An owner whose only surface is iMessage arms their own scheduled work (day cards, memory, follow-up ticks) on their first
 // turn, and it runs on the clock. A test that moves the faked clock forward holds that work first, so a card whose time the
-// jump crosses doesn't run inside a test about something else. Reminders the test set stay armed.
-const moveClock = async (w: Awaited<ReturnType<typeof world>>, at: number) => {
+// jump crosses doesn't run inside a test about something else. Reminders the test set stay armed, and so does any job it names.
+const moveClock = async (w: Awaited<ReturnType<typeof world>>, at: number, alsoKeep: readonly string[] = []) => {
+  const kept = ['reminder', ...alsoKeep];
   await runInDurableObject(w.ownerStub, async (_i, state) => {
-    if (state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length) state.storage.sql.exec("DELETE FROM schedule WHERE kind <> 'reminder'");
+    if (state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'").toArray().length) {
+      state.storage.sql.exec(`DELETE FROM schedule WHERE kind NOT IN (${kept.map(() => '?').join(', ')})`, ...kept);
+    }
   });
   vi.setSystemTime(at);
 };
@@ -970,44 +973,74 @@ it('an iMessage-only owner\'s reminder whose host stays offline fails just past 
   } finally { vi.useRealTimers(); }
 });
 
-// A reminder longer than one message goes to the bridge as two commands, one per part, each frozen under its own key; the
-// record arrives only once the bridge has reported both.
+// A message longer than one iMessage goes to the bridge as two commands, one per part, each frozen under its own key. The model
+// writes `text` for the due job, and the host reports on each part in turn: sent, or proved never sent. The bridge takes one
+// command at a time, so each next part goes on the owner's next hand-off try, seconds later; the job's record waits for the
+// bridge until the last report. Answers the commands the bridge received.
+const LONG = 'Call Sam about the harbour fund before lunch. '.repeat(120).trim();
+const inTwoParts = async (w: Awaited<ReturnType<typeof world>>, job: 'reminder' | 'heartbeat', reports: readonly ('sent' | 'not_started')[]) => {
+  expect(LONG.length).toBeGreaterThan(4_096);
+  const status = () => runInDurableObject(w.ownerStub, async (_i, state) => deliveryRecords(state).filter((row) => row[job]).map((row) => row.status));
+  const received: { text: string; commandId: string }[] = [];
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    proof.reply = LONG;
+    try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+    await moveClock(w, t0 + 1_000, [job]);
+    for (const [part, report] of reports.entries()) {
+      await w.pump();
+      const { delivery } = await w.host.pull();
+      expect(delivery, `part ${part} reached the bridge`).not.toBeNull();
+      received.push(JSON.parse(delivery!.body));
+      expect(await status()).toEqual(['accepted']);
+      await hostReports(w, delivery!, report === 'sent' ? undefined : Date.now() + 24 * 3_600_000);
+      await moveClock(w, Date.now() + 6_000, [job]);
+    }
+    await w.pump(2);
+  } finally { vi.useRealTimers(); }
+  return received;
+};
+
 it('an iMessage-only owner\'s reminder too long for one message goes out in two parts and settles once both arrive', async () => {
   const w = await world();
   await iMessageOnly(w);
   await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
-  const long = 'Call Sam about the harbour fund before lunch. '.repeat(120).trim();
-  expect(long.length).toBeGreaterThan(4_096);
-  const status = () => runInDurableObject(w.ownerStub, async (_i, state) => deliveryRecords(state).filter((row) => row.reminder).map((row) => row.status));
-  const sent: string[] = [], commands: string[] = [];
-  const t0 = Date.now();
-  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
-  try {
-    proof.reply = long;
-    try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
-    await moveClock(w, t0 + 1_000);
-    for (const part of [0, 1]) {
-      await w.pump();
-      const { delivery } = await w.host.pull();
-      expect(delivery, `part ${part} reached the bridge`).not.toBeNull();
-      const command = JSON.parse(delivery!.body) as { text: string; commandId: string };
-      sent.push(command.text); commands.push(command.commandId);
-      expect(await status()).toEqual(['accepted']);
-      await hostReports(w, delivery!);
-      // The bridge takes one command at a time, so the next part goes on the owner's next hand-off try, seconds later.
-      await moveClock(w, Date.now() + 6_000);
-    }
-  } finally { vi.useRealTimers(); }
-  expect(new Set(commands).size).toBe(2);
-  expect(long.startsWith(sent[0]!)).toBe(true);
-  expect(long.endsWith(sent[1]!)).toBe(true);
-  expect(await status()).toEqual(['delivered']);
-  await w.pump(2);
+  const received = await inTwoParts(w, 'reminder', ['sent', 'sent']);
+  expect(new Set(received.map((command) => command.commandId)).size).toBe(2);
+  expect(LONG.startsWith(received[0]!.text)).toBe(true);
+  expect(LONG.endsWith(received[1]!.text)).toBe(true);
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     const [record] = deliveryRecords(state).filter((row) => row.reminder);
+    expect(record!.status).toBe('delivered');
     expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:reminder:')).map((row) => row.replyRef))
       .toEqual([`proactive:${record!.id}:0`, `proactive:${record!.id}:1`]);
     expect(reminderRuns(state)).toEqual(['completed']);
+  });
+});
+
+// A later part the bridge proves never sent, after an earlier part arrived, leaves the message on the owner's phone in part: the
+// job says it was partly sent, not that it could not be delivered.
+it('an iMessage-only owner\'s two-part reminder whose second part never went says it was partly sent', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await seedDueReminder(state); });
+  await inTwoParts(w, 'reminder', ['sent', 'not_started']);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(deliveryRecords(state).filter((row) => row.reminder)).toMatchObject([{ status: 'blocked', reason: 'provider_failed', arrived: [true, false] }]);
+    expect(reminderRunSummaries(state)).toEqual([{ status: 'failed', summary: 'reminder partly sent; the rest was not sent' }]);
+  });
+});
+
+it('an iMessage-only owner\'s two-part follow-up whose second part never went says it was partly sent', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await inTwoParts(w, 'heartbeat', ['sent', 'not_started']);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(deliveryRecords(state).filter((row) => row.heartbeat)).toMatchObject([{ status: 'blocked', reason: 'provider_failed', arrived: [true, false] }]);
+    expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat'").toArray())
+      .toEqual([{ status: 'failed', summary: 'heartbeat partly sent; the rest was not sent' }]);
   });
 });
 
