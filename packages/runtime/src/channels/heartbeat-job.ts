@@ -45,7 +45,7 @@ export const heartbeatApplier = (deps: HeartbeatApplyDeps): MachineHandler => ({
     const due = held ? [] : dueLoops(deps.sql, now, deps.timezone, machine.refs);
     const code = held ?? (due.length ? null : 'held_stale');
     if (code) { deps.transaction(io.settle); return { held: code }; }
-    const reply = checkBackReply(await deps.turn(io.trace, due, `${loopCheckBackText(due)}\n\n${machineResultText(result)}`, io.current));
+    const reply = checkBackReply(await deps.turn(io.trace, due, `${loopCheckBackText(due)}\n\n${machineResultText(result, machine.withheld)}`, io.current));
     // The receipt freezes each loop as the turn left it, so a loop the owner closes or moves before the send stops it.
     const after = due.flatMap(loop => {
       const current = deps.sql.exec<{ status: string; due: string | null }>('SELECT status, due FROM loops WHERE id = ?', loop.id).toArray()[0];

@@ -26,6 +26,8 @@ export const isMachine = (row: Pick<JobRow, 'origin'>): boolean => row.origin.st
 export type MachineBrief = Readonly<{
   job: MachineJob; input_digest: string; scope: string; refs: readonly string[];
   source?: Readonly<{ connection_id: string }>; run_id?: string; record_id?: number;
+  // Refs whose words the worker was not shown because they carry health values: the brain judges those itself.
+  withheld?: readonly string[];
 }>;
 
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason

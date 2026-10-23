@@ -320,6 +320,22 @@ describe('applying a machine job', () => {
     });
   });
 
+  it('an item the worker was not shown (its words carry health values) goes to the brain\'s apply even when the worker found nothing', async () => {
+    await withBook(async (h) => {
+      const id = reportMachine(h.book, nothing, { items: [{ ref: 'l1', detail: 'Book the follow-up: BP was 150/95' }, { ref: 'l2', detail: 'Send the deck' }] });
+      expect(taskBrief(h.book.get(id)!).machine!.withheld).toEqual(['l1']);
+      const seen: TaskResult[] = [];
+      let quiet = 0;
+      const l = lane(h);
+      await runJobsLane(l.deps({ machine: { heartbeat: {
+        apply: async (_row, got, io) => { seen.push(got); h.transaction(io.settle); return 'skipped'; },
+        noNews: (_row, settle) => { quiet += 1; h.transaction(settle); },
+      } } }));
+      expect([seen, quiet]).toEqual([[nothing], 0]);
+      expect(hops(l.log, 'machine_skipped')).toHaveLength(1);
+    });
+  });
+
   it('a no-news hook that throws waits like an apply, then settles silently, and an owner task report behind it still applies', async () => {
     await withBook(async (h) => {
       const id = reportMachine(h.book, nothing);

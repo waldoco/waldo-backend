@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
-import type { GoogleClient, MailItem } from '../src/connectors/google';
+import type { CalendarChange, GoogleClient, MailItem } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
 import { updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
@@ -27,7 +27,7 @@ const FOUND: TaskResult = { status: 'done', summary: 'Asha signed the quote.', f
 const NOTHING: TaskResult = { status: 'done', summary: 'Nothing worth telling.', findings: [], proposals: [], left: [] };
 
 type Harness = Readonly<{
-  sql: SqlStorage; storage: DurableObjectStorage; clock: { at: number }; updates: UpdateBook; book: JobBook; mail: MailItem[]; reads: { n: number };
+  sql: SqlStorage; storage: DurableObjectStorage; clock: { at: number }; updates: UpdateBook; book: JobBook; mail: MailItem[]; events: CalendarChange[]; reads: { n: number };
   gate: { code: SweepGate | null }; down: { breaker: boolean }; held: number[];
   check(over?: Partial<Parameters<typeof updateSweepCheck>[0]>): ReturnType<typeof updateSweepCheck>;
   jobs(): JobRow[]; rows(): { id: number; changes: string; text: string | null }[]; since(): (number | null)[];
@@ -42,9 +42,9 @@ const withSweep = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const updates = updateBook(sql);
     updates.mark('mail_since', T0 - 600_000);
     updates.mark('calendar_since', T0 - 600_000);
-    const mail: MailItem[] = [], reads = { n: 0 }, gate = { code: null as SweepGate | null }, down = { breaker: false }, held: number[] = [];
+    const mail: MailItem[] = [], events: CalendarChange[] = [], reads = { n: 0 }, gate = { code: null as SweepGate | null }, down = { breaker: false }, held: number[] = [];
     const google = {
-      changedEvents: async () => { reads.n += 1; return []; },
+      changedEvents: async () => { reads.n += 1; return [...events]; },
       newMail: async () => { reads.n += 1; return [...mail]; },
     } as unknown as GoogleClient;
     const check = (over: Partial<Parameters<typeof updateSweepCheck>[0]> = {}) => updateSweepCheck({
@@ -53,7 +53,7 @@ const withSweep = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       enqueued: job => { held.push(job.created_at); }, ...over,
     });
     return work({
-      sql, storage: state.storage, clock, updates, book, mail, reads, gate, down, held, check,
+      sql, storage: state.storage, clock, updates, book, mail, events, reads, gate, down, held, check,
       jobs: () => sql.exec<JobRow>('SELECT * FROM task_jobs ORDER BY created_at').toArray(),
       rows: () => sql.exec<{ id: number; changes: string; text: string | null }>('SELECT id, changes, text FROM update_cards ORDER BY id').toArray(),
       since: () => [updates.since('mail_since'), updates.since('calendar_since')],
@@ -145,6 +145,19 @@ describe('the sweep check writes a machine job', () => {
     });
   });
 
+  it('an item whose words are dropped is named by a ref a reader can open: the event id, or the message id without a source', async () => {
+    await withSweep(async (h) => {
+      h.events.push({ id: 'ev-7', title: 'Cardiology follow-up: BP 150/95 last time', start: '2026-10-20T15:00:00Z', end: '2026-10-20T15:30:00Z', all_day: false, status: 'confirmed', created: '2026-10-20T08:58:00Z' } as CalendarChange);
+      h.mail.push({ ...MAIL, snippet: 'Your HRV 38 ms looks fine.' });
+      await h.check({ sourceFollowups: false });
+      const [job] = h.jobs();
+      expect(taskBrief(job!).machine!.refs).toEqual(['event:ev-7', 'message:m-1']);
+      expect(taskBrief(job!).machine!.withheld).toEqual(['event:ev-7', 'message:m-1']);
+      expect(taskBrief(job!).context).toContain(`[event:ev-7] ${HEALTH_DETAIL_DROPPED}`);
+      expect(numericHealthIn(job!.brief_json)).toBe(false);
+    });
+  });
+
   it('a mail carrying a health value keeps its ref in the brief and drops its words', async () => {
     await withSweep(async (h) => {
       h.mail.push({ ...MAIL, subject: 'Your results', snippet: 'Your HRV 38 ms and resting heart rate 52 bpm look fine.' });
@@ -202,6 +215,21 @@ describe('applying a sweep job', () => {
       expect(a.log.filter(entry => entry.hop === 'machine_applied')).toHaveLength(1);
       // The card is recorded as sent only once it is delivered, never at queue time.
       expect(h.rows()[0]!.text).toBeNull();
+    });
+  });
+
+  it('the worker found nothing on a mail it was not shown: the apply turn judges it, told which one, and only then is it judged', async () => {
+    await withSweep(async (h) => {
+      h.mail.push({ ...MAIL, subject: 'Your results', snippet: 'Your HRV 38 ms and resting heart rate 52 bpm look fine.' });
+      await h.check();
+      report(h, NOTHING);
+      const a = applying(h);
+      a.reply.text = 'SKIP';
+      expect(judged(h.sql)).toEqual([0]);
+      await a.lane();
+      expect(a.turns).toHaveLength(1);
+      expect(a.turns[0]!.text).toContain('Items not shown to the worker: mail:t-1.');
+      expect(judged(h.sql)).toEqual([1]);
     });
   });
 

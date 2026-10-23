@@ -7,7 +7,8 @@ type Sql = Pick<SqlStorage, 'exec'>;
 type WatchKey = 'calendar_since' | 'mail_since';
 export const changeLines = (changes: readonly Change[]): string => changes.map((change) => `- ${change.source} ${change.kind}: ${change.detail}${change.source_ref ? ` [source_ref ${change.source_ref}]` : ''}`).join('\n');
 
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new'; detail: string; source_message_id?: string; source_ref?: string }>;
+// ref: the event or message a reader opens the change by.
+export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new'; detail: string; source_message_id?: string; source_ref?: string; ref?: string }>;
 
 export const updateBook = (sql: Sql) => {
   sql.exec('CREATE TABLE IF NOT EXISTS observed_mail (source_ref TEXT PRIMARY KEY, thread_id TEXT NOT NULL, observed_at INTEGER NOT NULL, message_id TEXT NOT NULL, judged INTEGER NOT NULL DEFAULT 0, update_id INTEGER, attached INTEGER NOT NULL DEFAULT 0)');
@@ -90,7 +91,7 @@ export type UpdateBook = ReturnType<typeof updateBook>;
 const toChange = (item: CalendarChange, since: number): Change => {
   const { status, created, ...event } = item;
   const kind = status === 'cancelled' ? 'cancelled' : Date.parse(created) >= since ? 'added' : 'changed';
-  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)) };
+  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}` };
 };
 
 // What changed since the watermarks, read with no write: the caller records the changes, the mail it observed and the new
@@ -106,7 +107,7 @@ export const readChanges = async (book: UpdateBook, google: Pick<GoogleClient, '
   const observed: { source_ref: string; thread_id: string; at: number; message_id: string }[] = [];
   const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => {
     const detail = JSON.stringify(mailPromptProjection(item));
-    if (!sourceFollowups) return { source: 'mail', kind: 'new', detail };
+    if (!sourceFollowups) return { source: 'mail', kind: 'new', detail, ref: `message:${item.id}` };
     const source_ref = `mail:${item.thread_id || item.id}`;
     observed.push({ source_ref, thread_id: item.thread_id, at: Date.parse(item.at), message_id: item.id });
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };

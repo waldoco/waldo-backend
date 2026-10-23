@@ -37,6 +37,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
   const open = book.openMachine(spec.job, spec.scope);
   if (open) return { code: open.idempotency_key === spec.key ? 'existing' : 'held_open_job', job: open };
   const items = spec.items.map(keptItem);
+  const withheld = items.flatMap(item => item.detail === HEALTH_DETAIL_DROPPED ? [item.ref] : []);
   const brief: TaskBrief = {
     ...spec.text,
     context: fenced('Data fetched for this job', items.map(({ ref, detail }) => `- [${ref}] ${detail}`).join('\n')).trim(),
@@ -45,6 +46,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
     machine: {
       job: spec.job, input_digest: spec.inputDigest ?? md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
       ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}), ...(spec.recordId === undefined ? {} : { record_id: spec.recordId }),
+      ...(withheld.length ? { withheld } : {}),
     },
   };
   const { job, created } = book.create({
@@ -109,8 +111,9 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
   const handler = deps.appliers[taskBrief(row).machine!.job];
   const result = jobResult(row)!;
-  // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention.
-  if (!result.findings.length && !result.proposals.length) {
+  // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
+  // nothing about an item it was not shown, so a job with one goes to the brain's apply, which can see it.
+  if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length) {
     if (!handler?.noNews) return quietly('machine_no_news');
     try { await handler.noNews(row, settle); } catch (error) { return unavailable(error); }
     return done('machine_no_news');

@@ -62,8 +62,9 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<Readonly<{
 
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({
   job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: UPDATE_SWEEP_JOB_TEXT,
-  // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by position.
-  items: analysis.map((change, index) => ({ ref: change.source_ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${change.detail}` })),
+  // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
+  // or message a reader opens it by, and a change recorded before those were kept by position.
+  items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${change.detail}` })),
   timezone: job.timezone, now: job.now, deadlineAt: job.now + UPDATE_SWEEP_DEADLINE_MS, recordId: job.recordId,
 });
 
@@ -73,8 +74,8 @@ export const updateSweepTools = (sourceFollowups: boolean): readonly ToolName[] 
   sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : OUTSIDE_TEXT_JOB_TOOLS;
 
 export const updateSweepApplyText = (localNow: string, changes: readonly Change[], context: Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups: boolean }>,
-  result: Parameters<typeof machineResultText>[0]): string =>
-  `${updateCardPrompt(localNow, { changes: changeLines(changes), ...context })}\n\n${machineResultText(result)}`;
+  result: Parameters<typeof machineResultText>[0], withheld: readonly string[] = []): string =>
+  `${updateCardPrompt(localNow, { changes: changeLines(changes), ...context })}\n\n${machineResultText(result, withheld)}`;
 
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
@@ -99,11 +100,11 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     apply: async (row, result, io) => {
       const gate = deps.gate();
       if (gate) { deps.transaction(io.settle); return { held: gate }; }
-      const { record_id: recordId, refs } = taskBrief(row).machine!;
+      const { record_id: recordId, refs, withheld } = taskBrief(row).machine!;
       const changes = deps.updates.jobChanges(recordId!, refs);
       if (!changes.length) { deps.transaction(io.settle); return { held: 'held_stale' }; }
       const sourceFollowups = deps.sourceFollowups();
-      const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result);
+      const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
       const reply = (await deps.turn(io.trace, text, io.current)).trim();
       if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
       await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, () => { deps.updates.judgedJob(recordId!, refs); io.settle(); });

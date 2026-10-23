@@ -238,6 +238,19 @@ describe('applying a heartbeat job', () => {
     });
   });
 
+  it('the worker found nothing on a loop it was not shown: the apply turn judges that loop, told which one the worker could not see', async () => {
+    await withHeartbeat(NOW, async (h) => {
+      const loop = h.loops.open({ title: 'Book the follow-up: BP was 150/95', due: '2026-09-26T14:00' });
+      await h.tick(NOW);
+      report(h.book, h.jobs()[0]!, { status: 'done', summary: 'Nothing new.', findings: [], proposals: [], left: [] });
+      const a = applying(h);
+      await a.lane();
+      expect(a.turns).toHaveLength(1);
+      expect(a.turns[0]).toMatchObject({ loops: [loop.id] });
+      expect(a.turns[0]!.text).toContain(`not shown to the worker: ${loop.id}`);
+    });
+  });
+
   it('a check-back is asked again once the cooldown ends: each occurrence is its own job', async () => {
     await withHeartbeat(NOW, async (h) => {
       h.loops.open({ title: 'Check how the late call went', due: '2026-09-26T14:00' });
