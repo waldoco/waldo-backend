@@ -4161,6 +4161,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gmail: { book: gmailPushBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
+    // A pre-activity admission that lets a note out on this owner's chat surface.
+    const prepAdmitted = (admission: ReturnType<typeof computeAdmission>) => ['send', 'degrade'].includes(admission.verdict) && admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram');
     // Whether a prep note for this occurrence could go out now: not in quiet hours, and admitted by the owner's pre-activity
     // budget. Advisory: the commit that queues the note runs the authoritative admission.
     const prepGate = async (connectionId: string, occurrence: string, start: number, timezone: string): Promise<PrepGate | null> => {
@@ -4168,7 +4170,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const now = Date.now();
       const candidate = { event_id: await sha256Hex(JSON.stringify([connectionId, occurrence])), push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: start };
       const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
-      return ['send', 'degrade'].includes(admission.verdict) && admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram') ? null : 'held_budget';
+      return prepAdmitted(admission) ? null : 'held_budget';
     };
     // Queues a prep note when the owner's pre-activity budget admits it, `commit` and the budget charge in the same transaction.
     const prepEnqueue = (connectionId: string, timezone: string, current: () => Promise<void>) => async (id: string, text: string, calendarPrep: CalendarPrepReceipt, commit: () => void): Promise<boolean> => {
@@ -4185,7 +4187,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
         const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
-        if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram')) return;
+        if (!prepAdmitted(admission)) return;
         work(); commit();
         // Chat output, on Telegram or in the app, never consumes an APNs budget reservation.
         calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
