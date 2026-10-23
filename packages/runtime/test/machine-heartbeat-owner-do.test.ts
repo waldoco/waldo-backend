@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { LOOP_CHECK_BACK_TOOLS } from '../src/channels/check-back';
 import { loopBook } from '../src/channels/loops';
+import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -124,4 +125,24 @@ it('a pass that stops after the job is written still starts it: the jobs wake wa
   const settled = await until(() => runInDurableObject(owner, async (_instance, state) => jobs(state.storage.sql)[0]), row => row?.status === 'applied');
   expect(settled).toMatchObject({ status: 'applied', origin: 'machine:heartbeat' });
   expect(seen.worker).toHaveLength(1);
+}, 30_000);
+
+// The apply turn is built from what the worker read in someone else's words, so its recall never selects a health claim,
+// even one the loop's own words would match. The owner's other memory still reaches it.
+it('the apply turn is tainted: its recall leaves out health claims and keeps the rest', async () => {
+  seen.findings = [{ text: 'Asha wrote after the launch call: the notes come tomorrow.', source_ref: 'msg-9' }];
+  const owner = await ready('machine-heartbeat-taint', true);
+  await runInDurableObject(owner, async (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'fact', text: 'Asha leads the launch call', source: 'stated', evidence: 'Asha leads the launch call', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-19T08:00:00Z');
+    memory.add({ kind: 'health', text: 'Launch calls with Asha leave the owner with a migraine', source: 'stated', evidence: 'launch calls give me a migraine', origin: 'owner', source_ref: 'owner, app-2' }, '2026-10-19T08:00:00Z');
+    // A curated profile shows only what is pinned, so the two claims above reach the turn only through recall.
+    const pinned = memory.add({ kind: 'preference', text: 'Prefers short messages', source: 'stated', evidence: 'keep it short', origin: 'owner', source_ref: 'owner, app-3' }, '2026-10-19T08:00:00Z');
+    memory.pin(typeof pinned === 'number' ? pinned : memory.claims().find(claim => claim.text === 'Prefers short messages')!.id, 'profile', 0);
+  });
+  await runDurableObjectAlarm(owner);
+  await until(() => runInDurableObject(owner, async (_instance, state) => jobs(state.storage.sql)[0]), row => row?.status === 'applied');
+  expect(seen.apply).toHaveLength(1);
+  expect(seen.apply[0]).toContain('Asha leads the launch call');
+  expect(seen.apply[0]).not.toContain('migraine');
 }, 30_000);

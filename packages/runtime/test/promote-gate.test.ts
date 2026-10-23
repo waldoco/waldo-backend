@@ -10,6 +10,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { holdTopic } from './helpers/pending-topic';
 
 const openai = vi.hoisted(() => ({ promotions: 0, promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -107,6 +108,19 @@ describe('the nightly promotion gate', () => {
       expect(state.storage.kv.get(CONSTELLATION_DIGEST_KEY)).toMatch(/^[0-9a-f]{64}$/);
     });
   });
+  it('the digest is of what the promotion reads: a claim held by a pending forget can change without a promotion call', async () => {
+    await withOwner('promote-gate-held', async (state, night) => {
+      const memory = seed(state);
+      memory.add({ kind: 'fact', text: 'Has green tea after lunch', source: 'stated', evidence: 'green tea after lunch', origin: 'owner', source_ref: 'owner, app-3' }, '2026-10-20T09:00:00Z');
+      holdTopic(state.storage.sql, 'tea', '2026-10-18T08:00:00Z');
+      await night();
+      expect(openai.promotions).toBe(1);
+      state.storage.sql.exec("UPDATE claims SET text = 'Has green tea after dinner' WHERE text = 'Has green tea after lunch'");
+      await night();
+      expect(openai.promotions).toBe(1);
+    });
+  });
+
   it('a promotion that changed memory stores the digest of what it left, so the next night is quiet', async () => {
     await withOwner('promote-gate-applied', async (state, night) => {
       const memory = claimStore(state.storage.sql);

@@ -1002,7 +1002,8 @@ export const createOwnerResponder = (
         code: receipt.reason ?? receipt.outcome,
         detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
       }));
-      // Read in the same tick as the apply, so an owner turn landing while it hashes is still new to the next night.
+      // The memory this promotion left. The nightly pass runs on the owner's serial chain with every memory writer, so nothing
+      // else writes between the apply and this read.
       const left = promotionInput(promptMemory()!);
       if (gate) gate.promoted(await sha256Hex(left));
       return detail;
