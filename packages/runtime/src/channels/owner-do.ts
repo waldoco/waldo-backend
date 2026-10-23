@@ -115,6 +115,7 @@ import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } 
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
+import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
@@ -1894,6 +1895,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
       return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
+    // Health reads go straight to the signed health plane for this owner, without building the runtime.
+    if (url.pathname === DASHBOARD_HEALTH_PATH || url.pathname === DASHBOARD_ADMIN_HEALTH_PATH) {
+      return consoleHealth({ request, kv: this.ctx.storage.kv, doName: this.ctx.storage.kv.get<string>('do_name'), rpc: signedRpc(this.env), now: Date.now() });
     }
     if (memoryRoute) {
       try {

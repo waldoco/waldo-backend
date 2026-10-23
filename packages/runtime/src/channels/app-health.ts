@@ -52,21 +52,24 @@ const asObject = (value: unknown): Record<string, unknown> | null => (value && t
 
 // A database answer is either a closed error code or the success shape the contract declares; anything else is a
 // fault on our side and never reaches the client as detail.
-const failure = (result: unknown): Response | null => {
+const failureCode = (result: unknown): ErrorCode | null => {
   const answer = asObject(result);
-  if (!answer) return refuse('unavailable');
+  if (!answer) return 'unavailable';
   if (!('error' in answer)) return null;
   const code = healthApiErrorV1Schema.shape.error.safeParse(answer.error);
-  return refuse(code.success ? code.data : 'unavailable');
+  return code.success ? code.data : 'unavailable';
 };
-const settle = <T>(result: unknown, schema: ZodType<T>): Response => {
-  const failed = failure(result);
-  if (failed) return failed;
+type View = { body: object } | { error: ErrorCode };
+const answer = (view: View): Response => ('body' in view ? reply(view.body) : refuse(view.error));
+const parse = <T>(result: unknown, schema: ZodType<T>): View => {
+  const failed = failureCode(result);
+  if (failed) return { error: failed };
   const parsed = schema.safeParse(result);
-  if (parsed.success) return reply(parsed.data as object);
+  if (parsed.success) return { body: parsed.data as object };
   console.error('app health response shape');
-  return refuse('unavailable');
+  return { error: 'unavailable' };
 };
+const settle = <T>(result: unknown, schema: ZodType<T>): Response => answer(parse(result, schema));
 
 const readJson = async <T>(request: Request, schema: ZodType<T>, readBody: AppHealthInput['readBody']): Promise<{ data: T } | { response: Response }> => {
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return { response: refuse('invalid_request') };
@@ -100,35 +103,46 @@ const pillarView = (pillar: Pillar, stored: unknown): object | null => {
   };
 };
 
-const scores = async (input: AppHealthInput): Promise<Response> => {
-  const { url, doName, rpc } = input;
-  const unknown = [...url.searchParams.keys()].some(key => key !== 'day');
-  const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
-  if (unknown || !query.success) return refuse('invalid_request');
-  const day = query.data.day ?? null;
+// The one reading of a scores_read answer, for the app and for the owner's console: the contract body, or the closed error.
+export const healthScoresView = (result: unknown, day: string | null, now: number): View => {
   // No row to show is an answer, not an error: a 200 that says why, never a zero score.
-  const nothing = (reason: unknown): Response => {
+  const nothing = (reason: unknown): View => {
     const body = healthScoresUnavailableV1Schema.safeParse({ state: 'unavailable', day, reason });
-    if (body.success) return reply(body.data);
+    if (body.success) return { body: body.data };
     console.error('app health scores reason');
-    return refuse('unavailable');
+    return { error: 'unavailable' };
   };
-  const result = asObject(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)));
-  if (result?.error === 'not_linked') return nothing('not_linked');
-  const failed = failure(result);
-  if (failed) return failed;
-  if (typeof result?.unavailable === 'string') return nothing(result.unavailable);
-  const stored = asObject(result?.scores);
+  const answered = asObject(result);
+  if (answered?.error === 'not_linked') return nothing('not_linked');
+  const failed = failureCode(answered);
+  if (failed) return { error: failed };
+  if (typeof answered?.unavailable === 'string') return nothing(answered.unavailable);
+  const stored = asObject(answered?.scores);
   // The stored freshness is the row's at write time; the row is aged when read instead, by its compile time and its own day in its own zone.
-  const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, Date.now()) : null;
+  const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, now) : null;
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
     recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
-  if (parsed.success) return reply(parsed.data);
+  if (parsed.success) return { body: parsed.data };
   console.error('app health scores shape');
-  return refuse('unavailable');
+  return { error: 'unavailable' };
+};
+
+// The owner's consents as a client at this health revision may be shown them: a build that does not name revision 2 parses
+// the list strictly and cannot read a provider's rows, so it is shown none.
+export const healthConsentView = (listed: unknown, revision: number): View => {
+  const rows = asObject(listed)?.consents;
+  return parse(Array.isArray(rows) ? { consents: healthConsentListAtRevisionV1(rows.filter((row): row is { source: string } => typeof asObject(row)?.source === 'string'), revision) } : listed, healthConsentListV1Schema);
+};
+
+const scores = async (input: AppHealthInput): Promise<Response> => {
+  const { url, doName, rpc } = input;
+  const unknown = [...url.searchParams.keys()].some(key => key !== 'day');
+  const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
+  if (unknown || !query.success) return refuse('invalid_request');
+  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now()));
 };
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
@@ -178,11 +192,7 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
     '/ingest': ['ingest', healthIngestV1Schema, healthIngestReceiptV1Schema],
   };
   if (route === '/consents' && request.method === 'GET') {
-    // A build that does not name health revision 2 parses the list strictly and cannot read a provider's rows, so it is shown none.
-    const listed = await invokeHealth(rpc, doName, 'consent_list', '{}');
-    const rows = asObject(listed)?.consents;
-    const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health');
-    return settle(Array.isArray(rows) ? { consents: healthConsentListAtRevisionV1(rows.filter((row): row is { source: string } => typeof asObject(row)?.source === 'string'), revision) } : listed, healthConsentListV1Schema);
+    return answer(healthConsentView(await invokeHealth(rpc, doName, 'consent_list', '{}'), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health')));
   }
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
   const write = writes[route];

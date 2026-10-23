@@ -13,6 +13,7 @@ import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-li
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
 import { fenceSession, ownerSessionHash } from './session-fence';
+import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -26,6 +27,10 @@ export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
 type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+// The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
+const dashboardJson = (url: URL, request: Request) =>
+  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH].includes(url.pathname)
+  ||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json');
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;
 // A continuation is a read-only file locator, never an arbitrary redirect or grant.
@@ -353,12 +358,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let doName: string | null;
   try { doName = await auth.readOwnerCookie(request); }
   catch {
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if (dashboardJson(url,request)) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw new Error('owner session validation failed');
   }
   if (!doName) {
     event('console_route', false, 'no_valid_owner_cookie');
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if (dashboardJson(url,request)) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(signin());
   }
   const signout = await consoleSignoutKind(request, url);
@@ -378,7 +383,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); }
   catch (error) {
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if (dashboardJson(url,request)) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw error;
   }
   const routed = response.ok || (response.status >= 300 && response.status < 400);
@@ -388,7 +393,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     response = clearOwnerCookie(response);
   }
   if (resume && response.status === 401) return finish(signin());
-  if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
+  if (dashboardJson(url,request)) {
     const headers = new Headers(response.headers);
     for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);
     return finish(new Response(response.body, { status: response.status, headers }));

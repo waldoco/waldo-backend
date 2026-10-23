@@ -21,9 +21,11 @@ const raw = (over: Record<string, unknown> = {}) => ({ version: 1, as_of: NOW.to
 const view = (over: Record<string, unknown> = {}) => renderToStaticMarkup(<HealthView state={{ kind: 'ready', data: readHealth(raw(over)) }} now={NOW}/>);
 
 describe('health pages in the console', () => {
-  it('has a Health page for every owner and a tester page only for the admin', () => {
+  it('has a Health page in Settings for every owner and a tester page only for the admin, and keeps the five destinations', () => {
     expect(resolveRoute('health')).toBe('health');
-    expect(renderToStaticMarkup(<DashboardNavigation route="health"/>)).toMatch(/<a aria-current="page"[^>]*href="#\/health"[^>]*>[^]*Health/);
+    expect(isSettingsRoute('health')).toBe(true);
+    expect(renderToStaticMarkup(<SettingsNavigation selected="health"/>)).toMatch(/aria-current="page" href="#\/health">Health/);
+    expect(renderToStaticMarkup(<DashboardNavigation route="health"/>)).not.toContain('#/health');
     expect(resolveRoute('admin/health')).toBe('admin/health');
     expect(isSettingsRoute('admin/health')).toBe(true);
     expect(renderToStaticMarkup(<SettingsNavigation selected="day"/>)).not.toContain('#/admin/health');
