@@ -41,7 +41,7 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
   await runInDurableObject(ownerStub, async (_instance, state) => { state.storage.kv.put('do_name', owner); session = await consoleAccess(state.storage).grant(); csrf = (await consoleAccess(state.storage).session(session))!.csrf; });
   const cookie = `waldo_console=${session}; waldo_owner=${owner}.session_fixture.${await routerSignature(secret, 0, `cookie.${owner}.session_fixture`)}`;
   const call = (request: Request) => worker.fetch(request, env, {} as ExecutionContext);
-  const action = (action: string, fields: Record<string, string> = {}) => { const form = new FormData(); for (const [key, value] of Object.entries({ action, csrf, id: device, ...fields })) form.set(key, value); return call(new Request('https://bridge.test/console/action', { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' })); };
+  const action = (action: string, fields: Record<string, string> = {}) => { const form = new FormData(); for (const [key, value] of Object.entries({ action, csrf, id: device, ...fields })) form.set(key, value); return call(new Request('https://bridge.test/console/action', { method: 'POST', body: form, headers: { cookie, origin: 'https://bridge.test' }, redirect: 'manual' })); };
   const pair = await action('device.pair'); expect(pair.status).toBe(200); const code = (await pair.text()).split('\n')[0]!;
   const seed = new Uint8Array(32).map((_, index) => index), pkcs8 = new Uint8Array(48);
   pkcs8.set([0x30,0x2e,0x02,0x01,0x00,0x30,0x05,0x06,0x03,0x2b,0x65,0x70,0x04,0x22,0x04,0x20]); pkcs8.set(seed,16);
