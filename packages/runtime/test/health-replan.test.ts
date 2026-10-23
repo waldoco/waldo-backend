@@ -87,7 +87,7 @@ describe('forgetting a day of cached calendar demand', () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-replan-demand')), async (_i, state) => {
       const sql = state.storage.sql;
       // Nothing cached yet: forgetting is a no-op, not an error.
-      forgetDemandDay(sql, '2026-10-21');
+      forgetDemandDay(sql, '2026-10-21', NOW - 60_000);
       const calls: string[] = [];
       const client: DemandClient = {
         async calendarListsPage() { return { items: [{ id: 'primary', title: 'primary', access_role: 'owner', primary: true, selected: true, hidden: false } as CalendarListItem], next_page_token: null, fetched_count: 1, account: null as never, observed_at: new Date(NOW).toISOString() }; },
@@ -99,9 +99,45 @@ describe('forgetting a day of cached calendar demand', () => {
       const first = calls.length;
       await demand.read(range);
       expect(calls.length).toBe(first);
-      forgetDemandDay(sql, '2026-10-21');
+      forgetDemandDay(sql, '2026-10-21', NOW);
       await demand.read(range);
       expect(calls.slice(first)).toEqual([`${new Date(Date.parse('2026-10-20T18:30:00Z')).toISOString()}..${new Date(Date.parse('2026-10-21T18:30:00Z')).toISOString()}`]);
+    });
+  });
+
+  it('keeps a read that was already in flight when the day was dropped from writing its busy minutes back', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-replan-demand-race')), async (_i, state) => {
+      const sql = state.storage.sql;
+      const calls: string[] = [];
+      let clock = NOW, release: (() => void) | null = null, hold = false;
+      const client: DemandClient = {
+        async calendarListsPage() { return { items: [{ id: 'primary', title: 'primary', access_role: 'owner', primary: true, selected: true, hidden: false } as CalendarListItem], next_page_token: null, fetched_count: 1, account: null as never, observed_at: new Date(clock).toISOString() }; },
+        async freeBusy(from, to, ids) {
+          calls.push(`${from}..${to}`);
+          if (hold) await new Promise<void>(resolve => { release = resolve; });
+          return { from, to, calendars: Object.fromEntries(ids.map(id => [id, { busy: [] }])) } as FreeBusyResult;
+        },
+      };
+      const demand = calendarDemand({ sql, now: () => clock, accounts: async () => [{ email: 'owner@example.test', scopes: SCOPES, error: null }], client: async () => client });
+      const range = { from: '2026-10-21', to: '2026-10-21', timezone: TZ };
+      // A read starts and waits on Google; the calendar changes and today is dropped while it waits.
+      hold = true;
+      const inFlight = demand.read(range);
+      while (!release) await new Promise(resolve => setTimeout(resolve, 1));
+      clock = NOW + 60_000;
+      forgetDemandDay(sql, '2026-10-21', clock);
+      hold = false;
+      (release as () => void)();
+      await inFlight;
+      // The next read, well inside the half hour a fresh today is kept, reads today again.
+      clock = NOW + 2 * 60_000;
+      const before = calls.length;
+      await demand.read(range);
+      expect(calls.length).toBe(before + 1);
+      // And a read that starts after the drop is kept as usual.
+      clock = NOW + 3 * 60_000;
+      await demand.read(range);
+      expect(calls.length).toBe(before + 1);
     });
   });
 });
