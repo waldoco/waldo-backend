@@ -13,7 +13,9 @@ import { quoted } from '../prompt/turn-prompt';
 // size or kind. start_task writes the job and wakes the jobs lane, which starts the worker after the write commits.
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
-const refusal = (error: string, code: 'rejected' | 'not_found' | 'rate_limited' = 'rejected') => ({ ok: false as const, error, code, source_taint: null });
+// The dispatcher turns this into the one refusal shape, adding the fix its code carries, so each code is the one whose fix
+// agrees with the cause: invalid_args says to change the arguments and call again, rejected not to repeat the call.
+const refusal = (error: string, code: 'rejected' | 'not_found' | 'rate_limited' | 'invalid_args' = 'rejected') => ({ ok: false as const, error, code, source_taint: null });
 
 export type TaskToolDeps = Readonly<{
   book: JobBook;
@@ -37,7 +39,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
     mutates_state: true,
     async handle(args: StartTaskArgs, ctx: ToolDispatcherContext) {
       const unavailable = TASK_PROFILE_SPECS[args.profile].unavailable;
-      if (unavailable) return refusal(unavailable);
+      if (unavailable) return refusal(unavailable, 'invalid_args');
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
       const brief: TaskBrief = {
@@ -46,7 +48,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         ...(tainted ? { outside_text: true as const } : {}),
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead.
-      if (numericHealthIn(JSON.stringify(brief))) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.');
+      if (numericHealthIn(JSON.stringify(brief))) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.', 'invalid_args');
       // The job is keyed by the turn and its tool call, so a replayed turn's same call returns the job it already made.
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const key = `${ctx.turnId}:${ctx.toolCallId}`;

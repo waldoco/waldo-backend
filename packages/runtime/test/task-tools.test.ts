@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { CancelTaskArgs, StartTaskArgs } from '@waldo/contracts';
+import { buildSessionState, type CancelTaskArgs, type StartTaskArgs } from '@waldo/contracts';
+import { sanitise } from '../src/scribe/sanitiser';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { jobBook, TASK_MAX_OPEN, TASK_MAX_PER_TURN, type JobBook } from '../src/tasks/jobs';
 import { dispatchLoopTool } from '../src/conversation/tool-loop';
@@ -28,6 +29,7 @@ const withTools = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
   });
 
 const args = { profile: 'reader' as const, title: 'Inbox since Monday', goal: 'Find client mail that waits on the owner.', context: 'Clients write from company domains.', done_when: 'A list of threads: who, what, since when.' };
+const CANARY_TOKENS = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const ctx = (over: Partial<ToolDispatcherContext> = {}) => ({ turnId: 'turn-1', toolCallId: 'call-1', ...over }) as ToolDispatcherContext;
 
 describe('start_task', () => {
@@ -79,22 +81,29 @@ describe('start_task', () => {
     });
   });
 
-  it('refuses a brief with health values; the same brief in words then starts', async () => {
-    await withTools(async ({ book, start }) => {
-      const refused = await start.handle({ ...args, context: 'The owner slept 5 hours, so keep the list short.' }, ctx());
-      expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('Describe them in words') });
+  // Through the dispatcher, as the model reads them: one refusal shape, whose fix agrees with what the cause asks, and the
+  // retry it suggests succeeds.
+  const dispatched = (handlers: readonly unknown[], callId: string, toolArgs: unknown) => dispatchLoopTool({ call_id: callId, name: 'start_task', arguments: JSON.stringify(toolArgs) }, {
+    handlers: handlers as never,
+    ctx: { authenticatedUserId: 'owner-1', trigger: 'user_message', canaryTokens: CANARY_TOKENS, sourceTaint: null, toolArgSourceTaint: null, sanitise, turnId: 'turn-1',
+      session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARY_TOKENS, started_at: T0 }) } as ToolDispatcherContext,
+  });
+  it('refuses a brief with health values, saying to put them in words and call again; the same brief in words then starts', async () => {
+    await withTools(async ({ book, start, cancel }) => {
+      const refused = await dispatched([start, cancel], 'call-1', { ...args, context: 'The owner slept 5 hours, so keep the list short.' });
+      expect(refused).toMatchObject({ ok: false, error_code: 'invalid_args', error: expect.stringContaining('Describe them in words'), fix: expect.stringContaining('call again') });
+      expect(refused.fix).not.toMatch(/Do not repeat/);
       expect(book.open()).toHaveLength(0);
-      const retried = await start.handle({ ...args, context: 'The owner had a short night, so keep the list short.' }, ctx({ toolCallId: 'call-2' }));
-      expect(retried).toMatchObject({ ok: true, data: { status: 'started' } });
+      expect(await dispatched([start, cancel], 'call-2', { ...args, context: 'The owner had a short night, so keep the list short.' })).toMatchObject({ ok: true, data: { status: 'started' } });
     });
   });
 
   it('refuses the code profile with what to use instead; the reader profile then starts', async () => {
-    await withTools(async ({ book, start }) => {
-      const refused = await start.handle({ ...args, profile: 'code' }, ctx());
-      expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('reader or errand profile') });
+    await withTools(async ({ book, start, cancel }) => {
+      const refused = await dispatched([start, cancel], 'call-1', { ...args, profile: 'code' });
+      expect(refused).toMatchObject({ ok: false, error_code: 'invalid_args', error: expect.stringContaining('reader or errand profile'), fix: expect.stringContaining('call again') });
       expect(book.open()).toHaveLength(0);
-      expect(await start.handle(args, ctx({ toolCallId: 'call-2' }))).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+      expect(await dispatched([start, cancel], 'call-2', args)).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
     });
   });
 });
