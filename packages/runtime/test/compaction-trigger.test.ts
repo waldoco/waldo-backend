@@ -258,4 +258,15 @@ describe('the span a held topic leaves', () => {
       expect(spans[0]!.messages.map(message => message.content)).toEqual(fake.compactions()[0]!.request.messages.map(message => message.content));
     });
   });
+
+  it('the summary row counts only the rows it was made from', async () => {
+    await inOwner('compaction-covers-held-topic', async (storage) => {
+      const fake = model();
+      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake), { tools: [forgetTool as never] });
+      await lotusChat(responder, true);
+      await responder.compactIfDue!('owner');
+      const [row] = summaries(storage) as unknown as { covers: { rows: number } }[];
+      expect(row!.covers.rows).toBe(fake.compactions()[0]!.request.messages.length);
+    });
+  });
 });
