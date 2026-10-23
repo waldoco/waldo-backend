@@ -14,7 +14,7 @@ export const startTaskArgsSchema = z.strictObject({
   title: z.string().min(1),
   goal: z.string().min(1),
   context: z.string().describe('All it needs from this chat: names, dates, links, decisions, what to avoid.'),
-  done_when: z.string().min(1).describe('What done looks like.'),
+  done_when: z.string().min(1),
   effort: z.enum(['standard', 'deep']).optional(),
 });
 export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;

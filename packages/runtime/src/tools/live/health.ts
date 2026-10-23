@@ -130,7 +130,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own readings from their health plane, by local day: time asleep (never time in bed), sleep midpoint, overnight HRV labelled rmssd or sdnn (never blended), resting heart rate, mean heart rate, and movement, daylight and workout minutes. Daily values or a summary, for at most 31 days ending no later than today. One source per signal. When unavailable, the reason says why: consent, link, no readings or a failed read. The numbers stay in this turn: nothing is stored or logged.",
+    "The owner's own readings from their health plane, by local day: time asleep (never time in bed), sleep midpoint, overnight HRV labelled rmssd or sdnn (never blended), resting heart rate, mean heart rate, and movement, daylight and workout minutes. At most 31 days, ending no later than today. One source per signal. When unavailable, the reason says why. The numbers stay in this turn: nothing is stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
