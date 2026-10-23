@@ -75,17 +75,48 @@ describe('nightly eval suite', () => {
   }, 60_000);
 });
 
+describe('nightly eval with the tool search menu', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('runs the whole catalogue on the flag-on menu and names that menu in the scorecard', async () => {
+    vi.stubGlobal('fetch', async () => { throw new Error('the dry run must not reach the network'); });
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', WALDO_EVAL_TOOL_SEARCH: 'on' });
+    const searched: boolean[] = [];
+    const inner = config.gateway;
+    const card = await runNightly(SCENARIOS, { ...config, gateway: () => {
+      const gateway = inner();
+      return { complete: async (request) => { if (request.request.tools?.length) searched.push(request.request.tool_search !== undefined); return gateway.complete(request); } };
+    } });
+    expect(card.candidate_model).toBe('recorded+tool_search');
+    expect(card.scenarios).toHaveLength(SCENARIOS.length);
+    expect(card.scenarios.flatMap((row) => row.harness_errors ?? [])).toEqual([]);
+    expect(card.scenarios.every((row) => row.status === 'blocked' || row.status === 'ungraded')).toBe(true);
+    // Every reply that offered tools offered them through tool search.
+    expect(searched.length).toBeGreaterThan(SCENARIOS.length);
+    expect(searched.every(Boolean)).toBe(true);
+    // A whole catalogue run, budgeted like the dry run above rather than as one unit test.
+  }, 60_000);
+
+  it('leaves the switch-off menu as it was', () => {
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded' });
+    expect(config.candidate).toBe('recorded');
+    expect(config.toolSearch).toBeUndefined();
+  });
+});
+
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the look-up, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(27);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the two health cases and the look-up, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(29);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(29);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      expect(scenario.steps.some((step) => 'say' in step)).toBe(true);
+      // Something happens to the owner: they speak, or the health trigger runs on a change in their health.
+      expect(scenario.steps.some((step) => 'say' in step || 'health_change' in step)).toBe(true);
     }
   });
 

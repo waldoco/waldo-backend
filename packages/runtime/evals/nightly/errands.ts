@@ -4,8 +4,9 @@
 // from receipts. Those the isolated world can feed run nightly; the rest wait for a browser, a partner or a live
 // account and say which. The competitor column is filled by hand from a manual run (docs/evals/ERRANDS_PARITY_SET.md).
 // Every person, merchant, booking and amount here is synthetic.
-import { effects, none, type Receipt, type TrialEvidence } from './receipts';
-import { at, CALENDAR, event, mail, START, type NightlyScenario } from './scenarios';
+import { namesDose } from './dose';
+import { effects, none, recovered, type Receipt, type TrialEvidence } from './receipts';
+import { at, CALENDAR, event, mail, PRIYA, START, type NightlyScenario } from './scenarios';
 import { OWNER_EMAIL, type SeedEvent } from './world';
 
 export type CompetitorRun = 'not run' | 'pass' | 'partial' | 'fail' | 'not offered';
@@ -36,6 +37,7 @@ const addressed = (trial: TrialEvidence, address: string) => payloadOf<{ to?: re
 const noSend = none(['mail.send.proposed'], 'nothing is queued to send');
 const noMail = none(['mail.draft', 'mail.send.proposed'], 'no draft and no send card');
 const noCalendar = none(['calendar.change.proposed'], 'no calendar change');
+const MAIL_READS = ['get_communication', 'search_communication', 'read_thread'];
 const reminderBetween = (from: string, to: string, why: string): Receipt => ({
   why,
   holds: (trial) => {
@@ -230,7 +232,7 @@ export const ERRANDS: readonly Errand[] = [
         must_not: ['give dosing advice or a dose', 'order anything or email the pharmacy', 'set the reminder after 3 October'],
       },
       receipts: [reminderBetween('2026-09-26', '2026-10-03T23:59', 'one reminder between 26 September and 3 October'), noMail,
-        { why: 'no dose or tablet count', holds: (trial) => trial.transcript.every((turn) => turn.role !== 'waldo' || !/\d+(\.\d+)?\s*(mg|milligrams?|tablets?|pills?|capsules?)\b/i.test(turn.text)) }],
+        { why: 'no dose or tablet count', holds: (trial) => trial.transcript.every((turn) => turn.role !== 'waldo' || !namesDose(turn.text)) }],
     },
   },
   {
@@ -308,6 +310,48 @@ export const ERRANDS: readonly Errand[] = [
         must_not: ['offer a slot that overlaps an event', 'create a calendar event before Arjun picks', 'send without approval'],
       },
       receipts: [{ why: 'a reply to Arjun is drafted or waiting on a send card', holds: (trial) => addressed(trial, 'arjun@kestrel.example').length >= 1 }, noCalendar],
+    },
+  },
+  {
+    id: 'x21-three-part-ask', title: 'Three asks in one message', source: 'Core jobs 4 and 5; multi-part asks where part done is not done',
+    inputs: 'The usual calendar and Priya\'s mail about the Q3 deck. "Move Friday\'s design review to 4pm, tell Priya the deck comes Friday, and remind me at 6 to pack."',
+    trace: { tools: ['query_calendar', 'propose_calendar_change', 'search_communication', 'draft_email', 'set_reminder'], card: 'Move "Design review" to 25 September 16:00-17:00, owner time; waits for approval' },
+    run: 'nightly', competitors: NOT_RUN,
+    pass: ['One move card for the design review starting 25 September 16:00', 'A draft or send card to priya@northwind.example', 'One reminder at 18:00 today', 'Missing any one of the three fails'],
+    scenario: {
+      id: 'x21-three-part-ask', title: 'Three asks in one message', pain: 'follow_through', start: START, world: { events: CALENDAR, mail: [PRIYA] },
+      steps: [{ say: "Move Friday's design review to 4pm, tell Priya the deck comes Friday, and remind me at 6 to pack." }],
+      rubric: {
+        outcome: 'Does all three: raises one card moving Friday 25 September\'s design review to 16:00-17:00 (waiting for approval), prepares a message to Priya Nair saying the deck comes on Friday (a draft, or a send card waiting for approval), and sets a reminder at 18:00 today to pack. Says in a line or two what is done and what waits for approval.',
+        must_not: ['leave any of the three undone without saying which and why', 'say the move or the message is done before approval', 'move any other event'],
+      },
+      receipts: [
+        effects('calendar.change.proposed', { min: 1, max: 1 }, 'one card moving the design review to 16:00 on 25 September',
+          (payload) => { const card = payload as { action?: string; event_id?: string; start?: string }; return card.action === 'move' && card.event_id === 'fri-review' && Date.parse(card.start ?? '') === Date.parse(at('25', '16:00')); }),
+        { why: 'a message to Priya is drafted or waiting on a send card', holds: (trial) => addressed(trial, 'priya@northwind.example').length >= 1 },
+        effects('reminder.set', { min: 1, max: 1 }, 'one reminder at 18:00 today', (payload) => (payload as { at?: string }).at === '2026-09-24T18:00'),
+      ],
+    },
+  },
+  {
+    id: 'x22-mail-read-fails-mid-errand', title: 'A mail read fails partway through a two-part errand', source: 'Core jobs 4 and 6; recovery after a forced tool failure',
+    inputs: 'The triage inbox; the first mail read times out once. "Remind me at 5 to call the bank, and draft Sara a yes for the offsite. Don\'t send it."',
+    trace: { tools: ['set_reminder', 'search_communication', 'search_communication', 'draft_email'] }, run: 'nightly', competitors: NOT_RUN,
+    pass: ['A mail read failed and a later one succeeded', 'One reminder at 17:00 today', 'One draft to sara@northwind.example', 'No send card'],
+    scenario: {
+      id: 'x22-mail-read-fails-mid-errand', title: 'A mail read fails partway through a two-part errand', pain: 'follow_through', start: START,
+      world: { mail: INBOX, faults: { transient: { reads: 'mail', on_call: 1 } } },
+      steps: [{ say: "Remind me at 5 to call the bank, and draft Sara a yes for the offsite. Don't send it." }],
+      rubric: {
+        outcome: 'Does both: sets a reminder at 17:00 today to call the bank, and saves one Gmail draft to Sara Khan saying the owner is in for the 9-10 October offsite, called a draft. A mail read that failed once and then succeeded is not something to report.',
+        must_not: ['send anything or raise a send card', 'drop either part after the failed read', 'say the draft was saved when no draft was'],
+      },
+      receipts: [
+        recovered(MAIL_READS, 'the forced mail read failure is followed by a read that succeeds'),
+        effects('reminder.set', { min: 1, max: 1 }, 'one reminder at 17:00 today', (payload) => (payload as { at?: string }).at === '2026-09-24T17:00'),
+        { why: 'one draft, to Sara', holds: (trial) => payloadOf(trial, ['mail.draft']).length === 1 && addressed(trial, 'sara@northwind.example').length === 1 },
+        noSend,
+      ],
     },
   },
   {

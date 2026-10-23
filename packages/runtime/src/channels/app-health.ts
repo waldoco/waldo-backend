@@ -1,9 +1,10 @@
 import { fromRowZone } from '@waldo/contracts';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import {
-  HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
+  checkHealthChangeV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
-  healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
+  healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
+  healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
@@ -19,8 +20,11 @@ type ErrorCode = (typeof healthApiErrorV1Schema.shape.error.options)[number];
 export type AppHealthInput = Readonly<{
   request: Request; url: URL; doName: string; rpc: Rpc | null;
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
-  // After a committed ingest the owner's derived rows are recomputed off the request path. Both must be present to run it.
+  // After a committed ingest the owner's derived rows are recomputed off the request path. The owner's Durable Object does
+  // it, once for a run of uploads, in the owner's own zone; without a way to tell it, or when it cannot take the notice, the
+  // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
+  notifySamples?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
   readDemand?: ProducerDeps['readDemand'];
@@ -127,18 +131,42 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   return refuse('unavailable');
 };
 
-// A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The producer cannot
+// A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
-  if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
-  defer(produceHealthScores({
+  if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
+  const here = async () => compute && produceHealthScores({
     readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
+    readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     compute,
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
-  }, { now: Date.now(), timezone }));
+  }, { now: Date.now(), timezone });
+  defer(notifySamples ? notifySamples().catch(() => { console.error('health samples notice failed'); return here(); }) : here());
+};
+
+// Health revision 3: each change is checked on its own. A rejected change stays in its position as its reason and kind of
+// reading only, so the database numbers every rejection and stores one complete receipt, and its value never leaves the
+// Worker. The signed digest covers this payload, so two bodies under one request id that differ only inside a rejected
+// change are the same request: both store the same readings and get the same receipt.
+type Verdict = ReturnType<typeof checkHealthChangeV1>;
+const forwarded = (verdict: Verdict) => (verdict.ok ? verdict.change : { rejected: verdict.rejection.reason, signal: verdict.rejection.signal });
+const perSamplePayload = (batch: { samples: readonly unknown[]; deletions: readonly unknown[] }) => ({
+  ...batch,
+  samples: batch.samples.map((value, index) => forwarded(checkHealthChangeV1('sample', index, value))),
+  deletions: batch.deletions.map((value, index) => forwarded(checkHealthChangeV1('deletion', index, value))),
+  rejection: 'per_sample',
+});
+
+// A refused upload leaves no row behind, so its code is the only trace a stuck sync leaves on the server.
+const logRefusal = async (response: Response): Promise<Response> => {
+  if (response.status !== 200) {
+    const body = await response.clone().json().catch(() => null) as { error?: unknown } | null;
+    console.warn('app health ingest refused', { status: response.status, error: body?.error ?? null });
+  }
+  return response;
 };
 
 export const handleAppHealth = async (input: AppHealthInput): Promise<Response> => {
@@ -161,12 +189,22 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   if (!write) return refuse('unavailable', 404);
   if (request.method !== 'POST') return refuse('unavailable', 405);
   const [operation, requestSchema, responseSchema] = write;
-  const body = await readJson(request, requestSchema, readBody);
-  if ('response' in body) return body.response;
-  if (operation === 'ingest' && !knownZone((body.data as { timezone: string }).timezone)) return refuse('invalid_request');
+  if (operation !== 'ingest') {
+    const body = await readJson(request, requestSchema, readBody);
+    return 'response' in body ? body.response : settle(await invokeHealth(rpc, doName, operation, JSON.stringify(body.data)), responseSchema);
+  }
+  // A build that does not name health revision 3 keeps the all-or-nothing batch exactly.
+  const perSample = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') >= HEALTH_PER_SAMPLE_REVISION_V1;
+  const body = await readJson(request, perSample ? healthIngestEnvelopeV1Schema : healthIngestV1Schema, readBody);
+  if ('response' in body) return logRefusal(body.response);
+  if (!knownZone(body.data.timezone)) return logRefusal(refuse('invalid_request'));
   // A provider's readings come from Waldo's own sync of that provider, never from an app upload that claims its name.
-  if (operation === 'ingest' && isHealthProviderSourceV1((body.data as { source: string }).source)) return refuse('invalid_request');
-  const result = await invokeHealth(rpc, doName, operation, JSON.stringify(body.data));
-  if (operation === 'ingest') recompute(input, result, (body.data as { timezone: string }).timezone);
-  return settle(result, responseSchema);
+  if (isHealthProviderSourceV1(body.data.source)) return logRefusal(refuse('invalid_request'));
+  const payload = JSON.stringify(perSample ? perSamplePayload(body.data) : body.data);
+  // The per-sample mode marker and the rejection stand-ins can take a body at the cap just past it, which the database
+  // would refuse whole as invalid; this answers as the oversize body it is.
+  if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(refuse('invalid_request', 413));
+  const result = await invokeHealth(rpc, doName, operation, payload);
+  recompute(input, result, body.data.timezone);
+  return logRefusal(settle(result, responseSchema));
 };

@@ -48,7 +48,7 @@ describe('health providers: connect and disconnect', () => {
 });
 
 describe('health providers: consent at revision 2', () => {
-  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'storage_compute', version: 2, expected_epoch: 0, age_attested_18_plus: true };
+  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'storage_compute', version: 3, expected_epoch: 0, age_attested_18_plus: true };
 
   it('takes the provider\'s express authorization as the two purposes every source has, and no third', () => {
     expect(healthPurposeV1Schema.options).toEqual(['storage_compute', 'model_processing']);

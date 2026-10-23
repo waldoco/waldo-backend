@@ -1,5 +1,7 @@
-import { clientMetadataDocument } from '../connectors/mcp-oauth';
-import { MCP_FINISH_PATH, readMcpState, type ConnectOutcome } from '../connectors/mcp-connections';
+import { clientMetadataDocument, MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
+import { MCP_ATTEMPT_TTL_MS, MCP_FINISH_PATH, readMcpState, type ConnectOutcome } from '../connectors/mcp-connections';
+import { bindBrowser, checkBrowser, releaseBrowser } from '../connectors/oauth-browser-binding';
+import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { callbackPage } from './google-oauth';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -18,12 +20,21 @@ const COPY: Record<ConnectOutcome['kind'], Readonly<{ status: number; title: str
   failed: { status: 502, title: 'Server could not be connected', body: 'The server\'s sign-in did not complete. Start again from Connections; if it keeps failing, the server may not support Waldo yet.' },
 };
 
+const UNBOUND = { status: 403, title: 'Start the connection again', body: 'This sign-in came back to a different browser from the one that started it, or it took too long, so nothing was connected. Connect the server again from Connections in this browser.' };
+
 const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth', hop: 'mcp_oauth_callback', ok: false, error: reason }));
+
+// The console start link, followed by the signed-in owner: it sends the browser to the provider and binds the attempt
+// to that browser, so the callback accepts no other.
+export const mcpStartRedirect = async (nonce: string, target: string): Promise<Response> => new Response(null, {
+  status: 303,
+  headers: { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': await bindBrowser('mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now()) },
+});
 
 // The provider redirects the owner here after consent. The signed state names the owner object and a
 // single-use attempt; that object settles the attempt, so a reloaded callback never redeems the code twice.
-export const handleMcpCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv): Promise<Response> => {
-  const { TELEGRAM_WEBHOOK_SECRET: secret, OWNER_DO: owners } = env;
+export const handleMcpCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv & OAuthStateEnv): Promise<Response> => {
+  const secret = oauthStateSecret(env), owners = env.OWNER_DO;
   if (!secret || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const url = new URL(request.url);
   const state = await readMcpState(secret, url.searchParams.get('state') ?? '');
@@ -31,14 +42,24 @@ export const handleMcpCallback = async (request: Request, env: TelegramWebhookEn
     rejected(url.searchParams.get('state') ? 'bad_state' : 'missing_state');
     return callbackPage(false, COPY.invalid);
   }
-  try {
-    const response = await owners.get(owners.idFromName(state.owner)).fetch(`https://telegram-owner${MCP_FINISH_PATH}`, {
-      method: 'POST', body: JSON.stringify({ nonce: state.nonce, query: url.searchParams.toString() }),
-    });
-    const outcome = await response.json() as ConnectOutcome;
-    return callbackPage(outcome.kind === 'linked', COPY[outcome.kind] ?? COPY.failed);
-  } catch (failure) {
-    rejected(`owner unreachable: ${failure instanceof Error ? failure.name : 'unknown'}`);
-    return callbackPage(false, COPY.failed);
+  // Checked before the owner object wakes, so a forwarded sign-in or an injected code neither links nor settles the attempt.
+  const browser = await checkBrowser(request, 'mcp', state.nonce, Date.now());
+  if (browser !== 'bound') {
+    rejected(`browser_${browser}`);
+    return callbackPage(false, UNBOUND);
   }
+  const page = await (async () => {
+    try {
+      const response = await owners.get(owners.idFromName(state.owner)).fetch(`https://telegram-owner${MCP_FINISH_PATH}`, {
+        method: 'POST', body: JSON.stringify({ nonce: state.nonce, query: url.searchParams.toString() }),
+      });
+      const outcome = await response.json() as ConnectOutcome;
+      return callbackPage(outcome.kind === 'linked', COPY[outcome.kind] ?? COPY.failed);
+    } catch (failure) {
+      rejected(`owner unreachable: ${failure instanceof Error ? failure.name : 'unknown'}`);
+      return callbackPage(false, COPY.failed);
+    }
+  })();
+  page.headers.append('set-cookie', await releaseBrowser('mcp', state.nonce, MCP_CALLBACK_PATH));
+  return page;
 };

@@ -24,6 +24,7 @@ const TABLES: Record<string, Row> = {
   schedule: purged('forget-tracer-stores.test.ts'), update_cards: purged('forget-derived-stores.test.ts'), day_plan: purged('forget-derived-stores.test.ts'),
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'),
+  forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   claim_recall_ready: exempt('claim ids'),
   owner_findings: purged('forget-owner-findings.test.ts'),
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),

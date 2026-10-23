@@ -6,7 +6,7 @@ type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
 export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean}>;
 // A code or challenge the owner must copy goes back in that one response: the receipt book keeps
 // the receipt without it, so a replayed request never shows the value again.
-export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string}>;
+export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string;to?:string}>;
 export type RevealingReceipt=Readonly<{receipt:ControlReceipt;reveal:ControlReveal}>;
 export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;approval_state?:string}>;
 type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,value:unknown):Promise<void>}>;
@@ -22,9 +22,9 @@ export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
 const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
- imessage:['imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
+ imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat'],devices:['query_kind','body','severity']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity']};
 // These views list every action their read offers, at the top level (no id) or on the row it
 // targets. The fresh read's list is the eligibility check, so the console view is never built.
 const listedRows:Readonly<Record<string,string>>={imessage:'bridges',devices:'devices'};
@@ -55,6 +55,17 @@ export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:
  if(result.kind==='already')return {state:'recorded',message:`${result.name} is already connected.`};
  if(result.kind==='redirect'&&result.path&&/^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(result.path))return {state:'recorded',message:'Sign in to the server to finish connecting. Nothing has been granted yet.',navigation:result.path};
  return {state:'rejected',message:MCP_CONNECT_FAILURES[result.reason??'']??'That server could not be connected. Check the address and try again.'};
+};
+// "tool|on|<digest>" or "tool|off". Allowing names the digest the console showed; taking a permission back needs none.
+export const mcpRunsReceipt=async(id:string,value:string,setRuns:(id:string,tool:string,withoutAsking:boolean,seen?:string)=>Promise<boolean|'changed'>):Promise<ControlReceipt>=>{
+ const [tool,choice,seen,...rest]=value.split('|');
+ const valid=!!tool&&!rest.length&&(choice==='on'?/^[0-9a-f]{64}$/.test(seen??''):choice==='off'&&seen===undefined);
+ if(!valid)return {state:'rejected',message:NOTICES.invalid!};
+ const done=await setRuns(id,tool,choice==='on',choice==='on'?seen:undefined);
+ if(done==='changed')return {state:'rejected',message:'That server changed its tools since this page loaded, so nothing was allowed. Refresh Connections and choose again.'};
+ if(!done)return {state:'rejected',message:NOTICES.invalid!};
+ const label=tool==='*read_only_hint'?'The tools labelled read-only':tool;
+ return {state:'recorded',message:choice==='on'?`${label} run${tool==='*read_only_hint'?'':'s'} without asking.`:`${label} ask${tool==='*read_only_hint'?'':'s'} you first.`};
 };
 export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
  ?{state:'rejected',message:result.provider==='not_needed'?'That server is no longer connected. Refresh the records.':'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}

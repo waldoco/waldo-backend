@@ -152,8 +152,8 @@ describe('compaction', () => {
     expect(numericHealthIn('recovery score 71')).toBe(true);
     expect(numericHealthIn('The owner has been sleeping badly this week and wants quieter mornings.')).toBe(false);
     expect(numericHealthIn('circadian rhythm is off')).toBe(false);
-    // the floor also rejects an ordinary numbered list, which is why the instruction asks for plain bullets
-    expect(numericHealthIn('Next steps: 1. Book the flights')).toBe(true);
+    // a numbered list in prose is not a payload field, so a summary that numbers its items is not held
+    expect(numericHealthIn('Next steps: 1. Book the flights')).toBe(false);
   });
 
   it('the floor never reads or moves the shared global patterns\' lastIndex', () => {
