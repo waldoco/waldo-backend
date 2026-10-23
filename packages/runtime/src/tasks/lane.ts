@@ -19,6 +19,8 @@ export type JobsLaneDeps = Readonly<{
   timezone: string;
   // The surface this pass's turns run on and deliver to.
   surface: string;
+  // Whether the owner's quiet hours hold now. A progress note waits them out; a report the owner is owed does not.
+  quiet(): boolean;
   log(entry: TurnLogEntry): void;
   startWorker(ticket: TaskTicket): Promise<void>;
   // A machine turn on the owner's chain (responder.prompt): the job's text, the tools it may use, a check that the job is
@@ -61,6 +63,8 @@ export const parkedApplyText = (row: JobRow): string => {
 
 // A report that no model could write is retried for an hour, then the fixed words go out.
 const APPLY_RETRY_MS = 60 * 60_000;
+// A note held for quiet hours is looked at again this often, as the outbox looks again at proactive work it holds.
+const QUIET_RECHECK_MS = 10 * 60_000;
 
 export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const { book } = deps;
@@ -198,6 +202,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const due = noteDue(row);
     if (due === null) continue;
     if (due > deps.now()) { nextNote = Math.min(nextNote ?? due, due); continue; }
+    if (deps.quiet()) { nextNote = Math.min(nextNote ?? Infinity, deps.now() + QUIET_RECHECK_MS); continue; }
     try {
       await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row, deps.timezone), () => book.noteSent(row.id));
     } catch (error) {

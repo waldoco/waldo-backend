@@ -32,7 +32,7 @@ const withLane = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const busy = new Set<string>();
     const host = { fence: (id: string) => { fenced.push(id); }, cancelled: (id: string) => { fenced.push(id); }, busy: () => busy } as unknown as TaskHost;
     const deps = (over: Partial<JobsLaneDeps> = {}): JobsLaneDeps => ({
-      book, host, now: () => clock.at, timezone: 'UTC', surface: 'app', log: entry => { log.push(entry); },
+      book, host, now: () => clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); },
       startWorker: async ticket => { started.push(ticket); },
       turn: async (_job, trace, text) => { turns.push(trace); return `Reply to ${text.slice(1, 40)}`; },
       applyTools: () => ['search_communication'] as ToolName[],
@@ -181,6 +181,29 @@ describe('the jobs lane', () => {
       heartbeat();
       await runJobsLane(deps());
       expect([...sent.keys()]).toEqual([`task:${id}:note:1`, `task:${id}:note:2`]);
+      // Two notes say the task is alive; after them the owner hears only its report, however long it runs.
+      for (let tick = 0; tick < 3; tick += 1) {
+        clock.at += 10 * 60_000;
+        heartbeat();
+        const next = await runJobsLane(deps());
+        expect(next).not.toBe(clock.at);
+      }
+      expect(sent.size).toBe(2);
+    });
+  });
+
+  it('a progress note due in the owner\'s quiet hours waits for them to end, and the lane looks again later, not at once', async () => {
+    await withLane(async ({ book, sent, clock, deps }) => {
+      const id = book.create(task('k1')).job.id;
+      await runJobsLane(deps());
+      clock.at += 2 * 60_000;
+      const row = book.get(id)!;
+      expect(book.touch({ jobId: id, attempt: row.attempt, token: row.lease_token! }, null)).toBe(true);
+      const next = await runJobsLane(deps({ quiet: () => true }));
+      expect(sent.size).toBe(0);
+      expect(next).toBeGreaterThan(clock.at);
+      await runJobsLane(deps());
+      expect([...sent.keys()]).toEqual([`task:${id}:note:1`]);
     });
   });
 

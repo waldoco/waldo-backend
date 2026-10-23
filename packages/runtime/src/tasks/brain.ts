@@ -284,11 +284,14 @@ export const taskHost = (deps: TaskHostDeps) => {
 };
 export type TaskHost = ReturnType<typeof taskHost>;
 
-// A long job tells the owner it is still running: first after two minutes, then every ten.
+// A long job tells the owner it is still running: first after two minutes, then ten minutes later. Each note interrupts the
+// owner, and two already say the task is alive, so after them the owner hears only its report.
 export const TASK_NOTE_AFTER_MS = 2 * 60_000;
 export const TASK_NOTE_EVERY_MS = 10 * 60_000;
-export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'created_at' | 'last_note_at'>): number | null =>
-  row.status !== 'running' || row.kind !== 'task' ? null : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
+export const TASK_NOTE_MAX = 2;
+export const noteDue = (row: Pick<JobRow, 'status' | 'kind' | 'created_at' | 'last_note_at' | 'notes_sent'>): number | null =>
+  row.status !== 'running' || row.kind !== 'task' || row.notes_sent >= TASK_NOTE_MAX ? null
+    : row.last_note_at === null ? row.created_at + TASK_NOTE_AFTER_MS : row.last_note_at + TASK_NOTE_EVERY_MS;
 
 export const heldTopicIn = (row: Pick<JobRow, 'brief_json' | 'result_json' | 'checkpoint_json'>, topics: readonly string[]): boolean =>
   topics.some((topic) => [row.brief_json, row.result_json, row.checkpoint_json].some((value) => value !== null && (carriesTopic(value, topic) || hidesTopic(value, topic))));

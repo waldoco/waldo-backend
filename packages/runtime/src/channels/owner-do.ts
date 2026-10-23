@@ -2562,6 +2562,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const kv = storage.kv, jobs = this.jobs();
       const ran = await runJobsLane({
         book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, surface, log: runtime.log,
+        quiet: () => isQuiet(loopBook(storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), runtime.timezone),
         startWorker: async ticket => {
           const workers = this.env.TASK_WORKER_DO;
           if (!workers) throw new Error('task workers are not configured');
