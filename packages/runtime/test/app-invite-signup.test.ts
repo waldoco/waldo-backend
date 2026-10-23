@@ -117,6 +117,16 @@ describe('an invited person joins from the app with their phone', () => {
     expect(state.signups).toEqual([]);
   });
 
+  it('logs nothing carrying the phone on a join', async () => {
+    const { app, invited } = await directory(), lines: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(level =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ')); }));
+    try {
+      expect((await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone: '+919876543210' })).status).toBe(200);
+      expect(lines.filter(line => line.includes('9876543210'))).toEqual([]);
+    } finally { spies.forEach(spy => spy.mockRestore()); }
+  });
+
   it('refuses a phone that is not E.164 before any code is checked', async () => {
     const { app, state, invited } = await directory();
     for (const phone of ['98765 43210', '+0123456789', '+91 98765 43210', 12345]) {

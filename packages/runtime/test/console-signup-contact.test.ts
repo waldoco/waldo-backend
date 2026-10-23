@@ -11,11 +11,14 @@ const cookieFrom = (r: Response) => r.headers.get('set-cookie')!.split(';')[0]!;
 const post = (path: string, values: Record<string, string>, cookie = '') =>
   new Request(`https://w.test/console/signup${path}`, { method: 'POST', headers: { origin: 'https://w.test', cookie }, body: new URLSearchParams(values) });
 
-const setup = (options: { profileStatus?: () => number } = {}) => {
+const setup = (options: { profileStatus?: () => number; joinFails?: boolean } = {}) => {
   const signups: Record<string, string>[] = [], profiles: unknown[] = [];
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith('/signup_owner_for_auth')) { signups.push(JSON.parse(String(init?.body))); return json('owner-new'); }
+    if (url.endsWith('/signup_owner_for_auth')) {
+      signups.push(JSON.parse(String(init?.body)));
+      return options.joinFails ? json({ code: 'XX000', message: 'internal error' }, 500) : json('owner-new');
+    }
     if (url.includes('/rpc/')) return json(true);
     if (url.endsWith('/verify')) return json({ user: { id: 'u-1', email: 'person@example.com', email_confirmed_at: '2026-10-01Z' } });
     return json({});
@@ -42,7 +45,7 @@ describe('sign-up asks for a name and a phone', () => {
   it('shows both on the finish step, and says the phone is checked later by texting Waldo from it', async () => {
     const s = setup(), v = await verified(s);
     const html = await (await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: v.cookie } }), s.e, s.a, s.signup)).text();
-    expect(html).toMatch(/<input id="name" name="name"[^>]*autocomplete="name"[^>]*required/);
+    expect(html).toMatch(/<input id="name" name="name"[^>]*autocomplete="given-name"[^>]*required/);
     expect(html).toMatch(/<input id="phone" name="phone" type="tel"[^>]*autocomplete="tel"[^>]*required/);
     expect(html).toContain('the first time you text your link code to Waldo from it');
     expect(html).toContain('Nothing is sent to this number now');
@@ -52,7 +55,7 @@ describe('sign-up asks for a name and a phone', () => {
     for (const phone of ['', '98765 43210', '+0 1234567']) {
       const refused = await finish(s, v, { name: 'Asha Menon', phone });
       expect(refused.status).toBe(200);
-      expect(await refused.text()).toContain('Enter your name, and your phone with its country code');
+      expect(await refused.text()).toContain('Enter what Waldo should call you, and your phone with its country code');
     }
     expect(s.signups).toEqual([]);
     expect(s.profiles).toEqual([]);
@@ -60,7 +63,7 @@ describe('sign-up asks for a name and a phone', () => {
   it('refuses to finish without a name, or with one too long or carrying control characters', async () => {
     const s = setup(), v = await verified(s);
     for (const name of ['', '   ', 'a'.repeat(81), 'Asha\u0007Menon', 'Asha\nMenon']) {
-      expect(await (await finish(s, v, { name, phone: '+919876543210' })).text()).toContain('Enter your name, and your phone with its country code');
+      expect(await (await finish(s, v, { name, phone: '+919876543210' })).text()).toContain('Enter what Waldo should call you, and your phone with its country code');
     }
     expect(s.signups).toEqual([]);
   });
@@ -99,4 +102,24 @@ describe('sign-up asks for a name and a phone', () => {
     expect(html).not.toMatch(/src="https?:/);
     expect(s.fetcher).not.toHaveBeenCalled();
   });
+});
+
+describe('the sign-up phone stays out of the logs', () => {
+  const PHONE = '+919876543210';
+  const captured = () => {
+    const lines: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(level =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(arg => arg instanceof Error ? `${arg.message} ${arg.stack}` : typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ')); }));
+    return { lines, restore: () => spies.forEach(spy => spy.mockRestore()) };
+  };
+  for (const [label, options] of [['a sign-up that finishes', {}], ['a join the directory refuses', { joinFails: true }], ['a name the owner object cannot take', { profileStatus: () => 503 }]] as const) {
+    it(`logs nothing carrying it on ${label}`, async () => {
+      const s = setup(options), v = await verified(s), log = captured();
+      try {
+        await finish(s, v, { name: 'Asha Menon', phone: PHONE });
+        expect(s.signups).toHaveLength(1);
+        expect(log.lines.filter(line => line.includes('9876543210'))).toEqual([]);
+      } finally { log.restore(); }
+    });
+  }
 });

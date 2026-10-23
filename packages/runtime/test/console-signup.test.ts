@@ -185,7 +185,7 @@ it('refuses completion before email proof, with wrong CSRF, or without owner rou
   expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, cookie), env, s.a, signup)).text()).toContain('Verify your email before');
   expect(await (await handleSignup(post('/complete', { csrf: 'wrong' }, cookie), env, s.a, signup)).text()).toContain('expired');
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, signup));
-  expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, verifiedCookie), env, s.a, signup)).text()).toContain('Enter your name, and your phone');
+  expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, verifiedCookie), env, s.a, signup)).text()).toContain('Enter what Waldo should call you, and your phone');
   expect(await (await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+14155550100' }, verifiedCookie), env, s.a, signup)).text()).toContain('temporarily unavailable');
   expect(complete).not.toHaveBeenCalled();
 });
