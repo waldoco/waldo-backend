@@ -286,3 +286,74 @@ describe('the span a held topic leaves', () => {
     });
   });
 });
+
+// The console's forget as the owner DO runs it: custody of the texts, then the purge job's first pass over the conversation,
+// which either cleans it at once or leaves it to the job's retry.
+const consoleForget = (storage: DurableObjectStorage, memory: ReturnType<typeof claimStore>, cleans: boolean) => forgetPurge({
+  sql: storage.sql, store: memory, now: Date.now, arm: async () => undefined,
+  stores: [{ name: 'conversation', run: async (texts) => cleans ? (await redactConversationEntries(storage, texts, FORGOTTEN)).remaining : 1 }],
+});
+
+describe('a forget that lands while the summary is being written', () => {
+  type During = (storage: DurableObjectStorage, memory: ReturnType<typeof claimStore>) => unknown;
+  const compactWith = (name: string, scoped: boolean, summary: string, during: During, before: During = () => undefined) => inOwner(name, async (storage) => {
+    const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
+    await before(storage, memory);
+    const hops: TurnLogEntry[] = [];
+    const fake = model(() => during(storage, memory), summary);
+    const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway,
+      { memory, log: entry => hops.push(entry), ...(scoped ? { scope: closableScope(storage).scope } : {}) });
+    await lotusChat(responder);
+    await responder.compactIfDue!('owner');
+    // The summary call read the row as it was, so the forget landed while the call was in flight.
+    expect(JSON.stringify(fake.compactions().map(call => call.request.messages))).toContain('Lotus Hall');
+    return { rows: summaries(storage), hop: lastCompactionHop(hops), live: storage.kv.get(`${PREFIX}compaction-live:owner`), pending: memory.pendingTopics() };
+  });
+  const refused = (result: Awaited<ReturnType<typeof compactWith>>) => {
+    expect(result.rows).toHaveLength(0);
+    expect(result.live).toBeUndefined();
+    expect(result.hop).toEqual(expect.objectContaining({ ok: false, code: 'held_topic' }));
+    expect(result.hop!.detail).toBeUndefined();
+  };
+
+  it('a topic the console still holds when the summary returns: nothing is written, whether or not the summary names it', async () => {
+    for (const scoped of [false, true]) for (const summary of [LOTUS_SUMMARY, VENUE_SUMMARY]) {
+      const result = await compactWith(`compaction-held-in-flight-${scoped}-${summary.length}`, scoped, summary, (storage, memory) => {
+        memory.barrier('Lotus Hall', iso());
+        return consoleForget(storage, memory, false).track(['Lotus Hall'], 'history');
+      });
+      expect(result.pending).toEqual(['Lotus Hall']);
+      refused(result);
+    }
+  });
+
+  it('a spot forgotten from the console in flight: the owner words it quoted hold the rows that carry them', async () => {
+    const result = await compactWith('compaction-spot-forget-in-flight', true, VENUE_SUMMARY, (storage, memory) => {
+      const purged = memory.purge([memory.claims()[0]!.id], iso());
+      return consoleForget(storage, memory, false).track(purged.texts);
+    }, (_storage, memory) => memory.add({ kind: 'fact', text: 'The party venue is booked', source: 'stated', evidence: '"book the Lotus Hall for the party"', origin: 'owner', source_ref: 'owner, app-3' }, iso()));
+    expect(result.pending).toContain('book the Lotus Hall for the party');
+    refused(result);
+  });
+
+  it('a forget whose cleaning finished in flight, and the stored rows redacted in flight: nothing is written', async () => {
+    const cleaned: During = (storage, memory) => { memory.barrier('Lotus Hall', iso()); return consoleForget(storage, memory, true).track(['Lotus Hall'], 'history'); };
+    const redacted: During = (storage) => redactConversationEntries(storage, ['Lotus Hall'], FORGOTTEN);
+    for (const scoped of [false, true]) for (const [label, during] of [['cleaned', cleaned], ['redacted', redacted]] as const) {
+      const result = await compactWith(`compaction-${label}-in-flight-${scoped}`, scoped, LOTUS_SUMMARY, during);
+      // Nothing is held any more: only the rows the summary was made from show the forget.
+      expect(result.pending).toEqual([]);
+      refused(result);
+    }
+  });
+
+  it('a forget of a topic the span does not carry leaves the summary to be written', async () => {
+    const result = await compactWith('compaction-other-forget-in-flight', true, LOTUS_SUMMARY, (storage, memory) => {
+      memory.barrier('Bluefin', iso());
+      return consoleForget(storage, memory, false).track(['Bluefin'], 'history');
+    });
+    expect(result.pending).toEqual(['Bluefin']);
+    expect(result.rows.map(row => row.modelPayload)).toEqual([LOTUS_SUMMARY]);
+    expect(result.hop).toEqual(expect.objectContaining({ ok: true, code: 'compacted' }));
+  });
+});

@@ -822,11 +822,15 @@ export const createOwnerResponder = (
       if (!summary) { hop(false, 'empty'); return; }
       // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
       if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }
-      // The summary can name a held topic its input did not carry; one that does is not kept.
-      if (barrier().shows(summary)) { hop(false, 'held_topic'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
-      await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
+      // A forget can land while the summary is being written, so the commit that writes it reads the topics held then: the
+      // summary must not show one (it can name a topic its input did not carry), and no row it was made from may carry one.
+      const fence = { sources: plan.sources, admits: () => {
+        const held = barrier();
+        return !held.shows(summary) && !plan.input.some((message) => held.holds(message.content));
+      } };
+      if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }
       tree.append(row);
       if (live) tree.replace(supersededCompaction(live));
       hop(true, 'compacted', { ms: Date.now() - started, detail: `rows=${plan.covers.rows}:chars=${summary.length}:gap=${plan.gap}` });

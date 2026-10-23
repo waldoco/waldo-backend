@@ -137,6 +137,11 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
   };
 };
 
+// What a summary was made from, checked again in the commit that writes it, after the model call: each source row must
+// still be stored as the summary read it, and admits() must pass, reading what is held at that moment. A forget that
+// landed while the summary was being written rewrites a source row or holds a topic, and the summary is not written.
+export type CompactionFence = Readonly<{ sources: readonly ConversationEntry[]; admits: () => boolean }>;
+
 // The plan without the inputs `drop` selects, as a held topic's rows are left out: covers.rows counts only the original
 // rows the summary is still made from, the previous summary's count among them only while that summary is kept. Null when
 // nothing is left.

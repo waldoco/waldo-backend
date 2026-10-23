@@ -4,7 +4,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
-import { COMPACTION, supersededCompaction, type CompactionSettings } from './compaction';
+import { COMPACTION, supersededCompaction, type CompactionFence, type CompactionSettings } from './compaction';
 import { estimateMessageTokens } from './window';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
@@ -275,8 +275,10 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     // one write that never touches `${prefix}leaf`: a turn that landed while the summary was in flight keeps its leaf, and a
     // crash cannot leave two live summaries. A row already witnessed under this id is the same span again, and a no-op. The
     // superseded row is found at the key the last read saw it under while that key still holds it, else by reading back
-    // from the newest row until it turns up.
-    appendCompaction(row, supersededId, scope) { return serialize(storage, async () => {
+    // from the newest row until it turns up. A fence is checked in the unit that writes, with no wait before the write: each
+    // source row must still be stored with the model text the summary was made from (a row this store wrote is compared as
+    // it scrubbed it), and fence.admits() must pass; otherwise nothing is written and the result is false.
+    appendCompaction(row, supersededId, scope, fence) { return serialize(storage, async () => {
       await context.assertCurrent();
       const entry = scrub(validate(row));
       if (entry.role !== 'compaction') throw new Error('canonical history entry invalid');
@@ -286,10 +288,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         if (prior) { const next = validate(supersededCompaction(prior.entry)); out[prior.key] = next; out[witnessKey(next.id)] = witness(next); }
         return out;
       };
+      const modelText = (stored: ConversationEntry | undefined) => stored && (conversationModelMessages([stored])[0]?.content ?? null);
+      const fenced = (fence: CompactionFence, read: (id: string) => ConversationEntry | undefined) =>
+        fence.sources.every(source => { const stored = modelText(read(source.id)); return stored !== undefined && stored === modelText(scrub(source)); }) && fence.admits();
       if (scope) {
         if (!storage.kv) throw new Error('fenced canonical history unavailable');
-        scope.commit(() => {
-          if (storage.kv!.get<Witness>(witnessKey(entry.id))) return;
+        return scope.commit(() => {
+          if (storage.kv!.get<Witness>(witnessKey(entry.id))) return true;
+          if (fence && !fenced(fence, id => storage.kv!.get<Witness>(witnessKey(id))?.entry)) return false;
           const key = previous === null ? undefined : keyOf.get(previous), hit = key === undefined ? undefined : storage.kv!.get<ConversationEntry>(key);
           const prior = previous === null ? null : key !== undefined && hit?.id === previous ? { key, entry: hit } : (() => {
             for (const [at, value] of storage.kv!.list<ConversationEntry>({ prefix: `${prefix}conv:`, reverse: true })) if (value.id === previous) return { key: at, entry: value };
@@ -298,9 +304,10 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
           const [last] = storage.kv!.list(lastSlot);
           const count = nextSlot(storage.kv!.get<number>(`${prefix}count`) ?? 0, last?.[0]);
           for (const [key, value] of Object.entries(writes(count, prior))) storage.kv!.put(key, value);
+          return true;
         });
       } else {
-        if (await storage.get<Witness>(witnessKey(entry.id))) return;
+        if (await storage.get<Witness>(witnessKey(entry.id))) return true;
         const key = previous === null ? undefined : keyOf.get(previous), hit = key === undefined ? undefined : await storage.get<ConversationEntry>(key);
         const prior = previous === null ? null : key !== undefined && hit?.id === previous ? { key, entry: hit } : await (async () => {
           for (let end: string | undefined; ;) {
@@ -311,7 +318,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
           }
         })();
         const [last] = (await storage.list(lastSlot)).keys();
-        await storage.put(writes(nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last), prior));
+        const count = nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last);
+        if (fence) {
+          const keys = fence.sources.map(source => witnessKey(source.id)), receipts = new Map<string, Witness>();
+          for (let at = 0; at < keys.length; at += GET_KEYS) for (const [key, receipt] of await storage.get<Witness>(keys.slice(at, at + GET_KEYS))) receipts.set(key, receipt);
+          if (!fenced(fence, id => receipts.get(witnessKey(id))?.entry)) return false;
+        }
+        await storage.put(writes(count, prior));
+        return true;
       }
     }); },
     compactionAttempt: async (chainRef) => (await storage.get<number>(`${prefix}compaction-attempt:${chainRef}`)) ?? null,
