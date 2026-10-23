@@ -1,4 +1,4 @@
-import { APP_SEND_MAX_WIRE_BYTES, appSendRequestV1Schema } from '../../../contracts/src/app/core';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appContractHeaderV1Schema, appSendRequestV1Schema } from '../../../contracts/src/app/core';
 import { appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadIdV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema } from '../../../contracts/src/app/threads';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, readBoundedBody } from './app-api';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
@@ -104,9 +104,12 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
     body = bytes;
   }
 
+  const contract = request.headers.get(APP_CONTRACT_HEADER);
   const forwarded = new Request(`https://telegram-owner${chosen.target}`, {
     method: chosen.method,
-    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': url.origin, 'content-type': 'application/json' },
+    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': url.origin, 'content-type': 'application/json',
+      // The contract revisions the dashboard reads, as the app passes its own.
+      ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) },
     ...(body ? { body } : {}),
   });
   let response: Response;

@@ -53,6 +53,20 @@ describe('console chat page', () => {
     expect(page.querySelector('[role="log"]')?.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('draws the reply written so far inside the working row', async () => {
+    const store = createChatStore(deps(async () => ({ messages: [], next_cursor: null }), {
+      send: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }),
+      receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, draft: 'Here is **the plan** so far' }),
+      setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: (id) => window.clearTimeout(id),
+    }));
+    const page = await mount(<ChatPanel zone="Asia/Kolkata" store={store}/>);
+    const input = page.querySelector<HTMLTextAreaElement>('#chat-input')!;
+    await type(input, 'Plan my afternoon');
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); await flush();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); }); await flush();
+    expect(page.querySelector('.chat-msg.working .chat-draft')?.textContent).toBe('Here is the plan so far');
+  });
+
   it('draws a reply with its trace, and quick replies only on the latest reply', async () => {
     const reply: ChatMessage = { id: 'r', role: 'assistant', text: 'Moved it.\n\nDone: 1 change.', channel: 'app', parent_id: 'app-1', created_at: 1_760_000_000_000,
       parts: [{ type: 'receipt', items: [{ kind: 'calendar_change', target: 'Standup', outcome: 'accepted', at: 1_760_000_000_000 }, { kind: 'email_send', target: null, outcome: 'failed', at: 1_760_000_000_000 }], more: 0, fallback_text: 'Done: 1 change.' }, { type: 'quick_replies', choices: [{ id: 'ok', label: 'Thanks' }] }] };

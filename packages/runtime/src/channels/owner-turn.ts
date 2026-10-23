@@ -51,6 +51,7 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { replyGate, withReplyStream } from '../conversation/reply-gate';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
@@ -250,7 +251,9 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const adapter = gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const streamed = ownerCall && purpose === 'reply' ? activeOwnerTurn?.replyStream : undefined;
+    const adapter = withReplyStream(gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } }),
+      streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');

@@ -42,6 +42,7 @@ import {
   type SourceTaint,
   type TrustedRunV2ProviderExecutionWitness,
 } from '@waldo/contracts';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
 import {
   HookHaltError,
   HOOK_REGISTRY,
@@ -72,6 +73,8 @@ export type LLMGatewayRequest = {
   context: LLMContextMode;
   fallback_step: GatewayAttemptFallbackStep;
   headers: GatewayConstantHeaders;
+  // Set only for a reply shown while it is written. An adapter that cannot stream ignores it.
+  stream?: ReplyDeltaSink;
 };
 
 // V2 runtime effects are prepared and durably keyed by RunLoopDO before an adapter may issue

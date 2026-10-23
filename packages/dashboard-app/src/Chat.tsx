@@ -108,6 +108,7 @@ function Working({ item, queued, store, now }: { item: LocalMessage; queued: num
   return <div className="chat-msg waldo working" role="status" aria-live="polite">
     <span className="chat-avatar pulse-ring" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
+      {item.draft && <div className="chat-prose chat-draft"><ChatText text={item.draft}/></div>}
       <p className="chat-working"><span className="typing" aria-hidden="true"><i/><i/><i/></span><span className="shimmer">{item.state === 'running' ? 'Working on it' : 'Waldo has your message'}</span>
         <span className="meta time" aria-label={`${Math.floor(ms / 1000)} seconds`}>{elapsed(ms)}</span>{queued > 0 && <span className="meta">· {queued} more queued</span>}</p>
       {ms > 45_000 && <p className="meta">Bigger errands can take a few minutes. You can leave this page; the reply will be here.</p>}
