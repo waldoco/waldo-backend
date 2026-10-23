@@ -462,7 +462,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
   // stored review itself, so any full-review presentation serves it, for the kinds it shows in full: a send's draft and a
-  // calendar change without invite details, the rule consoleMayApprove applies at the route. Every other kind is approved
+  // calendar change without invite details, the rule waitingMayApprove applies at the route. Every other kind is approved
   // in chat or the app, whatever the route that asked. Answers the presentations that authorize the decision.
   const deciding = (entry: LedgerRow, via: ApprovalVia) => {
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number; payload_digest: string }>('SELECT surface, message_ref, approvable, payload_digest FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
