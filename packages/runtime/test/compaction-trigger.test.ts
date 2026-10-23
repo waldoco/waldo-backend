@@ -6,7 +6,9 @@ import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
-import { createOwnerResponder } from '../src/channels/owner-turn';
+import { createOwnerResponder, type OwnerContextHost } from '../src/channels/owner-turn';
+import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
+import { surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../src/identity/surface-owner-admission';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionSettings, type CompactionSettings } from '../src/conversation/compaction';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -36,7 +38,8 @@ const inOwner = <T,>(name: string, work: (storage: DurableObjectStorage) => Prom
   });
 const storeOn = (storage: DurableObjectStorage, settings: CompactionSettings) =>
   canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined }, undefined, undefined, settings);
-const summaries = (storage: DurableObjectStorage) => [...storage.kv.list<{ role?: string; modelPayload: string }>({ prefix: `${PREFIX}conv:` })].map(([, row]) => row).filter(row => row.role === 'compaction');
+const summaries = (storage: DurableObjectStorage, owner = PREFIX) => [...storage.kv.list<{ role?: string; modelPayload: string }>({ prefix: owner })]
+  .filter(([key]) => key.includes(':conv:')).map(([, row]) => row).filter(row => row.role === 'compaction');
 // A run scope that can be closed from outside, as a stop, a sign-out or a newer turn closes the one a turn ran under.
 const closableScope = (storage: DurableObjectStorage) => {
   let closed = false;
@@ -99,6 +102,36 @@ describe('a chain compacts under the settings its store was built with', () => {
       expect(fake.compactions()).toHaveLength(0);
       expect(summaries(storage)).toHaveLength(0);
       expect(storage.kv.get(`${PREFIX}compaction-attempt:owner`)).toBeUndefined();
+    });
+  });
+});
+
+describe('a scoped turn', () => {
+  it('the owner-level responder hands the hook to the scoped turn, whose store was built with compaction on', async () => {
+    await inOwner('compaction-scoped', async (storage) => {
+      const fake = model();
+      const binding: SurfaceOwnerBinding = { ownerId: '5d1f8a20-6c3b-4e9a-b7d2-0e4f6a8c1b3d', bindingRef: 'session-a', revision: '1', physicalDoId: 'physical-do-1' };
+      let chain = '';
+      const contextHost: OwnerContextHost = { prepare: async (turn, scope) => {
+        const context = createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup: async () => binding, expectedPhysicalDoId: binding.physicalDoId, surface: 'app',
+          subject: 'subject', occurrenceKey: turn.traceId, occurredAt: Date.now(), text: turn.text ?? '' }));
+        chain = context.conversationRef;
+        return context;
+      } };
+      const args: Args = ['fixture'];
+      const hops: TurnLogEntry[] = [];
+      args[3] = entry => hops.push(entry);
+      args[10] = fake.gateway;
+      args[21] = { contextHost, history: (context) => canonicalOwnerConversationStore(storage, context, undefined, undefined, small(compactionSettings({ WALDO_COMPACTION: 'on' }))) };
+      const responder = createOwnerResponder(...args);
+      for (let n = 1; n <= 6; n += 1) {
+        const { scope } = closableScope(storage);
+        await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n), runScope: scope }), (_name, work) => work());
+      }
+      await responder.compactIfDue!(chain);
+      expect(fake.compactions()).toHaveLength(1);
+      expect(hops.filter(hop => hop.hop === 'compaction').at(-1)).toMatchObject({ ok: true, code: 'compacted' });
+      expect(summaries(storage, `canonical-owner-v1:prn_${binding.ownerId.replaceAll('-', '')}:`)).toHaveLength(1);
     });
   });
 });
