@@ -347,6 +347,13 @@ describe('a forget that lands while the summary is being written', () => {
     }
   });
 
+  it('a source row gone from the store when the summary returns: nothing is written', async () => {
+    for (const scoped of [false, true]) {
+      // app-4 is inside the span the summary is made from (rounds 2 to 5 of the six-round chat).
+      refused(await compactWith(`compaction-source-gone-in-flight-${scoped}`, scoped, VENUE_SUMMARY, (storage) => { storage.kv.delete(`${PREFIX}witness:app-4`); }));
+    }
+  });
+
   it('a row the store scrubbed when it saved it still reads as the summary read it', async () => {
     await inOwner('compaction-scrubbed-source', async (storage) => {
       const fake = model();
