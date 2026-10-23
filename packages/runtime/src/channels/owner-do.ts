@@ -3438,7 +3438,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
+        let health:ReturnType<typeof healthContext.latest>|undefined;
+        return iMessageOwnerContext(this.imessageHost,record,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine});
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),
       // Scheduled jobs for an owner whose only surface is iMessage run as the owner the pass admitted.
       jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,...(spend ? { spend } : {})},
