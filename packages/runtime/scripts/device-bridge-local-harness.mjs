@@ -43,6 +43,11 @@ export async function startLocalBridge() {
           if (p.p_do_name !== doName) return false;
           sessions.add(p.p_session_hash); return true;
         }];
+      case 'console_session_open_for':
+        return [`consolesess.openfor.${p.p_do_name}.${p.p_session_hash}.${p.p_lifetime_seconds}.${p.p_idle_seconds}`, () => {
+          if (p.p_do_name !== doName) return false;
+          sessions.add(p.p_session_hash); return true;
+        }];
       case 'console_session_touch':
         return [`consolesess.touch.${p.p_do_name}.${p.p_session_hash}`, () => p.p_do_name === doName && sessions.has(p.p_session_hash)];
       case 'issue_device_pairing_code':
@@ -165,7 +170,7 @@ export async function startLocalBridge() {
 
   // Synthetic owner signs in through the real console grant; returns both console cookies.
   const login = async () => {
-    const response = await localFetch(`${origin}/console/verify`, { method: 'POST', redirect: 'manual', body: new URLSearchParams({ email: fixtureEmail, code: otp }) });
+    const response = await localFetch(`${origin}/console/verify`, { method: 'POST', redirect: 'manual', headers: { origin }, body: new URLSearchParams({ email: fixtureEmail, code: otp }) });
     assert.equal(response.status, 303, 'synthetic owner must sign in through real console grant');
     const cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
     assert.ok(cookie.includes('waldo_owner=') && cookie.includes('waldo_console='), 'both authenticated console cookies required');

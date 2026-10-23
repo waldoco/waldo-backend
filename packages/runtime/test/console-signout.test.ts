@@ -34,7 +34,7 @@ describe('console sign-out ends the console session’s chat work', () => {
     const { ns, calls } = owner(() => signedOutText());
     const response = (await handleConsole(post('/console/action', 'session.signout'), { OWNER_DO: ns, WALDO_ROUTER_HMAC_SECRET: SECRET }, auth(calls)))!;
     expect(calls).toEqual([`revoke:${own}`, `fence:${own}`, 'do:/console/action']);
-    expect(response.headers.get('set-cookie')).toMatch(/waldo_owner=; Path=\/console; HttpOnly; Secure; SameSite=Strict; Max-Age=0/);
+    expect(response.headers.get('set-cookie')).toMatch(/waldo_owner=; Path=\/console; HttpOnly; Secure; SameSite=Lax; Max-Age=0/);
   });
 
   it('one browser: a revoke the directory cannot confirm leaves everything signed in and says so', async () => {

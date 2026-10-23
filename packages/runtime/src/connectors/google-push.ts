@@ -92,15 +92,15 @@ export const watchDue = (state: CalendarWatchState | null, now: number): boolean
   state === null ? true : 'failedAt' in state ? now - state.failedAt >= RETRY_AFTER_FAILURE_MS : state.expiration - now < RENEW_BEFORE_MS;
 
 // Gmail pushes arrive through Google Cloud Pub/Sub. The owner sets up the topic and push subscription in
-// the OAuth app's Cloud project; this is the one value that names it, and Gmail push is off while it is empty.
-export const GMAIL_PUSH_PROJECT = 'waldo-dev-492217';
+// the OAuth app's Cloud project, and each environment names that project in GMAIL_PUSH_PROJECT. Gmail push is
+// off while it is unset, so an environment never watches into another environment's project.
 export const GMAIL_PUSH_PATH = '/events/gmail';
 export const GMAIL_WATCH_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/watch';
 const GMAIL_RENEW_EVERY_MS = 24 * 3_600_000;
 
 export type GmailPushConfig = Readonly<{ topic: string; serviceAccount: string }>;
-export const gmailPush = (project: string = GMAIL_PUSH_PROJECT): GmailPushConfig | null =>
-  /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project) ? { topic: `projects/${project}/topics/waldo-gmail-push`, serviceAccount: `waldo-gmail-push@${project}.iam.gserviceaccount.com` } : null;
+export const gmailPush = (project?: string): GmailPushConfig | null =>
+  project !== undefined && /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project) ? { topic: `projects/${project}/topics/waldo-gmail-push`, serviceAccount: `waldo-gmail-push@${project}.iam.gserviceaccount.com` } : null;
 
 export type GmailWatch = Readonly<{ historyId: string; expiration: number }>;
 export type GmailWatchState = Readonly<{ startedAt: number; expiration: number }> | Readonly<{ failedAt: number }>;
