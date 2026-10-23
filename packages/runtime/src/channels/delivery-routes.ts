@@ -8,7 +8,8 @@ export type OutboxRoute = Readonly<{
   // True when the surface will never take this record because it waited past the surface's own retention. Such a record ends
   // as lapsed, not as refused for the owner's binding.
   lapsed?(record: FinalRecord): boolean;
-  send(payload: FinalPayload): Promise<unknown>;
+  // `record` is the one being sent, `payload` the part of it going now.
+  send(payload: FinalPayload, record: FinalRecord): Promise<unknown>;
   // How the surface acknowledges a send; Telegram's message-and-chat check when absent.
   receipt?(result: unknown, record: FinalRecord): DeliveryAck;
 }>;
@@ -28,7 +29,7 @@ export const routedDelivery = (routes: readonly OutboxRoute[]) => {
     send: async (payload: FinalPayload, record: FinalRecord) => {
       const route = routeOf(record);
       if (!route) throw new Error('no delivery route for this record');
-      return route.send(payload);
+      return route.send(payload, record);
     },
   };
 };

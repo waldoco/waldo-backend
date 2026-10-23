@@ -43,6 +43,8 @@ export type TelegramWebhookEnv = Readonly<{
   ELEVENLABS_API_KEY?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
+  // '0' turns off progress notes on long iMessage turns.
+  WALDO_IMESSAGE_PROGRESS?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   WHOOP_CLIENT_ID?: string;
