@@ -37,14 +37,16 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Owner = Readonly<{ setup(channel?: string): Readonly<{ act(action: { action: string; id?: string }): Promise<boolean | string> }> }>;
+type Owner = Readonly<{ setup(channel?: string): Readonly<{ ready: Promise<unknown>; act(action: { action: string; id?: string }): Promise<boolean | string> }> }>;
 const disconnecting = async (name: string, account: Record<string, unknown>, run: (owner: Owner, state: DurableObjectState) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [account]);
-    try { await run(new OwnerDO(state, { ...env, ...CONFIG }) as unknown as Owner, state); } finally { await state.storage.deleteAlarm(); }
+    const owner = new OwnerDO(state, { ...env, ...CONFIG }) as unknown as Owner;
+    // The runtime's start-up arms watch upkeep for the seeded grant; a disconnect comes after it, as a console action does.
+    try { await owner.setup('telegram').ready; await run(owner, state); } finally { await state.storage.deleteAlarm(); }
   });
 };
 // The revocation traffic only: a runtime build also reads Google in the background.
