@@ -35,6 +35,19 @@ export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_start
 // The request the first look sends into main chat on the owner's tap. It reads as what the owner asked for, because it is.
 export const FIRST_LOOK_TEXT = 'Show me today as you see it, and what you noticed about how I work.';
 const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: priority';
+const calledText = (name: string) => `Wants to be called ${name}`;
+const named = (claims: ClaimStore) => claims.claims().some(candidate => candidate.source_ref === NAME_REF);
+
+// The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
+// stands: a later change goes through name.set, which corrects this same claim.
+export const recordSignupName = (claims: ClaimStore, name: string, at: number): boolean => {
+  if (named(claims)) return false;
+  claims.add({ kind: 'preference', text: calledText(name), source: 'stated', evidence: name, origin: 'owner', source_ref: NAME_REF }, new Date(at).toISOString());
+  const saved = claims.claims().find(candidate => candidate.source_ref === NAME_REF);
+  if (!saved) throw new Error('sign-up name not stored');
+  claims.pin(saved.id, 'profile', 0);
+  return true;
+};
 
 // The owner's first run. One row survives restarts; a second start returns the same run. The answers themselves live where
 // they are used: the name and this week's priority as owner-stated claims, the Brief time in the day plan, the agreements in
@@ -68,6 +81,8 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     const base = run ? steps(run) : Object.fromEntries(appOnboardingStepV1Schema.options.map(name => [name, 'pending'])) as Steps;
     // Connecting Google is its own flow; the step reads as done from the live connection.
     const google = base.google !== 'done' && run && await host.googleConnected() ? 'done' : base.google;
+    // A name sign-up recorded answers the name step.
+    const name = base.name === 'pending' && named(claims) ? 'done' : base.name;
     // While the run is open the agreements step reads from the ledger itself, however they were accepted, so a copy bump shows
     // it pending again; a finished run keeps the step it finished with.
     const agreements = !run || run.completed_at !== null ? base.agreements : consent.agreed() ? 'done' : 'pending';
@@ -75,7 +90,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       version: 1 as const,
       state: !run ? 'not_started' as const : run.completed_at === null ? 'in_progress' as const : 'completed' as const,
       run_id: run?.run_id ?? null, started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null,
-      steps: { ...base, google, agreements },
+      steps: { ...base, google, name, agreements },
       first_look: { message_id: run?.first_look_id ?? null },
       brief: { time: run?.brief_time ?? null, timezone_confirmed: host.timezoneConfirmed() },
       channel: { surface: host.proactiveSurface() },
@@ -111,7 +126,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     if (!consent.agreed()) return 'agreements_required';
     switch (action.action) {
       case 'name.set': {
-        const saved = answer(NAME_REF, 'preference', `Wants to be called ${action.name}`, action.name);
+        const saved = answer(NAME_REF, 'preference', calledText(action.name), action.name);
         if (saved) claims.pin(saved.id, 'profile', 0);
         step(run, 'name', 'done');
         return null;
@@ -156,7 +171,9 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       case 'complete': {
         // What the owner left unanswered stays unasked: the rest is learned in the first week, in context.
         const current = { ...steps(run), agreements: 'done' as const };
-        for (const name of APP_ONBOARDING_SKIPPABLE_V1) if (current[name] === 'pending') current[name] = name === 'google' && await host.googleConnected() ? 'done' : 'skipped';
+        for (const name of APP_ONBOARDING_SKIPPABLE_V1) {
+          if (current[name] === 'pending') current[name] = (name === 'google' && await host.googleConnected()) || (name === 'name' && named(claims)) ? 'done' : 'skipped';
+        }
         write({ steps: current, completed_at: at });
         return null;
       }
