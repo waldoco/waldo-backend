@@ -96,13 +96,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   const appSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `appbearer.${doName}.${sessionId}`);
   const lifetime = CONSOLE_SESSION_LIFETIME_MS / 1000, idle = CONSOLE_SESSION_IDLE_MS / 1000;
-  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>, kind: 'console' | 'app'): Promise<string | null> => {
+  type Open = (doName: string, sessionHash: string) => Promise<unknown>;
+  const openLong: Open = (doName, sessionHash) => rpc('console_session_open_for', `consolesess.openfor.${doName}.${sessionHash}.${lifetime}.${idle}`, { p_do_name: doName, p_session_hash: sessionHash, p_lifetime_seconds: lifetime, p_idle_seconds: idle });
+  const openTwelveHours: Open = (doName, sessionHash) => rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>, open: Open): Promise<string | null> => {
     const sessionId = newSessionId();
     const sessionHash = await linkCodeHash(sessionId);
-    const opened = kind === 'console'
-      ? await rpc('console_session_open_for', `consolesess.openfor.${doName}.${sessionHash}.${lifetime}.${idle}`, { p_do_name: doName, p_session_hash: sessionHash, p_lifetime_seconds: lifetime, p_idle_seconds: idle })
-      : await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-    if (opened !== true) return null;
+    if (await open(doName, sessionHash) !== true) return null;
     return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
   };
   // A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
@@ -192,12 +192,12 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    ownerCookie: (doName) => mint(doName, cookieSig, 'console'),
+    ownerCookie: (doName) => mint(doName, cookieSig, openLong),
     readOwnerCookie: (request) => readSigned(
       (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
       cookieSig,
     ),
-    ownerAppCredential: (doName) => mint(doName, appSig, 'app'),
+    ownerAppCredential: (doName) => mint(doName, appSig, openTwelveHours),
     readAppCredential: (credential) => readSigned(credential, appSig),
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });

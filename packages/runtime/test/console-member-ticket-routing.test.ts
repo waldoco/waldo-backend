@@ -33,9 +33,9 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
       expect(args.p_subject).toBe(SUBJECT);
       return Response.json([{ do_name: DEPLOY, subject: SUBJECT, timezone: null }]);
     }
-    if (url.pathname.endsWith('/console_session_open') || url.pathname.endsWith('/console_session_touch')) {
+    if (url.pathname.endsWith('/console_session_open_for') || url.pathname.endsWith('/console_session_touch')) {
       expect([DEPLOY, MEMBER]).toContain(args.p_do_name);
-      if (url.pathname.endsWith('/console_session_open')) {
+      if (url.pathname.endsWith('/console_session_open_for')) {
         if (rpcState.failOpen) throw new Error('synthetic session-open failure');
         return Response.json(rpcState.open);
       }
@@ -65,7 +65,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
   const token = new URL(link).searchParams.get('t')!;
   const post = (cookie?: string) => new Request(`${ORIGIN}/console`, {
     method: 'POST', redirect: 'manual', body: new URLSearchParams({ t: token }).toString(),
-    headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
+    headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
   });
   return { member, bindings, selected, link, post, deploySession, token, rpcState, messages };
 }
@@ -204,7 +204,7 @@ it.each([true, false])('actual Telegram /console command issues a routed ticket 
   const link = f.messages[0]!.match(/https:\/\/\S+/)![0];
   expect(new URL(link).searchParams.get('t')).toMatch(/^c1\./);
   const token = new URL(link).searchParams.get('t')!;
-  const response = await worker.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: token }).toString() }), f.bindings);
+  const response = await worker.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: token }).toString() }), f.bindings);
   expect(response.status).toBe(303);
   expect(f.selected).toEqual([MEMBER]);
 });

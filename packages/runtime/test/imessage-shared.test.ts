@@ -61,7 +61,7 @@ async function world() {
     const action = (actionName: string, fields: Record<string, string> = {}) => {
       const form = new FormData(); form.set('action', actionName); form.set('csrf', csrf);
       for (const [k, v] of Object.entries(fields)) form.set(k, v);
-      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
     };
     const controls = async () => (await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }))).json() as Promise<{ data: { actions: string[]; linked_hint: string | null } }>;
     return { stub, action, controls, name };
