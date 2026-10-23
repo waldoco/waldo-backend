@@ -35,8 +35,8 @@ const hallKinds = { facts: ['fact', 'health'], events: ['event', 'followup'], di
 const READ_BUDGET_BYTES = 65_536;
 // What a read shows of a claim: the statement and its provenance. Aliases are search keys and stay out.
 const provenance = (claim: Claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, evidence: claim.evidence, source: claim.source, origin: claim.origin,
-  source_ref: claim.source_ref ?? null, learned_at: claim.learned_at ?? claim.created_at, valid_from: claim.valid_from ?? null,
-  verification_status: claim.verification_status ?? 'provisional', supersedes_id: claim.supersedes_id ?? null, last_seen_at: claim.last_seen_at });
+  source_ref: claim.source_ref ?? null, verification_status: claim.verification_status ?? 'unverified', supersedes_id: claim.supersedes_id ?? null,
+  last_seen_at: claim.last_seen_at });
 const overlapsEvidence = (text: string, evidence: string, start: number, end: number): boolean => {
   for (let at = text.indexOf(evidence); at !== -1; at = text.indexOf(evidence, at + 1)) if (at < end && at + evidence.length > start) return true;
   return false;

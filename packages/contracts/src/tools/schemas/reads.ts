@@ -235,8 +235,6 @@ export const readMemoryClaimSchema = z.strictObject({
   source: z.string(),
   origin: z.string().refine(origin => origin !== 'untrusted').nullable(),
   source_ref: z.string().nullable(),
-  learned_at: z.string(),
-  valid_from: z.string().nullable(),
   verification_status: z.string(),
   supersedes_id: z.int().positive().nullable(),
   last_seen_at: z.string(),
