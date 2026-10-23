@@ -25,4 +25,8 @@ Run after the staging deploy that carries the flip, on the owner's account.
 
    `ledger.json` is the single cell the query in the script header returns. Langfuse needs `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Keep the output; it is the "before" for the caching and tool search changes.
 
+   The report prints owner ids (Langfuse `userId` values and DO names). Keep the raw output out of PRs, issues and chat; paste only totals or per-day figures with the ids removed.
+
+   A line starting `Unpriced:` means some calls had tokens and no price in `llm/pricing.ts`; their USD is counted as $0, so the totals are a floor.
+
 Pass when steps 3 to 5 hold. The ledger has no "before" (it was off); Langfuse's baseline window is the before.
