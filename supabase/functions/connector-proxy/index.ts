@@ -177,8 +177,10 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(error instanceof GoogleTokenError ? error.status : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
       }
     }
-    // A disconnect: Google is asked to revoke the grant before the Worker deletes its secret. The edge reads the secret and
-    // writes nothing; the Worker deletes it whatever Google answers.
+    // A disconnect: Google is asked to revoke the grant before the Worker deletes its secret. The edge reads the secret as any
+    // call does (stamping its last use) and changes no grant; the Worker deletes it whatever Google answers. Google's
+    // revocation ends every grant on that Google user, so callers come through the Worker's googleProxy.revoke, which asks
+    // only for a mailbox no other owner holds.
     if (body.op === 'revoke') {
       if (!body.connection) return fail(404, 'unknown operation');
       const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string}[];

@@ -374,7 +374,7 @@ The path [source]:
 | `workspace_owner_mappings`, the Auth audit log | no, on purpose | `:8-9` | n/a |
 | `whatsapp_onboarding_replies` (hashed number), `console_auth_attempts` (expire on a window) | no | `20261017090000:5-6`; `console-signin.ts:232` | none |
 | `DeviceBridgeDO`, `IMessageBridgeDO` state | **no**. Never contacted; iMessage keeps held bodies up to 30 days [unverified whether pruned] | `devices/device-bridge-do.ts:163-206`; `imessage/bridge-store.ts:41-43` | none |
-| Google, WHOOP and MCP grants at the provider; Gmail and Calendar watches | **no** on account deletion. A disconnect revokes at the provider first: Google through the `connector-proxy` `revoke` operation, WHOOP and MCP through `oauth-proxy`'s. Account deletion calls none of them (P4 item 2). | `connectors/connections.ts` (`revoke`), `connectors/mcp-connections.ts`, `health/providers/whoop-owner.ts` | disconnect only |
+| Google, WHOOP and MCP grants at the provider; Gmail and Calendar watches | **no** on account deletion. A disconnect revokes at the provider first: Google through `googleProxy.revoke`, which asks the `connector-proxy` `revoke` operation only for a mailbox no other owner holds; WHOOP and MCP through `oauth-proxy`'s. Account deletion calls none of them (P4 item 2). | `connectors/connections.ts` (`revoke`), `connectors/mcp-connections.ts`, `health/providers/whoop-owner.ts` | disconnect only |
 | Langfuse traces | **no** | export only | none |
 | DO point-in-time recovery (30 days), Supabase backups and PITR | **no**, and not disclosed | ADR-0058; ADR-0055 requires a tombstone ledger and re-deletion after restore, not built | none |
 
@@ -461,7 +461,11 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
 
 **P4. Account deletion that finishes.**
 1. **Erase the DO even when the directory call fails or is unknown.** Write an erase-pending marker first. On a lost or failed `delete_owner`, retry it from the DO's alarm with the same request id, and make the retry return a distinct "already gone" result instead of `false`.
-2. **Revoke at providers before the Vault delete.** The signed revoke operations exist: `connector-proxy` `revoke` for Google (`oauth2.googleapis.com/revoke`) and `oauth-proxy` `revoke` for WHOOP and MCP (ADR-0075 custody). Account deletion must call each one before `delete_owner` removes the Vault rows, and stop the Gmail and Calendar watches. Each call is best-effort, and the receipt names it.
+2. **Revoke at providers before the Vault delete.** The signed revoke operations exist: `connector-proxy` `revoke` for Google (`oauth2.googleapis.com/revoke`) and `oauth-proxy` `revoke` for WHOOP and MCP (ADR-0075 custody). Account deletion must reach each one before `delete_owner` removes the Vault rows, and stop the Gmail and Calendar watches. Each call is best-effort, and the receipt names it.
+   - For Google, the only entry point is the Worker's `googleProxy(env).revoke` in `connectors/connections.ts`. Never call the edge `revoke` op directly.
+   - Google's revocation ends Waldo's whole authorization for that Google user, so it would also end another owner's grant on the same mailbox.
+   - `googleProxy.revoke` asks Google only when signed `gmail_push_route` lists this connection as the mailbox's one live connection. The edge op has no such check.
+   - Call it while the owner's state is still `active`. `gmail_push_route` lists only active owners' connections, so once the owner is not active it no longer lists this one, and `googleProxy.revoke` answers `unavailable` without asking Google.
 3. **Clear the device and iMessage bridge objects.**
 4. **Delete or fix the legacy console form and its copy.**
 5. **Name every store outside reach in the receipt:** Langfuse until P5's purge, model providers, backups and PITR, and copies the owner shared.
