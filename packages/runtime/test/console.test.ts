@@ -2,6 +2,7 @@ import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
 
 const memoryStore = () => {
   const data = new Map<string, unknown>();
@@ -56,25 +57,29 @@ describe('owner console', () => {
     await access.signOut(cookie!);
     expect(await access.session(cookie)).toBeNull();
     const again = await access.redeem(new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!);
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.session(again)).toBeNull();
     const late = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     now += 11 * 60_000;
     expect(await access.redeem(late)).toBeNull();
   });
 
-  it('redeeming on a browser that already holds a live session refreshes it instead of stacking', async () => {
+  it('redeeming on a browser that already holds a live session replaces it, and the old one runs out instead of stacking', async () => {
     let now = 1_000;
     const access = consoleAccess(memoryStore(), () => now);
     const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     const cookie = (await access.redeem(await mint()))!;
     now += 60_000;
-    const again = await access.redeem(await mint(), cookie);
-    expect(again).toBe(cookie);
-    const refreshed = await access.session(cookie);
-    expect(refreshed?.expires).toBe(now + 12 * 60 * 60_000);
-    now += 11 * 60 * 60_000;
-    expect(await access.session(cookie)).not.toBeNull();
+    const again = (await access.redeem(await mint(), cookie))!;
+    expect(again).not.toBe(cookie);
+    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    expect((await access.session(cookie))?.expires).toBe(now + CONSOLE_REPLACED_SESSION_MS);
+    const signedIn = now;
+    now += CONSOLE_REPLACED_SESSION_MS + 1;
+    expect(await access.session(cookie)).toBeNull();
+    expect(await access.list()).toHaveLength(1);
+    now = signedIn + CONSOLE_SESSION_IDLE_MS - 1;
+    expect(await access.session(again)).not.toBeNull();
   });
 
   it('keeps sessions per browser: a second browser gets its own, sign-out kills only that one', async () => {
@@ -94,7 +99,7 @@ describe('owner console', () => {
     const timed = consoleAccess(store, () => clock);
     const mintTimed = async () => new URL(await timed.mintLink('https://waldo.example')).searchParams.get('t')!;
     const old = (await timed.redeem(await mintTimed()))!;
-    clock += 13 * 60 * 60_000;
+    clock += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await timed.session(old)).toBeNull();
     const fresh = (await timed.redeem(await mintTimed(), old))!;
     expect(fresh).not.toBe(old);
@@ -109,7 +114,7 @@ describe('owner console', () => {
     const a = (await access.redeem(await mint()))!;
     const b = (await access.redeem(await mint()))!;
     expect((await access.list()).map((session) => session.token).sort()).toEqual([a, b].sort());
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.list()).toEqual([]);
     const c = (await access.redeem(await mint()))!;
     const d = (await access.redeem(await mint()))!;
