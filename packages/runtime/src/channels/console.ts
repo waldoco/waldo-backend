@@ -81,13 +81,14 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       await store.delete('console:link');
       return addSession(current);
     },
-    // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime.
-    async session(token: string | null): Promise<ConsoleSession | null> {
+    // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime. A read another site
+    // started is not the owner's use and renews nothing.
+    async session(token: string | null, renew = true): Promise<ConsoleSession | null> {
       if (!token) return null;
       const sessions = await readSessions();
       const session = sessions[token];
       if (!session || session.expires < now()) return null;
-      if (session.signed_in === undefined) return session;
+      if (!renew || session.signed_in === undefined) return session;
       const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS);
       if (expires - session.expires < RENEW_STEP_MS) return session;
       const renewed = { ...session, expires };

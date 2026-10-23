@@ -8,6 +8,12 @@ export const OWNER_COOKIE = 'waldo_owner';
 // reauthentication ceiling; the app bearer keeps its own 12 hours.
 export const CONSOLE_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+// A request another site started (Fetch Metadata): under Lax it can still be a top-level visit carrying the cookies, so
+// it may read a session but never renews one, and the console refuses it any write or flow start.
+export const fromAnotherSite = (request: Request): boolean => {
+  const site = request.headers.get('sec-fetch-site');
+  return site === 'cross-site' || site === 'same-site';
+};
 
 export type AdminOverview = Readonly<{
   owners: readonly Readonly<{ id?: string; email: string | null; state: string; created_at: string; presences: readonly string[]; issued_count?: number }>[];
@@ -132,6 +138,28 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   };
   const presentedOwnerCookie = (request: Request) =>
     (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
+  const listSessions = async (doName: string): Promise<readonly ConsoleSession[]> => {
+    const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
+    // An invalid authority response cannot prove that a session is absent.
+    if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
+    const seen = new Set<string>();
+    return rows.map((raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
+      const row = raw as Record<string, unknown>;
+      if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+        || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
+        || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
+        || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+      seen.add(row.session);
+      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+    });
+  };
+  // The list holds only live rows, so membership answers liveness without moving last_seen_at.
+  const readListed = async (raw: string | null | undefined): Promise<string | null> => {
+    const session = await readSession(raw, cookieSig);
+    if (!session) return null;
+    return (await listSessions(session.doName)).some((row) => row.session === session.sessionHash) ? session.doName : null;
+  };
   const revokeSession = async (doName: string, sessionHash: string): Promise<boolean> => {
     const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
@@ -211,25 +239,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (previous?.doName === doName) await revokeSession(doName, previous.sessionHash);
       return mint(doName, cookieSig, openLong);
     },
-    readOwnerCookie: (request) => readSigned(presentedOwnerCookie(request), cookieSig),
+    readOwnerCookie: (request) => fromAnotherSite(request) ? readListed(presentedOwnerCookie(request)) : readSigned(presentedOwnerCookie(request), cookieSig),
     ownerAppCredential: (doName) => mint(doName, appSig, openTwelveHours),
     readAppCredential: (credential) => readSigned(credential, appSig),
-    async listSessions(doName) {
-      const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
-      // An invalid authority response cannot prove that a session is absent.
-      if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
-      const seen = new Set<string>();
-      return rows.map((raw: unknown) => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
-        const row = raw as Record<string, unknown>;
-        if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
-          || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
-          || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
-          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
-        seen.add(row.session);
-        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
-      });
-    },
+    listSessions,
     revokeSession,
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });

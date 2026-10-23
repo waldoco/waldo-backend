@@ -1,9 +1,11 @@
 import { MCP_START_PATH } from '../connectors/mcp-connections';
+import { fromAnotherSite } from '../identity/console-auth';
 import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
 import { CONSOLE_PATH } from './console';
 import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
+const underConsole = (path: string) => path === CONSOLE_PATH || path.startsWith(`${CONSOLE_PATH}/`);
 // GETs that begin a flow rather than read. A new one belongs here, or behind a POST.
 const startsFlow = (path: string) =>
   (path.startsWith(MCP_START_PATH) && path.length > MCP_START_PATH.length) || path === CONSOLE_PHOTON_START_PATH || path === BROWSER_TRIAL_PATH;
@@ -21,12 +23,22 @@ const refused = () => new Response('This request must come from the Waldo consol
 // only when the browser says another site sent it; typing the address or opening it from an app ("none") is the owner.
 export const consoleCrossSiteRefusal = (request: Request): Response | null => {
   const url = new URL(request.url);
-  if (url.pathname !== CONSOLE_PATH && !url.pathname.startsWith(`${CONSOLE_PATH}/`)) return null;
+  if (!underConsole(url.pathname)) return null;
   const site = request.headers.get('sec-fetch-site');
-  if (SAFE.has(request.method)) return startsFlow(url.pathname) && (site === 'cross-site' || site === 'same-site') ? refused() : null;
+  if (SAFE.has(request.method)) return startsFlow(url.pathname) && fromAnotherSite(request) ? refused() : null;
   const header = request.headers.get('origin');
   const origin = header === 'null' ? null : header;
   if (origin !== null && origin !== url.origin) return refused();
   if (site !== null) return site === 'same-origin' ? null : refused();
   return origin === url.origin ? null : refused();
+};
+
+// Lax lets another site open a console page in a window it keeps a handle on, and that handle can tell a signed-in
+// page from a signed-out one. Cross-Origin-Opener-Policy gives every console page its own browsing context group, so
+// the opener's handle goes dead. No console flow relies on an opener: its own links open with noopener.
+export const isolateConsolePage = (request: Request, response: Response): Response => {
+  if (!underConsole(new URL(request.url).pathname) || !(response.headers.get('content-type') ?? '').startsWith('text/html')) return response;
+  const isolated = new Response(response.body, response);
+  isolated.headers.set('cross-origin-opener-policy', 'same-origin');
+  return isolated;
 };

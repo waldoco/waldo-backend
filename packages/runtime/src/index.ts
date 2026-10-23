@@ -14,7 +14,7 @@ import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oa
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH, consoleCookie } from './channels/console';
-import { consoleCrossSiteRefusal } from './channels/console-cross-site';
+import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
 import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
@@ -124,7 +124,7 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   return new Response(response.body, { status: response.status, headers });
 };
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
     oauthStateSecret(env);
@@ -215,4 +215,9 @@ export default {
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
+} satisfies ExportedHandler<Env>;
+
+export default {
+  ...worker,
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
 } satisfies ExportedHandler<Env>;

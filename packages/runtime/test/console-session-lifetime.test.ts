@@ -336,7 +336,7 @@ describe('a request another site started renews no session', () => {
     }
     listed = [];
     expect(await auth.readOwnerCookie(new Request('https://w.test/console', { headers: { cookie, 'sec-fetch-site': 'cross-site' } }))).toBeNull();
-    for (const headers of [{ cookie }, { cookie, 'sec-fetch-site': 'same-origin' }, { cookie, 'sec-fetch-site': 'none' }]) {
+    for (const headers of [{ cookie }, { cookie, 'sec-fetch-site': 'same-origin' }, { cookie, 'sec-fetch-site': 'none' }] as Record<string, string>[]) {
       names.length = 0;
       await auth.readOwnerCookie(new Request('https://w.test/console', { headers }));
       expect(names).toEqual(['console_session_touch']);
