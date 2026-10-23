@@ -160,6 +160,10 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   update_thread_topics: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
 };
 
+// The tools whose record says yes to one fact, for the callers that hold a set.
+export const toolsWhere = (fact: (record: ToolRecord) => boolean): ReadonlySet<ToolName> =>
+  new Set((Object.keys(TOOL_RECORDS) as ToolName[]).filter((name) => fact(TOOL_RECORDS[name])));
+
 // A column of the records as its own table, for the callers that read one decision.
 export const toolRecordColumn = <K extends keyof ToolRecord>(column: K): Readonly<Record<ToolName, ToolRecord[K]>> =>
   Object.fromEntries(Object.entries(TOOL_RECORDS).map(([name, record]) => [name, record[column]])) as Record<ToolName, ToolRecord[K]>;
