@@ -22,7 +22,7 @@ import { productionDeps } from '../src/seams/deps';
 import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
-import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
+import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
@@ -1078,11 +1078,14 @@ it('an iMessage-only owner\'s morning brief goes out on iMessage and counts as s
   await runInDurableObject(w.ownerStub, async (_i, state) => expect(sent(state)).toBeTruthy());
 });
 
-// A loop past its date, with the follow-up tick due now.
+// A loop past its date, with the follow-up tick due now. The ticks recur on the wall clock's half hours, so the tick is seeded
+// with its own phase: the next one is due a full interval later, never at a half hour the test happens to run across.
 const dueFollowUp = async (state: DurableObjectState) => {
   loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => Date.now() - 3 * 3_600_000 }).open({ title: 'Send the invoice', due: new Date(Date.now() - 3_600_000).toISOString().slice(0, 16) });
   state.storage.sql.exec("DELETE FROM schedule WHERE kind = 'heartbeat'");
-  await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - HEARTBEAT_EVERY_MS - 60_000);
+  const due = Date.now() - 60_000;
+  await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID },
+    occurrenceAt: due, dueAt: due, recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: due % HEARTBEAT_EVERY_MS } });
 };
 it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {
   const w = await world();
