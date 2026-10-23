@@ -2,7 +2,7 @@ import {
   buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
-import { runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
+import { DROPPED_STEPS_NOTE, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
@@ -99,8 +99,6 @@ export const taskBriefText = (brief: TaskBrief, resumedFrom: number): string => 
 // Checkpoints keep the turns a resumed loop would show the model: the newest whole rounds within the replay limit. The
 // first kept turn carries a note of the calls that no longer fit, each step that cannot be replayed with its arguments, so
 // a resumed attempt knows it already acted and does not act again. A note on a dropped turn is carried into the new one.
-export const DROPPED_STEPS_NOTE = '[Earlier steps of this task, no longer shown: ';
-export const NOTE_END = ']\n\n';
 const NOTE_MAX = 4_000;
 const TOOL_OUTPUT_MAX = 32_768;
 const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {
@@ -162,7 +160,8 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
       ctx: { authenticatedUserId: claim.ownerRef, trigger: 'user_message', canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: 'external', session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: now() }) },
       maxSteps: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed),
       budget: { remaining: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed), deadline: claim.deadlineAt },
-      resume: claim.turns,
+      // A resumed step whose effect cannot be told apart from a crash is never offered to run again.
+      resume: { turns: claim.turns, repeatable: (name) => !unreplayable(name) },
       remote: {
         tools: [...claim.tools, FINISH_TOOL], mutations: claim.mutations, final: FINISH_TASK,
         dispatch: async (call) => {

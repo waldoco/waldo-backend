@@ -9,7 +9,7 @@ import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
-import { DROPPED_STEPS_NOTE } from '../src/tasks/worker-loop';
+import { DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { TOOL_RECORDS } from '../src/tools/records';

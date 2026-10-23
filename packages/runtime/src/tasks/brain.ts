@@ -2,7 +2,7 @@ import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type 
 import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
-import { dispatchLoopTool, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
+import { dispatchLoopTool, leadingNote, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -10,7 +10,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
-import { DROPPED_STEPS_NOTE, NOTE_END, type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
 // checks the attempt's ticket against the job book first, so a fenced attempt can neither read nor write. The jobs lane,
@@ -56,8 +56,7 @@ export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if 
 // The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
   if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name)) return turn;
-  const noteEnd = turn.output.startsWith(DROPPED_STEPS_NOTE) ? turn.output.indexOf(NOTE_END) : -1;
-  return { ...turn, output: `${noteEnd === -1 ? '' : turn.output.slice(0, noteEnd + NOTE_END.length)}${UNKEPT_OUTPUT}` };
+  return { ...turn, output: `${leadingNote(turn.output)}${UNKEPT_OUTPUT}` };
 };
 
 export const taskHost = (deps: TaskHostDeps) => {

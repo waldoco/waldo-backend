@@ -104,6 +104,16 @@ export const clearedToolResult = (name: string, result: ClearedResult): string =
   return `${head}${receipt}${back}]`;
 };
 
+// A task worker's checkpoint carries the steps it no longer shows as a note at the head of its first resumed result, so a
+// resumed attempt knows it already acted. Clearing that result keeps the note.
+export const DROPPED_STEPS_NOTE = '[Earlier steps of this task, no longer shown: ';
+export const NOTE_END = ']\n\n';
+export const leadingNote = (output: string): string => {
+  if (!output.startsWith(DROPPED_STEPS_NOTE)) return '';
+  const end = output.indexOf(NOTE_END);
+  return end === -1 ? '' : output.slice(0, end + NOTE_END.length);
+};
+
 // Set once by the first loop of a turn, from the run it serves, and shared with its child loops through the budget.
 const turnDeadline = (budget: { deadline?: number } | undefined, scope: RunEffectScope | undefined): number => {
   const deadline = budget?.deadline ?? turnDeadlineFor(scope);
@@ -134,7 +144,9 @@ export async function runToolLoop(input: Readonly<{
   // the tool whose successful call ends the loop (the worker's result), and `mutations` the tools that change state.
   remote?: Readonly<{ tools: readonly LLMTool[]; dispatch(call: LLMToolCall): Promise<LoopToolResult>; mutations?: readonly string[]; final?: string }>;
   // The tool turns a resumed loop starts from (a checkpoint). Finished calls are not run again; the model sees their results.
-  resume?: readonly LLMToolTurn[];
+  // repeatable: whether a resumed call may be offered to run again once its result is cleared. This loop never saw those
+  // calls run, so the caller that knows their effect class answers it.
+  resume?: Readonly<{ turns: readonly LLMToolTurn[]; repeatable(name: string): boolean }>;
   // Awaited after each round's results, before the next model call: the worker's checkpoint. A throw ends the loop.
   afterRound?: (turns: readonly LLMToolTurn[]) => Promise<void>;
   // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
@@ -142,7 +154,7 @@ export async function runToolLoop(input: Readonly<{
   stableMenu?: boolean;
 }>): Promise<string> {
   const tools = input.remote ? [...input.remote.tools] : toolDefinitions(input.handlers);
-  const turns: LLMToolTurn[] = [...(input.resume ?? [])];
+  const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
   const seen = new Map<string, LoopToolResult>();
   const offered = new Map<string, string>();
   const browserActions = new Map<string, number>();
@@ -181,14 +193,22 @@ export async function runToolLoop(input: Readonly<{
   };
   // Results cleared so far, oldest first; clearing only moves forward, so what was sent stays as it was sent.
   let cleared = 0;
-  // Per turn entry: the whole result as it came back, and what its cleared note needs.
-  const results: Readonly<{ full: string; ok: boolean; receipt: string | null; key: string; repeatable: boolean }>[] = [];
+  // Per turn entry: the whole result as it came back, and what its cleared note needs. A resumed result is read from its
+  // checkpointed text; one already cleared or left out of the checkpoint (null) is short and stays as it is.
+  type Kept = Readonly<{ lead: string; full: string; ok: boolean; receipt: string | null; key: string; repeatable: boolean }>;
+  const results: (Kept | null)[] = turns.map((turn) => {
+    const lead = leadingNote(turn.output), full = turn.output.slice(lead.length);
+    const ok = full.startsWith('{"ok":true') ? true : full.startsWith('{"ok":false') ? false : null;
+    return ok === null ? null : { lead, full, ok, receipt: null, key: `${turn.call.name}\u0000${turn.call.arguments}`, repeatable: input.resume!.repeatable(turn.call.name) };
+  });
   const clearNext = () => {
-    const turn = turns[cleared]!, result = results[cleared]!;
-    const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
-    turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) }) };
-    // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
-    if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
+    const turn = turns[cleared]!, result = results[cleared];
+    if (result) {
+      const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
+      turns[cleared] = { ...turn, output: `${result.lead}${clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) })}` };
+      // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
+      if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
+    }
     cleared += 1;
   };
   const clearThrough = (end: number) => { while (cleared < end) clearNext(); };
@@ -378,7 +398,7 @@ export async function runToolLoop(input: Readonly<{
         : '';
       const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
-      results.push({ full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
+      results.push({ lead: '', full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error

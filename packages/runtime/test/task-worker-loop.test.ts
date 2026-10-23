@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
-import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { checkpointTurns, DROPPED_STEPS_NOTE, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { DROPPED_STEPS_NOTE, type LoopToolResult } from '../src/conversation/tool-loop';
+import { checkpointTurns, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -25,7 +25,8 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: (
       log.tools.push(call);
       return { ok: true, data: { hits: [`hit for ${call.arguments}`] }, source_taint: 'external' } satisfies LoopToolResult;
     },
-    checkpoint: async (_ticket, next, turns, events, _spend, outcomes) => { log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
+    // A copy, as the RPC to the owner's object sends one: the loop goes on editing its own turns.
+    checkpoint: async (_ticket, next, sent, events, _spend, outcomes) => { const turns = structuredClone(sent); log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
     report: async (_ticket, outcome, events, _spend, outcomes) => { log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
     heartbeat: async () => { log.beats += 1; return held(); },
   };
@@ -128,6 +129,36 @@ describe('a task worker attempt', () => {
     const plain = fakeBrain();
     await runTaskAttempt(ticket, { brain: plain.brain, model: scripted([{ text: 'Nothing waits on you.' }]), sliceEnd: Date.now() + 60_000 });
     expect(plain.log.reports).toEqual([{ kind: 'result', result: { status: 'done', summary: 'Nothing waits on you.', findings: [], proposals: [], left: [] } }]);
+  });
+});
+
+describe('a resumed attempt whose earlier results get cleared', () => {
+  // The shape of a long reader job continued after a slice or a crash: eleven resumed reads of 16,000 characters, more
+  // than the loop keeps, with the first carrying the note of an errand step already run.
+  const body = (i: number) => { const head = `{"ok":true,"data":{"n":${i},"text":"`; return `${head}${'x'.repeat(16_000 - head.length - 3)}"}}`; };
+  const note = `${DROPPED_STEPS_NOTE}browse_act {"url":"https://example.com/book"} (already run; do not run it again)]\n\n`;
+  const resumed: LLMToolTurn[] = Array.from({ length: 11 }, (_, i) => ({
+    call: { call_id: `r${i}`, name: i === 1 ? 'browse_act' : 'search_communication', arguments: JSON.stringify({ query: `q${i}` }) },
+    output: i === 0 ? `${note}${body(i)}` : body(i),
+  }));
+
+  it('clears them without failing, keeps the dropped-steps note, and never tells the model to run an errand step again', async () => {
+    const { brain, log } = fakeBrain({ turns: resumed, seq: 3 });
+    const seen: Parameters<typeof scripted>[1] = [];
+    const outcome = await runTaskAttempt(ticket, { brain, model: scripted([{ call: 'search_communication', args: { query: 'q11' } }, { call: FINISH_TASK, args: result }], seen), sliceEnd: Date.now() + 60_000 });
+    expect(outcome).toBe('reported');
+    expect(log.reports).toEqual([{ kind: 'result', result }]);
+    const first = seen[0]!.turns;
+    expect(first[0]!.output.startsWith(note)).toBe(true);
+    expect(first[0]!.output).toContain('search communication result from earlier in this turn (it succeeded)');
+    expect(first[0]!.output).toContain('Run it again if you still need it.');
+    // The resumed browse_act's own result, cleared: it is never offered to run again.
+    expect(first[1]!.output).toContain('browse act result from earlier in this turn');
+    expect(first[1]!.output).toContain('Do not repeat the call');
+    expect(first[1]!.output).not.toContain('Run it again');
+    const checkpoint = log.checkpoints[0]!.turns;
+    expect(checkpoint[0]!.output).toContain('already run; do not run it again');
+    expect(checkpoint).toHaveLength(12);
   });
 });
 
