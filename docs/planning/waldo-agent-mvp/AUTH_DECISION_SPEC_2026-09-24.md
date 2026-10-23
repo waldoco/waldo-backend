@@ -43,7 +43,7 @@ Preferences, scope, scoped + granular data deletion, account deletion, trusted p
 
 ## Session security invariants (checklist additions)
 
-- Cookies: HttpOnly, Secure, SameSite=Strict, 12h, Path=/console; minted tokens single-use, 10-min expiry, stored hashed.
+- Cookies: HttpOnly, Secure, SameSite=Strict, 12h, Path=/console; minted tokens single-use, 10-min expiry, stored hashed. (Lifetime and SameSite amended 23 Oct 2026, see the last section.)
 - Sign-out-everywhere = DO grant version bump (invalidates all outstanding grant cookies for that person); session list lives in the DO.
 - Channel unlinks already drop all outbound to unlinked chats (shipped W2.5); relinking requires a fresh one-time code.
 - No service-role key in the runtime, ever; new auth RPCs follow the signed-function pattern with pgTAP coverage.
@@ -78,3 +78,85 @@ Tier 2 graduated from convention to contract. The rule, binding on every current
 4. connect_service (tier 1) and pure proposal tools (propose_calendar_change, which only writes to the approval desk) are exempt by design.
 
 Enforcement: packages/runtime/test/connector-contract.test.ts pins the tier-2 handler name list and asserts 1-3 for every entry. Adding a connector means adding its handlers to that pinned list in the same commit; a handler that skips the contract fails CI.
+
+
+## Amendment 23 Oct 2026 - console sessions stay signed in while used
+
+This replaces the 12-hour lifetime and `SameSite=Strict` in "Session security invariants" for every console sign-in: email code, invite signup, and the one-time console link. The app bearer keeps 12 hours until its own change (#1133). The 12 hours came from the first console (one-time Telegram links); #344 then enforced it server-side so a copied cookie could not outlive it. No ADR set it.
+
+**Lifetime.** A session ends 7 days after its last signed-in request, or 30 days after sign-in, whichever comes first.
+- Both stores enforce it on the server:
+  - **The directory row.** Migration `20261023090000` adds per-row `lifetime` and `idle_timeout`, measured against `last_seen_at`, which every validated request stamps. The database refuses any row past 30 days.
+  - **The owner object's own session.** It renews on use at most once an hour and is capped at 30 days.
+- The cookie's `Max-Age` is the 30 days. The server ends the session sooner if it goes unused.
+- **Why 30 days:** an email code is a single factor. NIST SP 800-63B-4 does not accept email as an out-of-band authenticator. Its lowest assurance level sets an overall reauthentication timeout of no more than 30 days, with an inactivity timeout optional (https://pages.nist.gov/800-63-4/sp800-63b.html#aal1reauth).
+- **Why 7 days idle:** owners reach Waldo mostly by message and open the console a few times a week. A shorter idle limit would bring back the daily sign-in this amendment removes.
+- OWASP ASVS 5.0 V7.3 asks for documented idle and absolute timeouts but sets no values; this section is that record.
+- For comparison:
+  - Cloudflare's dashboard times out after 72 hours of inactivity.
+  - Google Cloud console's default session is 16 hours.
+  - GitHub's `user_session` cookie lasts two weeks.
+
+**Cookies.** Both console cookies are `HttpOnly; Secure; SameSite=Lax; Path=/console; Max-Age=2592000`, from one helper (`consoleCookie`).
+- `Strict` withholds the cookies on any navigation from another site, so a link in Gmail on the web or on heywaldo.in opened the console signed out (OWASP CSRF Prevention Cheat Sheet; RFC 6265bis §8.8.2).
+- No primary source settles how links opened from native apps such as Messages are classed. `Lax` sends the cookies on any top-level GET, so that question no longer matters.
+
+**Forgery.** Every non-GET request under `/console` must come from the console's own origin, checked at the Worker before any handler (`console-cross-site.ts`).
+- The check uses `Sec-Fetch-Site: same-origin`, falling back to a matching `Origin`. Same-site siblings are refused.
+- This also closes login and logout forgery on `/console/verify`, the ticket POST and `/console/signout-all`. Those routes take no cookie, so they were open under `Strict` too.
+- Four GETs start a flow: MCP connect, Google connect, Photon connect and the browser trial. They are refused when another site sends them.
+- A new state-changing GET must join that list, `STEP_UP_ROUTES` with `startsFlow: true` in `console-step-up.ts`, or become a POST. The guard reads no other list.
+- Session CSRF tokens and the chat header stay as they were.
+
+**No rotation on renewal.**
+- A new session id is minted at every sign-in, which is the case OWASP requires.
+- Renewal slides the idle clock and keeps the id, because console chat work is fenced and signed out by session hash.
+- Revisit together with the app's session families (#1133).
+
+**A new sign-in in a browser that is already signed in.** Owner ruling, 23 October 2026: "Old session runs out".
+- This covers a confirm, a link redeemed there, and a signup there.
+- Only the new session carries the email code.
+- The old session loses its code and keeps ordinary access for 5 minutes (`CONSOLE_REPLACED_SESSION_MS`), then ends. A console chat turn running or queued under it finishes; a longer one is still cut off.
+- Both stores enforce the cap on the server:
+  - **The owner object.** The replaced session gets an `ends` time that renewal never passes.
+  - **The directory.** The signed `console_session_cap` (migration `20261023090000`) sets `lifetime = least(lifetime, age + 5 minutes)` and cuts the idle limit to fit. The 5 minutes are fixed in SQL; the caller names no duration.
+- The cap only ever shortens.
+- It applies to the presented row whichever owner holds it.
+- A cap that cannot be confirmed means no sign-in.
+- Sign-out and sign-out everywhere still end sessions at once and fence their turns.
+- #1133's app-token rotation uses the same shape (a capped predecessor), so it can converge on this when it rebases.
+
+**A fresh email code before lasting access.** Owner ruling, 23 October 2026 (GitHub's "sudo mode").
+- Some actions need an email code from the last 2 hours: those whose effect outlives the browser's session (a bound chat, a paired Mac, a connected account or tool, a standing grant, an invite, the account's removal).
+- GitHub uses "a two-hour session timeout period"; OWASP's Authentication Cheat Sheet asks for re-authentication before sensitive features.
+- The window runs from the code. Use does not restart it.
+- **The gated list:**
+  - pairing a Mac: `device.pair`, and `imessage.pair`, `.pair_shared`, `.verify`, `.activate`, `.activate_shared`;
+  - linking a chat: `telegram.link`, `whatsapp.link`, `whatsapp.confirm`, `imessage.link`, `imessage.enroll`;
+  - connecting: `google.connect`, `mcp.connect`, and starting a Photon connect (a GET);
+  - letting a connected tool run without asking: `mcp.runs`;
+  - inviting: `invite.create`, `invite.member`;
+  - deleting the account: `account.delete`.
+- `STEP_UP_ACTIONS` and `STEP_UP_ROUTES` in `packages/runtime/src/channels/console-step-up.ts` are authoritative. They classify every action the console accepts, with a one-line reason. A test fails when a registry gains an unclassified action.
+- **Not gated:**
+  - actions that remove access (unlinks, disconnects, revokes, sign-outs);
+  - one-off decisions and settings;
+  - the browser-trial consent: one 60-second public fixture session with no sign-ins, which cannot be renewed.
+- **A link sign-in never counts as the code.** The links come from linked chats, and a chat takeover is the threat. A link redeemed in a browser that proved a code keeps that code's time.
+- The owner object refuses the action before any handler runs:
+  - the dashboard gets `403 {"error":"step_up_required"}` and offers "Get an email code" (`/console/signin?confirm=1`), returning to the same view;
+  - the classic pages get a confirm page that returns to the devices page or the WhatsApp link that asked.
+- The existing OTP throttles apply to the confirm.
+
+**Unchanged:** server-side revocation, sign-out, sign-out everywhere, the session list, the OTP throttles and the owner checks.
+
+**Trade-off.** A copied cookie, or a browser left signed in, now works for up to 7 days unused or 30 days in use, where it used to stop after 12 hours.
+- The counterweights are those above. The main one is that such a cookie cannot bind a chat, pair a Mac, connect an account, invite anyone or delete the account without a fresh email code.
+- **Residuals:**
+  - A single sign-out within 5 minutes of a confirm leaves the code-less old session running until its cap. Sign-out everywhere ends it at once. Ending it on a single sign-out needs a link between the two rows, like #1133's `rotated_to`.
+  - Signing in as a different owner caps that owner's directory row but not their owner-object session. That session is unreachable once its row ends.
+  - The owner object caps the old session before the directory cap runs. If the directory cap then fails, the sign-in fails closed: no new cookies are issued, and the browser's old session already has only 5 minutes left, so the owner signs in again.
+
+**Rollback.** Reverting the Worker gives new sign-ins 12 hours again. Sessions already open keep their own lifetime until one of these ends them:
+- sign-out everywhere;
+- a forward migration restoring the 12-hour function bodies, which ends them at their 12th hour.

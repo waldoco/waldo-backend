@@ -3,7 +3,8 @@ import { googleHas, GoogleError, type GoogleClient } from './google';
 // One reconnect notice per failure episode. The notice fires on the healthy -> failing
 // transition while no notice is outstanding; while the grant keeps failing the circuit breaker
 // (google-circuit.ts) owns retries and the notice stays silent; recovery clears the outstanding
-// record and re-arms the episode. The caller records the notice only once it was delivered.
+// record and re-arms the episode. The caller records the notice once it is out of its hands: a button send that a surface
+// accepted, or a plain notice the delivery outbox took into custody, which then delivers it or ends it.
 export const reauthNoticeTransition = (
   state: Readonly<{ failing: boolean; noticed: boolean }>,
   error: string,
@@ -11,6 +12,15 @@ export const reauthNoticeTransition = (
   error === ''
     ? { send: false, noticed: false }
     : { send: !state.failing && !state.noticed, noticed: state.noticed };
+
+// The notice on a surface that carries no connect button (the app, iMessage): where the owner reconnects, never a link.
+// An owner on the app reconnects from its Connections screen; an owner whose only surface is iMessage, from the console's.
+const RECONNECT_WHERE = {
+  app: 'In the Waldo app, go back to Home, open the menu at the top left, tap Connections and reconnect Google there.',
+  console: 'Reconnect it from Connections in your Waldo console; ask me for a console link if you need one.',
+} as const;
+export const reconnectNoticeText = (place: keyof typeof RECONNECT_WHERE, email?: string): string =>
+  `Your Google connection${email ? ` (${email})` : ''} stopped working, so I can't reach that account until it is reconnected. ${RECONNECT_WHERE[place]}`;
 
 // The confirmation read after a connect or reconnect: one real provider round trip on the new
 // grant, on the cheapest feature the grant covers. Legacy null-scope grants retain the old

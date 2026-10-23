@@ -16,7 +16,7 @@ import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
 import type { OverviewV1 } from './model';
-import { fetchOverview, SignInRequired } from './model';
+import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
@@ -90,7 +90,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
 
   const brief = data.brief.status === 'sent_recorded'
     ? { title: 'Sent, as recorded.', body: 'Waldo logged a send. That doesn’t confirm delivery or show the message; check your chat.' }
-    : data.brief.status === 'sent_unconfirmed' ? { title: 'Sent, waiting for your phone.', body: 'WhatsApp took the Brief but hasn’t yet said it reached your phone. Waldo records it as arrived once it does.' }
+    : data.brief.status === 'sent_unconfirmed' ? { title: 'Waiting to hear it arrived.', body: 'Waldo queued the Brief for delivery and hasn’t yet heard that it reached you. It records it as arrived once it does.' }
     : data.brief.status === 'not_scheduled' ? { title: 'No Brief scheduled.', body: 'There’s nothing to send yet.' }
       : { title: 'Not sent yet.', body: 'No Brief content is shown here.' };
   const zone = data.timezone, next = data.next_card;
@@ -129,7 +129,7 @@ type FeedbackState = { kind: 'loading' } | { kind: 'error'; message: string; sig
 export function DashboardFeedback({ state, onRetry }: { state: FeedbackState; onRetry: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-page"><span className="visually-hidden">Checking what has been recorded…</span><i className="sk sk-title"/><i className="sk sk-rail"/><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
   return <div role="alert" className="feedback tile"><h1>{state.signedOut ? 'Sign in to your Waldo.' : 'Couldn’t load your dashboard.'}</h1>
-    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href="/console/signin">Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
+    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href={signInHref()}>Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
 }
 
 

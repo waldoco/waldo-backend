@@ -107,7 +107,7 @@ try {
   const html = await page.text();
   const csrf = html.match(/name="csrf" value="([a-f0-9]+)"/)?.[1];
   assert.ok(csrf, 'real console form must expose CSRF');
-  const action = (action, id = '', fields = {}) => localFetch(`${origin}/console/action`, { method: 'POST', redirect: 'manual', headers: { cookie },
+  const action = (action, id = '', fields = {}) => localFetch(`${origin}/console/action`, { method: 'POST', redirect: 'manual', headers: { cookie, origin },
     body: new URLSearchParams({ action, id, value: '', csrf, ...fields }) });
   const pair = await action('device.pair');
   assert.equal(pair.status, 200); assert.ok(pair.headers.get('cache-control')?.includes('no-store'));

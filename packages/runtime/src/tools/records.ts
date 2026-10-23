@@ -8,7 +8,7 @@ export const BRAIN_NAMESPACES = {
   calendar: 'Calendar changes and Google Tasks: free and busy time across all calendars, propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
   mail: 'Mail beyond search: read a whole message, send_email to propose an email the owner approves on a card, draft_email for a Gmail draft they edit themselves, and contacts.',
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
-  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, past conversations, stored tool output and chat threads.',
+  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, past conversations, stored tool output and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, and tracked responsibilities.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
@@ -130,6 +130,9 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // scope allow: the source guard is applied to the child's handlers too. claim null: it runs a read-only subagent.
   delegate_task: { brain: 'actions', scope: 'allow', claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
   remember: { brain: 'core', scope: 'allow', claim: 'memory_stored', replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },
+  // claim: a finding is stored unconfirmed; it says what Waldo found, never that the owner agreed.
+  record_owner_finding: { brain: 'memory', scope: 'allow', claim: 'owner_finding_recorded', replay: { replay: 'provider_idempotent', basis: 'a finding is keyed by its source URL and normalised text, so a re-run returns the stored finding', evidence: { file: 'onboarding/findings.ts', needle: 'duplicate' } } },
+  list_owner_findings: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
   forget_memory: { brain: 'memory', scope: 'allow', claim: 'memory_forgotten', replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
   // No live handler in this tree, so the effect is unverified: give each a claim label when its handler ships.
   execute_action: { brain: 'actions', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
