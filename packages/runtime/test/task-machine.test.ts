@@ -6,7 +6,7 @@ import { TOOL_PERMISSIONS, triggerTypeSchema, type CancelTaskArgs, type TaskResu
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { numericHealthIn, sanitise } from '../src/scribe/sanitiser';
 import { noteDue, taskHost, type TaskHost, type TaskHostDeps } from '../src/tasks/brain';
-import { isMachine, jobBook, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_OPEN, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
+import { isMachine, jobBook, MACHINE_MAX_RUNNING, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_OPEN, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
@@ -172,6 +172,30 @@ describe('a machine job never takes the owner\'s place', () => {
       // While the owner's slots stay full, a queued machine job is still due at its time.
       const next = enqueueMachine(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a', now: T0 + 5_000 })).job;
       expect(book.nextDue(true)).toBe(book.get(next.id)!.due_at);
+    });
+  });
+
+  it('run at most MACHINE_MAX_RUNNING at once, however many triggers fire, and the rest wait without waking the lane', async () => {
+    await withBook(async (h) => {
+      const { book, clock } = h;
+      // A dense day: twelve meetings, each its own prep job, plus a check-back and a sweep.
+      for (let i = 0; i < 12; i += 1) enqueueMachine(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
+      enqueueMachine(book, spec());
+      enqueueMachine(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a' }));
+      const l = lane(h);
+      const next = await runJobsLane(l.deps());
+      expect(l.started).toHaveLength(MACHINE_MAX_RUNNING);
+      expect(book.running()).toHaveLength(MACHINE_MAX_RUNNING);
+      // The queued ones wait for a running one to report rather than firing the alarm again now.
+      expect(next).not.toBe(clock.at);
+      await runJobsLane(l.deps());
+      expect(book.running()).toHaveLength(MACHINE_MAX_RUNNING);
+      // One reports and settles: one more starts.
+      const [first] = book.running();
+      book.report({ jobId: first!.id, attempt: first!.attempt, token: first!.lease_token! }, nothing, { rounds: 1, costUsd: 0 });
+      await runJobsLane(l.deps());
+      expect(l.started).toHaveLength(MACHINE_MAX_RUNNING + 1);
+      expect(book.running()).toHaveLength(MACHINE_MAX_RUNNING);
     });
   });
 

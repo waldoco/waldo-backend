@@ -74,6 +74,10 @@ export const TASK_MAX_PER_TURN = 3;
 // Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
 // not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
+// Machine jobs one owner runs at once, apart from the owner's task slots. Each trigger holds at most one open job per job
+// and scope, but meeting prep's scope is one meeting, so a dense calendar would otherwise start a worker per meeting at once,
+// each spending model calls in parallel. The rest wait in the queue and start as running ones report.
+export const MACHINE_MAX_RUNNING = 2;
 // Settled machine jobs are kept apart from the owner's, so a day of background checks never evicts the owner's task
 // history: the newest MACHINE_SETTLED_KEPT, and every one settled within MACHINE_SETTLED_KEPT_MS.
 export const MACHINE_SETTLED_KEPT = 50;
@@ -293,6 +297,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     running: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'running' ORDER BY created_at").toArray(),
     // The owner's task slots. A machine job never takes one: the owner did not start it, and must never wait behind it.
     runningTasks: (): number => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task' AND NOT ${MACHINE_ROW}`).toArray()[0]?.n ?? 0,
+    runningMachine: (): number => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND ${MACHINE_ROW}`).toArray()[0]?.n ?? 0,
     // The open machine job of a job and scope, if any.
     openMachine: (job: MachineJob, scope: string): JobRow | null => sql.exec<JobRow>(
       `SELECT * FROM task_jobs WHERE origin = ? AND status IN (${placeholders(OPEN)}) AND json_extract(brief_json, '$.machine.scope') = ? ORDER BY created_at LIMIT 1`,
@@ -316,12 +321,13 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // While every task slot is taken, a queued task waits for a report rather than its due time. A job in `busy` has a call
     // running in the brain, which renews its lease when it returns; until then its lapsed lease is looked at again a lease
     // from now, not at once, so a long step does not keep the alarm firing.
-    nextDue(slotsFull = false, busy: ReadonlySet<string> = new Set()): number | null {
+    // machineFull holds queued machine jobs the same way, behind MACHINE_MAX_RUNNING.
+    nextDue(slotsFull = false, busy: ReadonlySet<string> = new Set(), machineFull = false): number | null {
       const held = [...busy];
       const row = sql.exec<{ next: number | null }>(
         `SELECT MIN(CASE WHEN status = 'running' AND id IN (${placeholders(held)}) THEN MAX(lease_until, ?) WHEN status = 'running' THEN lease_until ELSE due_at END) AS next
-         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task' AND NOT ${MACHINE_ROW})`,
-        ...held, deps.now() + TASK_LEASE_MS, ...OPEN, slotsFull ? 1 : 0,
+         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task' AND NOT ${MACHINE_ROW}) AND NOT (? AND status = 'queued' AND ${MACHINE_ROW})`,
+        ...held, deps.now() + TASK_LEASE_MS, ...OPEN, slotsFull ? 1 : 0, machineFull ? 1 : 0,
       ).toArray()[0];
       return row?.next ?? null;
     },

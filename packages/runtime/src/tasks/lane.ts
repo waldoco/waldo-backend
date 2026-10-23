@@ -3,7 +3,7 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { isMachine, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { isMachine, MACHINE_MAX_RUNNING, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
 import { applyMachineJob, APPLY_RETRY_MS, type MachineAppliers } from './machine';
 import { fixedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
 import { retryTurnText } from './retry-turn';
@@ -172,7 +172,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     logSettled();
   };
 
-  let leftOver = false, slotsFull = false;
+  let leftOver = false, slotsFull = false, machineFull = false;
   for (const row of book.due()) {
     if (topics.length && heldTopicIn(row, topics)) {
       if (book.cancel(row.id, 'forgotten')) { deps.host.cancelled(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
@@ -183,6 +183,8 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (needsTurn && !deps.room()) { leftOver = true; continue; }
     if (row.status === 'reported') { await apply(row); continue; }
     if (row.kind === 'retry_turn') { await retry(row); continue; }
+    // A machine job waits for a machine slot, never an owner's task slot.
+    if (isMachine(row) && book.runningMachine() >= MACHINE_MAX_RUNNING) { machineFull = true; continue; }
     if (!isMachine(row) && book.runningTasks() >= TASK_MAX_RUNNING) { slotsFull = true; continue; }
     const ticket = book.startAttempt(row.id);
     if (!ticket) {
@@ -215,6 +217,6 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }
   book.trim();
-  const next = leftOver ? deps.now() : book.nextDue(slotsFull, deps.host.busy());
+  const next = leftOver ? deps.now() : book.nextDue(slotsFull, deps.host.busy(), machineFull);
   return next === null ? nextNote : nextNote === null ? next : Math.min(next, nextNote);
 }
