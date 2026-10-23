@@ -306,7 +306,7 @@ Each item is a failing test first. "Wire" means the exact provider request body 
 | T15 | **Dose** (with #1431): a pharmacy PDF "30 tablets of Atorvastatin 20 mg" in a radar | The item title is cleared; no card names the dose | Bypass `namesDose` on file-derived text → the dose appears |
 | T16 | **Core budget** | `brain-tool-surface` stays under 4,000 per provider with browsing | Place the tool in core → it shows in the report (D2) |
 
-Evals: T1, T2, T4 and T15 become nightly scenarios with synthetic files, held out and transcripts read (checklist 8). Run Stryker on `files/readable.ts` and on the S1 adapter render functions (`@stryker-mutator` is already a devDependency).
+Evals: T1, T2, T4, T15, T17 and T18 become nightly scenarios with synthetic files, held out and transcripts read (checklist 8). Run Stryker on `files/readable.ts` and on the S1 adapter render functions (`@stryker-mutator` is already a devDependency).
 
 ---
 
