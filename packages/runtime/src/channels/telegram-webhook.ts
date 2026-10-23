@@ -60,6 +60,10 @@ export type TelegramWebhookEnv = Readonly<{
   GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
+  APP_AGREEMENTS?: string;
+  // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
+  OWNER_LOOKUP?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
