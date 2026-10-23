@@ -155,6 +155,7 @@ This replaces the 12-hour lifetime and `SameSite=Strict` in "Session security in
 - **Residuals:**
   - A single sign-out within 5 minutes of a confirm leaves the code-less old session running until its cap. Sign-out everywhere ends it at once. Ending it on a single sign-out needs a link between the two rows, like #1133's `rotated_to`.
   - Signing in as a different owner caps that owner's directory row but not their owner-object session. That session is unreachable once its row ends.
+  - The owner object caps the old session before the directory cap runs. If the directory cap then fails, the sign-in fails closed: no new cookies are issued, and the browser's old session already has only 5 minutes left, so the owner signs in again.
 
 **Rollback.** Reverting the Worker gives new sign-ins 12 hours again. Sessions already open keep their own lifetime until one of these ends them:
 - sign-out everywhere;
