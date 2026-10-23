@@ -119,6 +119,14 @@ describe('health scores: Sleep debt', () => {
     expect(s.coverage).toBe(1);
     expect(s.need_basis).toBe('owner_confirmed');
   });
+  // The derived-row writer refuses a negative debt, and with it the whole row, so a long night must never offset a short one.
+  it('earns nothing back for a night longer than need, so debt is never below zero', () => {
+    const asleep = (minutes: (i: number) => number) => week().map((d, i) => ({ ...d, sleep: d.sleep && { ...d.sleep, asleepMinutes: minutes(i) } }));
+    const offset = computeDailyScores(input(asleep(i => (i === 0 ? 360 : i === 1 ? 780 : 480)))).sleep_debt;
+    expect(offset.state === 'available' && [offset.debt_minutes, offset.observed_weighted_shortfall_minutes]).toEqual([120, 120]);
+    const rested = computeDailyScores(input(asleep(() => 600))).sleep_debt;
+    expect(rested.state === 'available' && [rested.debt_minutes, rested.observed_weighted_shortfall_minutes]).toEqual([0, 0]);
+  });
   it('is partial with null debt and honest coverage when nights are missing', () => {
     const days = week().filter((_, i) => i !== 2 && i !== 5);
     const s = computeDailyScores(input(days)).sleep_debt;
