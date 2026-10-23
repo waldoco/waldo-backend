@@ -143,6 +143,23 @@ describe('get_health', () => {
     expect(result.ok && result.data.state === 'available' && result.data.freshness).toBe('expired');
   });
 
+  // A read at its row cap returns the newest rows, so the oldest day of that source may hold only part of its windows.
+  it('never reports the possibly partial oldest day of a truncated read as a whole day', async () => {
+    const step = (day: string, hour: number, value: number) => reading('steps_window', day, value, { start_at: `${day}T${String(hour).padStart(2, '0')}:00:00Z`, end_at: `${day}T${String(hour + 1).padStart(2, '0')}:00:00Z` });
+    const capped = { ...series, sources: [
+      { source: 'apple', consent_epoch: 3, truncated: true, samples: [step('2026-10-10', 15, 40), step('2026-10-11', 3, 100), step('2026-10-11', 4, 200), step('2026-10-12', 3, 300)] },
+    ] };
+    const ask = (aggregation: 'daily' | 'summary') => fake({ series: capped }).handler.handle({ signals: ['steps'], from: '2026-10-10', to: '2026-10-12', aggregation }, ctx);
+    const daily = await ask('daily');
+    expect(daily.ok && daily.data.state === 'available' && daily.data.signals[0]?.days).toEqual([{ day: '2026-10-10', value: null }, { day: '2026-10-11', value: 300 }, { day: '2026-10-12', value: 300 }]);
+    const summary = await ask('summary');
+    expect(summary.ok && summary.data.state === 'available' && summary.data.signals[0]?.summary).toEqual({ mean: 300, min: 300, max: 300, days_with_value: 2 });
+
+    const whole = { ...capped, sources: capped.sources.map(source => ({ ...source, truncated: false })) };
+    const full = await fake({ series: whole }).handler.handle({ signals: ['steps'], from: '2026-10-10', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(full.ok && full.data.state === 'available' && full.data.signals[0]?.days?.[0]).toEqual({ day: '2026-10-10', value: 40 });
+  });
+
   describe('Watch signals', () => {
     const night = (day: string, value: number, stages: Record<string, number> | null, start: string, end: string) =>
       reading('sleep_duration', day, value, { method: 'asleep_duration', start_at: start, end_at: end, ...(stages ? { stages } : {}) });
