@@ -812,7 +812,8 @@ export const createOwnerResponder = (
       }
       const started = Date.now();
       // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
-      const input = plan.input.filter((message) => !holdsHeldTopic(message.content));
+      const cut = barrier();
+      const input = plan.input.filter((message) => !cut.holds(message.content));
       if (!input.length) { hop(false, 'held_topic'); return; }
       const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
