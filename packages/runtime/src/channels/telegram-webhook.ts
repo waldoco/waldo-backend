@@ -56,6 +56,8 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
+  // The Google Cloud project holding Waldo's Gmail push topic in this environment; unset keeps Gmail push off.
+  GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.

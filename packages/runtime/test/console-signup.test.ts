@@ -156,7 +156,7 @@ it('finishes verified signup with an optional blank phone and both owner-scoped 
   expect(cookies).toContain('HttpOnly; Secure; SameSite=Strict');
 });
 
-it('a signup that resolves to the member signed in here ends this browser\'s old sessions', async () => {
+it('a signup that resolves to the member signed in here caps this browser\'s old sessions', async () => {
   const s = setup();
   const grant = vi.fn(async () => new Response('console-ticket'));
   const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
