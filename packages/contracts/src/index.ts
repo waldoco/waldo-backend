@@ -91,5 +91,6 @@ export * from './channels/imessage-v1';
 export * from './tools/schemas/skills';
 
 export * from './tools/schemas/memory';
+export * from './tools/schemas/lookup';
 
 export * from './tools/use-mac';

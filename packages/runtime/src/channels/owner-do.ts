@@ -1,4 +1,8 @@
 import { appControlsRequest } from './app-controls';
+import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { chatChannelLinks } from './chat-channel-links';
+import { consentLedger } from '../onboarding/consent-ledger';
+import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
@@ -321,7 +325,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -385,6 +389,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Model provider health for every channel and turn of this owner, so provider misses add up across turns.
   private readonly providerHealth = new InMemoryCircuitBreaker();
+  // What this object's turns read from the web, so a look-up finding can only cite a page a turn actually read.
+  private readonly lookupPages = observedPages();
   // The owner id each cached runtime was built for. The binding can change under a live cache (console-first signup builds owner 0, the Telegram link binds later).
   private runtimeOwners: Partial<Record<ChannelKind, number>> = {};
   private queue: Promise<unknown> = Promise.resolve();
@@ -877,6 +883,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
     return appSessionAuthority(this.env)(name, hash);
   }
+  // Hides retained copies of forgotten texts in every store a memory forget reaches, and throws when one still holds a copy.
+  // The memory forget tool and the look-up's forget and withdrawal share it, so a store added here is covered for both.
+  private async hideRetainedText(texts: readonly string[], scope?: RunEffectScope): Promise<void> {
+    const storage = this.ctx.storage;
+    scope?.admit();
+    const result = await redactConversationEntries(storage, texts, FORGOTTEN, scope);
+    await redactToolOutputLedger(storage, texts, FORGOTTEN, scope);
+    const mail = redactMailFollowupEntries(storage.kv, texts, FORGOTTEN, scope);
+    const prep = redactCalendarPrepEntries(storage.kv, texts, FORGOTTEN, scope);
+    const reports = redactJobReportEntries(storage.kv, texts, FORGOTTEN, scope);
+    forgetHeldWhatsApp(storage.kv, texts);
+    // A task holding a forgotten text is cancelled and its worker fenced; the purge then redacts the job rows.
+    this.forgetTasks(texts);
+    const cards = forgetWaitingCards(storage.sql, texts, Date.now());
+    const imessage = redactIMessageEntries(storage, texts, FORGOTTEN, scope);
+    const titles = redactThreadTitles(storage.kv, texts, FORGOTTEN, scope);
+    if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
+    // An owner who has not had a turn yet has no episodes table.
+    if (!storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) return;
+    const scrubEpisodes = () => {
+      const redact = literalTextRedactor(texts, FORGOTTEN);
+      for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
+        const text = redact(row.text);
+        if (text !== row.text) storage.sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
+      }
+    };
+    if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
+  }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
   // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
@@ -1307,6 +1341,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const row=this.appInbox.cancel(name,client,mainRef);if(!row)return fail(404);
       if(this.activeApp?.id===row.id)this.activeAbort?.abort();
       return Response.json(this.appInbox.receipt(name,client,mainRef),{headers:{'cache-control':'no-store'}});
+    }
+    if(APP_ONBOARDING_PATHS.includes(path)){
+      return this.serial(async()=>{
+        const current=async()=>{await this.appAuthority(name,hash);};
+        try{
+          return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
+            agreementsOffered:this.env.APP_AGREEMENTS==='1',lookupOffered:this.env.OWNER_LOOKUP==='1',hideText:texts=>this.hideRetainedText(texts),
+            chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
+            act:action=>this.setup('app').act(action,current),
+            admit:async(client,text)=>{
+              this.bindAppSubject(name);
+              const result=await this.appInbox.admit(name,hash,client,text,mainRef);
+              if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+              return result.kind==='admitted'||result.kind==='duplicate';
+            }}));
+        }catch(error){logAppReadFailure('app_onboarding',path,error);return fail(503);}
+      });
     }
     if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'){
       return this.serial(async()=>{
@@ -3571,31 +3622,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
-        hideHistory: async (texts, context) => {
-          const scope = context.runScope;
-          scope?.admit();
-          const result = await redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
-          const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          forgetHeldWhatsApp(this.ctx.storage.kv, texts);
-          // A task holding a forgotten text is cancelled and its worker fenced; the purge then redacts the job rows.
-          this.forgetTasks(texts);
-          const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now());
-          const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
-          const scrubEpisodes = () => {
-            const redact = literalTextRedactor(texts, FORGOTTEN);
-            for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
-              const text = redact(row.text);
-              if (text !== row.text) storage.sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
-            }
-          };
-          if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
-        },
-      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+        hideHistory: (texts, context) => this.hideRetainedText(texts, context.runScope),
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, { agreementsOffered: this.env.APP_AGREEMENTS === '1', lookupOffered: this.env.OWNER_LOOKUP === '1' }), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
