@@ -156,6 +156,22 @@ it('finishes verified signup with an optional blank phone and both owner-scoped 
   expect(cookies).toContain('HttpOnly; Secure; SameSite=Strict');
 });
 
+it('a signup that resolves to the member signed in here ends this browser\'s old sessions', async () => {
+  const s = setup();
+  const grant = vi.fn(async () => new Response('console-ticket'));
+  const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
+  const ownerCookie = vi.fn(async (_doName: string, _presented?: Request) => 'owner-session');
+  const a = { ...s.a, ownerCookie };
+  const { cookie, progress } = await start(s);
+  const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
+  const signedIn = `${verifiedCookie}; waldo_console=old-ticket; waldo_owner=owner-new.old.sig`;
+  const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, signedIn), e, a, { ...s.signup, complete: vi.fn(async () => 'owner-new') });
+  expect(result.status).toBe(303);
+  expect(grant).toHaveBeenCalledWith('https://telegram-owner/grant-console', expect.objectContaining({ headers: { 'x-waldo-do-name': 'owner-new', cookie: 'waldo_console=old-ticket' } }));
+  expect(ownerCookie.mock.calls[0]?.[0]).toBe('owner-new');
+  expect(ownerCookie.mock.calls[0]?.[1]?.headers.get('cookie')).toContain('waldo_owner=owner-new.old.sig');
+});
+
 it.each(['grant', 'session', 'response'])('retains verified proof and optional contact on %s failure, then retries without another OTP', async failure => {
   const s = setup();
   let failed = true;
@@ -204,7 +220,7 @@ it('routes two fresh email-only members and an existing member to distinct canon
       return json(created.get(body.p_auth_user));
     }
     const key = `${body.p_do_name}:${body.p_session_hash}`;
-    if (url.endsWith('/console_session_open')) { sessions.add(key); return json(true); }
+    if (url.endsWith('/console_session_open_for')) { sessions.add(key); return json(true); }
     if (url.endsWith('/console_session_touch')) return json(sessions.has(key));
     throw new Error('unexpected fixture endpoint');
   });

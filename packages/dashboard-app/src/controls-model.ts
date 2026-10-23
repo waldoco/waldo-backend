@@ -1,4 +1,4 @@
-import { SignInRequired } from './model';
+import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
 export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
@@ -254,6 +254,7 @@ export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> 
   if (response.status === 401) throw new SignInRequired();
   let value: unknown;
   try { value = await response.json(); } catch { throw new ControlsActionError('receipt_unavailable', 'The action receipt could not be read. Check this request before trying another change.', true); }
+  if (isStepUpRefusal(response.status, value)) throw new StepUpRequired();
   if (obj(value) && obj(value.receipt)) {
     const result = readActionResult(value, action, origin);
     const coherent = response.ok && ['recorded', 'incomplete'].includes(result.receipt.state)
