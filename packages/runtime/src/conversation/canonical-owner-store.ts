@@ -12,6 +12,10 @@ export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' 
 };
 // Rows a turn's read lists at a time, and the most keys one storage get takes.
 const PAGE_ROWS = 128, GET_KEYS = 128;
+// How many window budgets a turn reads back toward the row a live summary covers. The view shows at most one budget of
+// the rows after a summary, and re-compaction is due from 0.7 of one, so rows four budgets deep mean re-compaction has kept
+// failing; past that a turn reads the plain window, as with compaction off, instead of a read that grows every turn.
+const SUMMARY_TAIL_BUDGETS = 4;
 type Witness = Readonly<{ lineage: 'canonical_v1'; principal_ref: string; tenant_ref: string; entry: ConversationEntry }>;
 const writesInProgress = new WeakMap<object, Promise<unknown>>();
 const serialize = <T>(storage: object, work: () => Promise<T>): Promise<T> => {
@@ -114,8 +118,9 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   // A turn reads rows newest first, a page at a time, and stops once the rows read hold the window of the turn's chat and
   // of the stored leaf: the path back from each until it passes the window budget, counted from its newest owner message so
   // a retried message keeps its own window, or, with compaction on and a live summary on that chat, until the row the
-  // summary covers. Rows are written after their parents, so every row on that path is in the newest slots. A row read
-  // whose parent lies in the older slots not read hangs on no parent, in memory only. The page reads every row.
+  // summary covers or SUMMARY_TAIL_BUDGETS budgets back, whichever comes first. Rows are written after their parents, so
+  // every row on that path is in the newest slots. A row read whose parent lies in the older slots not read hangs on no
+  // parent, in memory only. The page reads every row.
   const read = async (turn: boolean, chat?: string): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;
@@ -176,7 +181,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         const message = conversationModelMessages([entry])[0];
         walk.counted += message ? estimateMessageTokens(message) : 0;
         const until = compaction.enabled ? coveredBy.get(entry.chatId) ?? null : null;
-        if (until !== null ? at === until || covered.has(at) : walk.counted > compaction.budgetTokens) walk.done = true;
+        if (until !== null ? at === until || covered.has(at) || walk.counted > SUMMARY_TAIL_BUDGETS * compaction.budgetTokens : walk.counted > compaction.budgetTokens) walk.done = true;
         else walk.at = entry.parentId;
       }
     };
