@@ -227,8 +227,8 @@ it('one owner\'s provider failures open only that owner\'s breaker: another owne
     const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
     const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: crypto.randomUUID(), origin: 'tg-1', surface: 'telegram', brief: { ...BRIEF, effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
     const ticket = book.startAttempt(job.id)!;
-    const claim = await (instance as Rpc).taskClaim(ticket);
-    expect(await (instance as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, Array.from({ length: misses }, () => ({ provider: 'openai', ok: false })))).toBe('deferred');
+    const claim = await (instance as unknown as Rpc).taskClaim(ticket);
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, Array.from({ length: misses }, () => ({ provider: 'openai', ok: false })))).toBe('deferred');
     await state.storage.deleteAlarm();
     return { seed: claim === 'fenced' ? null : claim.providerHealth, after: health(instance).find(entry => entry.provider === 'openai') };
   });
@@ -244,7 +244,7 @@ it('one owner\'s provider failures open only that owner\'s breaker: another owne
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: 'breaker-owner-b' }, 1,
       JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: 1, text: 'What should I pack for Goa?' } }));
-    await (instance as Rpc).drainInbox();
+    await (instance as unknown as Rpc).drainInbox();
     await state.storage.deleteAlarm();
     const queued = (state.storage.kv.get<{ payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
     expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(false);
