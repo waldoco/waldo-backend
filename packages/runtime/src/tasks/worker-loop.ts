@@ -8,7 +8,7 @@ import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../l
 import { modelCost } from '../llm/pricing';
 import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type BreakerSnapshot, type CircuitBreaker, type LLMGatewayAdapter } from '../llm/provider';
-import { sanitise } from '../scribe/sanitiser';
+import { numericHealthIn, sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
 import { FINISH_TASK, unreplayable } from './profiles';
 
@@ -104,7 +104,8 @@ const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {
   const acted: string[] = [], carried: string[] = [], counts = new Map<string, number>();
   for (const turn of dropped) {
     if (turn.output.startsWith(DROPPED_STEPS_NOTE)) carried.push(turn.output.slice(DROPPED_STEPS_NOTE.length, turn.output.indexOf(NOTE_END)));
-    if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
+    // The note is checkpointed, and arguments that carry a health reading are not stored.
+    if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${numericHealthIn(turn.call.arguments) ? '(arguments not kept)' : turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
     else counts.set(turn.call.name, (counts.get(turn.call.name) ?? 0) + 1);
   }
   const listed = [...carried, ...acted, ...[...counts].map(([name, count]) => `${name} x${count}`)].join('; ');
@@ -169,6 +170,8 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
             try { args = JSON.parse(call.arguments || '{}'); } catch { args = undefined; }
             const parsed = taskResultSchema.safeParse(args);
             if (!parsed.success) return { ok: false, error: `The result did not match ${FINISH_TASK}: ${parsed.error.issues.map(issue => issue.path.join('.') || 'result').join(', ')}.`, error_code: 'invalid_args', fix: `Call ${FINISH_TASK} again with every field.`, retryable: false, code: 'invalid_args' };
+            // A result is stored until the owner hears it, and the owner's health values are never stored.
+            if (numericHealthIn(JSON.stringify(parsed.data))) return { ok: false, error: 'The result names health readings with their numbers, which a task never stores.', error_code: 'invalid_args', fix: `Describe them in words (for example "above the usual range") and call ${FINISH_TASK} again.`, retryable: false, code: 'rejected' };
             finished = parsed.data;
             return { ok: true, data: { recorded: true } };
           }

@@ -4,6 +4,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, leadingNote, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { numericHealthIn } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -47,16 +48,27 @@ export const deferDelay = (deferrals: number): number => TASK_DEFER_MS[Math.min(
 const traceOf = (ticket: TaskTicket) => `task:${ticket.jobId}:${ticket.attempt}`;
 export const TURN_OUTCOME = { done: 'completed', partial: 'answered', blocked: 'blocked', failed: 'failed' } as const satisfies Record<TaskResult['status'], TurnOutcome>;
 const failedResult = (code: string): TaskResult => ({ status: 'failed', summary: `The worker stopped with an error (${code}).`, findings: [], proposals: [], left: [] });
+// The worker is asked to put readings in words before it finishes; a result that still carries one (a plain closing reply)
+// is not stored.
+const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.stringify(result))
+  ? { status: result.status === 'done' ? 'partial' : result.status, summary: 'The worker\'s result named health readings with their numbers, which a task never stores, so it was not kept.', findings: [], proposals: [], left: ['The findings themselves: the owner can ask again, and Waldo can read their mail or files directly.'] }
+  : result;
 
-// What an owner-connected MCP server returns is not known to be free of health readings (a wearable's server, say), and a
-// checkpoint persists in the owner object's storage. Its output is left out; a resumed attempt reads it again if it still
-// needs it, which a read allows.
+// A checkpoint persists in the owner object's storage, and the owner's health values are never stored. What an
+// owner-connected MCP server returns is not known to be free of them (a wearable's server, say), so its output is left out,
+// and so is any other call or output that carries a reading (a lab result in a mail, a result that quoted it). A resumed
+// attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
+export const UNKEPT_EFFECT = 'Not kept across a restart. This step already ran; do not run it again.';
 // The note on dropped steps rides on the first kept turn's output, so it survives when that output is not kept.
 const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
-  if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name)) return turn;
-  return { ...turn, output: `${leadingNote(turn.output)}${UNKEPT_OUTPUT}` };
+  const readingInCall = numericHealthIn(turn.call.arguments);
+  if (!UNKEPT_OUTPUT_TOOLS.has(turn.call.name) && !readingInCall && !numericHealthIn(turn.output)) return turn;
+  return {
+    ...turn, call: readingInCall ? { ...turn.call, arguments: '{}' } : turn.call,
+    output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}`,
+  };
 };
 
 export const taskHost = (deps: TaskHostDeps) => {
@@ -225,7 +237,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       if (!row) return 'fenced';
       const written = outcome.kind === 'unavailable'
         ? deps.book.defer(ticket, deps.now() + deferDelay(row.deferrals), spend)
-        : deps.book.report(ticket, outcome.kind === 'result' ? outcome.result : failedResult(outcome.code), spend);
+        : deps.book.report(ticket, outcome.kind === 'result' ? storableResult(outcome.result) : failedResult(outcome.code), spend);
       if (written === 'fenced' || written === 'duplicate') { if (written === 'fenced') fence(ticket.jobId); return written; }
       replay(outcomes);
       fence(ticket.jobId);

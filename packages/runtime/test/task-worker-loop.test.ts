@@ -267,6 +267,13 @@ describe('checkpoint trimming', () => {
     expect(first!.output).toContain(`${FINISH_TASK} x1`);
   });
 
+  it('names an acted step whose arguments carry a health reading without them', () => {
+    const turns = [turn(0, 'browse_act', { url: 'https://example.com/form', task: 'Enter blood pressure 142/91 in the intake form.' }), ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))];
+    const [first] = checkpointTurns(turns);
+    expect(first!.output).toContain('browse_act (arguments not kept) (already run; do not run it again)');
+    expect(first!.output).not.toContain('142/91');
+  });
+
   it('leaves a checkpoint within the limit untouched', () => {
     const turns = Array.from({ length: 5 }, (_, i) => turn(i, 'browse_act'));
     expect(checkpointTurns(turns)).toBe(turns);
