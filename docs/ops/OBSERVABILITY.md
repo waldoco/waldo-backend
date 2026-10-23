@@ -86,6 +86,15 @@ It is off unless the Worker var `WALDO_COST_LEDGER_SYNC=on`. Staging sets it `on
 
 The same KV keeps the owner's spend for the current UTC month (`cost_month_usd`), counted from every delta recorded while the ledger is on, whether or not it has reached Supabase yet. A turn that starts at or past `MONTHLY_SPEND_CEILING_USD` (USD 25 per owner per month in production and USD 250 on staging, code values in `packages/runtime/src/llm/cost-ledger.ts`; staging is higher so the owner's heavy test account is not moved to the auxiliary model mid-test) degrades rather than stops. The provider clamps each of its calls to the auxiliary route (Luna, then Haiku), which is where Briefs, check-ins, closes and other machine turns already run, so they keep going. `browse_page`, `browse_act` and `execute_code` are refused by the dispatcher before anything runs, with the tool refusal `spend_ceiling_reached`. Its fix tells the model what still works (the read tools, on the cheaper model) and the UTC day the ceiling resets, so it degrades the task rather than stopping. Each hold logs a `spend_hold` hop (`code: spend_ceiling_reached:<tool>`), and the ledger stores it as one call on model `held:<tool>` with `usd_estimate` 0. To count holds per owner per month, sum `calls` where `model like 'held:%'`; the month's spend is the sum of `usd_estimate` over the other rows. With the ledger off there is no month total and so no ceiling. The total counts model USD only (browser and sandbox time are priced at 0), and it starts at 0 in each DO storage, so the first month undercounts.
 
+Known gap: the ledger undercounts billed tokens, so treat the baseline as a floor. It misses:
+
+- an OpenAI call that ends `oversize` (incomplete output) returns no `spent`, so tokens the provider billed for are not logged;
+- failed routes and the template floor log no usage;
+- `failFromHook` in `llm/provider.ts` drops a call that was already billed;
+- `llm/pricing.ts` does not model cache writes, which bill above the uncached input rate.
+
+No test yet pins that a failed attempt's `spent` is added exactly once. Follow-up: make every billed attempt reach the turn log and add that test.
+
 Spend per owner per day for the last 30 days (service role):
 
 ```sql
