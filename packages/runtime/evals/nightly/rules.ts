@@ -61,7 +61,7 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'When one source fails and others worked', scenarios: ['e3-one-calendar-unreadable'] },
   { anchor: 'Stop only after several genuinely different attempts', scenarios: ['e3-one-calendar-unreadable'] },
   { anchor: 'Snippets are not the source', scenarios: ['t10-compare-flights', 't13-compare-purchase'] },
-  { anchor: 'Pick web_search or browse_page yourself', scenarios: ['t10-compare-flights'] },
+  { anchor: 'Never ask the owner for a link you can find', scenarios: ['t10-compare-flights'] },
   { anchor: 'In India, unless the owner names other sites', scenarios: ['t10-compare-flights', 't12-restaurant-booking'] },
   // Examples
   { anchor: 'Find the venue email for Kavya', scenarios: ['e1-look-before-asking'] },
