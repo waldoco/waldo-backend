@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select no_plan();
+select plan(97);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -60,6 +60,8 @@ select is(pg_temp.send('sms-asha', pg_temp.op('2')), 'busy', 'a second send whil
 select is(pg_temp.sent('sms-asha', pg_temp.op('9'), 'pending', pg_temp.sid('1')), 'denied', 'a finish with another operation is denied');
 select is(pg_temp.sent('sms-asha', pg_temp.op('1'), 'pending', pg_temp.sid('1')), 'pending', 'the send finishes pending');
 select is(pg_temp.state('sms-asha')->'challenge'->>'state', 'pending', 'the state shows the code is out');
+select is((pg_temp.state('sms-asha')->'challenge'->>'retry_at')::bigint, (select extract(epoch from next_send)::bigint from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-asha'), 'and when she may ask again');
+select is(pg_temp.state('sms-asha')->'challenge'->>'checks_left', '5', 'with five checks left');
 
 -- The same number on another owner's account is held while asha's code is live: ben's typed copy is sent nothing.
 select is(pg_temp.send('sms-ben', pg_temp.op('b')), 'held', 'another owner cannot send to a number held by a live challenge');
@@ -67,6 +69,7 @@ select is(pg_temp.send('sms-ben', pg_temp.op('b')), 'held', 'another owner canno
 -- Resending waits 60 seconds, and a challenge sends at most three times.
 select is(pg_temp.send('sms-asha', pg_temp.op('3')), 'throttled', 'a resend inside 60 seconds is throttled');
 select pg_temp.age('sms-asha', interval '61 seconds');
+select is(pg_temp.state('sms-asha')->'challenge'->'retry_at', 'null'::jsonb, 'after 60 seconds she may ask again now');
 select is(pg_temp.send('sms-asha', pg_temp.op('3')), 'reserved', 'a resend after 60 seconds is reserved');
 select is(pg_temp.sent('sms-asha', pg_temp.op('3'), 'pending', pg_temp.sid('1')), 'pending', 'it reuses the same verification');
 select pg_temp.age('sms-asha', interval '61 seconds');
@@ -74,6 +77,7 @@ select is(pg_temp.send('sms-asha', pg_temp.op('4')), 'reserved', 'the third send
 select is(pg_temp.sent('sms-asha', pg_temp.op('4'), 'pending', pg_temp.sid('1')), 'pending', 'and finishes');
 select pg_temp.age('sms-asha', interval '61 seconds');
 select is(pg_temp.send('sms-asha', pg_temp.op('5')), 'throttled', 'a fourth send in one challenge is throttled');
+select is((pg_temp.state('sms-asha')->'challenge'->>'retry_at')::bigint, (pg_temp.state('sms-asha')->'challenge'->>'expires_at')::bigint, 'and the state says the next code waits for this one to expire');
 
 -- A wrong code keeps the challenge open; checks are bounded and the code itself is never stored.
 select is(pg_temp.check('sms-asha', pg_temp.op('6')), jsonb_build_object('kind', 'reserved', 'reference', jsonb_build_object('service', pg_temp.svc(), 'sid', pg_temp.sid('1'), 'phone', '+919800000001')), 'a check is reserved with the verification it checks');
@@ -81,6 +85,7 @@ select is(pg_temp.check('sms-asha', pg_temp.op('5'))->>'kind', 'busy', 'a second
 select is(pg_temp.checked('sms-asha', pg_temp.op('6'), 'pending', pg_temp.sid('1')), 'pending', 'a wrong code leaves it pending');
 select ok(not pg_temp.verified('sms-asha'), 'and verifies nothing');
 select is((select count(*)::int from information_schema.columns where table_schema = 'waldo' and table_name = 'phone_sms_challenges' and column_name ilike '%code%'), 0, 'the ledger has no column for the code');
+select is((select count(*)::int from waldo.phone_sms_daily where key like '+%'), 0, 'and the daily counters keep no number');
 
 -- The right code proves the number on file, in the same transaction.
 select is(pg_temp.check('sms-asha', pg_temp.op('7'))->>'kind', 'reserved', 'another check is reserved');
@@ -129,6 +134,7 @@ select is(pg_temp.send('sms-dev', pg_temp.op('d')), 'reserved', 'dev''s send is 
 select is(pg_temp.sent('sms-dev', pg_temp.op('d'), 'unknown', ''), 'unknown', 'a send with no clear answer finishes unknown');
 select pg_temp.age('sms-dev', interval '61 seconds');
 select is(pg_temp.send('sms-dev', pg_temp.op('e')), 'throttled', 'and holds further sends');
+select ok((pg_temp.state('sms-dev')->'challenge'->>'retry_at')::bigint > pg_temp.at() + 3000, 'and the state says the owner may ask again in about an hour');
 select pg_temp.age('sms-dev', interval '1 hour');
 select is(pg_temp.send('sms-dev', pg_temp.op('e')), 'reserved', 'an hour later the owner may ask again');
 select is(pg_temp.sent('sms-dev', pg_temp.op('e'), 'pending', pg_temp.sid('d')), 'pending', 'and the code goes out');
@@ -156,10 +162,21 @@ select is(pg_temp.sent('sms-kim', pg_temp.op('a'), 'pending', pg_temp.sid('a')),
 select is(pg_temp.check('sms-kim', pg_temp.op(n::text))->>'kind' || pg_temp.checked('sms-kim', pg_temp.op(n::text), 'pending', pg_temp.sid('a')),
   'reservedpending', 'wrong code ' || n || ' is checked') from generate_series(1, 5) n;
 select is(pg_temp.check('sms-kim', pg_temp.op('6'))->>'kind', 'throttled', 'a sixth check is refused');
+select is(pg_temp.state('sms-kim')->'challenge'->>'checks_left', '0', 'and the state says no checks are left');
+
+-- A resend that comes back as a new verification is checked against that one, within the first send's ten minutes.
+insert into waldo.owners (do_name, email, phone) values ('sms-nia', 'nia@test.invalid', '+919800000013');
+select is(pg_temp.send('sms-nia', pg_temp.op('a')), 'reserved', 'nia''s send is reserved');
+select is(pg_temp.sent('sms-nia', pg_temp.op('a'), 'pending', pg_temp.sid('a')), 'pending', 'and goes out');
+select pg_temp.age('sms-nia', interval '61 seconds');
+select is(pg_temp.send('sms-nia', pg_temp.op('b')), 'reserved', 'her resend is reserved');
+select is(pg_temp.sent('sms-nia', pg_temp.op('b'), 'pending', pg_temp.sid('c')), 'pending', 'and comes back as a new verification');
+select is(pg_temp.check('sms-nia', pg_temp.op('c'))->'reference'->>'sid', pg_temp.sid('c'), 'which the next check asks about');
+select is((select expires_at > now() + interval '8 minutes' and expires_at < now() + interval '9 minutes' from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-nia'), true, 'with the ten minutes still counted from the first send');
 
 -- Daily caps per owner and per number bound what a typed number can receive, across every owner.
 insert into waldo.owners (do_name, email, phone) values ('sms-fay', 'fay@test.invalid', '+919800000007');
-insert into waldo.phone_sms_daily (scope, key, day, sends) values ('number', '+919800000007', (now() at time zone 'utc')::date, 5);
+insert into waldo.phone_sms_daily (scope, key, day, sends) values ('number', encode(sha256(convert_to('+919800000007', 'UTF8')), 'hex'), (now() at time zone 'utc')::date, 5);
 select is(pg_temp.send('sms-fay', pg_temp.op('a')), 'throttled', 'a number already sent five codes today is sent no more');
 insert into waldo.owners (do_name, email, phone) values ('sms-gus', 'gus@test.invalid', '+919800000008');
 insert into waldo.phone_sms_daily (scope, key, day, sends) select 'owner', id::text, (now() at time zone 'utc')::date, 5 from waldo.owners where do_name = 'sms-gus';
@@ -175,6 +192,10 @@ select ok(not pg_temp.verified('sms-mo'), 'whose number stays unverified');
 set local role anon;
 select throws_ok($$ select waldo.verify_owner_phone(gen_random_uuid(), '+919800000001') $$, '42501', null, 'the shared rule is not callable from outside');
 reset role;
+
+-- Deleting the owner deletes the challenge, the only row here that holds the number.
+delete from waldo.owners where do_name = 'sms-asha';
+select is((select count(*)::int from waldo.phone_sms_challenges where phone = '+919800000001' and owner_id not in (select id from waldo.owners)), 0, 'deleting an owner deletes their challenge');
 
 select * from finish();
 rollback;

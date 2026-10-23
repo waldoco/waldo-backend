@@ -16,7 +16,8 @@ type Acted = { status: number; body: { receipt?: { state: string; message: strin
 
 // A ledger that keeps one owner's number and challenge, and a Twilio that approves only CODE.
 function world(phone: string | null) {
-  const ledger = { phone, verified: false, challenge: null as null | { state: string; expires_at: number } };
+  const open = { expires_at: 1, retry_at: null as number | null, checks_left: 5 };
+  const ledger = { phone, verified: false, challenge: null as null | { state: string; expires_at: number; retry_at: number | null; checks_left: number } };
   const twilio: URLSearchParams[] = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -31,12 +32,12 @@ function world(phone: string | null) {
     if (fn !== 'phone_sms_transition') return new Response('unexpected', { status: 500 });
     const payload = JSON.parse(args.p_payload!) as Record<string, string>;
     const step = ({
-      reserve_send: () => { ledger.challenge = { state: 'sending', expires_at: 1 }; return { kind: 'reserved', phone: ledger.phone }; },
-      finish_send: () => { ledger.challenge = { state: 'pending', expires_at: 1 }; return { kind: 'pending' }; },
-      reserve_check: () => { ledger.challenge = { state: 'checking', expires_at: 1 }; return { kind: 'reserved', reference: { service: SERVICE, sid: SID, phone: ledger.phone } }; },
+      reserve_send: () => { ledger.challenge = { ...open, state: 'sending' }; return { kind: 'reserved', phone: ledger.phone }; },
+      finish_send: () => { ledger.challenge = { ...open, state: 'pending' }; return { kind: 'pending' }; },
+      reserve_check: () => { ledger.challenge = { ...open, state: 'checking' }; return { kind: 'reserved', reference: { service: SERVICE, sid: SID, phone: ledger.phone } }; },
       finish_check: () => {
-        if (payload.outcome === 'approved') { ledger.verified = true; ledger.challenge = { state: 'approved', expires_at: 1 }; return { kind: 'approved' }; }
-        ledger.challenge = { state: 'pending', expires_at: 1 }; return { kind: payload.outcome };
+        if (payload.outcome === 'approved') { ledger.verified = true; ledger.challenge = { ...open, state: 'approved' }; return { kind: 'approved' }; }
+        ledger.challenge = { ...open, state: 'pending' }; return { kind: payload.outcome };
       },
     } as Record<string, () => unknown>)[args.p_action!];
     return Response.json(step ? step() : { kind: 'denied' });
@@ -107,6 +108,16 @@ describe('the console phone view', () => {
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
     const w = world('+919800000001');
     w.ledger.verified = true;
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+  });
+
+  it('offers a resend only once the wait the ledger set has passed, and a check only while checks are left', async () => {
+    const w = world('+919800000001');
+    w.ledger.challenge = { state: 'pending', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) + 60, checks_left: 5 };
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_check']); });
+    w.ledger.challenge = { state: 'pending', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) - 1, checks_left: 0 };
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_send']); });
+    w.ledger.challenge = { state: 'unknown', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) + 3600, checks_left: 5 };
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
   });
 

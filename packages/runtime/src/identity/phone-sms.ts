@@ -10,7 +10,9 @@ export type PhoneSmsEnv = OwnerDirectoryEnv & Readonly<{
 }>;
 const CHALLENGE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
 export type PhoneChallengeState = (typeof CHALLENGE_STATES)[number];
-export type OwnerPhoneState = Readonly<{ phone: string | null; verified: boolean; sms: boolean; challenge: Readonly<{ state: PhoneChallengeState; expires_at: number }> | null }>;
+/** Times are epoch seconds. retry_at: when the owner may next ask for a code, null meaning now. */
+export type PhoneChallenge = Readonly<{ state: PhoneChallengeState; expires_at: number; retry_at: number | null; checks_left: number }>;
+export type OwnerPhoneState = Readonly<{ phone: string | null; verified: boolean; sms: boolean; challenge: PhoneChallenge | null }>;
 const OUTCOMES = ['denied', 'no_number', 'verified', 'number_taken', 'held', 'busy', 'throttled', 'expired', 'unknown', 'pending', 'approved'] as const;
 export type PhoneSmsOutcome = Readonly<{ kind: 'disabled' | (typeof OUTCOMES)[number] }>;
 export type PhoneSms = Readonly<{
@@ -28,9 +30,11 @@ const readState = (row: unknown, sms: boolean): OwnerPhoneState | null => {
   const value = row as Record<string, unknown>, challenge = value?.challenge as Record<string, unknown> | null | undefined;
   if (typeof row !== 'object' || Array.isArray(row) || !(value.phone === null || (typeof value.phone === 'string' && E164.test(value.phone)))
     || typeof value.verified !== 'boolean' || challenge === undefined
-    || (challenge !== null && (!CHALLENGE_STATES.includes(challenge.state as PhoneChallengeState) || !Number.isSafeInteger(challenge.expires_at)))) throw shapeError();
-  return { phone: value.phone, verified: value.verified, sms,
-    challenge: challenge === null ? null : { state: challenge.state as PhoneChallengeState, expires_at: challenge.expires_at as number } };
+    || (challenge !== null && (!CHALLENGE_STATES.includes(challenge.state as PhoneChallengeState) || !Number.isSafeInteger(challenge.expires_at)
+      || !(challenge.retry_at === null || Number.isSafeInteger(challenge.retry_at))
+      || !Number.isInteger(challenge.checks_left) || (challenge.checks_left as number) < 0 || (challenge.checks_left as number) > 5))) throw shapeError();
+  return { phone: value.phone, verified: value.verified, sms, challenge: challenge === null ? null : {
+    state: challenge.state as PhoneChallengeState, expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } };
 };
 
 // The owner's own number on file, proven by a code Twilio texts to it. The Worker names only the owner it signed in;

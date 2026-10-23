@@ -61,7 +61,8 @@ create table waldo.phone_sms_challenges (
 );
 create index phone_sms_challenges_phone on waldo.phone_sms_challenges (phone);
 
--- Sends per owner and per number in a UTC day, across challenges and owners. Rows older than yesterday are dropped.
+-- Sends per owner and per number in a UTC day, across challenges and owners. A number is keyed by its SHA-256, so the
+-- counter keeps no number; rows older than yesterday are dropped.
 create table waldo.phone_sms_daily (
   scope text not null check (scope in ('owner', 'number')),
   key text not null,
@@ -79,7 +80,7 @@ create function waldo.phone_sms_transition(p_action text, p_payload text, p_at b
 language plpgsql security definer set search_path = '' as $$
 declare
   p jsonb; o waldo.owners; c waldo.phone_sms_challenges;
-  v_service text; v_operation uuid; v_outcome text; v_sid text; v_locked text; v_now timestamptz; v_day date;
+  v_service text; v_operation uuid; v_outcome text; v_sid text; v_locked text; v_number_key text; v_now timestamptz; v_day date;
   v_resend boolean := false;
 begin
   if not waldo.router_signed('phonesms.' || p_action || '.' || p_payload, p_at, p_sig) then
@@ -129,11 +130,12 @@ begin
       v_resend := c.state = 'pending' and c.expires_at > v_now and c.phone = o.phone and c.service = v_service;
       if v_resend and (c.next_send > v_now or c.sends >= 3) then return jsonb_build_object('kind', 'throttled'); end if;
     end if;
+    v_number_key := encode(sha256(convert_to(o.phone, 'UTF8')), 'hex');
     if exists (select 1 from waldo.phone_sms_daily where day = v_day and sends >= 5
-        and ((scope = 'owner' and key = o.id::text) or (scope = 'number' and key = o.phone))) then
+        and ((scope = 'owner' and key = o.id::text) or (scope = 'number' and key = v_number_key))) then
       return jsonb_build_object('kind', 'throttled');
     end if;
-    insert into waldo.phone_sms_daily (scope, key, day, sends) values ('owner', o.id::text, v_day, 1), ('number', o.phone, v_day, 1)
+    insert into waldo.phone_sms_daily (scope, key, day, sends) values ('owner', o.id::text, v_day, 1), ('number', v_number_key, v_day, 1)
       on conflict (scope, key, day) do update set sends = waldo.phone_sms_daily.sends + 1;
     delete from waldo.phone_sms_daily where day < v_day - 1;
     if v_resend then
@@ -170,12 +172,13 @@ begin
   end if;
 
   if p_action = 'finish_send' then
-    if v_outcome = 'pending' and v_sid ~ '^VE[0-9a-fA-F]{32}$' and (c.sid is null or c.sid = v_sid) then
+    -- A resend may come back as a new verification; the code's ten minutes still count from the first send.
+    if v_outcome = 'pending' and v_sid ~ '^VE[0-9a-fA-F]{32}$' then
       update waldo.phone_sms_challenges set state = 'pending', sid = v_sid, operation = null,
         recipient_hold_until = greatest(c.expires_at, v_now) where owner_id = o.id;
       return jsonb_build_object('kind', 'pending');
     end if;
-    -- No clear answer, or one for another verification: the text may have gone out, so the number stays held.
+    -- No clear answer: the text may have gone out, so the number stays held.
     update waldo.phone_sms_challenges set state = 'unknown', operation = null, recipient_hold_until = v_now + interval '1 hour'
       where owner_id = o.id;
     return jsonb_build_object('kind', 'unknown');
@@ -210,10 +213,12 @@ begin
   return jsonb_build_object('kind', v_outcome);
 end $$;
 
--- What the console and the app show: the number on file, whether it is proven, and the state of a code sent to it.
+-- What the console and the app show: the number on file, whether it is proven, and the state of a code sent to it, with
+-- when the owner may next ask for one (null: now) and how many checks the code has left, so a surface offers only what
+-- the ledger would accept. A daily cap or another owner's hold is not shown; the refusal says so when the owner asks.
 create function waldo.owner_phone_state(p_do_name text, p_at bigint, p_sig text) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
-declare o waldo.owners; c waldo.phone_sms_challenges; v_state text;
+declare o waldo.owners; c waldo.phone_sms_challenges; v_state text; v_retry timestamptz;
 begin
   if not waldo.router_signed('phonestate.' || p_do_name, p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
@@ -226,9 +231,13 @@ begin
     when c.state = 'sending' and c.recipient_hold_until <= now() then 'unknown'
     when c.state in ('pending', 'checking') and c.expires_at <= now() then 'expired'
     else c.state end;
+  v_retry := case
+    when v_state in ('pending', 'checking') then case when c.sends >= 3 then c.expires_at else c.next_send end
+    when v_state = 'sending' or c.state = 'unknown' then c.recipient_hold_until end;
   return jsonb_build_object('phone', o.phone, 'verified', o.phone_verified_at is not null,
     'challenge', case when v_state is null then null
-      else jsonb_build_object('state', v_state, 'expires_at', extract(epoch from c.expires_at)::bigint) end);
+      else jsonb_build_object('state', v_state, 'expires_at', extract(epoch from c.expires_at)::bigint,
+        'retry_at', case when v_retry > now() then extract(epoch from v_retry)::bigint end, 'checks_left', 5 - c.checks) end);
 end $$;
 
 revoke all on function waldo.phone_sms_transition(text, text, bigint, text), waldo.owner_phone_state(text, bigint, text) from public;

@@ -174,8 +174,9 @@ describe('what never leaves its place', () => {
 
 describe('reading the state', () => {
   it('reads the number on file, its proof and the code in flight, signed for that owner', async () => {
-    const f = fake(() => ({ phone, verified: false, challenge: { state: 'pending', expires_at: 1_800_000_600 } }));
-    expect(await phoneSms(env, f.fetcher, () => NOW).state('owner-a')).toEqual({ phone, verified: false, sms: true, challenge: { state: 'pending', expires_at: 1_800_000_600 } });
+    const challenge = { state: 'pending', expires_at: 1_800_000_600, retry_at: 1_800_000_060, checks_left: 5 };
+    const f = fake(() => ({ phone, verified: false, challenge }));
+    expect(await phoneSms(env, f.fetcher, () => NOW).state('owner-a')).toEqual({ phone, verified: false, sms: true, challenge });
     expect(f.calls[0]!.body).toMatchObject({ p_do_name: 'owner-a' });
     expect(f.calls[0]!.body.p_sig).toBe(await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, NOW / 1000, 'phonestate.owner-a'));
   });
@@ -192,7 +193,9 @@ describe('reading the state', () => {
 
   it.each([
     [{ phone: '98000', verified: false, challenge: null }], [{ phone, verified: 'no', challenge: null }],
-    [{ phone, verified: false, challenge: { state: 'sent', expires_at: 1 } }], [{ phone, verified: false, challenge: { state: 'pending', expires_at: '1' } }],
+    [{ phone, verified: false, challenge: { state: 'sent', expires_at: 1, retry_at: null, checks_left: 5 } }], [{ phone, verified: false, challenge: { state: 'pending', expires_at: '1', retry_at: null, checks_left: 5 } }],
+    [{ phone, verified: false, challenge: { state: 'pending', expires_at: 1, retry_at: '1', checks_left: 5 } }], [{ phone, verified: false, challenge: { state: 'pending', expires_at: 1, retry_at: null, checks_left: 6 } }],
+    [{ phone, verified: false, challenge: { state: 'pending', expires_at: 1, checks_left: 5 } }],
     [{ phone, verified: false }], [[]],
   ])('a malformed read is refused, not shown: %j', async (row) => {
     await expect(phoneSms(env, fake(() => row).fetcher, () => NOW).state('owner-a')).rejects.toThrow('phone state shape');
