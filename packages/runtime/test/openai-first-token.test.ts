@@ -73,4 +73,29 @@ describe('first-token timeout', () => {
     expect(result.ok && result.response.text).toBe('From the fallback.');
     expect(asked.filter((model) => model === OPENAI_GPT_6_1_SOL_MODEL)).toHaveLength(1);
   });
+
+  // Sol's first output comes at 200 ms against a 50 ms window: late for a streamed call, an answer for an unstreamed one.
+  const routed = (breaker: InMemoryCircuitBreaker) => {
+    const openai = new OpenAIResponsesAdapter({ apiKey: 'synthetic-key-0123456789', client: slowClient(200), firstTokenTimeoutMs: 50 });
+    const opusAdapter: LLMGatewayAdapter = { complete: async (input) => ({ ok: true, data: { model: input.request.model, text: 'From the fallback.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } }) };
+    const ask = (streamed: boolean) => new RuntimeLLMProvider({ gateway: { complete: (input) => routedGateway({ [OPENAI_PROVIDER]: openai, [ANTHROPIC_PROVIDER]: opusAdapter }).complete(streamed ? { ...input, stream: sink } : input) }, circuitBreaker: breaker }).complete({
+      trigger: 'user_message',
+      policy: { routes: [{ trigger: 'user_message', primary: { ...sol, max_tokens: 4096 }, fallback: [{ ...opus, max_tokens: 16_000 }], floor: 'template' }], escalation: [], template_fallback: true },
+      renderRequest: () => ({ system: 'Be concise.', messages: [{ role: 'user', content: 'Plan my day.' }], max_tokens: 32, temperature: 0 }),
+    }, { authenticatedUserId: 'owner', trigger: 'user_message', canaryTokens: ['0123456789abcdef', 'fedcba9876543210', 'aaaabbbbccccdddd'], sourceTaint: null, toolArgSourceTaint: null, hasApproval: () => true, sanitise: (input: { payload: unknown; source_taint: unknown }) => ({ ok: true, payload: input.payload, source_taint: input.source_taint, redactions: [] }) } as never);
+    return ask;
+  };
+
+  it('a late first token is not a provider failure: after four, an unstreamed call still reaches OpenAI', async () => {
+    const breaker = new InMemoryCircuitBreaker();
+    const ask = routed(breaker);
+    for (let call = 0; call < 4; call += 1) {
+      const streamed = await ask(true);
+      expect(streamed.ok && streamed.response.text).toBe('From the fallback.');
+    }
+    expect(breaker.isOpen(OPENAI_PROVIDER)).toBe(false);
+    const plain = await ask(false);
+    expect(plain.ok && plain.response.text).toBe('Your day.');
+  });
+
 });
