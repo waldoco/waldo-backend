@@ -1470,7 +1470,10 @@ it('an iMessage turn that sent a progress note keeps the alarm for the owner\'s 
   try {
     await handedTurn(w, 'Book me a table somewhere quiet tonight');
     expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Working through your request now.']);
-    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+    // The note wakes nothing: the reminder keeps its entry, and the alarm holds the schedule's next one.
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBe(due);
+    expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 20_000);
 
