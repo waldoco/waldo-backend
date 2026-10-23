@@ -152,7 +152,8 @@ export const taskHost = (deps: TaskHostDeps) => {
       const row = deps.book.claim(ticket);
       if (row === 'parked') {
         fence(ticket.jobId);
-        hop(deps.book.get(ticket.jobId)!, 'task_parked', { ok: false, code: 'uncertain_effect' });
+        const parked = deps.book.get(ticket.jobId)!;
+        hop(parked, 'task_parked', { ok: false, code: parked.park_reason ?? 'uncertain_effect' });
         return 'fenced';
       }
       if (row === 'fenced' || row.kind !== 'task' || row.profile === null) return 'fenced';

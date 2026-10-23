@@ -545,6 +545,16 @@ describe('the task brain host', () => {
     });
   });
 
+  it('a worker rejoining past its job\'s deadline is parked as out of time, and the trace says so', async () => {
+    await withHost(async ({ host, ticket, book, clock, log }) => {
+      const t = ticket('reader');
+      clock.at = book.get(t.jobId)!.deadline_at + 60 * 60_000;
+      expect(await host.claim(t)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'deadline' });
+      expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ code: 'deadline' });
+    });
+  });
+
   it('a busy job past its deadline still ends: its running call is then fenced', async () => {
     await withHost(async ({ ticket, book, clock }) => {
       const t = ticket('errand');

@@ -92,7 +92,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
       try {
-        if (row.park_reason) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone), () => settle(row));
+        if (row.park_reason) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone, row.park_reason), () => settle(row));
         else settle(row);
       } catch (error) { if (!(error instanceof ClosedRunError)) throw error; }
       logSettled();
@@ -126,7 +126,12 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const retry = async (row: JobRow) => {
     const brief = retryBrief(row);
     const ticket = book.startAttempt(row.id);
-    if (!ticket) return;
+    if (!ticket) {
+      // Its promised time is long gone: the owner hears it was missed instead of getting a late answer.
+      const parked = book.get(row.id);
+      if (parked?.status === 'reported' && parked.park_reason) { hop(row, 'retry_turn_parked', { ok: false, code: parked.park_reason }); await apply(parked); }
+      return;
+    }
     const current = async () => { if (book.get(row.id)?.lease_token !== ticket.token) throw new ClosedRunError(); };
     let reply: string | null;
     try {
@@ -172,7 +177,11 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (row.kind === 'retry_turn') { await retry(row); continue; }
     if (book.runningTasks() >= TASK_MAX_RUNNING) { slotsFull = true; continue; }
     const ticket = book.startAttempt(row.id);
-    if (!ticket) continue;
+    if (!ticket) {
+      const parked = book.get(row.id);
+      if (parked?.park_reason) hop(row, 'task_parked', { ok: false, code: parked.park_reason });
+      continue;
+    }
     try {
       await deps.startWorker(ticket);
       hop(row, 'task_started', { detail: `attempt=${ticket.attempt}:crashes=${row.crashes}` });

@@ -7,7 +7,8 @@ import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, TASK_LEASE_MS, TASK_MAX_RUNNING, type CreateJob, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { promiseRetry } from '../src/tasks/retry-turn';
-import { fixedReport, progressNote } from '../src/prompt/fixed-lines';
+import { fixedReport, progressNote, retryParkedNotice } from '../src/prompt/fixed-lines';
+import { JOB_START_GRACE_MS } from '../src/tasks/jobs';
 
 // The jobs lane over the real job book on Durable Object SQLite, with the model turn, the worker start and the outbox as
 // fakes. The outbox fake keys records by id the way the final outbox does, and runs the job's commit in the same step as
@@ -291,6 +292,27 @@ describe('R-4: the retried turn', () => {
       expect(sent.get(`retry:${job!.id}`)).toBe('I still can\'t reach my model, so I couldn\'t answer your message from 08:00. Could you send it again in a little while?');
       expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'provider_unavailable' });
     });
+  });
+
+  it('a retry whose wake comes well past the promised time is not answered late: the owner hears it was missed', async () => {
+    await withLane(async ({ book, sent, clock, deps, turns }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at = JSON.parse(job!.brief_json).promised_by + JOB_START_GRACE_MS + 1;
+      await runJobsLane(deps());
+      expect(turns).toEqual([]);
+      expect(sent.get(`retry:${job!.id}`)).toBe('I couldn\'t get back to you by 08:30 as I said, so your message from 08:00 is still unanswered. Could you send it again?');
+      expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'deadline' });
+    });
+  });
+
+  it('a parked retry tells the owner why in words that fit the reason', () => {
+    const brief = { message_ref: 'm', text: 'hi', conversation_ref: 'c', said_at: Date.UTC(2027, 0, 1, 8, 0), promised_by: Date.UTC(2027, 0, 1, 8, 30) };
+    expect(retryParkedNotice(brief, 'UTC', 'provider_unavailable')).toMatch(/can't reach my model/);
+    for (const reason of ['deadline', 'crashed', 'uncertain_effect', 'brief_changed'] as const) {
+      expect(retryParkedNotice(brief, 'UTC', reason)).not.toMatch(/model/);
+      expect(retryParkedNotice(brief, 'UTC', reason)).toMatch(/08:00/);
+    }
   });
 
   it('a message with health values is not kept in the job; the retry says where to find it', async () => {

@@ -12,9 +12,14 @@ export const ownerTime = (at: number, timezone: string): string =>
 export const floorReplyText = (promised: number, timezone: string): string =>
   `I can't answer properly right now. I'll come back to you by ${ownerTime(promised, timezone)}.`;
 
-// The retry's promised time came and still no model answered.
-export const retryParkedNotice = (brief: RetryBrief, timezone: string): string =>
-  `I still can't reach my model, so I couldn't answer your message from ${ownerTime(brief.said_at, timezone)}. Could you send it again in a little while?`;
+// A retry that stopped without answering, said for why it stopped: no model by the promised time, a wake that came only after
+// it, or a run that kept failing.
+export const retryParkedNotice = (brief: RetryBrief, timezone: string, reason: ParkReason): string => {
+  const said = ownerTime(brief.said_at, timezone);
+  if (reason === 'provider_unavailable') return `I still can't reach my model, so I couldn't answer your message from ${said}. Could you send it again in a little while?`;
+  if (reason === 'deadline') return `I couldn't get back to you by ${ownerTime(brief.promised_by, timezone)} as I said, so your message from ${said} is still unanswered. Could you send it again?`;
+  return `Something kept going wrong while I answered your message from ${said}, so it is still unanswered. Could you send it again?`;
+};
 
 // Why a task stopped, as the owner hears it.
 export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {

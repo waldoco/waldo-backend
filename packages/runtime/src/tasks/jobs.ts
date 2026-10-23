@@ -45,6 +45,10 @@ export const TASK_LEASE_MS = 120_000;
 export const TASK_MAX_CRASHES = 3;
 // A job may wait hours, such as for a live-view login, but never forever.
 export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
+// A job is not started or rejoined past its deadline: it parks, and the owner hears it ran out of time, rather than getting
+// work or an answer they stopped waiting for. A wake set for the deadline itself fires a little after it, and that last try
+// still runs, so the deadline holds after this much grace.
+export const JOB_START_GRACE_MS = 5 * 60_000;
 // Task workers one owner runs at once. Each makes model calls back to back, so more at once multiplies the owner's spend per
 // minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
 // starts when a running one reports.
@@ -138,9 +142,12 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       const now = deps.now();
       const row = sql.exec<{ attempt: number }>(
         `UPDATE task_jobs SET status = 'running', attempt = attempt + 1, lease_token = ?, lease_until = ?, due_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'queued' RETURNING attempt`, token, now + TASK_LEASE_MS, now, id,
+         WHERE id = ? AND status = 'queued' AND deadline_at + ? >= ? RETURNING attempt`, token, now + TASK_LEASE_MS, now, id, JOB_START_GRACE_MS, now,
       ).toArray()[0];
-      return row ? { jobId: id, attempt: row.attempt, token } : null;
+      if (row) return { jobId: id, attempt: row.attempt, token };
+      const late = get(id);
+      if (late?.status === 'queued' && late.deadline_at + JOB_START_GRACE_MS < now) park(id, 'deadline');
+      return null;
     },
     // Intent before an effect that cannot be replayed: the call is recorded on the job before it runs, and cleared only by
     // the checkpoint or report that records its result. Until then the worker's own copy of the result is the only one, so an
@@ -153,8 +160,9 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     claim(ticket: TaskTicket): JobRow | Fenced | 'parked' {
       if (!renew(ticket)) return 'fenced';
       const row = get(ticket.jobId)!;
-      if (row.inflight_json === null) return row;
-      return park(row.id, 'uncertain_effect') ? 'parked' : 'fenced';
+      const reason: ParkReason | null = row.inflight_json !== null ? 'uncertain_effect' : deps.now() > row.deadline_at + JOB_START_GRACE_MS ? 'deadline' : null;
+      if (reason === null) return row;
+      return park(row.id, reason) ? 'parked' : 'fenced';
     },
     // Every brain-side tool call renews the lease and records whether the job has read external content.
     touch(ticket: TaskTicket, taint: 'external' | null): boolean {
