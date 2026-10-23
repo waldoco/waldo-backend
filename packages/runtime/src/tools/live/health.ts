@@ -147,7 +147,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own readings from their health plane, by the reading's local day: time asleep (never time in bed) and the night's light, deep, REM and awake minutes, sleep efficiency, sleep midpoint, overnight HRV labelled rmssd or sdnn (never blended), resting, mean and walking heart rate, breathing rate and blood oxygen (the day's mean), wrist temperature labelled absolute or a delta against the watch's own baseline (never blended), one-minute heart-rate recovery after workouts, VO2 max, steps, active energy, and movement, daylight, workout and mindful minutes. Daily values or a summary, for at most 31 days ending no later than today. One source per signal. When unavailable, the reason says why: consent, link, no readings or a failed read. The numbers stay in this turn: nothing is stored or logged.",
+    "The owner's own readings from their health plane, by local day. Sleep is time asleep, never time in bed. Overnight HRV and wrist temperature carry their method and are never blended. Heart rate, breathing rate, blood oxygen and hr_recovery (the drop in the minute after a workout) are day means. Daily values or a summary, for at most 31 days ending no later than today. One source per signal. The numbers stay in this turn: nothing is stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
