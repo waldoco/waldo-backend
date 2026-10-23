@@ -116,7 +116,7 @@ export const handleWhoopCallback = async (request: Request, env: WhoopRoutesEnv)
   const params = new URL(request.url).searchParams;
   const state = params.get('state') ?? '', error = params.get('error'), code = params.get('code');
   if (!STATE.test(state)) { log('bad_state'); return whoopPage(error ? 'denied' : 'invalid'); }
-  // Checked before anything else is asked, so a forwarded sign-in or an injected code neither links nor settles the attempt.
+  // Checked before anything else is asked, so a callback landing in a browser that did not start the attempt neither links nor settles it. WHOOP has no PKCE, so a code injected into the starting browser is not stopped here.
   const browser = await checkBrowser(request, bindingSecret, 'whoop', state, Date.now());
   if (browser !== 'bound') { log(`browser_${browser}`); return whoopPage('unbound'); }
   try { if (await throttled(env, request, 'whoop-callback')) return slowDown(); } catch { return whoopPage('failed'); }

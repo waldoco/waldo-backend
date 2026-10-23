@@ -37,8 +37,11 @@ h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}strong{col
 
 // A connect link handed to a surface that holds the owner's session (the app) carries a one-time code in ?handoff=. The
 // first GET that presents it redeems it and binds that browser to this hop; every later step of the hop needs that
-// binding. So the link copied out before it was opened, the spent link afterwards, or the bare start address, opened in
-// any other browser, binds nothing and redirects nowhere. Chat links carry no code, because no owner session exists there.
+// binding. So once the code is spent or past its lifetime, the link or the bare start address opened in any other
+// browser binds nothing and redirects nowhere. The code does not say who opens it: whichever browser loads a coded link
+// first, including one the owner forwarded unopened, is the one bound, and the confirm page's masked owner hint plus
+// the Continue press is what stands between that browser and the owner's Waldo. Chat links carry no code, because no
+// owner session exists there.
 export const HANDOFF_PARAM = 'handoff';
 const HANDOFF = /^[A-Za-z0-9_-]{22}$/;
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
