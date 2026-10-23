@@ -19,8 +19,8 @@ type ChatEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace;
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
 
-// Forged requests: the cookies are SameSite=Strict already; a credentialed call must also come from this origin and
-// carry the console header. Origin is required on a write, since browsers always send it there.
+// Forged requests: the cookies are SameSite=Lax, so a cross-site read could carry them; a credentialed call must also
+// come from this origin and carry the console header. Origin is required on a write, since browsers always send it there.
 const sameSite = (request: Request, url: URL): boolean => {
   if (request.headers.get(CONSOLE_CHAT_HEADER) !== '1') return false;
   const site = request.headers.get('sec-fetch-site');

@@ -2,6 +2,7 @@ import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
 
 const memoryStore = () => {
   const data = new Map<string, unknown>();
@@ -56,7 +57,7 @@ describe('owner console', () => {
     await access.signOut(cookie!);
     expect(await access.session(cookie)).toBeNull();
     const again = await access.redeem(new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!);
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.session(again)).toBeNull();
     const late = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     now += 11 * 60_000;
@@ -72,8 +73,8 @@ describe('owner console', () => {
     const again = await access.redeem(await mint(), cookie);
     expect(again).toBe(cookie);
     const refreshed = await access.session(cookie);
-    expect(refreshed?.expires).toBe(now + 12 * 60 * 60_000);
-    now += 11 * 60 * 60_000;
+    expect(refreshed?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    now += CONSOLE_SESSION_IDLE_MS - 1;
     expect(await access.session(cookie)).not.toBeNull();
   });
 
@@ -94,7 +95,7 @@ describe('owner console', () => {
     const timed = consoleAccess(store, () => clock);
     const mintTimed = async () => new URL(await timed.mintLink('https://waldo.example')).searchParams.get('t')!;
     const old = (await timed.redeem(await mintTimed()))!;
-    clock += 13 * 60 * 60_000;
+    clock += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await timed.session(old)).toBeNull();
     const fresh = (await timed.redeem(await mintTimed(), old))!;
     expect(fresh).not.toBe(old);
@@ -109,7 +110,7 @@ describe('owner console', () => {
     const a = (await access.redeem(await mint()))!;
     const b = (await access.redeem(await mint()))!;
     expect((await access.list()).map((session) => session.token).sort()).toEqual([a, b].sort());
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.list()).toEqual([]);
     const c = (await access.redeem(await mint()))!;
     const d = (await access.redeem(await mint()))!;

@@ -2,7 +2,7 @@ import { withRequestTimeout } from '../identity/request-timeout';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { signupAuth, SIGNUP_COOKIE, SIGNUP_TTL_SECONDS, type SignupAuth, type SignupProgress } from '../identity/console-signup';
-import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_COOKIE, CONSOLE_PATH, consoleCookie } from './console';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 
 export const CONSOLE_SIGNUP_PATH = '/console/signup';
@@ -118,9 +118,8 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       const ownerCookie = await auth.ownerCookie(doName);
       if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
       const headers = new Headers({ location: CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' });
-      const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
-      headers.append('set-cookie', `${CONSOLE_COOKIE}=${grant}; ${cookie}`);
-      headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; ${cookie}`);
+      headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, grant));
+      headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
       headers.append('set-cookie', `${SIGNUP_COOKIE}=; Path=${CONSOLE_SIGNUP_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
       consoleLog(trace, 'console_signup', true, 'signed_in');
       return new Response(null, { status: 303, headers });

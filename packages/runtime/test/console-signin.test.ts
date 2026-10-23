@@ -27,7 +27,7 @@ it('finishes download OTP with an HTML link and unchanged cookie protections', a
     auth({ verify: async () => 'do-a' })))!;
   expect(response.status).toBe(200);
   expect(response.headers.get('location')).toBeNull();
-  expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+  expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
   expect(await response.text()).toContain('id="signin-download"');
 });
 
@@ -45,7 +45,7 @@ it('returns a signed-out owner to the devices page after sign-in so Kennel pairi
     auth({ verify: async () => 'do-a' })))!;
   expect(verified.status).toBe(303);
   expect(verified.headers.get('location')).toBe('/console/devices');
-  expect(verified.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+  expect(verified.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
 });
 it('accepts exactly the devices path as a non-download continuation', () => {
   expect(consoleReturnTarget(['/console/devices'])).toBe('/console/devices');
@@ -243,8 +243,8 @@ describe('handleConsole', () => {
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
     const cookies = [...response.headers].filter(([name]) => name === 'set-cookie').map(([, value]) => value);
-    expect(cookies.some((cookie) => cookie.startsWith('waldo_console=session-token;') && cookie.includes('HttpOnly') && cookie.includes('SameSite=Strict'))).toBe(true);
-    expect(cookies.some((cookie) => cookie.startsWith('waldo_owner=do-a.session.sig;'))).toBe(true);
+    expect(cookies).toContain('waldo_console=session-token; Path=/console; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
+    expect(cookies).toContain('waldo_owner=do-a.session.sig; Path=/console; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
   });
 
   it('a wrong code wakes no owner DO', async () => {

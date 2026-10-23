@@ -8,6 +8,7 @@ import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
+import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
@@ -17,18 +18,31 @@ export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
 export const CONSOLE_RUNS_PATH = `${CONSOLE_PATH}/runs`;
 export const CONSOLE_COOKIE = 'waldo_console';
 const LINK_MS = 10 * 60_000;
-const SESSION_MS = 12 * 60 * 60_000;
+// A session granted before the lifetime change has no signed_in and keeps its fixed 12 hours.
+const LEGACY_SESSION_MS = 12 * 60 * 60_000;
+// A used session renews at most this often, so a page that polls does not write storage on every request.
+const RENEW_STEP_MS = 60 * 60_000;
+
+// Both console cookies share one policy. Lax lets a link from mail, a website or a chat app open the console signed in;
+// a cross-site write, or a cross-site start of a flow a GET begins, is refused before any handler (console-cross-site.ts).
+// The cookie lives the absolute lifetime; the server ends the session sooner when it goes unused.
+export const consoleCookie = (name: string, value: string): string =>
+  `${name}=${value}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${CONSOLE_SESSION_LIFETIME_MS / 1000}`;
+export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
-export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number }>;
+// expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
+// signed_in plus the lifetime.
+export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number }>;
 
-// One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
-// signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
+// One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
+// name is recorded. Tokens never leave this function.
 export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
-  [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
-    signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
+  [...sessions].sort((a, b) => signedInAt(b) - signedInAt(a)).map((session) => ({
+    signed_in: localIso(signedInAt(session), timezone).slice(0, 16).replace('T', ' '),
     until: localIso(session.expires, timezone).slice(0, 16).replace('T', ' '),
     current: session.token === current.token,
   }));
@@ -45,7 +59,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     else await store.delete('console:sessions');
   };
   const addSession = async (): Promise<string> => {
-    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
+    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS };
     const sessions = await readSessions();
     sessions[session.token] = session;
     await writeSessions(sessions);
@@ -67,17 +81,26 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
         const sessions = await readSessions();
         const existing = sessions[current];
         if (existing && existing.expires >= now()) {
-          sessions[current] = { ...existing, expires: now() + SESSION_MS };
+          sessions[current] = { ...existing, signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS };
           await writeSessions(sessions);
           return current;
         }
       }
       return addSession();
     },
+    // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime.
     async session(token: string | null): Promise<ConsoleSession | null> {
       if (!token) return null;
-      const session = (await readSessions())[token];
-      return session && session.expires >= now() ? session : null;
+      const sessions = await readSessions();
+      const session = sessions[token];
+      if (!session || session.expires < now()) return null;
+      if (session.signed_in === undefined) return session;
+      const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS);
+      if (expires - session.expires < RENEW_STEP_MS) return session;
+      const renewed = { ...session, expires };
+      sessions[token] = renewed;
+      await writeSessions(sessions);
+      return renewed;
     },
     grant: addSession,
     async signOut(token: string): Promise<void> {

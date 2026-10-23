@@ -13,7 +13,8 @@ import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
-import { CONSOLE_PATH } from './channels/console';
+import { CONSOLE_PATH, consoleCookie } from './channels/console';
+import { consoleCrossSiteRefusal } from './channels/console-cross-site';
 import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
@@ -115,7 +116,7 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`);
+  headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, headers });
 };
@@ -124,6 +125,8 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
     oauthStateSecret(env);
+    const crossSite = consoleCrossSiteRefusal(request);
+    if (crossSite) return crossSite;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));

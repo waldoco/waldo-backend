@@ -204,7 +204,7 @@ it('routes two fresh email-only members and an existing member to distinct canon
       return json(created.get(body.p_auth_user));
     }
     const key = `${body.p_do_name}:${body.p_session_hash}`;
-    if (url.endsWith('/console_session_open')) { sessions.add(key); return json(true); }
+    if (url.endsWith('/console_session_open_for')) { sessions.add(key); return json(true); }
     if (url.endsWith('/console_session_touch')) return json(sessions.has(key));
     throw new Error('unexpected fixture endpoint');
   });

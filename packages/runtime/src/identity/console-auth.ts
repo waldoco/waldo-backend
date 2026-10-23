@@ -2,6 +2,12 @@ import { withRequestTimeout } from './request-timeout';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
+// A console sign-in stays signed in while it is used: it ends 7 days after its last signed-in request, and 30 days
+// after sign-in however much it is used. The directory row and the owner object's own session both enforce it, and
+// the database refuses a row past 30 days. Email codes are a single factor, so 30 days is NIST SP 800-63B-4's AAL1
+// reauthentication ceiling; the app bearer keeps its own 12 hours.
+export const CONSOLE_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
 
 export type AdminOverview = Readonly<{
   owners: readonly Readonly<{ id?: string; email: string | null; state: string; created_at: string; presences: readonly string[]; issued_count?: number }>[];
@@ -89,10 +95,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   const appSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `appbearer.${doName}.${sessionId}`);
-  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+  const lifetime = CONSOLE_SESSION_LIFETIME_MS / 1000, idle = CONSOLE_SESSION_IDLE_MS / 1000;
+  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>, kind: 'console' | 'app'): Promise<string | null> => {
     const sessionId = newSessionId();
     const sessionHash = await linkCodeHash(sessionId);
-    const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    const opened = kind === 'console'
+      ? await rpc('console_session_open_for', `consolesess.openfor.${doName}.${sessionHash}.${lifetime}.${idle}`, { p_do_name: doName, p_session_hash: sessionHash, p_lifetime_seconds: lifetime, p_idle_seconds: idle })
+      : await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
     if (opened !== true) return null;
     return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
   };
@@ -183,12 +192,12 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    ownerCookie: (doName) => mint(doName, cookieSig),
+    ownerCookie: (doName) => mint(doName, cookieSig, 'console'),
     readOwnerCookie: (request) => readSigned(
       (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
       cookieSig,
     ),
-    ownerAppCredential: (doName) => mint(doName, appSig),
+    ownerAppCredential: (doName) => mint(doName, appSig, 'app'),
     readAppCredential: (credential) => readSigned(credential, appSig),
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });

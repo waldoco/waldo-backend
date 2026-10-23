@@ -8,14 +8,17 @@ export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'u
 // the receipt without it, so a replayed request never shows the value again.
 export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string;to?:string}>;
 export type RevealingReceipt=Readonly<{receipt:ControlReceipt;reveal:ControlReveal}>;
-export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;approval_state?:string}>;
+export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;kept_until?:number;approval_state?:string}>;
 type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,value:unknown):Promise<void>}>;
 export const RECEIPT_BOOK_KEY='console:control-receipts';
-// One receipt book per owner: rows live while their session does, and a session's capacity is bounded.
+// One receipt book per owner: rows live while their session does, but no longer than RECEIPT_RETENTION_MS after they
+// were written, and a session's capacity is bounded. A console session lasts up to 30 days, so without that bound a busy
+// session would fill its capacity and refuse changes for weeks.
+export const RECEIPT_RETENTION_MS=12*60*60_000;
 export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly {csrf:string;expires:number}[]>,key=RECEIPT_BOOK_KEY):Promise<Record<string,StoredReceipt>>{
  const book=await store.get<Record<string,StoredReceipt>>(key)??{};
  const live=new Map(await Promise.all((await sessions()).map(async session=>[await controlRevision(session.csrf),session.expires] as const)));
- for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:renewed};if((book[id]?.expires??0)<Date.now())delete book[id];}
+ for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:Math.min(renewed,row.kept_until??renewed)};if((book[id]?.expires??0)<Date.now())delete book[id];}
  return book;
 }
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
@@ -114,7 +117,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(await controlRevision(projection)!==form.get('revision'))return reply({error:'stale_read',message:'These records changed. Refresh and review again before applying a change.'},409);
  const rows=Object.hasOwn(listedRows,view)?listedRows[view]:undefined;
  if(rows?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
- const pending:StoredReceipt={fingerprint,expires:deps.expires,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
+ const kept_until=Date.now()+RECEIPT_RETENTION_MS,expires=Math.min(deps.expires,kept_until);
+ const pending:StoredReceipt={fingerprint,expires,kept_until,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
  book[key]=pending;await deps.store.put(bookKey,book);
  let receipt:ControlReceipt,status=200,reveal:ControlReveal|undefined;
  try{
@@ -123,7 +127,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
   receipt=typeof result==='object'?result:typeof result==='string'?result===action.action?{state:'recorded',message:NOTICES[result]??'The change was recorded.'}:(result==='spot.forget.incomplete'||result==='node.forget.incomplete')?{state:'incomplete',message:NOTICES[result]!}:result==='invalid'||result.endsWith('.failed')?{state:'rejected',message:NOTICES[result]??'The change could not be applied.'}:pending.receipt:result?{state:'recorded',message:NOTICES[action.action]??'The change was recorded.'}:{state:'rejected',message:'That change could not be applied. Refresh the records and try again.'};
   if(receipt.state==='rejected')status=409;else if(receipt.state==='unconfirmed')status=503;
  }catch{receipt=pending.receipt;status=503;}
- book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put(bookKey,book);
+ book[key]={fingerprint,status,receipt,expires,kept_until};await deps.store.put(bookKey,book);
  return reply({receipt,duplicate:false,...(reveal&&receipt.state==='recorded'?{reveal}:{})},status);
 }
 

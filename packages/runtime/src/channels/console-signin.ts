@@ -7,7 +7,7 @@ import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, consoleCookie } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
@@ -303,11 +303,10 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event('console_verify', false, 'session_unavailable');
       return finish(codeForm(email, phone, invite, 'Sign-in is having trouble. Try again in a moment.'));
     }
-    const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
     const terminal = target && !redirectReturnTarget([target]) ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
     const headers = new Headers(terminal?.headers ?? { location: target ?? CONSOLE_PATH });
-    headers.append('set-cookie', `${CONSOLE_COOKIE}=${await grant.text()}; ${cookie}`);
-    headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookieValue}; ${cookie}`);
+    headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, await grant.text()));
+    headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookieValue));
     event('console_verify', true, 'signed_in');
     return finish(new Response(terminal?.body ?? null, { status: terminal ? 200 : 303, headers }));
   }
@@ -328,9 +327,8 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       await Promise.all(hashes.map(hash => fenceSession(env, owners, doName, hash)));
     }
     const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
-    const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
-    headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
-    headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
+    headers.append('set-cookie', clearConsoleCookie(CONSOLE_COOKIE));
+    headers.append('set-cookie', clearConsoleCookie(OWNER_COOKIE));
     event('console_route', true, 'signed_out_all');
     return finish(new Response(null, { status: 303, headers }));
   }

@@ -46,7 +46,7 @@ describe('dashboard control owner route and real executors',()=>{
   const response=await postAction(stub,token,read,{view:'connections',action:'session.signout',request_id:'signout-request-01'});
   expect(response.status).toBe(200);expect(await response.json()).toMatchObject({receipt:{state:'recorded',signed_out:true}});
   const cookies=(response.headers as unknown as {getSetCookie():string[]}).getSetCookie();expect(cookies).toHaveLength(2);
-  for(const name of ['waldo_console','waldo_owner'])expect(cookies.find(value=>value.startsWith(name+'='))).toBe(`${name}=; Path=/console; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+  for(const name of ['waldo_console','waldo_owner'])expect(cookies.find(value=>value.startsWith(name+'='))).toBe(`${name}=; Path=/console; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
   expect((await stub.fetch(root+CONTROLS_PATH+'?view=connections',{headers:apiHeaders(token)})).status).toBe(401);
   expect((await postAction(stub,token,read,{view:'connections',action:'session.signout',request_id:'signout-request-01'})).status).toBe(401);
  });
