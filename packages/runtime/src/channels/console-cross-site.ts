@@ -1,14 +1,9 @@
-import { MCP_START_PATH } from '../connectors/mcp-connections';
 import { fromAnotherSite } from '../identity/console-auth';
-import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
-import { CONSOLE_GOOGLE_START_PATH, CONSOLE_PATH } from './console';
-import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
+import { CONSOLE_PATH } from './console';
+import { startsConsoleFlow } from './console-step-up';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 const underConsole = (path: string) => path === CONSOLE_PATH || path.startsWith(`${CONSOLE_PATH}/`);
-// GETs that begin a flow rather than read. A new one belongs here, or behind a POST.
-const startsFlow = (path: string) => [MCP_START_PATH, CONSOLE_GOOGLE_START_PATH].some(start => path.startsWith(start) && path.length > start.length)
-  || path === CONSOLE_PHOTON_START_PATH || path === BROWSER_TRIAL_PATH;
 
 const refused = () => new Response('This request must come from the Waldo console.', {
   status: 403, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
@@ -25,7 +20,7 @@ export const consoleCrossSiteRefusal = (request: Request): Response | null => {
   const url = new URL(request.url);
   if (!underConsole(url.pathname)) return null;
   const site = request.headers.get('sec-fetch-site');
-  if (SAFE.has(request.method)) return startsFlow(url.pathname) && fromAnotherSite(request) ? refused() : null;
+  if (SAFE.has(request.method)) return startsConsoleFlow(url.pathname) && fromAnotherSite(request) ? refused() : null;
   const header = request.headers.get('origin');
   const origin = header === 'null' ? null : header;
   if (origin !== null && origin !== url.origin) return refused();
