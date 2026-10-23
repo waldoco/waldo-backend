@@ -26,6 +26,9 @@ describe('a calendar change that can move the owner\'s today', () => {
     expect(touchesDay(change({ start: '2026-10-20T23:00:00+05:30', end: '2026-10-21T01:00:00+05:30' }), '2026-10-21', TZ)).toBe(true);
     expect(touchesDay(change({ start: '2026-10-21', end: '2026-10-22', all_day: true }), '2026-10-21', TZ)).toBe(true);
     expect(touchesDay(change({ start: '2026-10-22', end: '2026-10-23', all_day: true }), '2026-10-21', TZ)).toBe(false);
+    // Google's all-day end is the day after the last one: yesterday's all-day event ends "today" and is not today's.
+    expect(touchesDay(change({ start: '2026-10-20', end: '2026-10-21', all_day: true }), '2026-10-21', TZ)).toBe(false);
+    expect(touchesDay(change({ start: '2026-10-19', end: '2026-10-23', all_day: true }), '2026-10-21', TZ)).toBe(true);
     // A cancelled event comes back without times, so it may have been today's.
     expect(touchesDay(change({ status: 'cancelled', start: '', end: '', all_day: true }), '2026-10-21', TZ)).toBe(true);
     expect(touchesDay({ source: 'mail', kind: 'new', detail: '{}' }, '2026-10-21', TZ)).toBe(false);
