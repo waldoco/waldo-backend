@@ -62,6 +62,7 @@
 - **24 months of daily aggregates** with a full deletion story.
 - **A closed catalogue of statistically tested patterns** the owner can see, correct and delete.
 - **A `HealthPlanningContext`** that gives the model dated, worded statements. Code computes and the model judges.
+- **Energy windows learned from Exoplan's published method** (§3.6): aligned to waking, per weekday, scaled by that morning's Recovery, and used by The Brief and "plan my day" through the existing approval cards.
 
 ### 1.1 What this changes in earlier decisions
 
@@ -147,7 +148,7 @@ Two more points cut across both camps:
 | Samsung stress | HR (plus "other factors"). No baseline described [V46]. | UNCONFIRMED | — | Unavailable at extreme HR [V46] |
 | Fitbit Resilience / Body Responses | Responsiveness (HR, HRV, EDA), exertion balance, sleep [V52] | UNCONFIRMED | UNCONFIRMED | UNCONFIRMED |
 | **Waldo today** (inside `form.candidate.v4`) | Awake, non-workout hours' mean HR. RMSSD hourly HRV only, so **Apple SDNN is ignored** (`form.ts:35`). | 14 of 30 days, matched hours | Unavailable for 14 days | Fewer than 8 hours of HR: no stress part |
-| **Waldo v2** (inside `form.candidate.v6`) | #1399's sedentary HR, plus hourly HRV of whichever method the day has, against that method's own baseline | 60 days | Personal-only, joins at 7 days (§3.1) | As today |
+| **Waldo v2** (inside `form.candidate.v7`) | #1399's sedentary HR, plus hourly HRV of whichever method the day has, against that method's own baseline | 60 days | Personal-only, joins at 7 days (§3.1) | As today |
 
 ### 2.5 Body battery / energy
 
@@ -156,12 +157,13 @@ Two more points cut across both camps:
 | Garmin Body Battery (0–100) | HRV, stress, sleep, activity, scaled by VO2max. Charges in rest, drains with stress and activity [V28][V29]. No Firstbeat white paper exists for it [V33]. | UNCONFIRMED | UNCONFIRMED. Firstbeat's underlying stress/recovery method is population-seeded [V30]. | UNCONFIRMED |
 | Samsung Energy Score | See 2.1. Described as an "energy reservoir" model [V42]. | — | "A few days" [V43] | UNCONFIRMED |
 | WHOOP, Oura, Apple, Fitbit | No equivalent found; the nearest are Recovery and Readiness [inference from the pages read] | — | — | — |
+| Exoplan energy prediction (added 23 Oct at the owner's request) | Resting heart rate through the day, with active energy used to drop moving time, plus sleep and wake times. Time is counted from waking up. The hours where a smoothed per-weekday curve runs above a downward-sloping line are the "energy peaks". That morning's Exo Score (sleep and heart rate) sets how long the peaks last [V69]. | 8 weeks of Apple Health data, same weekdays pooled; the author started with 12 [V69] | "A short calibration period" with a watch. Without one, the rhythm comes from the chronotype set during onboarding [V70][V71]. | Days with an unusual wake time are dropped, so travel leaves gaps. The first hour after waking, the last hour before bed and any moving time are cut [V69]. |
 | **Waldo today** `form.candidate.v4` | Recovery 0.4, movement 0.2, stress 0.2, sleep midpoint 0.1, daylight 0.1. Live all day against the same hours of earlier days. | 14 of 30 | Unavailable for 14 days | Renormalised; stale after 6 h without data |
-| **Waldo v2** `form.candidate.v6` (§3.3) | Today's inputs, plus an alertness-by-hour component from the owner's own sleep timing (two-process shape). This replaces the static midpoint term. | Midpoint history 60 days | Provisional from day 1 | As today |
+| **Waldo v2** `form.candidate.v7` (§3.3) | Today's inputs, plus an alertness-by-hour component from the owner's own sleep timing (SAFTE shape). This replaces the static midpoint term. | Midpoint history 60 days | Provisional from day 1 | As today |
 
 ## 3. Waldo's scores v2 [proposed]
 
-**Version names.** The names below stack on what other lanes already hold: #1399 has `recovery.candidate.v2`, `weight.candidate.v4` and `form.candidate.v5`, and the freshness lane (#1401, merged) has `form.candidate.v4`. This proposal claims `recovery.candidate.v3`, `form.candidate.v6`, `weight.candidate.v5`, `sleep-need.candidate.v1` and `sleep-debt.candidate.v2`, and records the claim in the shared notes folder. Each version stays `candidate_unaccepted` until a review receipt exists, as today (`scores/types.ts:64`).
+**Version names.** The names below stack on what other lanes already hold: the Apple Watch lane is building #1399 as `recovery.candidate.v2`, `weight.candidate.v4` and `form.candidate.v5` (v5 only because it builds on `recoveryBasis`), and reserves `form.candidate.v7` for #1399's sedentary-stress input (its P5). The freshness lane (#1401, merged) has `form.candidate.v4`. This proposal claims `recovery.candidate.v3`, `form.candidate.v7`, `weight.candidate.v5`, `sleep-need.candidate.v1` and `sleep-debt.candidate.v2`, and records the claim in the shared notes folder. Each version stays `candidate_unaccepted` until a review receipt exists, as today (`scores/types.ts:64`).
 
 **What doesn't change.**
 - The 0–100 mapping: `50 ± 20z`, clamped at |z| 2.5 (`stats.ts:3-35`).
@@ -266,14 +268,14 @@ Today no age or sex field exists anywhere in the backend.
 - **Previous-day activity as a Recovery input.** Oura [V10] and Apple [V35] use it. Fitbit removed it from Readiness [V49], and WHOOP folds strain into sleep need instead [V6]. Waldo already has load in Weight and in sleep need (§3.5). Adding it to Recovery too would count the same day twice.
 - **A 7-day HRV balance inside the score.** Oura [V10] and Garmin [V21] use one. Waldo keeps it as a trend driver and pattern (§5.1), so the morning number stays about last night, as WHOOP's does [V2], and the model sees the trend separately.
 
-### 3.3 Form: `form.candidate.v6`
+### 3.3 Form: `form.candidate.v7`
 
-**What v6 changes over v4/v5:**
-1. **Stress HRV per method.** The stress part takes hourly HRV of whichever method the day has, against that method's own baseline, instead of RMSSD only (`form.ts:35`). Apple owners get an HRV-informed stress part for the first time. Sedentary HR stays as #1399 v5 defines it.
+**What v7 changes over v4–v6:**
+1. **Stress HRV per method.** The stress part takes hourly HRV of whichever method the day has, against that method's own baseline, instead of RMSSD only (`form.ts:35`). Apple owners get an HRV-informed stress part for the first time. Sedentary HR is #1399's P5 input, which the Apple Watch lane numbers `form.candidate.v7`.
 2. **§3.1 baselines.** Personal-only components join at 7 days. The Recovery part is provisional from night 1.
 3. **An alertness-by-hour term replaces the sleep-midpoint term.**
    - **Today:** a static "how far is last night's midpoint from usual" (`form.ts:68-72`). It says nothing about *when* in the day the owner is sharpest. The website promises exactly that: "10:30–12:30 is your sharpest stretch", and Form "live all day, from Circadian, Motion and Stress".
-   - **v6:** a SAFTE-shaped expected effectiveness E(t), the model ADR-0011 already grounds Form in. It uses the published equations and defaults [P-Hursh 2004]:
+   - **v7:** a SAFTE-shaped expected effectiveness E(t), the model ADR-0011 already grounds Form in. It uses the published equations and defaults [P-Hursh 2004]:
      - a sleep reservoir that fills during the owner's actual sleep intervals and drains about 1 % per waking hour;
      - a two-harmonic circadian term `cos(2π(T−p)/24) + 0.5·cos(4π(T−p−3)/24)`, scaled 7 % to 12 % by the reservoir deficit;
      - sleep inertia for up to 120 minutes after waking.
@@ -284,7 +286,7 @@ Today no age or sex field exists anywhere in the backend.
    - **Share:** 0.15, taken from midpoint 0.1 and daylight 0.1 → 0.05.
 4. **The personal curve takes over.** Once an `hour_profile` pattern is supported (§5.1), its peak window is reported beside E(t) in the prompt. The shape is a prior, and the owner's own hours win. This is §3.1's idea applied to the time of day.
 
-**Shadow first.** v6 is computed beside v5 for 4 weeks and stored only in a shadow field, which no reader shows. The switch happens only if the §7.3 bar holds. This is the riskiest change here, because SAFTE's parameters are fitted to laboratory performance, not to a wrist-derived "right now" score [P-Hursh 2004][P-Hursh 2017].
+**Shadow first.** v7 is computed beside the live Form version for 4 weeks and stored only in a shadow field, which no reader shows. The switch happens only if the §7.3 bar holds. This is the riskiest change here, because SAFTE's parameters are fitted to laboratory performance, not to a wrist-derived "right now" score [P-Hursh 2004][P-Hursh 2017].
 
 ### 3.4 Weight: `weight.candidate.v5`, and Weight without a calendar
 
@@ -323,6 +325,42 @@ Today no age or sex field exists anywhere in the backend.
 | Surplus | Earns nothing back | Repays debt at half rate: a night above need subtracts 0.5 × surplus from the running shortfall, never below 0. "One long night counts it, without calling the debt paid" (website). One recovery night doesn't restore performance after restriction, even at 10 h in bed [P-Banks 2010][P-Belenky 2003], and 1 h of debt took about 4 days to recover [P-Kitamura 2016]. The 0.5 rate is a design choice [inference], tuned in §7.1 S2. |
 | Missing nights | Any missing: `partial`, no figure | A figure when at least 10 of 14 nights are observed, including last night. The shortfall is scaled by total weight ÷ observed weight, and coverage is reported. Fewer: `partial`, as today. |
 | Persisted | No | Yes (#1399 AW-7, accepted) |
+
+### 3.6 What Exoplan adds, and where each idea would go
+
+Added 23 October at the owner's request. Exoplan is an energy-aware calendar for iPhone. It publishes its method in a research note by its founding engineer [V69], and describes the product on its site and support page [V70][V71]. This section learns from those pages only. No code was copied and the app was not inspected. Anything the pages don't state is marked [inference].
+
+**How Exoplan's energy model compares with Form and Weight:**
+
+| | Exoplan [V69][V70] | Waldo today | Waldo v2 as proposed above |
+|---|---|---|---|
+| Question it answers | *When* in a typical day energy rises and dips | Form: how today compares with the same hours of earlier days. Weight: how heavy today's demand is. | Form v7 adds an expected alertness-by-hour term (§3.3); `hour_profile` patterns learn the owner's own curve (§5.1) |
+| Inputs | Resting heart rate, active energy (to cut moving time), sleep and wake times | Hourly HR means, hourly HRV, movement and daylight minutes; sleep; calendar busy minutes | Adds #1399's sedentary heart rate, sleep intervals for SAFTE, and tasks and messages for Weight |
+| Time-of-day curve | Empirical: the owner's own resting-HR shape, aligned to **hours since waking**, pooled **per weekday** over 8 weeks, smoothed, with peaks above a sloped line | None. Hours are compared only with the same clock hours of earlier days (`form.ts:43-44`). | SAFTE's published shape anchored on the 5-night sleep midpoint, plus the owner's `hour_profile` by **clock hour**, pooled across all days |
+| Recovery and debt | The Exo Score from sleep and heart rate sets **how long** the peaks are. Its formula isn't published. | Recovery as a score; debt computed but not stored | Recovery v3, sleep need v1, debt v2 (§3.2, §3.5). SAFTE's reservoir lowers the alertness curve as debt grows. |
+| Scheduling | The planner takes a typed or spoken list ("deep work 4h, gym") and fits it around meetings and energy. Every change is reviewed before it lands [V70][V71]. | The health trigger proposes calendar changes on a zone change (`trigger.ts`). Day cards give health "at most one line" and place no work into any window (`prompt/day-cards.ts:41`). | Unchanged by §3–§6 |
+| Cold start | Chronotype from onboarding until watch data arrives [V70] | Nothing for 14 days | Population priors (§3.1); SAFTE phase from the first night's sleep |
+| Caveat | The note itself says a hard Monday and an easy Monday get the same peaks, and that stress-raised heart rate is read as energy [V69] | — | Waldo's stress term reads a heart rate *above the owner's usual for that hour* as stress. The two views fit together [inference]: the **shape** of the typical resting-HR day is circadian arousal, and today's **deviation** from that shape is stress. Waldo keeps both, so it avoids Exoplan's stated caveat. |
+
+**Ideas Waldo lacks, and where each would go:**
+
+| # | Idea from Exoplan | What Waldo would do | Where | Computation or judgment |
+|---|---|---|---|---|
+| X-1 | Align the day to **hours since waking**, not the clock [V69] | `hour_profile` (§5.1) and Form v7's alertness term index hours from **today's** wake time, taken from the sleep sample's end. A late morning shifts the windows. | Scores (`health/patterns/*`, Form v7 in `scores/form.ts`) | Computation |
+| X-2 | **Per-weekday** curves [V69] | `hour_profile` keeps one curve per weekday once that weekday has 6 occurrences (the §5.1 bar), and a pooled curve before that. This joins §5.1's `weekday_rhythm` to the hour axis. | Patterns | Computation |
+| X-3 | Build the curve from **resting** heart rate only: cut moving time, the first hour after waking and the last hour before bed, and drop outliers [V69] | Use #1399's sedentary-HR fields where Apple provides them. Elsewhere, drop hours with movement or a workout (Form already does for stress, `form.ts:20-24`), plus the first and last waking hour. Hourly windows are Waldo's finest grain; Exoplan uses 20-minute steps [V69]. Finer windows would need a wire change, not proposed. | Producer and patterns | Computation |
+| X-4 | Drop days with an **unusual wake time** [V69] | Days whose wake time is more than 2 h from the owner's 14-day median are left out of `hour_profile` (the 2 h threshold is [inference]). Owner `travel` labels (§5.4) are left out too. | Patterns | Computation |
+| X-5 | Peaks are hours **above a downward-sloping line** [V69] | Peak windows are where the owner's curve sits above its own linear trend across the waking day, so they aren't just "the morning". The note doesn't publish the line's slope or how it is fitted; a least-squares line is [inference]. | Patterns | Computation |
+| X-6 | The **morning score scales peak length** [V69] | Today's peak windows are shortened when Recovery is `mixed` or `compromised` or debt is building, and lengthened when it is `excellent`. They are trimmed around the profile's highest points, never moved. The scaling constants are candidates for §7.3. | Producer (writes today's windows on the derived row as hour ranges), with Form v7 | Computation |
+| X-7 | **Chronotype at onboarding** for owners without a watch [V70] | An optional "when do you sleep on a free day?" question in the health profile (§3.1.3). It seeds SAFTE's phase (§3.3) for owners with no sleep data. This also serves the website's "Without one, Waldo leans on your calendar, work and patterns". | Health profile and app onboarding | Computation (the answer is owner-stated) |
+| X-8 | **Plan the day into the windows**: a list of tasks with durations is fitted around meetings and energy, and every change is reviewed [V70][V71] | Today's windows reach the model in `HealthPlanningContext` (§6.1). The Brief names the day's best window and what to protect in it, which the website already promises ("10:30–12:30 is your sharpest stretch. Blocked it."). "Plan my day" uses the existing approval-carded calendar proposals. | Day-card prompt (`prompt/day-cards.ts`), §6 context, the existing calendar proposal tool | **Judgment**: which task goes in which window is the model's call. Windows and calendar clashes are computed. Every change goes through an approval card, as today. |
+| X-9 | An **energy band on the calendar** [V70] | The app's day view shades today's windows from the `/scores` response | App UI (app lane), plus a `windows` field on `/scores` at the next health revision | Display of a computation |
+
+**Not adopted:**
+- **A single per-weekday curve with no daily input.** Exoplan's own caveat is that a hard day and an easy one get the same peaks [V69]. Waldo's Form deviation, Recovery and debt already make the day itself count. X-6 adds that to the windows.
+- **Reading a raised heart rate as more energy.** Waldo keeps a raised heart rate against the owner's usual for that hour as stress, and only the typical shape as energy (see the caveat row above).
+
+**Decisions:** HI-14 and HI-15 in §8.
 
 ## 4. Backfill and retention
 
@@ -414,7 +452,7 @@ The code computes statistics and decides statistical support. Whether a pattern 
 |---|---|---|---|---|
 | `personal_range` | Each daily signal in §4.2, per source and method | Shrunk centre and spread (§3.1); this is "your usual" | 14 days; `candidate` before that | "against your own usual" (Quiet flags) |
 | `weekday_rhythm` | Sleep minutes, sleep midpoint, resting HR, overnight HRV, Weight, calendar minutes | Day-of-week effect: one-way comparison of the weekday's mean against the owner's other days, Welch t, with Benjamini–Hochberg control across the catalogue at q = 0.1 | 6 occurrences of that weekday and 42 days in total | "This Tuesday is shaping up like the last three" (The Heads-Up) |
-| `hour_profile` | Form, stress heart rate, movement by local hour | Mean by hour over matched days, with a smoothed peak and trough window and a confidence interval for the peak | 21 days with at least 12 hours of intraday data each | "10:30–12:30 is your sharpest stretch" (The Window) |
+| `hour_profile` | Form, sedentary heart rate, movement, by hour since waking (§3.6) | Mean by hour over matched days, with peak windows above the owner's own trend line and a confidence interval for the peak. Built from resting hours only, per weekday once that weekday has the evidence, with unusual-wake days dropped (§3.6, X-1 to X-5). | 21 days with at least 12 hours of intraday data each | "10:30–12:30 is your sharpest stretch" (The Window) |
 | `trend` | HRV (ln), resting HR, sleep minutes, respiratory rate, wrist temperature | 7-day mean against the 60-day baseline (Oura's HRV-balance shape [V10]), plus a 28-day Theil–Sen slope with a bootstrap interval | 28 days | "Shows how far you've come" |
 | `driver_frequency` | Each #1399 driver | How often the driver was `outside` in the last 60 days, compared with the share the owner's own range implies | 30 days | "Quiet flags" |
 | `association` | A fixed list of pairs, below | Paired comparison of the next-day outcome on exposed against unexposed days. Mean difference with a bootstrap 90 % interval; BH-controlled. Never phrased causally. | 28 paired days, at least 8 of them exposed | Spots and constellations ("Stress, Sleep, Caffeine") |
@@ -613,7 +651,7 @@ No vendor composite has published external validation (§2), so "as good as or b
 | HI-2 | Health profile: age band and sex from HealthKit characteristics (iOS) or onboarding (Android). Optional, editable, stored in the health plane. | **Yes**. Without it every owner gets the wider all-adults prior. | All-adults priors only |
 | HI-3 | Apple SDNN: no population prior and no conversion. Personal-only, joining at 7 nights. Day-1 Recovery for Apple owners uses sleep and resting HR. | **Yes**. The alternative, seeding from Fitbit's 5-minute SDRR, uses a different window and device. | Seed Apple SDNN from Fitbit's 5-minute SDRR as a labelled, wide prior. This needs a new `baseline.prior` value, which isn't in §3.1.1's enum. |
 | HI-4 | Baseline window 60 days; `personal` at 14 days; personal-only components join at 7 | **Yes** | Keep 30 days |
-| HI-5 | Form v6: per-method stress HRV, plus a SAFTE-shaped alertness term replacing the midpoint term, **shadow for 4 weeks** before it shows | **Yes, shadow first**. Ship the stress-HRV change even if the alertness term is declined. | Form v5 plus the SDNN fix only |
+| HI-5 | Form v7: per-method stress HRV, plus a SAFTE-shaped alertness term replacing the midpoint term, **shadow for 4 weeks** before it shows | **Yes, shadow first**. Ship the stress-HRV change even if the alertness term is declined. | Form v5 plus the SDNN fix only |
 | HI-6 | Weight v5: calendar optional, tasks and messages wired as counts. HR-based TRIMP load left as a later candidate. | **Yes** | Weight stays calendar-only |
 | HI-7 | Retention: daily aggregates and patterns for 24 months; the phone reads history to the same 24 months | **24 months now**. "Years", as the website says, needs a new notice and its own decision. | 90 days only, and "Bring your past" can't be kept |
 | HI-8 | Backfilled days get Recovery and sleep-debt rows for the last 90 days only (labelled `backfilled`, never zone-change events), so "Your history" (7/30/90 dots) works from day 1. Form and Weight aren't reconstructed. | **Yes** | History starts at install |
@@ -622,6 +660,8 @@ No vendor composite has published external validation (§2), so "as good as or b
 | HI-11 | The pattern contract in §5: closed catalogue, FDR q = 0.1, minimum evidence per kind, 40-pattern cap, day labels, see/correct/delete, an off switch | **Yes** | No pattern learning; the website's patterns promise stays unmet |
 | HI-12 | Sleep need v1 (age prior shrunk toward free nights) and debt v2 (half-rate repayment, figure from 10 of 14 nights) | **Yes** | Need stays the owner's own average |
 | HI-13 | One Brain ADR-0081 amendment covering #1399 and this note, published before the first migration of either | **Yes** | Two amendments, two reviews |
+| HI-14 | Energy windows from Exoplan's published method shape (§3.6, X-1 to X-7): aligned to hours since waking, per weekday once there is evidence, resting hours only, unusual-wake days dropped, peaks above the owner's own trend, length scaled by Recovery and debt, and a chronotype question for owners without a watch | **Yes**, folded into `hour_profile` and Form v7's shadow run | `hour_profile` stays clock-hour and pooled |
+| HI-15 | Day planning into windows (§3.6, X-8, X-9): today's windows in the planning context; The Brief names and protects the best window; "plan my day" proposals through the existing approval cards; an energy band in the app's day view | **Yes**. Task placement stays the model's judgment and every change needs the owner's yes. | Day cards keep health to one line |
 
 ## 9. Contract, migrations and PR order (after acceptance)
 
@@ -634,13 +674,13 @@ No vendor composite has published external validation (§2), so "as good as or b
 
 | PR | Content | Depends on | Touches |
 |---|---|---|---|
-| Q1 | Contract, next free health revision (4, or 5 if the clinical purpose lands first): `baseline` on pillars; `daily_aggregate` sample kind; health profile DTO and route; patterns list, feedback and day-label DTOs and routes. App-lane announcement first (additive-only rule). | #1399 P1 | `contracts/src/app/health-ingest.ts` (or a new `health-patterns.ts`) |
+| Q1 | Contract, next free health revision (4, or 5 if the clinical purpose lands first): `baseline` on pillars; today's `windows` (hour ranges) on `/scores` (§3.6 X-9); an optional chronotype in the profile (X-7); `daily_aggregate` sample kind; health profile DTO and route; patterns list, feedback and day-label DTOs and routes. App-lane announcement first (additive-only rule). | #1399 P1 | `contracts/src/app/health-ingest.ts` (or a new `health-patterns.ts`) |
 | Q2 | Migrations: new tables `health_daily_aggregates`, `health_profile`, `health_patterns`, `health_day_labels`. RPCs `health_daily_read`, `health_patterns_write`/`_read`/`_feedback`, `health_day_label_write`. `health_ingest` gains the rollup and routes daily samples older than 90 days to aggregates instead of ignoring them. The deletion paths in §4.4, with a pgTAP test per path and per table. | Q1; #1399 P2 | `supabase/migrations/*`, registry, pgTAP |
-| Q3 | Scores: `scores/baseline.ts`; recovery v3, sleep need v1, debt v2, weight v5. Producer reads aggregates and the profile, and writes `baseline`. Form v6 is computed into a shadow field only. | Q2; #1399 P3 | `health/scores/*`, `health/producer.ts` (after the freshness lane's and #1399's producer changes) |
+| Q3 | Scores: `scores/baseline.ts`; recovery v3, sleep need v1, debt v2, weight v5. Producer reads aggregates and the profile, and writes `baseline`. Form v7 is computed into a shadow field only. | Q2; #1399 P3 | `health/scores/*`, `health/producer.ts` (after the freshness lane's and #1399's producer changes) |
 | Q4 | Owner DO wiring: tasks and messages counts beside calendar busy minutes | Q3 | `health/calendar-demand.ts` neighbour, owner-DO hunk |
-| Q5 | Agent feed: `HealthPlanningContext` fields in `toContextHealthMaterial`, the version mislabel fix, `get_health_pattern`, `health_pattern_feedback`; `resolveHealthMode` reads `baseline.state` | Q3 | `channels/health-context.ts`, `health/trigger.ts`. Both are other lanes' files; done with those lanes' agreement. |
+| Q5 | Agent feed: `HealthPlanningContext` fields (including today's windows, §3.6 X-8) in `toContextHealthMaterial`; The Brief's instruction in `prompt/day-cards.ts` names and protects the best window; the version mislabel fix, `get_health_pattern`, `health_pattern_feedback`; `resolveHealthMode` reads `baseline.state` | Q3 | `channels/health-context.ts`, `health/trigger.ts`. Both are other lanes' files; done with those lanes' agreement. |
 | Q6 | Pattern job: `health/patterns/*` (pure) plus the owner-DO schedule entry | Q2, Q3 | new files |
-| Q7 | Form v6 switch from shadow to live, if the §7.3 bar holds | 4 weeks of Q3 | `scores/form.ts` |
+| Q7 | Form v7 switch from shadow to live, if the §7.3 bar holds | 4 weeks of Q3 | `scores/form.ts` |
 | App lane | Backfill reader, profile questions, the provisional copy, the patterns view, the felt rating | Q1 | waldo-app |
 
 **Coordination:**
@@ -787,6 +827,11 @@ support.garmin.com returned 403.
 - [V66] Oura API and MCP Agreement (effective 8 June 2026)
 - [V67] GDPR (EUR-Lex 32016R0679), Art. 5(1)(c), (e) and Art. 9
 - [V68] HealthKit, `HKCharacteristicTypeIdentifier.dateOfBirth` and `.biologicalSex` (iOS 8.0), re-read by hand
+
+**Exoplan** (all read by hand in a browser on 23 October):
+- [V69] Lvoff M. Exoplan energy algorithm (research note), mikelvoff.com/notes/exoplan-energy-algorithm, including the figure descriptions
+- [V70] Exoplan home page and FAQ, exoplan.io
+- [V71] Exoplan support page, exoplan.io/support/
 
 **Papers:**
 - [P-Natarajan 2019] Natarajan A, Pantelopoulos A, Emir-Farinas H, Natarajan P. Heart rate variability with photoplethysmography in 8 million individuals. bioRxiv 10.1101/772285 v1, Table S2 and scaling table, re-read by hand. Published as Lancet Digit Health 2020;2:e650–7; the published tables returned 403.
