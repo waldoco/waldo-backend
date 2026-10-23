@@ -12,6 +12,15 @@ export const reauthNoticeTransition = (
     ? { send: false, noticed: false }
     : { send: !state.failing && !state.noticed, noticed: state.noticed };
 
+// The notice on a surface that carries no connect button (the app, iMessage): where the owner reconnects, never a link.
+// An owner on the app reconnects from its Connections screen; an owner whose only surface is iMessage, from the console's.
+const RECONNECT_WHERE = {
+  app: 'In the Waldo app, go back to Home, open the menu at the top left, tap Connections and reconnect Google there.',
+  console: 'Reconnect it from Connections in your Waldo console; ask me for a console link if you need one.',
+} as const;
+export const reconnectNoticeText = (place: keyof typeof RECONNECT_WHERE, email?: string): string =>
+  `Your Google connection${email ? ` (${email})` : ''} stopped working, so I can't reach that account until it is reconnected. ${RECONNECT_WHERE[place]}`;
+
 // The confirmation read after a connect or reconnect: one real provider round trip on the new
 // grant, on the cheapest feature the grant covers. Legacy null-scope grants retain the old
 // features (googleHas), so they confirm on calendar like a full consent grant.
