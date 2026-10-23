@@ -1029,6 +1029,51 @@ it('a reply that meets a note the host is still sending waits for that send and 
   expect(retries).toEqual([]);
 }, 30_000);
 
+it('a note from the next turn never reaches the owner before the reply still waiting from the turn before it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 600_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
+    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+  });
+  const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
+    drops.push(args[0]); return dropProgress.apply(this, args);
+  });
+  const LATER = 'Switching the options to vegetarian ones.';
+  proof.notes.push('Looking at dinner spots near you.', LATER);
+  const hostStep = async () => {
+    const pulled = await w.host.pull(); expect(pulled.status).toBe(200);
+    if (pulled.delivery) await w.host.postResult(pulled.delivery, await w.host.execute(pulled.delivery));
+  };
+  let note: Delivery | null = null;
+  proof.hold = async () => {
+    // Turn 1: the host has pulled note 1 and is still sending it.
+    await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+    // Turn 2's note falls due once the bridge's own short hold for a waiting reply has lapsed.
+    setTiming({ firstMs: 10_000, secondMs: 600_000, minTurnMs: 0 });
+    expect((await w.host.send(w.host.message('Make it vegetarian'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // The slow send finishes only after reply 1 has given up its polls and gone to its retry.
+    void vi.waitFor(() => expect(retries.some(ref => ref.startsWith('reply:'))).toBe(true), { timeout: 15_000, interval: 50 })
+      .then(async () => { await w.host.postResult(note!, await w.host.execute(note!)); });
+    // Turn 2 runs while the host keeps pulling, until its note has been settled or sent.
+    proof.hold = () => vi.waitFor(async () => { await hostStep(); expect(drops.includes('progress_yields') || sentTexts(w).includes(LATER)).toBe(true); }, { timeout: 20_000, interval: 500 });
+  };
+  await replyFor(w, 'Find me three dinner options near me tonight');
+  await w.pump(2);
+  // Reply 2 met the slot reply 1 held; its retry is an owner alarm, which this harness runs through pump.
+  await vi.waitFor(async () => { await hostStep(); await w.pump(1); expect(sentTexts(w)).toHaveLength(3); }, { timeout: 20_000, interval: 500 });
+  expect(sentTexts(w)).toEqual(['Looking at dinner spots near you.', 'Scripted owner reply.', 'Scripted owner reply.']);
+  expect(proof.progressInputs).toHaveLength(2);
+  const later = (await outbox(w.ownerStub)).filter(r => r.replyRef.startsWith('progress:') && r.replyRef.endsWith(':1'))[1];
+  expect(later).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_yields' } });
+}, 60_000);
+
 it('two messages already waiting when a drain starts each have their reply handed over before the next one runs', async () => {
   const w = await world();
   await w.pairAndActivate();

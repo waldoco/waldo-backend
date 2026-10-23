@@ -104,10 +104,13 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
  * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
  * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
  * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
+ * A note never goes ahead of an earlier message still waiting for the same bridge, such as the last turn's reply on its
+ * retry; the bridge cannot see that one yet.
  */
 export const handOffIMessageProgress = async (host: OwnerHost, replyRef: string): Promise<boolean> => {
   const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef), turn = replyRef.split(':')[1];
   if (!row || row.state !== 'frozen') return false;
+  if (outbox.messageWaiting(row.bridgeDoName)) { outbox.dropProgress('progress_yields', turn, true); return false; }
   let outcome;
   try { outcome = await handOff(host, row); } catch { outbox.dropProgress('progress_handoff_uncertain', turn); return false; }
   if (outcome.kind === 'queued') { outbox.markQueued(replyRef); return true; }

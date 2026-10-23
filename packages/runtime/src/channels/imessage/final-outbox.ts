@@ -13,7 +13,7 @@ const RETRY_MS = 5_000;
 /** A reply the bridge could not take because its one mailbox slot was busy tries again this soon. */
 export const IMESSAGE_BUSY_RETRY_MS = 1_000;
 // A progress note is sent once, while its turn runs, and never after its reply. It wakes nothing: one left frozen by an
-// evicted turn is settled not_started at the next drain.
+// evicted turn is settled may_have_completed at the next drain.
 const PROGRESS = 'progress:';
 export const isProgressNote = (replyRef: string) => replyRef.startsWith(PROGRESS);
 const UNBOUND = { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' };
@@ -63,6 +63,10 @@ export class IMessageFinalOutbox {
    */
   freezeProgress(record: IMessageInboxRecord, index: 1 | 2, text: string): IMessageOutboxRecord {
     return this.put(`${PROGRESS}${record.id}:${index}`, { ...targetOf(record), commandId: `wpn${index}_${record.commandId}` }, text);
+  }
+  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. */
+  messageWaiting(bridgeDoName: string): boolean {
+    return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.bridgeDoName === bridgeDoName);
   }
   /** When Waldo last put a message on this chat's way: the newest record not proved unsent. */
   lastSentAt(): number | null {
