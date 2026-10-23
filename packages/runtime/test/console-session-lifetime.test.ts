@@ -343,3 +343,30 @@ describe('a request another site started renews no session', () => {
     }
   });
 });
+
+describe('when the browser last proved an email code', () => {
+  it('an email-code grant records the time; a link sign-in does not', async () => {
+    let now = 1_790_000_000_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const byCode = await access.grant();
+    expect((await access.session(byCode))!.verified_at).toBe(now);
+    now += 60_000;
+    const link = new URL(await access.mintLink('https://w.test')).searchParams.get('t')!;
+    const byLink = (await access.redeem(link))!;
+    expect((await access.session(byLink))!.verified_at).toBeUndefined();
+  });
+
+  it('a link redeemed in a browser that proved a code keeps that code\'s time; a new code replaces it', async () => {
+    let now = 1_790_000_000_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const proved = now;
+    const first = await access.grant();
+    now += 30 * 60_000;
+    const link = new URL(await access.mintLink('https://w.test')).searchParams.get('t')!;
+    const relinked = (await access.redeem(link, first))!;
+    expect((await access.session(relinked))!.verified_at).toBe(proved);
+    now += 60_000;
+    const again = await access.grant(relinked);
+    expect((await access.session(again))!.verified_at).toBe(now);
+  });
+});

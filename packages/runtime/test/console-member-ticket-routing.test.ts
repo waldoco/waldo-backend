@@ -4,6 +4,7 @@ import worker from '../src/index';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { consoleAuth, OWNER_COOKIE } from '../src/identity/console-auth';
 import { linkCodeHash } from '../src/identity/owner-directory';
+import { OWNER_CONTROLS_ACTION_PATH, OWNER_CONTROLS_PATH } from '../src/channels/dashboard-owner-controls';
 
 const DEPLOY = 'owner-synthetic-console-deploy';
 const MEMBER = 'owner-synthetic-console-member';
@@ -31,8 +32,13 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     }
     if (url.origin !== 'https://directory.invalid') throw new Error('unexpected external request');
     const args = JSON.parse(String(init?.body));
+    if (url.pathname === '/auth/v1/verify') return Response.json(args.token === '246810' ? { user: { id: 'synthetic-auth-user', email: args.email } } : {}, { status: args.token === '246810' ? 200 : 400 });
     rpcCalls.push({ name: url.pathname.split('/rpc/')[1]!, args });
     if (url.pathname.endsWith('/assert_channel_presence')) return Response.json(true);
+    if (url.pathname.endsWith('/console_auth_throttle')) return Response.json(true);
+    if (url.pathname.endsWith('/owner_for_auth')) return Response.json(owner);
+    if (url.pathname.endsWith('/member_invites')) return Response.json([]);
+    if (url.pathname.endsWith('/issue_member_invite')) return Response.json(true);
     if (url.pathname.endsWith('/console_session_revoke')) return Response.json(rpcState.revoke);
     if (url.pathname.endsWith('/console_session_list')) {
       const at = new Date().toISOString();
@@ -337,5 +343,36 @@ describe('console pages and session clocks, through the Worker', () => {
     expect(fromConsole.status).toBe(200);
     expect(f.rpcCalls.map(call => call.name)).toContain('console_session_touch');
     expect(await expiry()).toBeGreaterThan(soon);
+  });
+});
+
+describe('a fresh email code before lasting access, through the Worker', () => {
+  it('a link sign-in is asked for a code before inviting someone, and the same invite runs after the code', async () => {
+    const f = await fixture();
+    await runInDurableObject(f.member, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, directoryEnv); });
+    const bindings = { ...f.bindings, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as unknown as Cloudflare.Env;
+    let signedIn = cookies(await worker.fetch(f.post(), bindings));
+    const invite = async () => {
+      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=invites`, { headers: { cookie: signedIn, accept: 'application/json' } }), bindings);
+      expect(read.status).toBe(200);
+      const current = await read.json() as { csrf: string; revision: string };
+      return worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_ACTION_PATH}`, {
+        method: 'POST', headers: { cookie: signedIn, origin: ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'invites', action: 'invite.member', value: 'friend@example.test', request_id: 'step-up-invite-request' }),
+      }), bindings);
+    };
+    const refused = await invite();
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: 'step_up_required' });
+    expect(f.rpcCalls.map(call => call.name)).not.toContain('issue_member_invite');
+    const verified = await worker.fetch(new Request(`${ORIGIN}/console/verify`, {
+      method: 'POST', redirect: 'manual', headers: { cookie: signedIn, origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'member@example.test', code: '246810' }),
+    }), bindings);
+    expect(verified.status).toBe(303);
+    signedIn = cookies(verified);
+    const done = await invite();
+    expect(done.status).toBe(200);
+    expect(f.rpcCalls.map(call => call.name)).toContain('issue_member_invite');
   });
 });
