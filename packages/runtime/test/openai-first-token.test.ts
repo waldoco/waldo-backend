@@ -98,4 +98,11 @@ describe('first-token timeout', () => {
     expect(plain.ok && plain.response.text).toBe('Your day.');
   });
 
+  it('keeps the whole-call limit when the provider ahead has its circuit open, so the slow answer lands', async () => {
+    const breaker = new InMemoryCircuitBreaker();
+    for (let failure = 0; failure < 3; failure += 1) breaker.recordFailure(ANTHROPIC_PROVIDER);
+    expect(breaker.isOpen(ANTHROPIC_PROVIDER)).toBe(true);
+    const result = await routed(breaker)(true);
+    expect(result.ok && result.response.text).toBe('Your day.');
+  });
 });
