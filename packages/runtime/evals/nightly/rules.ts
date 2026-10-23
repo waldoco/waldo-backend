@@ -103,7 +103,7 @@ export const ruleInventory = async (system: string, coverage: readonly RuleCover
   }
   return rules.map((rule) => {
     const entry = matched.get(rule.id);
-    if (!entry) return { rule, kind: 'uncovered' as const };
+    if (!entry || ('scenarios' in entry && entry.scenarios.length === 0)) return { rule, kind: 'uncovered' as const };
     return 'boundary' in entry ? { rule, kind: 'boundary' as const, reason: entry.boundary } : { rule, kind: 'mapped' as const, scenarios: entry.scenarios };
   });
 };

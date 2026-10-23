@@ -6,11 +6,10 @@
 // WALDO_EVAL_VERDICT=<rule id> with WALDO_EVAL_RUNS=<baseline.json>:<ablated.json>[,...] prints that rule's verdict from
 // scorecards already written, and runs nothing.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { ablationVerdict } from './ablation';
+import { ablationRuns, ablationVerdict } from './ablation';
 import { nightlyConfig } from './config';
 import { NIGHTLY_SCENARIOS, rawHistoryScenarios } from './catalogue';
 import { evalBehaviourPrompt, ruleInventory } from './rules';
-import type { Scorecard } from './scorecard';
 import { runNightly } from './suite';
 
 if (process.env.WALDO_EVAL_RULES) {
@@ -20,12 +19,7 @@ if (process.env.WALDO_EVAL_RULES) {
   const id = process.env.WALDO_EVAL_VERDICT;
   const status = (await ruleInventory(evalBehaviourPrompt())).find((entry) => entry.rule.id === id);
   if (!status) throw new Error(`no rule ${id}`);
-  const card = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as Scorecard;
-  const runs = (process.env.WALDO_EVAL_RUNS ?? '').split(',').filter(Boolean).map((pair) => {
-    const [baseline, ablated] = pair.split(':');
-    if (!baseline || !ablated) throw new Error('WALDO_EVAL_RUNS takes <baseline.json>:<ablated.json> pairs');
-    return { baseline: card(baseline), ablated: card(ablated) };
-  });
+  const runs = ablationRuns(process.env.WALDO_EVAL_RUNS ?? '', (path) => readFileSync(path, 'utf8'));
   console.log(JSON.stringify({ id, ...ablationVerdict(status, runs) }, null, 2));
 } else {
   // WALDO_EVAL_MEMORY=raw_history runs the memory cases without a claim store, as the baseline for memory changes;

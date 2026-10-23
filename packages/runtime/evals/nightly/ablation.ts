@@ -1,5 +1,6 @@
 // Ablation: a nightly run with named behaviour rules taken out of the system prompt, compared with a run that keeps them.
 // Production code is untouched; the trial's gateway drops the rules on the way to the model.
+import { stableJson } from '../../src/context-composer/canonical';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import { ruleInventory, type RuleStatus } from './rules';
 import type { Scorecard } from './scorecard';
@@ -25,6 +26,17 @@ export const ablating = (inner: LLMGatewayAdapter, ids: readonly string[], miss:
 
 export const ablationLabel = (candidate: string, ids: readonly string[]): string => `${candidate}+ablate:${[...ids].sort().join(',')}`;
 
+// WALDO_EVAL_RUNS: `<baseline.json>:<ablated.json>` pairs. A file named twice is one run counted twice.
+export const ablationRuns = (spec: string, read: (path: string) => string): AblationRun[] => {
+  const pairs = spec.split(',').filter(Boolean).map((pair) => pair.split(':'));
+  if (pairs.some(([baseline, ablated]) => !baseline || !ablated)) throw new Error('WALDO_EVAL_RUNS takes <baseline.json>:<ablated.json> pairs');
+  const paths = pairs.flat();
+  const repeated = paths.find((path, index) => paths.indexOf(path) !== index);
+  if (repeated) throw new Error(`WALDO_EVAL_RUNS names ${repeated} twice`);
+  const card = (path: string) => JSON.parse(read(path)) as Scorecard;
+  return pairs.map(([baseline, ablated]) => ({ baseline: card(baseline!), ablated: card(ablated!) }));
+};
+
 // The decision, fixed before any run. Ties and inconclusive results keep the rule.
 // keep: removing the rule adds 2 or more failures out of 5 on a scenario it governs, in any run; or the overall pass rate
 //   falls by 5 points or more in at least two runs, all moving the same way.
@@ -36,10 +48,18 @@ const KEEP_FAILURES = 2, KEEP_DROP = 0.05, PRUNE_BAND = 0.02, RUNS = 2;
 export type AblationRun = Readonly<{ baseline: Scorecard; ablated: Scorecard }>;
 export type AblationVerdict = Readonly<{ verdict: 'keep' | 'prune' | 'inconclusive' | 'uncovered'; reason: string }>;
 
+// A run whose budget ran out, or with a scenario cut short or broken by the harness, measured only part of what it set
+// out to. A blocked scenario never runs in any card, so it is the one gap allowed.
+const finished = (card: Scorecard) => !card.budget_exhausted && card.scenarios.every((row) => row.status !== 'incomplete' && !row.harness_errors?.length);
+const scenarioIds = (card: Scorecard) => card.scenarios.map((row) => row.id).sort().join('\n');
+
 export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]): AblationVerdict => {
   if (status.kind === 'boundary') throw new Error('a hard-boundary rule is never ablated');
   if (status.kind === 'uncovered') return { verdict: 'uncovered', reason: 'no scenario exercises this rule' };
   const id = status.rule.id;
+  // Independent runs are different runs: a card given twice, in one pair or across two, is one run counted twice.
+  const cards = runs.flatMap(({ baseline, ablated }) => [stableJson(baseline), stableJson(ablated)]);
+  if (new Set(cards).size !== cards.length) return { verdict: 'inconclusive', reason: 'a scorecard appears twice, so the runs are not independent' };
   // The label carries the model and every eval mode, so a pair whose labels differ by anything but the ablation would
   // credit the rule with a mode's or a judge's effect.
   for (const { baseline, ablated } of runs) {
@@ -49,9 +69,12 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
       return { verdict: 'inconclusive', reason: 'a run pair is not this rule against an unablated baseline on the same model, modes and judge' };
     }
   }
-  // A governed scenario missing or ungraded on either side is no evidence about the rule, and inconclusive keeps it.
-  const graded = (card: Scorecard) => status.scenarios.every((scenario) => card.scenarios.some((row) => row.id === scenario && row.status === 'graded'));
-  if (!runs.every(({ baseline, ablated }) => graded(baseline) && graded(ablated))) return { verdict: 'inconclusive', reason: 'a governed scenario was not graded in every run' };
+  if (!runs.every(({ baseline, ablated }) => finished(baseline) && finished(ablated) && scenarioIds(baseline) === scenarioIds(ablated))) {
+    return { verdict: 'inconclusive', reason: 'a run pair did not finish the same scenarios' };
+  }
+  // A governed scenario needs every trial graded on both sides: one graded trial can never show 2 more failures out of 5.
+  const graded = (card: Scorecard) => status.scenarios.every((scenario) => card.scenarios.some((row) => row.id === scenario && row.passed + row.failed === TRIALS));
+  if (!runs.every(({ baseline, ablated }) => graded(baseline) && graded(ablated))) return { verdict: 'inconclusive', reason: `a governed scenario was not graded on all ${TRIALS} trials in every run` };
   const governed = (card: Scorecard) => new Map(card.scenarios.filter((row) => status.scenarios.includes(row.id)).map((row) => [row.id, row]));
   const added = runs.map(({ baseline, ablated }) => {
     const before = governed(baseline), after = governed(ablated);
@@ -62,7 +85,8 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
   });
   const worst = added.flat().find((change) => change.failures >= KEEP_FAILURES);
   if (worst) return { verdict: 'keep', reason: `${worst.failures} more failures out of ${TRIALS} on ${worst.scenario}` };
-  const deltas = runs.map(({ baseline, ablated }) => baseline.overall.pass_rate === null || ablated.overall.pass_rate === null ? null : ablated.overall.pass_rate - baseline.overall.pass_rate);
+  // Rates are fractions of trial counts; rounding drops float noise, so a fall of exactly 2 points is within the band.
+  const deltas = runs.map(({ baseline, ablated }) => baseline.overall.pass_rate === null || ablated.overall.pass_rate === null ? null : Math.round((ablated.overall.pass_rate - baseline.overall.pass_rate) * 1e6) / 1e6);
   if (runs.length < RUNS || deltas.some((delta) => delta === null)) return { verdict: 'inconclusive', reason: `needs ${RUNS} graded run pairs` };
   if (deltas.every((delta) => delta! <= -KEEP_DROP)) return { verdict: 'keep', reason: 'the overall pass rate fell by 5 points or more in every run' };
   const clean = added.flat().every((change) => change.failures <= 0 && change.voice <= 0 && change.receipts <= 0);
