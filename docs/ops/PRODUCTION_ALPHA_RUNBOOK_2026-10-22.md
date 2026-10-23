@@ -85,6 +85,8 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
 | `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
+| `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |
+| `OWNER_LOOKUP` | `0` | `0` | `0` until the privacy notice that discloses the look-up is published (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. |
 | `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
 | `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
@@ -328,7 +330,7 @@ Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, *
   - 30 attempts per IP per 15 minutes.
 
   A group onboarding behind one office network will meet the IP limit [inference].
-- **Sessions last 12 hours** (`console-signin.ts:306`, `app-api.ts:87`), so 50 daily users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4).
+- **App sessions last 12 hours** (`app-api.ts:87`), so 50 daily app users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4). Console sessions stay signed in for up to 30 days while used (`identity/console-auth.ts`).
 
 **Cost ceiling.**
 - **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).

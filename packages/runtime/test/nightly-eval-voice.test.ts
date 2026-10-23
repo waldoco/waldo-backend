@@ -342,12 +342,13 @@ describe('the nightly catalogue', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
-    // (h1-health-change-card), the stale health reading case (h2-stale-health-reading) and these sets, so it holds whether
-    // or not other scenarios land beside them.
+    // (h1-health-change-card), the stale health reading case (h2-stale-health-reading), the look-up case (k1-owner-lookup)
+    // and these sets, so it holds whether or not other scenarios land beside them.
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'c1-connected-tracker')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h2-stale-health-reading')).toBe(true);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length);
+    expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'k1-owner-lookup')).toBe(true);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {
