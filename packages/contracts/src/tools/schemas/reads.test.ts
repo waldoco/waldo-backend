@@ -20,6 +20,7 @@ import {
   readDocumentArgsSchema,
   readDocumentResultSchema,
   readMemoryArgsSchema,
+  readMemoryResultSchema,
   searchEpisodesArgsSchema,
   taskStatusFilterSchema,
   browsePageArgsSchema,
@@ -185,6 +186,37 @@ describe('readMemoryArgs', () => {
   it('rejects a non-hall and a query over 500 chars', () => {
     expect(readMemoryArgsSchema.safeParse({ hall: 'goals' }).success).toBe(false);
     expect(readMemoryArgsSchema.safeParse({ query: 'x'.repeat(501) }).success).toBe(false);
+  });
+});
+
+describe('readMemoryResult', () => {
+  const claim = {
+    id: 1, kind: 'preference', text: 'Usually gym 11am', evidence: 'I go to the gym at 11', source: 'stated', origin: 'owner',
+    source_ref: 'owner, tg-1', learned_at: '2026-09-30T01:00:00Z', valid_from: null, verification_status: 'owner-grounded',
+    supersedes_id: null, last_seen_at: '2026-09-30T01:00:00Z',
+  };
+  const result = { claims: [claim], omitted_claim_ids: [], complete: true, authority: 'context_only_not_action_approval' };
+
+  it('accepts whole claims with provenance, and a read that names what it omitted', () => {
+    expect(readMemoryResultSchema.safeParse(result).success).toBe(true);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [], omitted_claim_ids: [2], complete: false }).success).toBe(true);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: null, source_ref: null, supersedes_id: 3 }] }).success).toBe(true);
+  });
+
+  it('rejects aliases or bookkeeping columns on a claim, a missing provenance field, and untrusted claims', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, aliases: 'workout' }] }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, status: 'active', seen_count: 2 }] }).success).toBe(false);
+    const { evidence: _evidence, ...unsourced } = claim;
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [unsourced] }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: 'untrusted' }] }).success).toBe(false);
+  });
+
+  it('rejects a read that claims completeness while omitting a claim, or the reverse, or any action authority', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, omitted_claim_ids: [2], complete: true }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, complete: false }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, authority: 'approved' }).success).toBe(false);
+    const { omitted_claim_ids: _omitted, ...unbounded } = result;
+    expect(readMemoryResultSchema.safeParse(unbounded).success).toBe(false);
   });
 });
 

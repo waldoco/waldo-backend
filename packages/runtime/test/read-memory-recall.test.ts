@@ -1,7 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, toolNameSchema } from '@waldo/contracts';
+import { buildSessionState, readMemoryResultSchema, toolNameSchema } from '@waldo/contracts';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
+import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { dispatchTool } from '../src/tools/dispatcher';
@@ -39,6 +42,7 @@ describe('read_memory as the one recall function', () => {
       authority: 'context_only_not_action_approval', complete: true, omitted_claim_ids: [],
       claims: [{ id: 1, text: gym.text, evidence: gym.evidence, source_ref: gym.source_ref, origin: 'owner', verification_status: 'owner-grounded' }],
     } });
+    expect(readMemoryResultSchema.safeParse((result as { data: unknown }).data).success).toBe(true);
   });
 
   it('still refuses an owner turn bound to another conversation or owner', async () => {
@@ -82,6 +86,46 @@ describe('read_memory as the one recall function', () => {
       return m.call({}, machine);
     });
     expect(result).toMatchObject({ ok: true, data: { claims: [{ id: 2, text: gym.text }], omitted_claim_ids: [1], complete: false } });
+    expect(readMemoryResultSchema.safeParse((result as { data: unknown }).data).success).toBe(true);
+  });
+
+  it('withholds a claim whose topic the owner asked to forget while that forget is still settling, by text or by alias', async () => {
+    const result = await inDo(async sql => {
+      const m = readMemory(sql);
+      m.store.add({ ...gym, text: 'Posterbot standup moved to 9' }, '2026-09-30T01:00:00Z', 1);
+      m.store.add({ ...gym, text: 'Standup notes go in the shared doc', aliases: ['posterbot'] }, '2026-09-30T01:00:00Z', 2);
+      m.store.add({ ...gym, text: 'Standup runs short on Fridays' }, '2026-09-30T01:00:00Z', 3);
+      sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at) VALUES ('pending-posterbot', 'Posterbot', '2026-09-30T02:00:00Z')");
+      return [await m.call({ query: 'standup' }, machine), await m.call({ query: 'Posterbot' }, ownerTurn())];
+    }) as { data: { claims: { id: number }[] } }[];
+    expect(result[0]!.data.claims.map(claim => claim.id)).toEqual([3]);
+    expect(result[1]!.data.claims).toEqual([]);
+  });
+
+  it('a recall in a job over outside text keeps the turn external, so its ledger row is tainted; an owner job stays clean', async () => {
+    const rows = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`read-memory-${sequence++}`)), async (_instance, state) => {
+      const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      store.add(gym, '2026-09-30T01:00:00Z', 1);
+      const ledger = toolOutputLedger(state.storage);
+      const outputs: string[] = [];
+      const job = async (id: string, taint?: 'external') => {
+        let round = 0;
+        const gateway: LLMGatewayAdapter = { async complete(request) {
+          round += 1;
+          if (round === 2) outputs.push(request.request.tool_turns?.[0]?.output ?? '');
+          return { ok: true, data: { model: request.request.model, text: round === 1 ? '' : 'SKIP', ...(round === 1 ? { tool_calls: [{ call_id: 'c1', name: 'read_memory', arguments: JSON.stringify({ query: 'gym' }) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+        } };
+        const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+        // The background mail follow-up's own tool list, as the owner DO names it.
+        await createOwnerResponder('fixture', undefined, store, undefined, undefined, handlers, undefined, false, ledger, undefined, gateway)
+          .prompt(id, 'owner', 'Check observed mail for anything the owner should follow up', async (_hop, work) => work(), 'telegram', ['get_context', 'read_memory', 'search_episodes'], undefined, undefined, undefined, taint);
+      };
+      await job('mail-followup', 'external');
+      await job('owner-job');
+      return [...(await state.storage.list<{ tool: string; taint: string | null; origin: string }>({ prefix: 'toolout:' })).values()].filter(row => row.tool === 'read_memory');
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.map(row => row.taint).sort()).toEqual(['external', null]);
   });
 
   it('one owner DO never reads another owner store', async () => {
