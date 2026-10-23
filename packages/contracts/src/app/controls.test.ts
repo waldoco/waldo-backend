@@ -54,6 +54,8 @@ describe('Google connect from the app', () => {
 
   it('returns the first-party link in the receipt navigation', () => {
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA' }).success).toBe(true);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(true);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA', handoff: 'BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(false);
   });
 });
 
