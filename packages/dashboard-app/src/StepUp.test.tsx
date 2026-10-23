@@ -49,6 +49,27 @@ describe('an action that needs a fresh email code', () => {
     await act(async () => root.unmount());
   });
 
+  // Pairing a Mac and linking a chat run through the same panel as connect, so each view shows the same way back.
+  for (const [hash, view, record, label] of [
+    ['#/connections/imessage', 'imessage', { version: 1, view: 'imessage', state: 'available', csrf: 'c'.repeat(64), revision, data: { enabled: true, address: 'waldo@test.invalid', linked_hint: null, admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.pair'], bridges: [] }, status: { bridges: [] } }, 'Pair a Mac host'],
+    ['#/connections/devices', 'devices', { version: 1, view: 'devices', state: 'available', csrf: 'c'.repeat(64), revision, data: { actions: ['device.pair'], devices: [], query_kinds: [], notification_bodies: [] }, status: { devices: [] } }, 'Get pairing code'],
+  ] as const) {
+    it(`the ${view} view offers the email code after a refused pairing`, async () => {
+      window.location.hash = hash;
+      vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+      vi.stubGlobal('fetch', vi.fn(async (_input: string, init?: RequestInit) => init?.method === 'POST' ? refused() : Response.json(record)));
+      const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+      await act(async () => root.render(<ControlsPanel view={view}/>));
+      await flush();
+      const pair = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes(label))!;
+      await act(async () => pair.click());
+      await flush();
+      const link = [...host.querySelectorAll<HTMLAnchorElement>('a')].find(a => a.getAttribute('href')?.startsWith('/console/signin?confirm=1'));
+      expect(link?.getAttribute('href')).toBe(`/console/signin?confirm=1${hash}`);
+      await act(async () => root.unmount());
+    });
+  }
+
   it('connections offer the email code after a refused connect', async () => {
     window.location.hash = '#/settings/connections';
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
