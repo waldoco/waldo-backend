@@ -38,13 +38,14 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel?: string): Readonly<{ ready: Promise<unknown>; act(action: { action: string; id?: string }): Promise<boolean | string> }> }>;
-const disconnecting = async (name: string, account: Record<string, unknown>, run: (owner: Owner, state: DurableObjectState) => Promise<void>) => {
+const CAPTURING = { WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' };
+const disconnecting = async (name: string, account: Record<string, unknown>, run: (owner: Owner, state: DurableObjectState) => Promise<void>, extra: Record<string, string> = {}) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [account]);
-    const owner = new OwnerDO(state, { ...env, ...CONFIG }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...CONFIG, ...extra }) as unknown as Owner;
     // The runtime's start-up arms watch upkeep for the seeded grant; a disconnect comes after it, as a console action does.
     try { await owner.setup('telegram').ready; await run(owner, state); } finally { await state.storage.deleteAlarm(); }
   });
@@ -98,6 +99,22 @@ describe('disconnecting Google', () => {
       expect(revoking()).toEqual(['rpc:gmail_push_route', 'edge:revoke', 'rpc:connection_revoke']);
       expect(await state.storage.get('google:accounts')).toEqual([expect.objectContaining({ id: 'conn-1' })]);
     });
+  });
+
+  // Staging captures free text in traces; without capture a hop's detail is reduced to its code, so only this proves the
+  // token and the address stay out of what a disconnect records.
+  it('with trace text capture on, neither the token nor the address reaches the trace', async () => {
+    for (const [outcome, google] of [['revoked', () => new Response('{}', { status: 200 })], ['failed', () => new Response('upstream', { status: 503 })]] as const) {
+      world.calls = []; world.bodies = []; world.google = google;
+      await disconnecting(`disconnect-captured-${outcome}`, { id: `local:${EMAIL}`, email: EMAIL, scopes: [CALENDAR], refresh_token: TOKEN }, async (owner, state) => {
+        expect(await owner.setup('telegram').act({ action: 'google.disconnect', id: `local:${EMAIL}` })).toBe(true);
+        expect(revoking()).toEqual(['google:revoke']);
+        // With capture on the row keeps free text instead of the code; the code goes out as trace metadata.
+        expect(hops(state).map(({ hop, ok }) => ({ hop, ok }))).toEqual([{ hop: 'google_disconnect', ok: outcome === 'revoked' ? 1 : 0 }]);
+        expect(traces(state)).not.toContain(TOKEN);
+        expect(traces(state)).not.toContain(EMAIL);
+      }, CAPTURING);
+    }
   });
 
   it('a grant this object holds itself is revoked at Google directly, and forgotten whatever Google says', async () => {
