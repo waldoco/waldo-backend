@@ -127,7 +127,11 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     schema: browsePageArgsSchema,
     trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('browse_page')),
     autonomy_gated: false,
-    handle: async () => ({ ok: true as const, data: { text: 'fixture page' }, source_taint: 'external' as const }),
+    handle: async () => {
+      const blocked = scenario.fixtures?.browse;
+      if (typeof blocked === 'string') return { ok: false as const, code: 'rejected' as const, error: 'The site stopped this read.', source_taint: 'external' as const, blocked };
+      return { ok: true as const, data: { text: 'fixture page' }, source_taint: 'external' as const };
+    },
   };
   const spentUsd = scenario.fixtures?.spentUsd;
   const integration = spentUsd === undefined ? undefined : { spend: () => ({ spentUsd, ceilingUsd: MONTHLY_SPEND_CEILING_USD }) };
@@ -136,7 +140,8 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web, ...(scenario.fixtures?.browse ? [browse] : [])];
   const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
   const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway,
-    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, integration);
+    // A blocked-browse fixture admits its read, so the block comes from the site rather than the egress check.
+    undefined, undefined, undefined, undefined, undefined, typeof scenario.fixtures?.browse === 'string' ? ['*'] : undefined, undefined, undefined, undefined, undefined, integration);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];

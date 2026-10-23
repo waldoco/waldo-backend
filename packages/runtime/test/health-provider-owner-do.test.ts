@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HEALTH_RECOMPUTE_ID, HEALTH_RECOMPUTE_WINDOW_MS } from '../src/health/recompute';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { callOwnerProvider } from '../src/health/providers/provider-route';
 import { WHOOP_SYNC_ID } from '../src/health/providers/whoop-owner';
@@ -11,7 +12,7 @@ import { addNight, edge, newPlane, newWorld, planeRpc, whoopFetch } from './help
 import { EDGE_ENV } from './support/oauth-edge-harness';
 
 // The owner object's side of WHOOP, end to end on the real object: a signed call from the Worker, a real alarm pass that
-// runs the sync, the score producer, and the health trigger armed by the zone change the writer reports. The oauth-proxy
+// runs the sync, the recompute it asks for one window later, and the health trigger armed by the zone change the writer reports. The oauth-proxy
 // Edge Function runs for real, in process, over a Vault stand-in; the health plane and WHOOP are the recorded fakes; no
 // model is ever called.
 // The edge in this test verifies the router signature with the key the harness gives it, so the owner object signs with the same one.
@@ -22,8 +23,10 @@ const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'syn
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable',
   WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: 'client-secret-fixture', WHOOP_REDIRECT_URI: 'https://worker.example.invalid/oauth/whoop/callback' };
 
-const models = vi.hoisted(() => ({ calls: 0 }));
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { models.calls += 1; throw new Error('no model call in this test'); } }; } }));
+const models = vi.hoisted(() => ({ formats: [] as unknown[] }));
+vi.mock('openai', () => ({ default: class { responses = { create: async (params?: { text?: { format?: { name?: unknown } } }) => {
+  models.formats.push(params?.text?.format?.name); throw new Error('no model call in this test');
+} }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => true }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 
@@ -41,7 +44,7 @@ let zoneChanged: string[] = [];
 let sequence = 0;
 
 beforeEach(() => {
-  Object.assign(world, newWorld()); Object.assign(plane, newPlane()); written.length = 0; zoneChanged = []; models.calls = 0;
+  Object.assign(world, newWorld()); Object.assign(plane, newPlane()); written.length = 0; zoneChanged = []; models.formats = [];
   vi.useFakeTimers({ toFake: ['Date'], now: START });
   const whoop = whoopFetch(world, { get now() { return Date.now(); } } as { now: number });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -107,7 +110,7 @@ describe('WHOOP on the owner object', () => {
     }, { WHOOP_CLIENT_ID: undefined });
   });
 
-  it('links on the callback, arms a sync, and a real alarm pass reads the month, recomputes the owner\'s rows and arms the health trigger', async () => {
+  it('links on the callback, arms a sync, and real alarm passes read the month, recompute the owner\'s rows and arm the health trigger', async () => {
     for (let i = 0; i < 30; i += 1) addNight(world, i);
     const printed: string[] = [];
     for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
@@ -118,18 +121,24 @@ describe('WHOOP on the owner object', () => {
       // The code was traded and the tokens saved by the edge, never by the object.
       expect([plane.vault.rpcs, plane.vault.rows.map(connection => [connection.provider, connection.account])]).toEqual([['oauth_client_get', 'oauth_store'], [['whoop', '70001']]]);
       expect(row(WHOOP_SYNC_ID)!.due_at).toBeLessThanOrEqual(Date.now());
-      await armAlarm(state.storage, Date.now());
-      await state.storage.deleteAlarm();
-      await owner.alarm();
+      const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); await owner.alarm(); };
+      await pass();
       expect([...plane.samples.keys()].filter(key => key.startsWith('sleep_duration|'))).toHaveLength(30);
       expect(plane.ingests).toBeGreaterThan(0);
+      // The sync asked for one recompute; it runs a window later, as an upload's does.
+      expect(written).toHaveLength(0);
+      expect(row(HEALTH_RECOMPUTE_ID)).toMatchObject({ kind: 'provider_sync', due_at: START + HEALTH_RECOMPUTE_WINDOW_MS });
+      vi.setSystemTime(START + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
       expect(written).toHaveLength(2);
       for (const payload of written) expect(JSON.parse(payload).basis).toEqual([{ source: 'whoop', consent_epoch: 1 }]);
       // The writer said a pillar moved zone: the owner object marked the day and armed the health trigger, with no signed hop in between.
       expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([{ day: '2026-10-21' }]);
       expect(row(HEALTH_TRIGGER_ID)).toMatchObject({ kind: 'patrol' });
       expect(row(WHOOP_SYNC_ID)!.due_at).toBeGreaterThan(Date.now());
-      expect(models.calls).toBe(0);
+      // The sync and the recompute call no model. The app runtime the recompute runs in plans its day when it starts, and
+      // that is the only call there is.
+      expect(models.formats.every(format => format === 'day_plan')).toBe(true);
       expect(dump(state), 'the dump reads the real tables').toContain(WHOOP_SYNC_ID);
       for (const sentinel of SENTINELS) for (const [where, text] of [['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${sentinel} in ${where}`).not.toContain(sentinel);
       const status = await (await call('status')).json() as { providers: { state: string; last_sync_at: string }[] };

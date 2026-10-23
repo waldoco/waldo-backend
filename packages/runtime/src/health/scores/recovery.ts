@@ -3,8 +3,9 @@ import type { DayRecord, HrvMethod, UnavailableReason } from './types';
 
 // Form v2 and Weight v2 leave out days holding an overlapping hour window (Form's hours, Weight's physical load). Form v3
 // reads an hour or day with no daylight or movement reading as missing, not zero; Weight v3 counts every day the calendar
-// reports, not only days with health readings. A change in which inputs are admitted is a new version.
-export const ALGORITHM = { recovery: 'recovery.candidate.v1', form: 'form.candidate.v3', weight: 'weight.candidate.v3', sleepDebt: 'sleep-debt.candidate.v1' } as const;
+// reports, not only days with health readings. Form v4 compares a day still in progress with the same wall-clock hours of
+// earlier days, and judges a finished day on the hours it has. A change in which inputs are admitted is a new version.
+export const ALGORITHM = { recovery: 'recovery.candidate.v1', form: 'form.candidate.v4', weight: 'weight.candidate.v3', sleepDebt: 'sleep-debt.candidate.v1' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 

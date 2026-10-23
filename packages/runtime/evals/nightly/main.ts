@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { ablationVerdict } from './ablation';
 import { nightlyConfig } from './config';
-import { NIGHTLY_SCENARIOS as SCENARIOS } from './catalogue';
+import { NIGHTLY_SCENARIOS, rawHistoryScenarios } from './catalogue';
 import { evalBehaviourPrompt, ruleInventory } from './rules';
 import type { Scorecard } from './scorecard';
 import { runNightly } from './suite';
@@ -28,6 +28,9 @@ if (process.env.WALDO_EVAL_RULES) {
   });
   console.log(JSON.stringify({ id, ...ablationVerdict(status, runs) }, null, 2));
 } else {
+  // WALDO_EVAL_MEMORY=raw_history runs the memory cases without a claim store, as the baseline for memory changes;
+  // its card is not gated. WALDO_EVAL_JUDGE_MODE=joint asks each judge about every dimension in one call (split is the default).
+  const SCENARIOS = process.env.WALDO_EVAL_MEMORY === 'raw_history' ? rawHistoryScenarios(NIGHTLY_SCENARIOS) : NIGHTLY_SCENARIOS;
   const only = process.env.WALDO_EVAL_ONLY;
   const scenarios = only ? SCENARIOS.filter((scenario) => scenario.id === only) : SCENARIOS;
   if (scenarios.length === 0) throw new Error(`no scenario ${only}`);

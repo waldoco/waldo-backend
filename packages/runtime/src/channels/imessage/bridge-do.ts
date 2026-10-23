@@ -11,9 +11,10 @@ import { BridgeStore, BridgeStoreError, parseStoredEvent, type DeliveryRow } fro
 import { mintHostKey, sha256Hex, signCommitment, signS2, unwrapCredential, verifyS2, type S2Headers } from './crypto';
 import { iMessageDirectory, IMessageDirectoryUnavailable, type BridgeAuthority, type SenderAuthority } from './directory';
 import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './policy';
+import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFinish, type PhotonStatus } from './photon';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 
-export type IMessageEnv = OwnerDirectoryEnv & Readonly<{
+export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
   WALDO_ENVIRONMENT?: string;
   IMESSAGE_CONNECTOR_ENABLED?: string;
   IMESSAGE_CONNECTOR_POLICY?: string;
@@ -25,6 +26,8 @@ export type IMessageEnv = OwnerDirectoryEnv & Readonly<{
   IMESSAGE_ONBOARDING_URL?: string;
   /** Shared Waldo number: the address owners text "waldo CODE" to, shown in the console. */
   IMESSAGE_WALDO_ADDRESS?: string;
+  /** Shared Waldo number on Photon: the console page an enrolled but unlinked sender is sent to (https only). */
+  IMESSAGE_CONSOLE_URL?: string;
 }>;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
@@ -73,6 +76,8 @@ export const LINK_REPLIES = {
   claimed: 'This number is already linked to a Waldo account, so it was not moved. To link it here, unlink it in that account\'s console first, then text a new code.',
   uncertain: 'Linking could not be confirmed. Check your Waldo console before trying a new code.',
 } as const;
+export const enrolledReply = (url: string) =>
+  `Hi, I'm Waldo. This number is set up for your Waldo account but not linked yet. Open ${url} and tap Open Messages to finish.`;
 export const onboardingReply = (url: string) =>
   `Hi, I'm Waldo. This number only talks to people with their own Waldo. To get yours, join here: ${url} - already have one? Text waldo followed by the code from your Waldo console.`;
 const onboardingUrl = (raw: string | undefined): string | null => {
@@ -250,6 +255,42 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 
   /** Safe status for the owner console: no keys, bodies, handles or GUIDs. */
+  /** Photon OAuth custody lives on one instance per environment; every other instance refuses. */
+  private photonTokens(): PhotonTokens | null {
+    const c = this.composition(), config = photonConfig(this.env);
+    if (!c || !config || !this.env.IMESSAGE_BRIDGE_DO?.idFromName(photonDoName(c.environment)).equals(this.ctx.id)) return null;
+    return new PhotonTokens(this.ctx.storage.kv, config);
+  }
+  async photonBegin(owner: string, redirectUri: string): Promise<{ nonce: string; url: string } | null> {
+    const tokens = this.photonTokens();
+    return tokens ? tokens.begin(owner, redirectUri) : null;
+  }
+  /**
+   * Token work is serialized (a refresh spends the refresh token it uses). Failures are caught inside the serialized
+   * section and rethrown after it: a throw inside blockConcurrencyWhile would reset the object.
+   */
+  private async serialized<T>(work: () => Promise<T>): Promise<T> {
+    const outcome = await this.ctx.blockConcurrencyWhile(async () => { try { return { ok: true as const, value: await work() }; } catch { return { ok: false as const }; } });
+    if (!outcome.ok) throw new Error('photon_unavailable');
+    return outcome.value;
+  }
+  async photonFinish(nonce: string, query: string): Promise<PhotonFinish> {
+    const tokens = this.photonTokens();
+    if (!tokens) return 'failed';
+    try { return await this.serialized(() => tokens.finish(nonce, new URLSearchParams(query))); } catch { return 'failed'; }
+  }
+  /** null = not connected. Throws when Photon's answer is unknown (the stored token is kept). */
+  async photonAccessToken(): Promise<string | null> {
+    const tokens = this.photonTokens();
+    return tokens ? this.serialized(() => tokens.accessToken()) : null;
+  }
+  async photonDropAccess(): Promise<void> { this.photonTokens()?.dropAccess(); }
+  async photonKeepAlive(): Promise<'fresh' | 'refreshed' | 'disconnected' | 'unconfigured'> {
+    const tokens = this.photonTokens();
+    return tokens ? this.serialized(() => tokens.keepAlive()) : 'unconfigured';
+  }
+  async photonStatus(): Promise<PhotonStatus | null> { return this.photonTokens()?.status() ?? null; }
+
   async status(): Promise<{ online: boolean; textReady: boolean; quarantine: string | null; events: Record<string, number>; outstanding: number; revoked: boolean }> {
     const c = this.composition();
     if (!c) return { online: false, textReady: false, quarantine: null, events: {}, outstanding: 0, revoked: false };
@@ -411,6 +452,15 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         const outcome = redeemHashed ? await redeemHashed('imessage', event.senderHandle, await linkCodeHash(code)) : { kind: 'uncertain' as const };
         await this.enqueueSystemReply(store, event, environment, bridgeId, accountId, LINK_REPLIES[outcome.kind]);
         return outcome.kind === 'redeemed' ? 'link_redeemed' : outcome.kind === 'claimed' ? 'link_claimed' : 'link_failed';
+      }
+      // A number its owner enrolled on Photon but has not linked: point them at their console, never at a Waldo.
+      // Only Photon enrolls numbers: without it there is nothing to look up (and no enrollment table to depend on).
+      const finish = photonConfig(this.env) ? onboardingUrl(this.env.IMESSAGE_CONSOLE_URL) : null;
+      if (finish && ready !== 'unavailable' && await directory.enrolledHandle(environment, event.senderHandle)) {
+        const enrolledHash = await sha256Hex(JSON.stringify([bridgeId, 'enrolled', event.senderHandle]));
+        if (!(await directory.onboardingAllowed(environment, bridgeId, accountId, enrolledHash))) return 'stranger_throttled';
+        await this.enqueueSystemReply(store, event, environment, bridgeId, accountId, enrolledReply(finish));
+        return 'stranger_onboarded';
       }
       const url = onboardingUrl(this.env.IMESSAGE_ONBOARDING_URL);
       if (!url || ready === 'unavailable') return 'stranger_ignored';

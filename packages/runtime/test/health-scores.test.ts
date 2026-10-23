@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { computeDailyScores } from '../src/health/scores';
+import { localIso, localToEpoch } from '../src/channels/reminders';
 import { localDayWindow } from '../src/health/scores/time';
-import { formZone, recoveryZone, weightZone } from '../src/health/scores/zones';
+import { formZone, heldZone, recoveryZone, weightZone } from '../src/health/scores/zones';
 import type { DailyScoresInput, DayRecord, HourlyBucket } from '../src/health/scores/types';
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -53,6 +54,14 @@ describe('health scores: Recovery', () => {
     expect([100, 80, 79, 60, 59, 40, 39, 0].map(recoveryZone)).toEqual(['excellent', 'excellent', 'solid', 'solid', 'mixed', 'mixed', 'compromised', 'compromised']);
     expect([80, 79, 60, 59, 40, 39].map(formZone)).toEqual(['energized', 'steady', 'steady', 'flagging', 'flagging', 'depleted']);
     expect([0, 20, 21, 40, 41, 60, 61, 100].map(weightZone)).toEqual(['light', 'light', 'moderate', 'moderate', 'heavy', 'heavy', 'peak', 'peak']);
+  });
+  it('holds a zone through a move of five points or fewer past it, and leaves it on a larger one, in every band shape', () => {
+    expect([75, 74, 90].map(score => heldZone(formZone, score, 'energized'))).toEqual(['energized', 'steady', 'energized']);
+    expect([84, 85, 55, 54].map(score => heldZone(formZone, score, 'steady'))).toEqual(['steady', 'energized', 'steady', 'flagging']);
+    expect([25, 26].map(score => heldZone(weightZone, score, 'light'))).toEqual(['light', 'moderate']);
+    expect([79, 61, 35].map(score => heldZone(recoveryZone, score, null))).toEqual(['solid', 'solid', 'compromised']);
+    // Two zones away is never held, however near an edge.
+    expect(heldZone(formZone, 61, 'depleted')).toBe('steady');
   });
   it('is unavailable with missing_sleep when the target day has no sleep', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).recovery).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
@@ -151,8 +160,15 @@ describe('health scores: Form', () => {
   it('is intraday_inputs_unavailable when the target day has no hourly data', () => {
     expect(computeDailyScores(input(replaceTarget({ hourly: [] }))).form).toEqual({ state: 'unavailable', reason: 'intraday_inputs_unavailable' });
   });
-  it('is stale_inputs when the newest hourly data is older than 6 hours before asOf', () => {
-    expect(computeDailyScores(input(week(), { asOf: `${addDays(TARGET, 1)}T06:00:00.000Z` })).form).toEqual({ state: 'unavailable', reason: 'stale_inputs' });
+  it('is stale_inputs while the day is still running and its newest hourly data is older than 6 hours', () => {
+    const morning = replaceTarget({ hourly: hourly(TARGET, 0, { hours: [4, 5, 6, 7, 8, 9, 10, 11, 12] }) });
+    expect(computeDailyScores(input(morning, { asOf: `${TARGET}T19:30:00.000Z` })).form).toEqual({ state: 'unavailable', reason: 'stale_inputs' });
+  });
+  it('judges a finished day on the hours it has, so the next morning\'s recompute does not mark it stale', () => {
+    const evening = computeDailyScores(input(week(), { asOf: `${TARGET}T20:30:00.000Z` })).form;
+    const nextMorning = computeDailyScores(input(week(), { asOf: `${addDays(TARGET, 1)}T08:00:00.000Z` })).form;
+    expect(evening.state).toBe('available');
+    expect(nextMorning).toEqual(evening);
   });
   it('passes a Recovery failure through as its own reason', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).form).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
@@ -175,6 +191,77 @@ describe('health scores: Form', () => {
     expect(usual.used.signals).toContain('daylight');
     expect(less.used.signals).toContain('daylight');
     expect(less.score).toBeLessThan(usual.score);
+  });
+});
+
+// A day of identical habits by the owner's own wall clock: a bucket every local hour, daylight 07:00-19:00, movement
+// 07:00-22:00, asleep 23:00-07:00. With every day alike, any difference in Form comes from how the day is compared.
+const wallHour = (d: string, tz: string, h: number): number | null => {
+  const local = `${d}T${String(h).padStart(2, '0')}:00`, at = localToEpoch(local, tz);
+  return localIso(at, tz) === local ? at : null;
+};
+const habitual = (d: string, tz: string, through = 24): DayRecord => ({
+  day: d, timezone: tz,
+  sleep: { startAt: new Date(wallHour(addDays(d, -1), tz, 23)!).toISOString(), endAt: new Date(wallHour(d, tz, 7)!).toISOString(), asleepMinutes: 450, midpointMinute: 180 },
+  overnightHrv: { value: 60, method: 'rmssd' }, restingHeartRate: 55, workouts: [], demand: null,
+  hourly: Array.from({ length: through }, (_, h) => h).flatMap(h => {
+    const at = wallHour(d, tz, h);
+    return at === null ? [] : [{ startAt: new Date(at).toISOString(), heartRate: 70, hrv: 55, hrvMethod: 'rmssd' as const, daylightMinutes: h >= 7 && h < 19 ? 20 : null, movementMinutes: h >= 7 && h < 22 ? 10 : null }];
+  }),
+});
+const formOn = (target: string, tz: string, through: number, historyTz: (i: number) => string = () => tz) => {
+  const days = [habitual(target, tz, through), ...Array.from({ length: 21 }, (_, i) => habitual(addDays(target, -(i + 1)), historyTz(i + 1)))];
+  const asOf = new Date((wallHour(target, tz, Math.min(through, 23)) ?? 0) + (through >= 24 ? 2 : 0.5) * 3_600_000).toISOString();
+  return computeDailyScores({ access: 'granted', targetDay: target, days, sleepNeedMinutes: 480, asOf }).form;
+};
+
+describe('health scores: Form on a day still in progress', () => {
+  it('compares the hours so far with the same hours of earlier days, so a usual morning reads as usual, not low', () => {
+    const afternoon = formOn(TARGET, 'Europe/London', 15), wholeDay = formOn(TARGET, 'Europe/London', 24);
+    if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(afternoon.used.signals).toEqual(expect.arrayContaining(['daylight', 'movement', 'stress']));
+    expect(afternoon.score).toBe(wholeDay.score);
+    expect(afternoon.algorithm_version).toBe('form.candidate.v4');
+  });
+  it('still reads a day that is really behind its usual hours as lower', () => {
+    const quiet = (record: DayRecord): DayRecord => ({ ...record, hourly: record.hourly.map(bucket => ({ ...bucket, daylightMinutes: bucket.daylightMinutes && 5, movementMinutes: bucket.movementMinutes && 2 })) });
+    const days = [quiet(habitual(TARGET, 'Europe/London', 15)), ...Array.from({ length: 21 }, (_, i) => habitual(addDays(TARGET, -(i + 1)), 'Europe/London'))];
+    const behind = computeDailyScores({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T15:30:00.000Z` }).form;
+    const usual = formOn(TARGET, 'Europe/London', 15);
+    if (behind.state !== 'available' || usual.state !== 'available') throw new Error('expected available');
+    expect(behind.score).toBeLessThan(usual.score);
+  });
+  // Counting elapsed hours instead would cut the earlier days an hour short of 15:00 here, in daylight.
+  it('matches hours by the wall clock on a spring-forward day, whose 15:00 is only 14 hours after midnight', () => {
+    const afternoon = formOn('2026-03-08', 'America/New_York', 15), wholeDay = formOn('2026-03-08', 'America/New_York', 24);
+    if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(afternoon.score).toBe(wholeDay.score);
+  });
+  it('matches hours by the wall clock on a fall-back day, whose 15:00 is 16 hours after midnight', () => {
+    const afternoon = formOn('2026-10-25', 'Europe/London', 15), wholeDay = formOn('2026-10-25', 'Europe/London', 24);
+    if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(afternoon.score).toBe(wholeDay.score);
+  });
+  it('matches each earlier day by its own zone\'s clock after the owner changes time zone', () => {
+    const travelled = (i: number) => (i >= 3 ? 'Asia/Kolkata' : 'Europe/London');
+    const afternoon = formOn(TARGET, 'Europe/London', 15, travelled), wholeDay = formOn(TARGET, 'Europe/London', 24, travelled);
+    if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(afternoon.score).toBe(wholeDay.score);
+  });
+  it('leaves out the hour the phone is still filling, on both sides, until it ends', () => {
+    // At 15:20 the 15:00 window holds twenty minutes of an hour the earlier days hold in full.
+    const growing = habitual(TARGET, 'Europe/London', 16);
+    const days = [{ ...growing, hourly: growing.hourly.map((bucket, h) => (h === 15 ? { ...bucket, daylightMinutes: 7, movementMinutes: 3 } : bucket)) },
+      ...Array.from({ length: 21 }, (_, i) => habitual(addDays(TARGET, -(i + 1)), 'Europe/London'))];
+    const midHour = computeDailyScores({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T15:20:00.000Z` }).form;
+    const wholeDay = formOn(TARGET, 'Europe/London', 24);
+    if (midHour.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
+    expect(midHour.score).toBe(wholeDay.score);
+  });
+  it('does not move when only the clock moves and no new hours arrive', () => {
+    const days = [habitual(TARGET, 'Europe/London', 15), ...Array.from({ length: 21 }, (_, i) => habitual(addDays(TARGET, -(i + 1)), 'Europe/London'))];
+    const at = (iso: string) => computeDailyScores({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: iso }).form;
+    expect(at(`${TARGET}T19:00:00.000Z`)).toEqual(at(`${TARGET}T15:30:00.000Z`));
   });
 });
 

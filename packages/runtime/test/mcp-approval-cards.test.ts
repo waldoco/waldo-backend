@@ -52,9 +52,9 @@ describe('MCP approval cards for owner-connected servers', () => {
 
   for (const withEffects of [false, true]) {
     it(`reports "That failed" when the tool ran and returned an error (${withEffects ? 'with' : 'without'} the effect ledger)`, async () => {
-      await rig(`tool-failed-${withEffects}`, async () => { throw new McpToolFailed("tracker's create_issue ran and reported an error: Title is required."); }, withEffects)(async ({ desk, sql, ran }) => {
+      await rig(`tool-failed-${withEffects}`, async () => { throw new McpToolFailed('tracker\'s create_issue ran and reported an error. tracker said (its own words, not Waldo\'s): "Title is required."'); }, withEffects)(async ({ desk, sql, ran }) => {
         const id = await desk.proposeMcpCall(OWNER_CARD);
-        expect(await desk.decide(id, 'a', 't')).toEqual({ toast: 'That failed', message: "Run create_issue on the tracker MCP server ran and failed: tracker's create_issue ran and reported an error: Title is required." });
+        expect(await desk.decide(id, 'a', 't')).toEqual({ toast: 'That failed', message: 'Run create_issue on the tracker MCP server ran and failed. tracker\'s create_issue ran and reported an error. tracker said (its own words, not Waldo\'s): "Title is required."' });
         expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('failed');
         expect((await desk.decide(id, 'a', 't')).toast).toBe('Already handled.');
         expect(ran).toHaveLength(1);

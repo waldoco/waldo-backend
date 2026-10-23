@@ -1,6 +1,6 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { RunEffectScope } from '../channels/run-effect-scope';
-import { asciiLiteralIncludes, forgetSourceBatch } from '../memory/selective-forget';
+import { forgetSourceBatch } from '../memory/selective-forget';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
@@ -112,13 +112,13 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   for (const [key, row] of rows) {
     let index = 0;
     const before = sources.length;
-    const add = (text: string) => { if (asciiLiteralIncludes(text, topic)) sources.push({ ref: `ledger:${key}:${index++}`, text }); };
+    const add = (text: string) => { if (carriesTopic(text, topic)) sources.push({ ref: `ledger:${key}:${index++}`, text }); };
     add(row.summary);
     const decoded = (value: unknown): void => {
       if (typeof value === 'string') add(value);
       else if (Array.isArray(value)) value.forEach(decoded);
       else if (value && typeof value === 'object') for (const [name, child] of Object.entries(value)) {
-        if (asciiLiteralIncludes(name, topic)) incomplete = true;
+        if (carriesTopic(name, topic)) incomplete = true;
         add(name); decoded(child);
       }
     };

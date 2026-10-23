@@ -3,18 +3,21 @@
 // reminder path, as the owner object's alarm drives it.
 import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
+import { HEALTH_TRIGGER_FORMAT } from '../../src/health/trigger';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type SeedMail, type WorldSeed } from './world';
+import { evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
   | Readonly<{ health: 'shared' | 'withdrawn' }>
+  // The owner's derived health moves zone and the health trigger runs, with one structured model call.
+  | Readonly<{ health_change: true }>
   | Readonly<{ mail_arrives: SeedMail }>;
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
@@ -39,12 +42,12 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapte
   },
 });
 
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName }>): Promise<TrialRecord> => {
-  const world = evalWorld(scenario.world, scenario.start);
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; memory?: MemoryMode }>): Promise<TrialRecord> => {
+  const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
-  const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = createTelegramResponder(deps.toolSearch ? { openaiApiKey: 'eval-key', toolSearch: true } : 'eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
@@ -70,6 +73,10 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
+      } else if ('health_change' in step) {
+        const { outcome, proposal } = await world.healthChange((id, prompt) => responder.prompt(id, 1, prompt, time, [], async () => undefined, HEALTH_TRIGGER_FORMAT));
+        transcript.push({ role: 'world', text: `The owner's health moves zone and the health trigger runs (${outcome}).` });
+        if (proposal) transcript.push({ role: 'waldo', surface: 'notification', text: proposal.reason });
       } else {
         world.shareHealth(step.health === 'shared');
         transcript.push({ role: 'world', text: step.health === 'shared' ? 'The owner shares health data.' : 'The owner withdraws health sharing.' });

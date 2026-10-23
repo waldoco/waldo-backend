@@ -10,7 +10,7 @@ export type DayRecord = Base<'day', {
   // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
   proactive_surface?: ProactiveSurface;
 }>;
-export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both'; app_linked: boolean; whatsapp_linked: boolean; telegram_linked: boolean };
+export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
   telegram: { linked: boolean; unlinkAvailable: boolean };
@@ -19,7 +19,7 @@ export type ConnectionsRecord = Base<'connections', {
   mcp?: McpServerRecord[];
 }>;
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
-export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string }[] };
+export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
 export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
@@ -38,11 +38,11 @@ export type ProfileRecord = Base<'profile', { sections: { title: string; lines: 
 export type SetupRecord = Base<'setup', { telegram_linked: boolean; google_access_granted: boolean; quiet_hours_set: boolean; imessage_linked?: boolean }>;
 export type UsageRecord = Base<'usage', { rows: { model: string; calls: number; input: number; cached: number; output: number; usd: number }[] }>;
 export type FilesRecord = Base<'files', { storage: 'telegram_reference'; items: { id: number; kind: string; name: string; mime: string | null; size: number | null; caption: string; at: number }[] }>;
-const IMESSAGE_TOP = ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'] as const, IMESSAGE_ROW = ['imessage.verify', 'imessage.activate', 'imessage.activate_shared', 'imessage.revoke'] as const;
+const IMESSAGE_TOP = ['imessage.enroll', 'imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'] as const, IMESSAGE_ROW = ['imessage.verify', 'imessage.activate', 'imessage.activate_shared', 'imessage.revoke'] as const;
 const DEVICE_ROW = ['device.revoke', 'device.query', 'device.notify'] as const;
 // Liveness sits beside data: it is not part of the revision, so it can change between reads without blocking a decision.
 export type IMessageRecord = Base<'imessage', {
-  enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; actions: (typeof IMESSAGE_TOP)[number][];
+  enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; phone: string | null; photon: 'connected' | 'disconnected' | null; actions: (typeof IMESSAGE_TOP)[number][];
   bridges: { id: string; kind: 'owner' | 'shared'; state: string; subject: string | null; chat: string | null; observed: boolean; host_version: string; actions: (typeof IMESSAGE_ROW)[number][] }[];
 }> & { status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
 export type DevicesRecord = Base<'devices', {
@@ -52,10 +52,11 @@ type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: Waitin
 export type ControlRecord = Records[ControlsView];
 export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
-export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string };
+/** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
@@ -89,13 +90,13 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   if (expected === 'day') {
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
-    if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean'))) throw shapeError();
+    if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
-      ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, telegram_linked: surface.telegram_linked } } : {}),
+      ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
@@ -107,7 +108,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     telegram: { linked: data.telegram.linked, unlinkAvailable: data.telegram.unlinkAvailable },
     sessions: { until: data.sessions.until, count: data.sessions.count, items: (data.sessions.items as { signed_in: string; until: string; current: boolean }[]).map(item => ({ signed_in: item.signed_in, until: item.until, current: item.current })) },
     ...(data.channels === undefined ? {} : { channels: (data.channels as NonNullable<ConnectionsRecord['data']['channels']>).map(item => ({ channel: item.channel, state: item.state, masked_label: item.masked_label })) }),
-    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }) })) })) }),
+    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tools_capped: server.tools_capped, read_only_digest: server.read_only_digest, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }), digest: tool.digest })) })) }),
     } } as Records[V];
   }
   if (expected === 'waiting') {
@@ -150,12 +151,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'imessage') {
     const status = value.status;
+    // phone and photon are newer fields: a server without them reads as not enrollable, Photon unknown.
     if (typeof data.enabled !== 'boolean' || !optionalString(data.address) || !optionalString(data.linked_hint) || typeof data.admin !== 'boolean' || !listed(data.actions, IMESSAGE_TOP) || !Array.isArray(data.bridges)
+      || (data.phone !== undefined && !optionalString(data.phone)) || (data.photon !== undefined && data.photon !== null && data.photon !== 'connected' && data.photon !== 'disconnected')
       || !data.bridges.every(row => obj(row) && string(row.id) && /^imb_[0-9a-f]{32}$/.test(row.id) && ['owner', 'shared'].includes(String(row.kind)) && string(row.state) && optionalString(row.subject) && optionalString(row.chat) && typeof row.observed === 'boolean' && string(row.host_version) && listed(row.actions, IMESSAGE_ROW))
       || !obj(status) || !Array.isArray(status.bridges) || !status.bridges.every(row => obj(row) && string(row.id) && typeof row.online === 'boolean' && typeof row.text_ready === 'boolean' && typeof row.sending_paused === 'boolean')) throw shapeError();
     type Bridge = IMessageRecord['data']['bridges'][number];
     return { ...base, view: 'imessage', data: {
-      enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, actions: [...data.actions] as IMessageRecord['data']['actions'],
+      enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, phone: (data.phone ?? null) as string | null,
+      photon: (data.photon ?? null) as IMessageRecord['data']['photon'], actions: [...data.actions] as IMessageRecord['data']['actions'],
       bridges: (data.bridges as Bridge[]).map(row => ({ id: row.id, kind: row.kind, state: row.state, subject: row.subject, chat: row.chat, observed: row.observed, host_version: row.host_version, actions: [...row.actions] })),
     }, status: { bridges: (status.bridges as IMessageRecord['status']['bridges']).map(row => ({ id: row.id, online: row.online, text_ready: row.text_ready, sending_paused: row.sending_paused })) } } as Records[V];
   }
@@ -194,8 +198,9 @@ export async function fetchControls<V extends ControlsView>(view: V, signal?: Ab
 }
 
 const mcpServer = (item: unknown): boolean => obj(item) && string(item.id) && string(item.name) && string(item.host) && string(item.server_url) && ['oauth', 'none'].includes(String(item.auth)) && ['active', 'reauth_needed'].includes(String(item.status))
-  && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean'
-  && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string'));
+  && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean' && typeof item.tools_capped === 'boolean'
+  && digest(item.read_only_digest) && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string') && digest(tool.digest));
+const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 
 // Existing connectUrl issues a first-party /c/<22-character ticket>. Direct
 // Google authorization is constrained to the exact existing provider endpoint.
@@ -226,7 +231,7 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
 
 // Each one-time value has one action and one exact shape; anything else is refused, never shown.
 const REVEALS: Partial<Record<ControlAction, { kind: ActionReveal['kind']; shape: RegExp }>> = {
-  'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
+  'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ }, 'imessage.enroll': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
   'imessage.pair': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ }, 'imessage.pair_shared': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ },
   'imessage.verify': { kind: 'challenge', shape: /^wic_[a-f0-9]{48}$/ },
   'device.pair': { kind: 'pairing_code', shape: /^wp1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/ },
@@ -235,7 +240,8 @@ function readReveal(value: unknown, action: ControlAction, fresh: boolean): Acti
   const expected = REVEALS[action];
   const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
   if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
-  return { kind: expected.kind, value: value.value };
+  const to = expected.kind === 'link_code' && string(value.to) && /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/.test(value.to) ? value.to : undefined;
+  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}) };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {

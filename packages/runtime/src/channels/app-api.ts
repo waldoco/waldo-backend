@@ -4,7 +4,7 @@ import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, app
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { computeDailyScores } from '../health/scores';
@@ -137,7 +137,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
-        notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day) } : {}) });
+        notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
+        notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName) } : {}) });
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
@@ -152,9 +153,13 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
   if (linkCode) {
     if (request.method !== 'POST') return fail(405);
-    const address = env.IMESSAGE_WALDO_ADDRESS;
-    if (!address || !auth.issueProviderLinkCode) return fail(503);
+    if (!auth.issueProviderLinkCode) return fail(503);
     try {
+      // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
+      // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
+      const { iMessageNumberView } = await import('./imessage/enrollment');
+      const address = (await iMessageNumberView(env as never, who.doName)).number;
+      if (!address) return fail(503);
       const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
       if (!code) return fail(503);
       return ok(appIMessageLinkCodeV1Schema.parse({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 }));

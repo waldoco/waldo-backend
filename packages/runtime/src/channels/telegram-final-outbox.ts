@@ -1,4 +1,5 @@
 import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import { carriesTopic } from '../memory/forget-guard';
 import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
@@ -8,11 +9,14 @@ import { telegramRichReply } from './rich-format';
 export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
 // One report per occurrence: the producer and the scheduler both find a queued report by this id.
 export const standingOrderFinalId = (orderId: string, occurrence: number): string => `standing-order:${orderId}:${occurrence}`;
+// One card per day: the card's producer and the later-card bound both find a queued card by this id.
+export const dayCardFinalId = (day: string, card: CardId): string => `day-card:${day}:${card}`;
 export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 // Statuses a surface reported for a message id before the outbox could match them to a record (the record was still being
 // sent, or the id was never the outbox's). Kept briefly, so a record that finishes its send then picks up what arrived early.
-const EARLY_STATUS_KEY = 'telegram_final_outbox_status_v1';
+export const EARLY_STATUS_KEY = 'telegram_final_outbox_status_v1';
 const EARLY_STATUS_TTL_MS = 24 * 60 * 60 * 1000;
+export const MAX_EARLY_STATUSES = 256;
 const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
 export type FinalPayload = TelegramFinalPayload;
@@ -54,6 +58,11 @@ export type FinalRecord = {
   standingOrder?: { runId: string; gate: StandingGate };
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+// Whether the provider took any part of the record, whether or not it has arrived. Such a record is on the owner's phone in
+// part, so it is never superseded, moved to another surface, or ended as "not sent".
+export const tookPart = (record: Pick<FinalRecord, 'providerMessageIds'>): boolean => (record.providerMessageIds ?? []).some(Boolean);
+// What a record that stops waiting without going out again ends as: blocked when nothing went out, quarantined when part did.
+const endUnsent = (row: FinalRecord, reason: string): void => { row.status = tookPart(row) ? 'quarantined' : 'blocked'; row.reason = reason; };
 // What a surface's acknowledgement proves was sent. arrivalBy marks a surface that only accepted the message and reports later
 // whether it reached the recipient (or refused it); the record waits for that report until arrivalBy. 'held' is a surface
 // that kept the text for later instead of sending it. 'refused' is a surface that sent nothing and leaves the record in the
@@ -144,7 +153,7 @@ export class TelegramFinalOutbox {
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
     }
-    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !(row.providerMessageIds ?? []).some(Boolean) && options?.supersedes?.(row)) {
+    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !tookPart(row) && options?.supersedes?.(row)) {
       row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
     }
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
@@ -232,7 +241,7 @@ export class TelegramFinalOutbox {
     if (!row) return;
     const before = JSON.stringify(row);
     if (row.expiresAt !== undefined && this.now() >= row.expiresAt) {
-      row.status = 'blocked'; row.reason = 'expired';
+      endUnsent(row, 'expired');
       await this.save(this.records().map(current => current.id === row.id ? row : current)); await options.settled(row); await markSettled(row); return;
     }
     // A quiet-hours hold keeps the frozen intent pending; it is not a rejection.
@@ -240,10 +249,10 @@ export class TelegramFinalOutbox {
     if (deferred !== undefined && deferred !== null && deferred > this.now()) {
       row.dueAt = Math.min(deferred, row.expiresAt ?? Infinity); await commit(row, before); return;
     }
-    if (options.lapsed?.(row)) { row.status = 'blocked'; row.reason = 'lapsed'; if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
+    if (options.lapsed?.(row)) { endUnsent(row, 'lapsed'); if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
     let allowed = false;
     try { allowed = (row.expiresAt === undefined || this.now() < row.expiresAt) && await options.allowed(row); } catch { /* fail closed */ }
-    if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
+    if (!allowed) { endUnsent(row, 'owner_binding'); if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
     row.status = 'attempting'; row.attempts += 1;
     if (!(await commit(row, before))) return;
     let persistedRow = JSON.stringify(row);
@@ -430,14 +439,21 @@ const applyEarlyStatuses = (kv: StatusKv, row: FinalRecord, now: number): void =
 // still being sent, or for an id the outbox does not hold, is kept briefly for that record. Answers how many records changed.
 export const observeSurfaceStatuses = (kv: StatusKv, statuses: readonly SurfaceStatus[], addressed: (record: FinalRecord) => boolean, now: number): number => {
   const rows = new TelegramFinalOutbox(kv).records();
-  const early = Object.fromEntries(Object.entries(kv.get<EarlyStatuses>(EARLY_STATUS_KEY) ?? {}).filter(([, status]) => now - status.seen < EARLY_STATUS_TTL_MS));
+  const stored = kv.get<EarlyStatuses>(EARLY_STATUS_KEY) ?? {};
+  const early = Object.fromEntries(Object.entries(stored).filter(([, status]) => now - status.seen < EARLY_STATUS_TTL_MS));
   const changed = new Set<FinalRecord>();
   for (const status of statuses) {
     const row = rows.find(record => addressed(record) && record.providerMessageIds?.includes(status.id));
     if (!row || row.status === 'attempting') { early[status.id] ??= { kind: status.kind, at: status.at, seen: now }; continue; }
     if (applyStatus(row, row.providerMessageIds!.indexOf(status.id), status.kind, now)) changed.add(row);
   }
-  kv.put(EARLY_STATUS_KEY, early);
+  // The surface also reports on messages that are not records (every direct reply and knock), and each of those lands here until
+  // a record claims it. Uncapped, one storage value grows with the owner's chat volume until it outgrows what a value can hold;
+  // the write that acknowledges the surface's reports then fails, and the reports a real record is waiting for are lost.
+  // Beyond the cap the oldest go: only the one record being sent can still be waiting on one, and that is a handful of ids.
+  const entries = Object.entries(early);
+  const kept = entries.length > MAX_EARLY_STATUSES ? Object.fromEntries(entries.sort(([, a], [, b]) => a.seen - b.seen).slice(-MAX_EARLY_STATUSES)) : early;
+  if (JSON.stringify(kept) !== JSON.stringify(stored)) kv.put(EARLY_STATUS_KEY, kept);
   if (changed.size) writeRows(kv, rows);
   return changed.size;
 };
@@ -453,7 +469,7 @@ export const retireSurfaceRecords = (kv: StatusKv, addressed: (record: FinalReco
     if (!addressed(row)) continue;
     // A record that already ended and still owes its settlement keeps how it ended, and is handed back to be settled: no pass for this surface runs again.
     if (row.status !== 'pending' && row.status !== 'accepted' && row.status !== 'attempting') { if (row.settled === false) retired.push(row.id); continue; }
-    const sent = row.status !== 'pending' || (row.providerMessageIds ?? []).some(Boolean);
+    const sent = row.status !== 'pending' || tookPart(row);
     row.status = sent ? 'quarantined' : 'blocked'; row.reason = 'surface_unlinked'; row.settled = false; row.dueAt = 0;
     retired.push(row.id);
   }
@@ -478,7 +494,7 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     if (text === row.payload.text && fallback === row.payload.fallback_text && !metadataChanged) continue;
     row.payload = { ...row.payload, text, ...(fallback === undefined ? {} : { fallback_text: fallback }) };
     // Once a part has gone out its message ids follow the parts by index, so the parts are redacted in place, never split again.
-    const started = (row.deliveredParts ?? 0) > 0 || (row.providerMessageIds ?? []).some(Boolean);
+    const started = (row.deliveredParts ?? 0) > 0 || tookPart(row);
     row.parts = started && row.parts?.length
       ? row.parts.map(part => ({ text: redact(part.text), ...(part.fallback_text === undefined ? {} : { fallback_text: redact(part.fallback_text) }) }))
       : payloadParts(row.payload);
@@ -497,7 +513,7 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     };
     if (scope) scope.commit(write); else write();
   }
-  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => value.toLowerCase().includes(needle.toLowerCase())))).length;
+  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => carriesTopic(value, needle)))).length;
   return { rewritten, remaining };
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);

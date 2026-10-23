@@ -17,6 +17,16 @@ describe('modern owner controls read', () => {
     expect(JSON.stringify(readControls({ ...connections, data: { ...connections.data, sessions: { ...connections.data.sessions, items: [{ ...connections.data.sessions.items[0], token: 'never-retain' }] } } }, 'connections'))).not.toContain('never-retain');
   });
 
+  it('keeps each MCP tool\'s shown digest, which a grant sends back, and refuses a server record without one', () => {
+    const server = { id: 'c1', name: 'notion', host: 'mcp.notion.com', server_url: 'https://mcp.notion.com/mcp', auth: 'oauth', status: 'active', scopes: [], wants_scopes: [], tools: 1, hidden_tools: 0, runs_without_asking: 0, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64), tool_list: [{ tool: 'search', runs: 'asks_first', read_only_hint: true, digest: 'a'.repeat(64) }] };
+    const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
+    expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
+    expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+      expect(() => readControls(withServer(broken), 'connections')).toThrow();
+    }
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);
@@ -139,7 +149,7 @@ describe('revision-bound owner control actions', () => {
 
 describe('iMessage and device setup reads', () => {
   const bridge = { id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid', observed: true, host_version: 'host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] };
-  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
+  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
   const device = { id: 'dev_fixture', label: '<b>Mac</b>', capabilities: ['machine_state_query'], created_at: '2026-10-16', actions: ['device.revoke', 'device.query'] };
   const devices = { ...day, view: 'devices', data: { actions: ['device.pair'], devices: [device], query_kinds: ['session_status'], notification_bodies: ['Your Mac is connected.'] }, status: { devices: [{ id: device.id, online: false, last_seen_at: null, commands: [{ class: 'machine_state_query', state: 'queued', result_state: null }] }] } };
   it('keeps only the listed fields and actions, and liveness beside the data', () => {
@@ -148,7 +158,7 @@ describe('iMessage and device setup reads', () => {
     expect(readControls({ ...devices, data: { ...devices.data, devices: [{ ...device, pubkey: 'never-retain' }] } }, 'devices')).toEqual(devices);
     for (const value of [
       { ...imessage, status: undefined }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'invite.create'] } }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'imessage.link'] } },
-      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } },
+      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } }, { ...imessage, data: { ...imessage.data, photon: 'maybe' } }, { ...imessage, data: { ...imessage.data, phone: 5 } },
     ]) expect(() => readControls(value, 'imessage')).toThrow('unsupported');
     for (const value of [{ ...devices, data: { ...devices.data, actions: ['device.revoke'] } }, { ...devices, data: { ...devices.data, devices: [{ ...device, actions: ['device.pair'] }] } }, { ...devices, status: { devices: [{ ...devices.status.devices[0], online: 'yes' }] } }])
       expect(() => readControls(value, 'devices')).toThrow('unsupported');

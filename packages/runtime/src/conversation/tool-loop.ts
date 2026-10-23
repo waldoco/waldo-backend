@@ -1,9 +1,9 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
-import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ToolError, type ToolName } from '@waldo/contracts';
+import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
-import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
 
@@ -23,15 +23,16 @@ export const capToolOutput = (output: string, offload?: ToolOutputStore, callId?
     : `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[full output stored as ${stored.id}: ${stored.stored_chars} characters total; call read_tool_output with this id, offset and length to read more]`;
 };
 
+// model: the model that answered, when one did; its provider's cache lifetime decides when old results may be cleared.
 export type ToolLoopStep = (
   tools: readonly LLMTool[] | undefined,
   turns: readonly LLMToolTurn[],
-) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
+) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[]; model?: ModelName }>>;
 
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
 // parallel_batches is 1 on the first call of a dispatch batch and 0 on the calls that ran beside it, so summing it over a
 // turn's tool hops counts its batches.
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; taint: 'external' | null; parallel_batches: 0 | 1 }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; blocked?: RungBlockedOutcome; taint: 'external' | null; parallel_batches: 0 | 1 }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -86,11 +87,16 @@ const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING
 // (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
 // input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
 export const TOOL_RESULTS_KEEP_CHARS = 160_000;
+// Once every provider that served the turn has let its prompt cache expire, the next request re-bills the whole prefix
+// anyway, so results older than this many latest rounds are cleared then, as Anthropic's tool result clearing keeps the
+// latest three tool uses by default. While any cache may be warm, clearing would re-bill everything after the cleared
+// result, so nothing is cleared for time.
+export const COLD_CACHE_KEEP_ROUNDS = 3;
 // A cleared result stays one call away: the note keeps whether it worked and any receipt link, and names the stored
 // copy read_tool_output reads back. Without a store, a read can run again; a browse or a write cannot be repeated.
 export type ClearedResult = Readonly<{ ok: boolean; receipt: string | null; stored?: StoredPut; repeatable: boolean }>;
 export const clearedToolResult = (name: string, result: ClearedResult): string => {
-  const head = `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn (${result.ok ? 'it succeeded' : 'it failed'}) is no longer shown, to keep the turn within its context.`;
+  const head = `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn (${result.ok ? 'it succeeded' : 'it failed'}) is no longer shown.`;
   const receipt = result.receipt ? ` Its link: ${result.receipt}.` : '';
   const back = result.stored
     ? ` Its full output is stored as ${result.stored.id}${result.stored.truncated ? ` (first ${result.stored.stored_chars} of ${result.stored.original_chars} characters)` : ''}; call read_tool_output with this id to read it again.`
@@ -157,6 +163,7 @@ export async function runToolLoop(input: Readonly<{
   const roundStarts: number[] = [];
   const shownTurns = (): readonly LLMToolTurn[] => {
     clearOldResults();
+    if (cacheCold(Date.now())) clearThrough(roundStarts.length > COLD_CACHE_KEEP_ROUNDS ? roundStarts[roundStarts.length - COLD_CACHE_KEEP_ROUNDS]! : 0);
     if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
     const start = roundStarts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? roundStarts.at(-1)!;
     const [first, ...rest] = turns.slice(start);
@@ -167,20 +174,31 @@ export async function runToolLoop(input: Readonly<{
   let cleared = 0;
   // Per turn entry: the whole result as it came back, and what its cleared note needs.
   const results: Readonly<{ full: string; ok: boolean; receipt: string | null; key: string; repeatable: boolean }>[] = [];
+  const clearNext = () => {
+    const turn = turns[cleared]!, result = results[cleared]!;
+    const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
+    turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) }) };
+    // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
+    if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
+    cleared += 1;
+  };
+  const clearThrough = (end: number) => { while (cleared < end) clearNext(); };
   const clearOldResults = () => {
     const newest = roundStarts.at(-1) ?? 0;
     let total = turns.slice(cleared).reduce((sum, turn) => sum + turn.output.length, 0);
     if (total <= TOOL_RESULTS_KEEP_CHARS) return;
     while (cleared < newest && total > TOOL_RESULTS_KEEP_CHARS / 2) {
-      const turn = turns[cleared]!, result = results[cleared]!;
-      total -= turn.output.length;
-      const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
-      turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) }) };
-      // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
-      if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
-      cleared += 1;
+      total -= turns[cleared]!.output.length;
+      clearNext();
     }
   };
+  // When each provider that answered this loop last returned: its cache entry lives from the start of that request, so
+  // the return is the latest it can have been refreshed.
+  const answeredAt = new Map<Provider, number>();
+  const cacheCold = (now: number): boolean => answeredAt.size > 0 && [...answeredAt].every(([provider, at]) => {
+    const lifetime = PROMPT_CACHE_TTL_MS[provider];
+    return lifetime !== undefined && now - at >= lifetime;
+  });
   let browsingWithheld = false;
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
@@ -215,6 +233,7 @@ export async function runToolLoop(input: Readonly<{
       return unfinishedReply('time_exhausted', done);
     }
     input.ctx.runScope?.admit();
+    if (response.model !== undefined) answeredAt.set(PROVIDER_OF[response.model], Date.now());
     // A hosted web search runs inside the model's own call, so its results arrive in the response rather than as a tool
     // result. They taint the rest of the turn the same way (ADR-0049), before this round's calls are dispatched.
     if (response.output_items?.some((item) => item.type === 'web_search_call')) {
@@ -353,7 +372,7 @@ export async function runToolLoop(input: Readonly<{
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error
       // text off; error keeps the human-facing message for capture-on.
-      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean });
+      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean; blocked?: RungBlockedOutcome });
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: settled?.ms ?? Date.now() - started, output, parallel_batches: batchLead ? 1 : 0,
@@ -364,6 +383,7 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.retryable !== undefined ? { retryable: typed.retryable } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
+        ...(typed?.blocked ? { blocked: typed.blocked } : {}),
       });
       batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
@@ -392,7 +412,7 @@ const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationT
   return batch.length > 1 ? batch : [start];
 };
 
-type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
+type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome }>;
 
 // A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
 const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>
@@ -424,6 +444,7 @@ async function dispatch(
     error_code: result.error_code,
     fix: result.fix,
     retryable: result.retryable,
+    ...(result.blocked ? { blocked: result.blocked } : {}),
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
     // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.

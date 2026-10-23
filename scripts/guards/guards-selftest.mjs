@@ -1061,7 +1061,8 @@ if (legitimateSupabaseFunction.status !== 0 || legitimateSupabaseFunction.stderr
   failures += 1;
 }
 
-// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, or are clean.
+// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, re-arm with a bare
+// null for the schedule, or are clean.
 const WAKE_GUARD = 'scripts/guards/guard-wake-due-keys.mjs';
 const WAKE_SLOT = "export const LANE_DUE_KEY = 'lane_due_v1';\nexport const WAKE_DUE_KEYS = [\n  LANE_DUE_KEY, 'other_due_v1',\n] as const;\n";
 function withWakeFixture(lanes) {
@@ -1079,6 +1080,7 @@ function withWakeFixture(lanes) {
 const WAKE_CASES = [
   { name: 'an unlisted due key', lanes: { 'packages/runtime/src/channels/lane.ts': "kv.put('stray_due_v1', due);\n" }, finds: "'stray_due_v1'" },
   { name: 'an arm without a listed key', lanes: { 'packages/runtime/src/channels/lane.ts': 'await armAlarm(storage, due);\n' }, finds: 'channels/lane.ts: arms the owner alarm' },
+  { name: 'a re-arm with a bare null for the schedule', lanes: { 'packages/runtime/src/channels/lane.ts': 'await rearmSharedAlarm(this.ctx.storage,\n  null, Date.now());\n' }, finds: 'channels/lane.ts: re-arms the owner alarm with a bare null' },
 ];
 for (const { name, lanes, finds } of WAKE_CASES) {
   const result = withWakeFixture(lanes);
@@ -1088,7 +1090,7 @@ for (const { name, lanes, finds } of WAKE_CASES) {
   }
 }
 const wakeClean = withWakeFixture({
-  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\n",
+  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\nawait rearmSharedAlarm(storage, bound, now);\nawait rearmSharedAlarm(storage, held ? retry : NO_SCHEDULE_WAKE, now, 30_000);\n",
   'packages/runtime/src/channels/other.ts': "kv.put('other_due_v1', due);\nawait armAlarm(storage, due);\n",
   'packages/runtime/src/devices/device-bridge-do.ts': "await armAlarm(this.ctx.storage, due);\nkv.put('bridge_due_v1', due);\n",
 });
@@ -1162,6 +1164,32 @@ if (surfaceCompareOutsideBaseline.status === 0 || !surfaceCompareOutsideBaseline
 const surfaceCompareInTest = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/core.test.ts', SURFACE_CORE);
 if (!reportsClean(surfaceCompareInTest)) {
   process.stderr.write(`guards-selftest: guard-surface-neutral-core FALSE POSITIVE on a test file:\n${surfaceCompareInTest.stderr}`);
+  failures += 1;
+}
+
+const runEdgeImportGuardWith = (libSpecifier) => {
+  const root = mkdtempSync(join(tmpdir(), 'edge-imports-'));
+  try {
+    mkdirSync(join(root, 'supabase', 'functions', 'f'), { recursive: true });
+    mkdirSync(join(root, 'packages', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'supabase', 'functions', 'f', 'index.ts'), "import { a } from '../../../packages/lib/a.ts';\n");
+    writeFileSync(join(root, 'packages', 'lib', 'a.ts'), `import { b } from '${libSpecifier}';\nexport const a = b;\n`);
+    writeFileSync(join(root, 'packages', 'lib', 'b.ts'), 'export const b = 1;\n');
+    return spawnSync('node', ['scripts/guards/guard-edge-function-imports.mjs', '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+const edgeImportBare = runEdgeImportGuardWith('./b');
+if (edgeImportBare.status === 0 || !edgeImportBare.stderr.includes("imports './b'")) {
+  process.stderr.write('guards-selftest: guard-edge-function-imports MISSED an extensionless import two hops from a function\n');
+  failures += 1;
+}
+
+const edgeImportExplicit = runEdgeImportGuardWith('./b.ts');
+if (edgeImportExplicit.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-edge-function-imports FALSE POSITIVE on an explicit extension:\n${edgeImportExplicit.stderr}`);
   failures += 1;
 }
 

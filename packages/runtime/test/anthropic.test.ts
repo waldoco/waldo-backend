@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Anthropic from '@anthropic-ai/sdk';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
@@ -226,6 +227,63 @@ describe('AnthropicMessagesAdapter tool search', () => {
     if (result.ok) expect(result.data.tool_calls).toHaveLength(1);
   });
 
+  it('continues a response that only searched, with its blocks sent back, and returns the answer after them', async () => {
+    const { bodies, adapter } = recording([reply([search, found], 'pause_turn'), reply([use], 'tool_use')]);
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]!.messages).toEqual([...bodies[0]!.messages as unknown[], { role: 'assistant', content: [search, found] }]);
+    expect(bodies[1]!.tools).toEqual(bodies[0]!.tools);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'query_availability' }], input_tokens: 20, output_tokens: 6 } });
+    // The searched blocks lead the answer's, so the next round replays the whole turn.
+    if (result.ok) expect(result.data.output_items!.map((item) => item.type)).toEqual(['server_tool_use', 'tool_search_tool_result', 'tool_use']);
+  });
+
+  it('stops continuing a response that keeps only searching, and fails it as an empty answer', async () => {
+    const { bodies, adapter } = recording([reply([search, found], 'pause_turn')]);
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(3);
+    expect(result).toMatchObject({ ok: false, code: 'transient' });
+  });
+
+  it('keeps the spend of a search-only response when its continuation fails', async () => {
+    let calls = 0;
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      calls += 1;
+      if (calls === 1) return reply([search, found], 'pause_turn');
+      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
+    } } } as never });
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args', spent: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 0 } });
+  });
+
+  it('reports no spend for a first call that fails', async () => {
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async () => {
+      throw new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic' } }, 'synthetic', new Headers());
+    } } } as never });
+    const base = gatewayRequest();
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(result).not.toHaveProperty('spent');
+  });
+
+  // Each continuation is billed, so only a response whose every block is search work, and that holds a search result,
+  // is continued; anything else is answered or failed on the call that returned it.
+  it.each([
+    ['holds no blocks at all', reply([], 'end_turn')],
+    ['called the search but holds no result', reply([search], 'pause_turn')],
+    ['also answered in text', reply([search, found, { type: 'text', text: 'Free at 3.' }], 'end_turn')],
+    ['stopped at the output limit', reply([search, found], 'max_tokens')],
+  ])('does not continue a response that %s', async (_case, response) => {
+    const { bodies, adapter } = recording([response, reply([use], 'tool_use')]);
+    const base = gatewayRequest();
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search } });
+    expect(bodies).toHaveLength(1);
+  });
+
   it('sends a deferred tool up front when the history calls it without the search that loaded it', async () => {
     const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Done.' }])]);
     const base = gatewayRequest();
@@ -245,5 +303,68 @@ describe('AnthropicMessagesAdapter tool search', () => {
     expect((bodies[0]!.messages as unknown[]).slice(1, 2)).toEqual([{ role: 'assistant', content: [use] }]);
     expect(deferred(bodies[1]!)).toBeUndefined();
     expect(deferred(bodies[2]!)).toBe(true);
+  });
+});
+
+// Rolling breakpoints (prompt caching guide): the system block, which caches the tools rendered before it, and the last
+// cacheable block of each of the last three messages, four in all as the API allows.
+describe('AnthropicMessagesAdapter cache breakpoints', () => {
+  const tools = [{ name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } }];
+  const EPHEMERAL = { type: 'ephemeral' };
+  const marked = (body: Record<string, unknown>) => (body.messages as Array<{ content: Array<Record<string, unknown>> }>)
+    .flatMap((message, index) => message.content.flatMap((block, at) => block.cache_control ? [`${index}.${at}`] : []));
+  const breakpoints = (body: Record<string, unknown>) => JSON.stringify(body).split('"cache_control"').length - 1;
+  const history = [{ role: 'user' as const, content: 'one' }, { role: 'assistant' as const, content: 'two' }, { role: 'user' as const, content: 'three' }, { role: 'assistant' as const, content: 'four' }, { role: 'user' as const, content: 'five' }];
+
+  it('marks the system block and the last block of each of the last three messages, and nothing else', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, 'anthropic_native');
+    await adapter.complete({ ...base, request: { ...base.request, tools, messages: history } });
+    expect(marked(bodies[0]!)).toEqual(['2.0', '3.0', '4.0']);
+    expect((bodies[0]!.messages as Array<{ content: unknown[] }>)[4]!.content).toEqual([{ type: 'text', text: 'five', cache_control: EPHEMERAL }]);
+    expect(breakpoints(bodies[0]!)).toBe(4);
+    expect(bodies[0]!.tools).toEqual([{ name: 'get_context', description: 'Current time', input_schema: { type: 'object', properties: {} } }]);
+  });
+
+  it('marks every message of a shorter conversation', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+    await adapter.complete(gatewayRequest(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, 'anthropic_native'));
+    expect(marked(bodies[0]!)).toEqual(['0.0']);
+    expect(breakpoints(bodies[0]!)).toBe(2);
+  });
+
+  it('marks no message on a step without provider caching', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+    const base = gatewayRequest();
+    await adapter.complete({ ...base, request: { ...base.request, messages: history } });
+    expect(breakpoints(bodies[0]!)).toBe(0);
+  });
+
+  it('a round re-marks the message the previous round marked last, so each request reads what the one before it wrote', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, 'anthropic_native');
+    const round = (n: number) => ({ call: { call_id: `c${n}`, name: 'get_context', arguments: '{}' }, output: `o${n}`, prior_items: [{ type: 'tool_use', provider: ANTHROPIC_PROVIDER, block: { type: 'tool_use', id: `c${n}`, name: 'get_context', input: {} } }] });
+    await adapter.complete({ ...base, request: { ...base.request, tools, messages: history, tool_turns: [round(1)] } });
+    await adapter.complete({ ...base, request: { ...base.request, tools, messages: history, tool_turns: [round(1), round(2)] } });
+    // The first request's last marked block is the second request's first marked block, at the same position and after
+    // the same content. A marker is not content: a block marked once and not again still reads from the cache.
+    const unmarked = (messages: unknown) => JSON.stringify(messages).replaceAll(',"cache_control":{"type":"ephemeral"}', '');
+    expect(marked(bodies[0]!).at(-1)).toBe('6.0');
+    expect(marked(bodies[1]!)).toEqual(['6.0', '7.0', '8.0']);
+    expect(unmarked((bodies[1]!.messages as unknown[]).slice(0, 7))).toBe(unmarked(bodies[0]!.messages));
+  });
+
+  it('marks the last block that takes a marker, never a server tool block after it, and leaves the stored item unchanged', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+    const base = gatewayRequest(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, 'anthropic_native');
+    const search = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_bm25', input: { query: 'time' } };
+    const found = { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'tool_search_tool_search_result', tool_references: [{ type: 'tool_reference', tool_name: 'get_context' }] } };
+    const use = { type: 'tool_use', id: 'c1', name: 'get_context', input: {} };
+    const prior = [search, found, use, search, found].map((block) => ({ type: block.type, provider: ANTHROPIC_PROVIDER, block }));
+    const searchable = [{ ...tools[0]!, namespace: 'time', defer_loading: true }, { name: 'remember', description: 'Remember', parameters: { type: 'object', properties: {} } }];
+    await adapter.complete({ ...base, request: { ...base.request, tools: searchable, tool_search: { namespaces: { time: 'Time.' } }, tool_turns: [{ call: { call_id: 'c1', name: 'get_context', arguments: '{}' }, output: 'now', prior_items: prior }] } });
+    expect((bodies[0]!.messages as Array<{ content: unknown[] }>)[1]!.content).toEqual([search, found, { ...use, cache_control: EPHEMERAL }, search, found]);
+    expect(use).not.toHaveProperty('cache_control');
+    expect((bodies[0]!.tools as Array<Record<string, unknown>>).some((tool) => 'cache_control' in tool)).toBe(false);
   });
 });
