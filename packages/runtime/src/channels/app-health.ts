@@ -174,11 +174,15 @@ const perSamplePayload = (batch: { samples: readonly unknown[]; deletions: reado
   rejection: 'per_sample',
 });
 
-// A refused upload leaves no row behind, so its code is the only trace a stuck sync leaves on the server.
-const logRefusal = async (response: Response): Promise<Response> => {
+// A refused upload leaves no receipt, so its closed code and status are the only trace a stuck sync leaves on the server.
+// They are logged, and counted for the console's freshness view after the answer, through the deferred lane, so the count
+// never changes or delays what the app is told. A call refused before this route (credential, rate limit) is not counted.
+const logRefusal = async (input: AppHealthInput, response: Response): Promise<Response> => {
   if (response.status !== 200) {
     const body = await response.clone().json().catch(() => null) as { error?: unknown } | null;
     console.warn('app health ingest refused', { status: response.status, error: body?.error ?? null });
+    const code = healthApiErrorV1Schema.shape.error.safeParse(body?.error);
+    input.defer?.(invokeHealth(input.rpc, input.doName, 'refusal_note', JSON.stringify({ code: code.success ? code.data : 'unavailable', status: response.status })));
   }
   return response;
 };
@@ -206,15 +210,15 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   // A build that does not name health revision 3 keeps the all-or-nothing batch exactly.
   const perSample = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') >= HEALTH_PER_SAMPLE_REVISION_V1;
   const body = await readJson(request, perSample ? healthIngestEnvelopeV1Schema : healthIngestV1Schema, readBody);
-  if ('response' in body) return logRefusal(body.response);
-  if (!knownZone(body.data.timezone)) return logRefusal(refuse('invalid_request'));
+  if ('response' in body) return logRefusal(input, body.response);
+  if (!knownZone(body.data.timezone)) return logRefusal(input, refuse('invalid_request'));
   // A provider's readings come from Waldo's own sync of that provider, never from an app upload that claims its name.
-  if (isHealthProviderSourceV1(body.data.source)) return logRefusal(refuse('invalid_request'));
+  if (isHealthProviderSourceV1(body.data.source)) return logRefusal(input, refuse('invalid_request'));
   const payload = JSON.stringify(perSample ? perSamplePayload(body.data) : body.data);
   // The per-sample mode marker and the rejection stand-ins can take a body at the cap just past it, which the database
   // would refuse whole as invalid; this answers as the oversize body it is.
-  if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(refuse('invalid_request', 413));
+  if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(input, refuse('invalid_request', 413));
   const result = await invokeHealth(rpc, doName, operation, payload);
   recompute(input, result, body.data.timezone);
-  return logRefusal(settle(result, responseSchema));
+  return logRefusal(input, settle(result, responseSchema));
 };
