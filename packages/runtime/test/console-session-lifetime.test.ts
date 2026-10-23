@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth } from '../src/identity/console-auth';
 import { consoleStepUpRefusal } from '../src/channels/console-step-up';
+import * as consoleAuthModule from '../src/identity/console-auth';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 import { clearConsoleCookie, consoleAccess, consoleCookie, consoleSessionRows, signInPage } from '../src/channels/console';
@@ -234,7 +235,11 @@ describe('control receipts in a long session', () => {
   });
 });
 
-describe('a new sign-in in a browser ends that browser\'s old sessions', () => {
+const FIVE_MINUTES = 5 * 60_000;
+
+// By owner ruling, a sign-in in a browser that holds a live session (a confirm, among others) does not end that session:
+// only the new one carries the code, and the old one keeps ordinary access for 5 minutes so a running turn finishes.
+describe('a new sign-in in a browser lets that browser\'s old session run out', () => {
   const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
   const at = 1_790_000_000_000;
   const directory = (answer: (name: string) => unknown = () => true) => {
@@ -248,58 +253,108 @@ describe('a new sign-in in a browser ends that browser\'s old sessions', () => {
   };
   const presenting = (cookie: string) => new Request('https://w.test/console/verify', { method: 'POST', headers: { cookie } });
 
-  it('redeeming a link in a signed-in browser issues a new token and ends the old one', async () => {
+  it('runs out five minutes after the sign-in that replaced it', () => {
+    expect((consoleAuthModule as Record<string, unknown>).CONSOLE_REPLACED_SESSION_MS).toBe(FIVE_MINUTES);
+  });
+
+  it('a link redeemed in a signed-in browser issues a new token; the old one keeps ordinary access, without the code, for five minutes', async () => {
     let now = at;
     const access = consoleAccess(memoryStore(), () => now);
     const old = await access.grant();
     const before = (await access.session(old))!;
     const link = new URL(await access.mintLink('https://w.test')).searchParams.get('t')!;
-    now += 5 * 60_000;
+    now += 60_000;
     const fresh = (await access.redeem(link, old))!;
     expect(fresh).not.toBe(old);
-    expect(await access.session(old)).toBeNull();
+    const capped = (await access.session(old))!;
+    expect(capped).toMatchObject({ token: old, csrf: before.csrf, expires: now + FIVE_MINUTES });
+    expect(capped.verified_at).toBeUndefined();
     const after = (await access.session(fresh))!;
     expect(after.csrf).not.toBe(before.csrf);
     expect(after.signed_in).toBe(now);
-    expect(await access.list()).toHaveLength(1);
+    expect(after.verified_at).toBe(at);
+    expect(await access.list()).toHaveLength(2);
+    now += FIVE_MINUTES;
+    expect(await access.session(old)).not.toBeNull();
+    now += 1;
+    expect(await access.session(old)).toBeNull();
+    expect(await access.session(fresh)).not.toBeNull();
   });
 
-  it('an email sign-in in a signed-in browser ends that browser\'s old owner object session and no other', async () => {
-    const access = consoleAccess(memoryStore(), () => at);
+  it('an email sign-in in a signed-in browser caps that browser\'s old owner object session and no other', async () => {
+    let now = at;
+    const access = consoleAccess(memoryStore(), () => now);
     const old = await access.grant();
     const otherBrowser = await access.grant();
+    now += 60_000;
     const fresh = await access.grant(old);
-    expect(await access.session(old)).toBeNull();
-    expect(await access.session(otherBrowser)).not.toBeNull();
-    expect(await access.session(fresh)).not.toBeNull();
-    expect(await access.list()).toHaveLength(2);
+    const capped = await access.session(old);
+    expect(capped).toMatchObject({ expires: now + FIVE_MINUTES });
+    expect(capped?.verified_at).toBeUndefined();
+    expect(await access.session(otherBrowser)).toMatchObject({ verified_at: at });
+    expect((await access.session(fresh))!.verified_at).toBe(now);
+    expect(await access.list()).toHaveLength(3);
   });
 
-  it('revokes the directory row of the owner cookie the browser presented, before opening the new one', async () => {
+  it('a capped session is never renewed past its cap, and a second sign-in never lengthens it', async () => {
+    let now = at;
+    const access = consoleAccess(memoryStore(), () => now);
+    const old = await access.grant();
+    now += 60_000;
+    await access.grant(old);
+    const cap = now + FIVE_MINUTES;
+    now += 2 * 60_000;
+    expect(await access.session(old)).toMatchObject({ expires: cap });
+    await access.grant(old);
+    expect(await access.session(old)).toMatchObject({ expires: cap });
+    now = cap + 1;
+    expect(await access.session(old)).toBeNull();
+  });
+
+  it('sign-out and sign-out everywhere still end a capped session at once', async () => {
+    let now = at;
+    const access = consoleAccess(memoryStore(), () => now);
+    const old = await access.grant();
+    const fresh = await access.grant(old);
+    await access.signOut(old);
+    expect(await access.session(old)).toBeNull();
+    const again = await access.grant(fresh);
+    await access.signOutAll();
+    expect(await access.session(fresh)).toBeNull();
+    expect(await access.session(again)).toBeNull();
+  });
+
+  it('caps the directory row of the owner cookie the browser presented, before opening the new one', async () => {
     const d = directory();
     const presented = (await d.auth.ownerCookie('do-a'))!;
     d.calls.length = 0;
     const fresh = (await d.auth.ownerCookie('do-a', presenting(`waldo_owner=${presented}`)))!;
     expect(fresh).not.toBe(presented);
-    expect(d.calls.map(call => call.name)).toEqual(['console_session_revoke', 'console_session_open_for']);
-    expect(d.calls[0]!.body).toMatchObject({ p_do_name: 'do-a', p_session_hash: await linkCodeHash(presented.split('.')[1]!) });
+    expect(d.calls.map(call => call.name)).toEqual(['console_session_cap', 'console_session_open_for']);
+    const hash = await linkCodeHash(presented.split('.')[1]!);
+    expect(d.calls[0]!.body).toMatchObject({ p_do_name: 'do-a', p_session_hash: hash });
+    expect(d.calls[0]!.body.p_sig).toBe(await routerSignature('router', d.calls[0]!.body.p_at as number, `consolesess.cap.do-a.${hash}`));
   });
 
-  it('leaves another owner\'s row, and a cookie it cannot verify, alone', async () => {
+  it('caps another owner\'s row the same way, and leaves a cookie it cannot verify alone', async () => {
     const d = directory();
     const otherOwner = (await d.auth.ownerCookie('do-b'))!;
-    for (const cookie of [`waldo_owner=${otherOwner}`, 'waldo_owner=do-a.forged.0000', 'waldo_console=only']) {
+    d.calls.length = 0;
+    expect(await d.auth.ownerCookie('do-a', presenting(`waldo_owner=${otherOwner}`))).not.toBeNull();
+    expect(d.calls.map(call => call.name)).toEqual(['console_session_cap', 'console_session_open_for']);
+    expect(d.calls[0]!.body).toMatchObject({ p_do_name: 'do-b', p_session_hash: await linkCodeHash(otherOwner.split('.')[1]!) });
+    for (const cookie of ['waldo_owner=do-a.forged.0000', 'waldo_console=only']) {
       d.calls.length = 0;
       expect(await d.auth.ownerCookie('do-a', presenting(cookie))).not.toBeNull();
       expect(d.calls.map(call => call.name), cookie).toEqual(['console_session_open_for']);
     }
   });
 
-  it('opens no new session when the presented row cannot be revoked', async () => {
+  it('opens no new session when the presented row cannot be capped', async () => {
     const presented = (await directory().auth.ownerCookie('do-a'))!;
-    const d = directory(name => name === 'console_session_revoke' ? null : true);
+    const d = directory(name => name === 'console_session_cap' ? null : true);
     await expect(d.auth.ownerCookie('do-a', presenting(`waldo_owner=${presented}`))).rejects.toThrow();
-    expect(d.calls.map(call => call.name)).toEqual(['console_session_revoke']);
+    expect(d.calls.map(call => call.name)).toEqual(['console_session_cap']);
   });
 });
 

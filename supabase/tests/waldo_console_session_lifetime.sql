@@ -13,6 +13,8 @@ create function pg_temp.list(name text) returns jsonb language sql as $$
   select waldo.console_session_list(name, pg_temp.at(), pg_temp.sig('consolesess.list.' || name)) $$;
 create function pg_temp.authority(name text, hash text) returns jsonb language sql as $$
   select waldo.app_session_authority(name, hash, pg_temp.at(), pg_temp.sig('app.session.' || name || '.' || hash)) $$;
+create function pg_temp.cap(name text, hash text) returns boolean language plpgsql as $$
+  begin return waldo.console_session_cap(name, hash, pg_temp.at(), pg_temp.sig('consolesess.cap.' || name || '.' || hash)); end $$;
 insert into auth.users (id) values ('31000000-0000-0000-0000-000000000001');
 insert into waldo.owners (id, do_name, auth_user_id, email) values
   ('11000000-0000-0000-0000-000000000001', 'life-owner', '31000000-0000-0000-0000-000000000001', 'life@test.invalid');
@@ -89,5 +91,41 @@ select is(pg_temp.touch('life-owner', repeat('d', 64)), true, 'revoking one leav
 select is(waldo.console_signout_all('life-owner', pg_temp.at(), pg_temp.sig('consolesess.signout.life-owner')) >= 1, true, 'sign-out everywhere drops the long sessions');
 select is(pg_temp.touch('life-owner', repeat('d', 64)), false, 'a long session signed out everywhere no longer validates');
 select is(pg_temp.authority('life-owner', repeat('d', 64)), null, 'nor admits console chat');
+
+-- A sign-in in a browser that presents a live session caps that session instead of ending it: it keeps ordinary access
+-- for 5 minutes, so a running turn or a queued message finishes, and then it ends everywhere.
+select has_function('waldo', 'console_session_cap', array['text', 'text', 'bigint', 'text'], 'the cap exists');
+select is(has_function_privilege('anon', 'waldo.console_session_cap(text, text, bigint, text)', 'execute'), true, 'the runtime key can cap a session (signature still required)');
+select is(has_function_privilege('service_role', 'waldo.console_session_cap(text, text, bigint, text)', 'execute'), false, 'service role is not granted the cap');
+select is(has_function_privilege('authenticated', 'waldo.console_session_cap(text, text, bigint, text)', 'execute'), false, 'a signed-in Supabase user is not granted the cap');
+select throws_ok($$ select waldo.console_session_cap('life-owner', repeat('e', 64), pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'an unsigned cap is rejected');
+select throws_ok($$ select waldo.console_session_cap('life-owner', repeat('e', 64), pg_temp.at(), pg_temp.sig('consolesess.revoke.life-owner.' || repeat('e', 64))) $$, '42501', 'unsigned router call', 'a revoke signature does not cap');
+
+select is(pg_temp.open_for('life-owner', repeat('e', 64), 2592000, 604800), true, 'a long console session opens');
+update waldo.console_sessions set created_at = now() - interval '3 days', last_seen_at = now() - interval '1 hour' where session_hash = repeat('e', 64);
+select is(pg_temp.cap('life-owner', repeat('e', 64)), true, 'a sign-in caps the session it replaces');
+select is((select lifetime = interval '3 days 5 minutes' and idle_timeout = interval '3 days 5 minutes' from waldo.console_sessions where session_hash = repeat('e', 64)), true, 'it now ends 5 minutes after the sign-in, and its idle limit fits inside');
+select is(pg_temp.touch('life-owner', repeat('e', 64)), true, 'inside the 5 minutes it still validates');
+select is(pg_temp.authority('life-owner', repeat('e', 64))->>'session_hash', repeat('e', 64), 'inside the 5 minutes console chat under it still runs');
+select is((pg_temp.authority('life-owner', repeat('e', 64))->>'expires_at')::numeric, extract(epoch from now() + interval '5 minutes') * 1000, 'console chat sees the cap as the end');
+update waldo.console_sessions set created_at = created_at - interval '1 minute' where session_hash = repeat('e', 64);
+select is(pg_temp.cap('life-owner', repeat('e', 64)), true, 'a second sign-in inside the window caps again');
+select is((select lifetime from waldo.console_sessions where session_hash = repeat('e', 64)), interval '3 days 5 minutes', 'and never lengthens the cap');
+select is(pg_temp.cap('nobody', repeat('e', 64)), false, 'another owner name caps nothing');
+select is(pg_temp.cap('life-owner', repeat('z', 64)), false, 'a hash that is not 64 lowercase hex characters caps nothing');
+update waldo.console_sessions set created_at = now() - interval '3 days 5 minutes 1 second' where session_hash = repeat('e', 64);
+select is(pg_temp.touch('life-owner', repeat('e', 64)), false, 'after the 5 minutes it no longer validates');
+select is(pg_temp.authority('life-owner', repeat('e', 64)), null, 'after the 5 minutes it no longer admits console chat');
+select is(jsonb_array_length(pg_temp.list('life-owner')), 0, 'after the 5 minutes it is absent from the active list');
+select is(pg_temp.cap('life-owner', repeat('e', 64)), false, 'a session that has ended is not capped');
+
+select is(pg_temp.open_for('life-owner', repeat('f', 64), 2592000, 604800), true, 'a console session opened just now');
+select is(pg_temp.cap('life-owner', repeat('f', 64)), true, 'is capped by a sign-in at once');
+select is((select lifetime = interval '5 minutes' and idle_timeout = interval '5 minutes' from waldo.console_sessions where session_hash = repeat('f', 64)), true, 'to 5 minutes, with its 7-day idle limit cut to fit');
+select is(waldo.console_session_open('life-owner', repeat('1', 64), pg_temp.at(), pg_temp.sig('consolesess.open.life-owner.' || repeat('1', 64))), true, 'a session on the 12-hour rail opens');
+select is(pg_temp.cap('life-owner', repeat('1', 64)), true, 'and is capped the same way');
+select is((select lifetime = interval '5 minutes' and idle_timeout is null from waldo.console_sessions where session_hash = repeat('1', 64)), true, 'keeping no idle limit');
+select is(waldo.console_session_revoke('life-owner', repeat('f', 64), pg_temp.at(), pg_temp.sig('consolesess.revoke.life-owner.' || repeat('f', 64))), true, 'sign-out still ends a capped session at once');
+select is(pg_temp.touch('life-owner', repeat('f', 64)), false, 'and it no longer validates');
 select * from finish();
 rollback;

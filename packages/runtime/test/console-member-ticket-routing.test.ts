@@ -19,9 +19,11 @@ const directoryEnv = {
 afterEach(() => vi.unstubAllGlobals());
 
 async function fixture(owner = MEMBER, issuedAt?: number) {
-  const rpcState = { open: true, failOpen: false, live: true, revoke: true as boolean | null };
+  const rpcState = { open: true, failOpen: false, live: true, revoke: true as boolean | null, cap: true as boolean | null };
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const opened: string[] = [];
+  // A revoked row ends at once; a capped row stays live, since no test here outlives its 5 minutes.
+  const ended = new Set<string>();
   const messages: string[] = [];
   // Every external request fails except these fictional directory/session RPCs.
   vi.stubGlobal('fetch', vi.fn(async (input: string | Request, init?: RequestInit) => {
@@ -39,10 +41,11 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     if (url.pathname.endsWith('/owner_for_auth')) return Response.json(owner);
     if (url.pathname.endsWith('/member_invites')) return Response.json([]);
     if (url.pathname.endsWith('/issue_member_invite')) return Response.json(true);
-    if (url.pathname.endsWith('/console_session_revoke')) return Response.json(rpcState.revoke);
+    if (url.pathname.endsWith('/console_session_revoke')) { ended.add(String(args.p_session_hash)); return Response.json(rpcState.revoke); }
+    if (url.pathname.endsWith('/console_session_cap')) return Response.json(rpcState.cap);
     if (url.pathname.endsWith('/console_session_list')) {
       const at = new Date().toISOString();
-      return Response.json(rpcState.live ? opened.map(session => ({ session, created_at: at, last_seen_at: at })) : []);
+      return Response.json(rpcState.live ? opened.filter(session => !ended.has(session)).map(session => ({ session, created_at: at, last_seen_at: at })) : []);
     }
     if (url.pathname.endsWith('/route_presence')) {
       expect(args.p_subject).toBe(SUBJECT);
@@ -55,7 +58,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
         if (rpcState.open) opened.push(String(args.p_session_hash));
         return Response.json(rpcState.open);
       }
-      return Response.json(rpcState.live);
+      return Response.json(rpcState.live && !ended.has(String(args.p_session_hash)));
     }
     throw new Error('unexpected directory RPC');
   }));
@@ -183,6 +186,7 @@ it('replaces an owner cookie that names no live session instead of refusing the 
   expect(response.status).toBe(303);
   expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=${MEMBER}.`);
   expect(f.rpcCalls.map(call => call.name)).not.toContain('console_session_revoke');
+  expect(f.rpcCalls.map(call => call.name)).not.toContain('console_session_cap');
 });
 
 it('redeems a link in a browser whose own owner session has ended', async () => {
@@ -194,7 +198,7 @@ it('redeems a link in a browser whose own owner session has ended', async () => 
   expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=${MEMBER}.`);
 });
 
-it('rotates both sessions of a signed-in browser that redeems a link', async () => {
+it('caps both sessions of a signed-in browser that redeems a link, so the old ones run out instead of ending mid-turn', async () => {
   const f = await fixture();
   const presented = (await consoleAuth(directoryEnv)!.ownerCookie(MEMBER))!;
   let oldConsole = '';
@@ -207,20 +211,23 @@ it('rotates both sessions of a signed-in browser that redeems a link', async () 
   expect(issued[OWNER_COOKIE]).not.toBe(presented);
   expect(issued[CONSOLE_COOKIE]).toBeTruthy();
   expect(issued[CONSOLE_COOKIE]).not.toBe(oldConsole);
-  const revoked = f.rpcCalls.filter(call => call.name === 'console_session_revoke');
-  expect(revoked).toHaveLength(1);
-  expect(revoked[0]!.args).toMatchObject({ p_do_name: MEMBER, p_session_hash: await linkCodeHash(presented.split('.')[1]!) });
+  expect(f.rpcCalls.map(call => call.name)).not.toContain('console_session_revoke');
+  const capped = f.rpcCalls.filter(call => call.name === 'console_session_cap');
+  expect(capped).toHaveLength(1);
+  expect(capped[0]!.args).toMatchObject({ p_do_name: MEMBER, p_session_hash: await linkCodeHash(presented.split('.')[1]!) });
   await runInDurableObject(f.member, async (_instance, state) => {
     const access = consoleAccess(state.storage);
-    expect(await access.session(oldConsole)).toBeNull();
+    const old = await access.session(oldConsole, false);
+    expect(old?.expires ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+    expect(old?.verified_at).toBeUndefined();
     expect(await access.session(issued[CONSOLE_COOKIE]!)).not.toBeNull();
   });
 });
 
-it('signs no one in when the presented owner session cannot be revoked', async () => {
+it('signs no one in when the presented owner session cannot be capped', async () => {
   const f = await fixture();
   const presented = (await consoleAuth(directoryEnv)!.ownerCookie(MEMBER))!;
-  f.rpcState.revoke = null;
+  f.rpcState.cap = null;
   const response = await worker.fetch(f.post(`${OWNER_COOKIE}=${presented}`), f.bindings);
   expect(response.status).toBe(503);
   expect(response.headers.get('set-cookie')).toBeNull();
@@ -347,6 +354,38 @@ describe('console pages and session clocks, through the Worker', () => {
 });
 
 describe('a fresh email code before lasting access, through the Worker', () => {
+  it('the cookies a confirm replaced keep ordinary access for now, but not the code', async () => {
+    const f = await fixture();
+    await runInDurableObject(f.member, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, directoryEnv); });
+    const bindings = { ...f.bindings, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as unknown as Cloudflare.Env;
+    const confirm = async (cookie: string) => {
+      const verified = await worker.fetch(new Request(`${ORIGIN}/console/verify`, {
+        method: 'POST', redirect: 'manual', headers: { cookie, origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'member@example.test', code: '246810' }),
+      }), bindings);
+      expect(verified.status).toBe(303);
+      return cookies(verified);
+    };
+    const invite = async (cookie: string, requestId: string) => {
+      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=invites`, { headers: { cookie, accept: 'application/json' } }), bindings);
+      expect(read.status, 'an ordinary read').toBe(200);
+      const current = await read.json() as { csrf: string; revision: string };
+      return worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_ACTION_PATH}`, {
+        method: 'POST', headers: { cookie, origin: ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'invites', action: 'invite.member', value: 'friend@example.test', request_id: requestId }),
+      }), bindings);
+    };
+    const proved = await confirm(cookies(await worker.fetch(f.post(), bindings)));
+    const confirmed = await confirm(proved);
+    const replaced = await invite(proved, 'replaced-cookie-invite');
+    expect(replaced.status).toBe(403);
+    expect(await replaced.json()).toEqual({ error: 'step_up_required' });
+    expect(f.rpcCalls.map(call => call.name)).not.toContain('issue_member_invite');
+    expect((await invite(confirmed, 'confirmed-cookie-invite')).status).toBe(200);
+    expect(f.rpcCalls.map(call => call.name)).toContain('issue_member_invite');
+  });
+
+
   it('a link sign-in is asked for a code before inviting someone, and the same invite runs after the code', async () => {
     const f = await fixture();
     await runInDurableObject(f.member, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, directoryEnv); });

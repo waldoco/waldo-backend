@@ -61,7 +61,7 @@ const owner = async (name: string) => {
   const post = (path: string, fields: Record<string, string>, extra: Record<string, string> = {}) =>
     stub.fetch(root + path, { method: 'POST', headers: headers({ 'content-type': 'application/x-www-form-urlencoded', ...extra }), body: new URLSearchParams(fields) });
   const get = (path: string) => stub.fetch(root + path, { headers: headers({ accept: 'text/html' }) });
-  return { stub, codeAge, read, post, get };
+  return { stub, token, codeAge, read, post, get };
 };
 
 // Each action posts the same request twice, once with a code older than two hours and once with a fresh one.
@@ -250,5 +250,23 @@ describe('linking a chat, pairing a Mac and letting a tool run need a fresh code
     expect(whatsapp).toContain(`/console/signin?confirm=1&amp;return_to=%2Fconsole%2Fwhatsapp%2Flink%2F${WHATSAPP_TOKEN}`);
     const forged = await (await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', action: WHATSAPP_LINK_CONFIRM_ACTION, token: '../admin', subject: '15555550100' }, { accept: 'text/html' })).text();
     expect(forged).toContain('href="/console/signin?confirm=1"');
+  });
+});
+
+describe('a session a sign-in replaced in this browser', () => {
+  it('keeps ordinary actions while it runs out, but cannot take a gated one even though its code was fresh', async () => {
+    const calls = directory();
+    const o = await owner('step-up-replaced');
+    await o.codeAge(60_000);
+    await runInDurableObject(o.stub, async (_instance, state) => { await consoleAccess(state.storage).grant(o.token); });
+    const day = await o.read(`${CONTROLS_PATH}?view=day`);
+    const pin = await o.post(CONTROL_ACTION_PATH, { csrf: day.csrf, revision: day.revision, request_id: 'replaced-pin', view: 'day', action: 'card.pin', id: 'card:close', value: '22:15' });
+    expect(pin.status).toBe(200);
+    const devices = await o.read(`${CONTROLS_PATH}?view=devices`);
+    calls.length = 0;
+    const pair = await o.post(CONTROL_ACTION_PATH, { csrf: devices.csrf, revision: devices.revision, request_id: 'replaced-pair', view: 'devices', action: 'device.pair' });
+    expect(pair.status).toBe(403);
+    expect(await pair.json()).toEqual({ error: 'step_up_required' });
+    expect(calls).toEqual([]);
   });
 });
