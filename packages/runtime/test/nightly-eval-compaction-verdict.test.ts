@@ -21,7 +21,7 @@ const card = (switchOn: boolean, outcomes: Outcomes = {}, over: Readonly<{ candi
   const rows: ScenarioTrials[] = ids.map((id) => ({ id, pain: 'context', outcomes: outcomes[id] ?? PASS }));
   const compaction = over.compaction === undefined ? (switchOn ? 'on' : 'off') : over.compaction;
   return scorecard(rows, {
-    candidate: over.candidate ?? (switchOn ? 'gpt-6.1-sol+compaction' : 'gpt-6.1-sol'), judge: over.judge ?? 'claude-opus-5-5 (split)', trials: over.trials ?? 3,
+    candidate: over.candidate ?? (switchOn ? 'candidate-a+compaction' : 'candidate-a'), judge: over.judge ?? 'judge-a (split)', trials: over.trials ?? 3,
     usage: { ...usage, exhausted: over.exhausted ?? false }, ...(compaction === null ? {} : { compaction }),
   });
 };
@@ -82,8 +82,8 @@ describe('the compaction verdict reads the ADR section 6 bar from an off and an 
       ['an off card that does not record the switch, as one from the legacy store', card(false, OFF_MISSES, { compaction: null }), card(true), 'switch'],
       ['two on cards', card(false, OFF_MISSES, { compaction: 'on' }), card(true), 'switch'],
       ['the cards in the wrong order', card(true), card(false, OFF_MISSES), 'switch'],
-      ['different models', card(false, OFF_MISSES, { candidate: 'gpt-6.1-mini' }), card(true), 'model'],
-      ['different judges', card(false, OFF_MISSES, { judge: 'claude-sonnet-5-5 (split)' }), card(true), 'model'],
+      ['different models', card(false, OFF_MISSES, { candidate: 'candidate-b' }), card(true), 'model'],
+      ['different judges', card(false, OFF_MISSES, { judge: 'judge-b (split)' }), card(true), 'model'],
       ['different trial counts', card(false, OFF_MISSES, { trials: 5 }), card(true), 'trials'],
       ['a single trial per probe', card(false, OFF_MISSES, { trials: 1 }), card(true, {}, { trials: 1 }), 'trials'],
     ];
