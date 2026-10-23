@@ -200,6 +200,26 @@ describe('a Google grant that stops working, on the app', () => {
     });
   });
 
+  // Reads that fail together each find the grant healthy when they note it, so each asks for a notice; the episode gets one.
+  it('reads that fail together in one tick queue one notice, not one each', async () => {
+    const name = 'reauth-app-concurrent';
+    await world(name, 'app', async w => {
+      let now = Date.now();
+      const ticking = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+      try {
+        const runtime = w.owner.setup('app');
+        await runtime.ready;
+        const client = (await runtime.google.client('calendar'))!;
+        await Promise.all([1, 2, 3].map(() => client.calendarPage().catch(() => undefined)));
+        await vi.waitFor(() => expect(w.hops('google_reauth_notice').length).toBeGreaterThan(0), { timeout: 5_000, interval: 20 });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await (w.owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+      } finally { ticking.mockRestore(); }
+      expect(w.notices()).toHaveLength(1);
+      expect(w.state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'google_reauth_notice'").toArray()).toEqual([{ note: 'queued' }]);
+    });
+  });
+
   it('an app the owner has since unlinked gets nothing delivered', async () => {
     const name = 'reauth-app-unlinked';
     await world(name, 'app', async w => {

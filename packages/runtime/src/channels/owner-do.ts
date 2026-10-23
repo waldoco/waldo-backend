@@ -2871,8 +2871,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A dead grant's notice where no connect button can go (the app, iMessage): plain text, no link, through the delivery outbox,
     // which takes it to the app transcript for an owner the directory admits there, or to iMessage for an owner whose only
     // surface it is. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
-    // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none.
+    // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none, and
+    // reads that failed together, each finding the grant healthy when it noted the failure, get the one notice the first queued.
     const queueReauthNotice = async (id: string): Promise<void> => {
+      if (id in ((await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {})) return;
       const trace = `google-reauth:${(await sha256Hex(id)).slice(0, 16)}:${Date.now()}`;
       if (!(await health())[id]) { log({ trace, hop: 'google_reauth_notice', ms: 0, ok: true, code: 'grant_recovered' }); return; }
       const email = (await accounts()).find((known) => known.id === id)?.email;
