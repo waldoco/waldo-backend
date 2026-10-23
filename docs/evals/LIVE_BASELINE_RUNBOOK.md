@@ -67,7 +67,7 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 2. **Schedule it from `main`, with the job checking out `beta-mvp` explicitly.** A schedule always runs the default branch's latest commit, so without an explicit checkout it tests `main`'s code.
 3. **Make `beta-mvp` the default branch.**
 
-The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,200 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together.
+The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,470 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together. [inference] At 6 s a call the candidate side is at most about 150 minutes; the judges' 234 trial waves at up to 30 s each add about 120 more, so the high estimate is about 270 minutes and 360 still fits.
 
 ## Calls and cost per run
 
@@ -80,7 +80,7 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 | Judge calls | 1,266 | 327 |
 | Suggested `WALDO_EVAL_MAX_CALLS` | 2800 | 1800 |
 
-A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
+A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 81 scenarios that is 3000. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
 **Cost estimate.** [inference] This is an estimate, not a measurement.
 
