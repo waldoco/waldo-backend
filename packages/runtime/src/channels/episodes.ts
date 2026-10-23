@@ -191,6 +191,8 @@ export const NIGHTLY_CATCH_UP_DELAY_MS = 15 * 60_000;
 // has spent NIGHTLY_DAILY_CALLS calls, and the next night resumes. Nothing is skipped except one time group that has failed
 // NIGHTLY_CHUNK_ATTEMPTS times alone and for longer than NIGHTLY_QUARANTINE_AFTER_MS, which an outage of under a day never is.
 export const NIGHTLY_THROUGH_KEY = 'nightly_consolidated_through_v1';
+// The digest of the memory the nightly promotion last read in full and applied.
+export const CONSTELLATION_DIGEST_KEY = 'constellation_digest_v1';
 export const NIGHTLY_CHUNKS = 3;
 export const NIGHTLY_CHUNK_CHARS = 40_000;
 export const NIGHTLY_DAILY_CALLS = 30;
