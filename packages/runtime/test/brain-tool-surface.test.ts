@@ -12,6 +12,7 @@ import { MESSAGING_BEHAVIOR, TOOL_SEARCH_LINE } from '../src/prompt/messaging-be
 import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools } from '../src/tools/records';
 import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
+import { delegateTaskHandler } from '../src/conversation/subagent';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
@@ -110,6 +111,15 @@ describe('the brain tool surface', () => {
       expect(members, namespace).toBeGreaterThan(0);
       expect(members, namespace).toBeLessThan(10);
     }
+  });
+
+  // delegate_task points at start_task for work that outlives the reply. Under tool search start_task sits in a namespace
+  // the model may not have loaded, so the pointer names that namespace's routing line, which names start_task.
+  it('delegate_task\'s pointer to start_task says where start_task is found', () => {
+    const delegate = delegateTaskHandler(async () => ({ ok: true, text: '' }) as never).description;
+    const place = TOOL_RECORDS.start_task.brain;
+    expect(delegate).toContain('start_task');
+    if (place !== 'core') expect(delegate.toLowerCase()).toContain(BRAIN_NAMESPACES[place].split(':')[0]!.toLowerCase());
   });
 
   // A tool the behaviour text names must be findable: loaded up front, or named in its namespace's routing line.
