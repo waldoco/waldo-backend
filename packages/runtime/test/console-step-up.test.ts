@@ -8,7 +8,7 @@ import { OWNER_CONTROLS_ACTION_PATH, OWNER_CONTROLS_PATH } from '../src/channels
 import * as ownerControls from '../src/channels/dashboard-owner-controls';
 import * as controlActions from '../src/channels/dashboard-control-actions';
 import * as stepUp from '../src/channels/console-step-up';
-import { CONSOLE_ACTIONS } from '../src/channels/console';
+import { CONSOLE_ACTIONS, CONSOLE_GOOGLE_START_PATH } from '../src/channels/console';
 import { CONSOLE_PHOTON_START_PATH, IMESSAGE_CONSOLE_ACTIONS } from '../src/channels/imessage/console';
 import { WHATSAPP_LINK_CONFIRM_ACTION } from '../src/channels/whatsapp-link-console';
 import { BROWSER_TRIAL_PATH } from '../src/channels/browser-trial-consent';
@@ -162,6 +162,7 @@ describe('every console action is classified before it ships', () => {
     const classified = routes();
     expect(classified[CONSOLE_PHOTON_START_PATH]?.gated).toBe(true);
     expect(classified[BROWSER_TRIAL_PATH]?.gated).toBe(false);
+    expect(classified[CONSOLE_GOOGLE_START_PATH]?.gated, 'the Google start follows a link only a gated google.connect mints').toBe(false);
     for (const [path, rule] of Object.entries(classified)) {
       expect(typeof rule.gated, path).toBe('boolean');
       expect(oneLine(rule.why), path).toBe(true);

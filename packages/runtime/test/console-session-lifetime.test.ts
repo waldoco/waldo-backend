@@ -189,8 +189,8 @@ describe('cross-site requests to the console', () => {
     expect(consoleCrossSiteRefusal(at('/console/verify', 'POST', { 'sec-fetch-site': 'same-origin', origin: 'https://evil.test' }))?.status).toBe(403);
   });
 
-  it('refuses a cross-site start of the flows a GET begins: MCP and Photon connects and the browser trial', () => {
-    for (const path of ['/console/mcp/start/abcDEF123_-xyz', '/console/imessage/photon/start', '/console/browser/trial']) {
+  it('refuses a cross-site start of the flows a GET begins: MCP, Google and Photon connects and the browser trial', () => {
+    for (const path of ['/console/mcp/start/abcDEF123_-xyz', `/console/google/start/${'g'.repeat(43)}`, '/console/imessage/photon/start', '/console/browser/trial']) {
       expect(consoleCrossSiteRefusal(at(path, 'GET', { 'sec-fetch-site': 'cross-site' }))?.status, path).toBe(403);
       expect(consoleCrossSiteRefusal(at(path, 'GET', { 'sec-fetch-site': 'same-site' }))?.status, path).toBe(403);
       expect(consoleCrossSiteRefusal(at(path, 'GET', { 'sec-fetch-site': 'same-origin' })), path).toBeNull();
