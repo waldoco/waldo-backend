@@ -69,6 +69,8 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
+  // A redacted look-up finding is deleted the next time the finding store reads (onboarding/findings.ts).
+  ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
 // Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
 export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
