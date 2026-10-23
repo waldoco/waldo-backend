@@ -181,6 +181,10 @@ describe('every console action is classified before it ships', () => {
       const refused = consoleCrossSiteRefusal(new Request(`https://w.test${sample(path)}`, { headers: { 'sec-fetch-site': 'cross-site' } }));
       expect([path, refused?.status ?? null]).toEqual([path, flows.includes(path) ? 403 : null]);
     }
+    // A prefix needs a token after it; an exact path does not match as a prefix.
+    for (const path of [MCP_START_PATH, CONSOLE_GOOGLE_START_PATH, `${CONSOLE_PHOTON_START_PATH}/more`, `${BROWSER_TRIAL_PATH}-more`]) {
+      expect(consoleCrossSiteRefusal(new Request(`https://w.test${path}`, { headers: { 'sec-fetch-site': 'cross-site' } })), path).toBeNull();
+    }
   });
 });
 

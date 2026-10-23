@@ -105,7 +105,7 @@ This replaces the 12-hour lifetime and `SameSite=Strict` in "Session security in
 - The check uses `Sec-Fetch-Site: same-origin`, falling back to a matching `Origin`. Same-site siblings are refused.
 - This also closes login and logout forgery on `/console/verify`, the ticket POST and `/console/signout-all`. Those routes take no cookie, so they were open under `Strict` too.
 - Four GETs start a flow: MCP connect, Google connect, Photon connect and the browser trial. They are refused when another site sends them.
-- A new state-changing GET must join that list or become a POST.
+- A new state-changing GET must join that list, `STEP_UP_ROUTES` with `startsFlow: true` in `console-step-up.ts`, or become a POST. The guard reads no other list.
 - Session CSRF tokens and the chat header stay as they were.
 
 **No rotation on renewal.**
