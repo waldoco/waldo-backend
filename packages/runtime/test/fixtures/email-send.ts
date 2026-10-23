@@ -1,13 +1,13 @@
 import { b64url, buildMime, sha256Hex } from '../../src/connectors/google';
 import type { EmailSendProposal } from '../../src/channels/approvals';
 
-type Draft = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; message_id: string; account?: string; thread_id?: string; inReplyTo?: string; references?: readonly string[] }>;
+type Draft = Omit<EmailSendProposal, 'raw' | 'digest'>;
 
 // The bytes send_email freezes for a draft: base64url canonical MIME and their digest. `wire` builds the bytes from
 // other words than the card shows, for a proposal whose bytes and fields disagree.
 export const emailProposal = async (draft: Draft, wire: Partial<Pick<Draft, 'subject' | 'body' | 'to'>> = {}): Promise<EmailSendProposal> => {
-  const { message_id, account: _account, thread_id: _thread, ...fields } = draft;
-  const raw = b64url(new TextEncoder().encode(buildMime({ ...fields, ...wire, messageId: message_id })));
+  const { to, cc, bcc, subject, body, message_id, inReplyTo, references } = { ...draft, ...wire };
+  const raw = b64url(new TextEncoder().encode(buildMime({ to, ...(cc ? { cc } : {}), ...(bcc ? { bcc } : {}), subject, body, messageId: message_id, ...(inReplyTo ? { inReplyTo } : {}), ...(references ? { references } : {}) })));
   return { ...draft, raw, digest: await sha256Hex(raw) };
 };
 

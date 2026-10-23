@@ -3,7 +3,7 @@ import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
-import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
+import { GoogleError, b64url, buildMime, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -14,7 +14,7 @@ import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './s
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
-import { appApprovalExactV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalExactV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -69,6 +69,15 @@ export type EmailSendProposal = Readonly<{
   // When an identical earlier send is still of unknown outcome: its time, in the owner's zone, for the card.
   earlier_unknown_at?: string;
 }>;
+// Gmail is handed exactly the words the card shows: the frozen bytes carry their digest and are the canonical MIME of the
+// shown recipients, subject and body, and the subject stays one header line (MIME would fold a line break into a space).
+const emailIntact = async (p: EmailSendProposal): Promise<boolean> => {
+  if (/[\r\n]/.test(p.subject) || await sha256Hex(p.raw) !== p.digest) return false;
+  try {
+    return p.raw === b64url(new TextEncoder().encode(buildMime({ to: p.to, ...(p.cc ? { cc: p.cc } : {}), ...(p.bcc ? { bcc: p.bcc } : {}), subject: p.subject, body: p.body,
+      messageId: p.message_id, ...(p.inReplyTo ? { inReplyTo: p.inReplyTo } : {}), ...(p.references ? { references: p.references } : {}) })));
+  } catch { return false; }
+};
 // What the owner would receive: two proposals with the same content send the same email.
 const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) =>
   JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
@@ -236,8 +245,11 @@ const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> 
 // What each kind changes, from the frozen payload, exposing no more than the app review.
 const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
   const p = JSON.parse(entry.payload_json);
-  if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}) };
-  if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] } };
+  // The draft is the frozen words that go out, carried only whole: a body past the contract's bound, or a subject that
+  // breaks its header line (Gmail would not be sent it as shown), leaves no draft to approve against.
+  const whole = (message: Readonly<{ subject: string | null; body: string }>) => appApprovalMessageV1Schema.safeParse(message).success ? { message } : {};
+  if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}), ...whole({ subject: p.subject, body: p.body }) };
+  if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] }, ...whole({ subject: null, body: p.content }) };
   if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
   if (entry.kind === 'tainted_action') return { scope: `${p.tool} from external content` };
@@ -448,18 +460,28 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     });
     return shown;
   };
-  // Approving or modifying needs a card that showed the full review on the deciding surface. The
-  // console renders the stored review itself, so any full-review presentation serves it, and it approves one
-  // kind only: a calendar change without invite details, the rule consoleMayApprove applies at the route. Every
-  // other kind is approved in chat or the app, whatever the route that asked.
-  const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
-    const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
+  // Approving or modifying needs a card that showed the full review on the deciding surface. The console renders the
+  // stored review itself, so any full-review presentation serves it, for the kinds it shows in full: a send's draft and a
+  // calendar change without invite details, the rule consoleMayApprove applies at the route. Every other kind is approved
+  // in chat or the app, whatever the route that asked. Answers the presentations that authorize the decision.
+  const deciding = (entry: LedgerRow, via: ApprovalVia) => {
+    const live = sql.exec<{ surface: string; message_ref: string; approvable: number; payload_digest: string }>('SELECT surface, message_ref, approvable, payload_digest FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
-    if (via.surface === 'console') return entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json)) && live.some(approves);
+    if (via.surface === 'console') return entry.kind === 'email_send' || entry.kind === 'message_send' || (entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json))) ? live.filter(approves) : [];
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
-    return (tapped.length ? tapped : mine).some(approves);
+    return (tapped.length ? tapped : mine).filter(approves);
   };
+  const presentedTo = (entry: LedgerRow, via: ApprovalVia) => deciding(entry, via).length > 0;
+  // A send goes out only as a card showed it: some card that authorizes the decision carries the digest of what is stored now.
+  const shownAsStored = async (entry: LedgerRow, via: ApprovalVia) => {
+    const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
+    return deciding(entry, via).some(p => p.payload_digest === digest);
+  };
+  // Said the same whether the stored draft changed, its bytes disagree with its words, or its card recorded no digest.
+  const changedSend = (entry: LedgerRow): ApprovalDecision => entry.kind === 'email_send'
+    ? { toast: 'Email changed', message: `The stored email doesn't match the card you reviewed, so nothing was sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Ask me again and I'll prepare a fresh one.` }
+    : { toast: 'Message changed', message: "The stored message doesn't match the card you reviewed, so nothing was sent. Ask me again and I'll prepare a fresh one." };
   const notPresented = (entry: LedgerRow): ApprovalDecision => {
     const id = entry.id;
     const inApp = deps.appLink && appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
@@ -577,6 +599,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'card_unconfirmed' && entry.card_waits_on != null) return { toast: 'Not out yet', message: `That card has not reached you on ${entry.card_waits_on} yet; it goes out there when you next write. Nothing was done.` };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
+    if (action === 'a' && entry.status === 'open' && (entry.kind === 'email_send' || entry.kind === 'message_send') && !await shownAsStored(entry, via)) {
+      setStatus(id, 'failed');
+      return changedSend(entry);
+    }
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
@@ -683,9 +709,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const client = await deps.google({id:`approval:${id}:apply`},'mail',ep.account);
           if (client === null || (ep.account && client.account?.email?.toLowerCase() !== ep.account.toLowerCase())) {
             out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
-          } else if (await sha256Hex(ep.raw) !== ep.digest) {
+          } else if (!await emailIntact(ep)) {
             setStatus(id, 'failed');
-            out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
+            out = changedSend(entry);
           } else {
             if (!recovering) {
               const lost = claimOpen(id);

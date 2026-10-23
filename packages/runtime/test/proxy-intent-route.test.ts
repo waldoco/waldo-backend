@@ -40,6 +40,7 @@ it('readOnly is honored only for mcpread: ids and ignores requireRoute',async()=
 });
 import {approvalDesk} from '../src/channels/approvals';
 import type {GoogleClient} from '../src/connectors/google';
+import {emailProposal} from './fixtures/email-send';
 it('calendar proposal read, apply and undo all retain account A after independent health reorder',async()=>{
  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('intent-calendar-lineage'));
  await runInDurableObject(stub,async(_instance,state)=>{
@@ -59,10 +60,9 @@ it('lost send cannot fall over to B when A disappears; desk keeps truthful unkno
   const started=new Promise<void>(r=>{began=r;});const gate=new Promise<void>(r=>{release=r;});
   const client={sendRaw:async()=>{effects++;began();await gate;throw new ProxyIntentError('intent_pending');}} as unknown as GoogleClient;
   const desk=approvalDesk(state.storage.sql,{call:async()=>({message_id:1}),owner:42,google:async(intent)=>{const route=pinProxyIntentRoute(state.storage.sql,intent,'google:mail',candidates,preferred);return route?client:null;},newId:()=>String(1),now:()=>1000,timezone:'UTC',log:()=>{}});
-  const raw='fixture';const id=await desk.proposeSendEmail({to:['fictional@test.invalid'],subject:'fixture',body:'fixture',message_id:'fixture',raw,digest:await sha256Hex(raw)});
+  const id=await desk.proposeSendEmail(await emailProposal({ to:['fictional@test.invalid'],subject:'fixture',body:'fixture',message_id:'<fixture@waldo-send>' }));
   const first=desk.decide(id,'a','fixture');await started;candidates=[b];preferred=b;
   const repeat=await desk.decide(id,'a','fixture');expect(repeat.toast).toBe('Outcome unknown');expect(repeat.message).not.toContain('Nothing was delivered');release();await first;expect(effects).toBe(1);
  });
 });
 import {ProxyIntentError} from '../src/connectors/proxy-intent';
-import {sha256Hex} from '../src/connectors/google';

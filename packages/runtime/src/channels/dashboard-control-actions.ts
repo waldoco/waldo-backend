@@ -139,7 +139,7 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
  'Not available':'This approval cannot be applied here. Nothing was changed.','Not available here':'That approval was not shown in full here, so nothing was done.',
  'Review it in the app':'That approval was not shown in full here, so nothing was done.','Channel not connected':'That channel is not connected, so nothing was sent.',
  'Messaging is not set up':'Messaging is not set up, so nothing was sent.','Browsing is not set up':'Browsing is not set up, so nothing was done.','MCP is not set up':'MCP is not set up, so nothing ran.',
- 'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
+ 'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Message changed':'The stored message no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
  'Not done':'The browser action was not done.','That failed':'That did not work. Nothing else ran.',
  'Nothing ran':'Nothing ran. The server did not carry out that call.','Call changed':'The stored call no longer matches what was approved, so nothing ran.',
  'Outcome unknown':'The operation outcome is unknown. Check the result before retrying; nothing was run again.',
