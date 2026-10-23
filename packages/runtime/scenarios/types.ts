@@ -40,7 +40,8 @@ export type FixtureWeb = Readonly<{ title: string; url: string; snippet: string 
 export type FixtureFreeBusy = Readonly<{ busy: readonly Readonly<{ start: string; end: string }>[]; errors?: readonly Readonly<{ reason: string }>[] }>;
 
 // A turn is owner text; the '@plan ' and '@prompt ' prefixes drive the planning and proactive
-// entry points, matching the evals runner's convention.
+// entry points, matching the evals runner's convention. '@job ' drives a proactive job that embeds
+// text someone else wrote (a day card, an update card), as the owner DO runs one.
 export type Scenario = Readonly<{
   id: string;
   category: ScenarioCategory;
