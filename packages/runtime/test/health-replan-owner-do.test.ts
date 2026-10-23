@@ -211,52 +211,69 @@ describe('Weight follows the day', () => {
     });
   });
 
-  it('puts up a second card the same day once the gate\'s cooldown ends, showing the model the first and that it is still waiting', async () => {
+  // Two evaluations on one day: the offsite added at 10:10 gives the first card, its cancellation at 10:40 moves Weight
+  // back, and the floor's run lands five seconds inside the cooldown of the first card and waits for it. The model takes
+  // five seconds, so each card is booked after its run started. `second` is what the model answers the second time.
+  const twoEvaluations = async (o: { state: DurableObjectState; sweep(): Promise<void>; pass(): Promise<void>; upload(): Promise<void> }, second: string) => {
     const REVIEW: CalendarItem = { id: 'gcal-review-2', title: 'Quarterly board review', start: '2026-10-21T16:00:00+05:30', end: '2026-10-21T16:30:00+05:30', all_day: false, attendees: 6, etag: 'r2' };
+    await morning(o);
+    offsiteAdded();
+    world.events = [OFFSITE, REVIEW];
+    await o.sweep();
+    vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
+    await o.pass();
+    const firstRun = Date.now();
+    await o.pass();
+    expect(cards(o.state)).toHaveLength(1);
+    // Google returns the cancellation without times.
+    vi.setSystemTime(NOW + 40 * 60_000);
+    world.events = [REVIEW];
+    world.busy = world.busy.filter(b => b.start !== block(TODAY, 13, 6).start);
+    world.changed = [{ id: OFFSITE.id, title: '(no title)', start: '', end: '', all_day: true, status: 'cancelled', created: '' }];
+    world.decision = second;
+    await o.sweep();
+    expect(calendarLogs().at(-1)).toEqual({ ok: true, code: 'asked' });
+    vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
+    await o.pass();
+    expect(world.trace.filter(step => step.startsWith(`context_write:${TODAY}`)).at(-1)).toBe(`context_write:${TODAY}:weight`);
+    expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 60 * 60_000 });
+    vi.setSystemTime(firstRun + 60 * 60_000);
+    await o.pass();
+    expect(runs(o.state).map(run => run.outcome)).toEqual(['proposed']);
+    expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 5_000 + 60 * 60_000 });
+    vi.setSystemTime(firstRun + 5_000 + 60 * 60_000);
+    await o.pass();
+    return world.requests.filter(r => r.request.response_format?.name === 'health_proposal').map(r => JSON.stringify(r.request));
+  };
+  const sameDay = (run: () => Promise<void>) => async () => {
     // Today still holds an hour of meetings before the offsite: half an hour at 10:00 and the review.
     world.busy[0] = block(TODAY, 10, 0.5);
     world.busy.push(block(TODAY, 16, 0.5));
-    // The model takes five seconds, so each card is booked after its run started.
     world.latencyMs = 5_000;
+    await run();
+  };
+
+  it('puts up a second card the same day once the gate\'s cooldown ends, showing the model the first and that it is still waiting', sameDay(async () => {
     await withOwner(async o => {
-      await morning(o);
-      offsiteAdded();
-      world.events = [OFFSITE, REVIEW];
-      await o.sweep();
-      vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
-      await o.pass();
-      const firstRun = Date.now();
-      await o.pass();
-      expect(cards(o.state)).toHaveLength(1);
-      // At 10:40 the offsite is called off. Google returns the cancellation without times.
-      vi.setSystemTime(NOW + 40 * 60_000);
-      world.events = [REVIEW];
-      world.busy = world.busy.filter(b => b.start !== block(TODAY, 13, 6).start);
-      world.changed = [{ id: OFFSITE.id, title: '(no title)', start: '', end: '', all_day: true, status: 'cancelled', created: '' }];
-      world.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T15:30', title: 'Buffer', notify_guests: null, reason: 'The afternoon opened up; a short buffer before the review keeps it steady.' });
-      await o.sweep();
-      expect(calendarLogs().at(-1)).toEqual({ ok: true, code: 'asked' });
-      vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
-      await o.pass();
-      expect(world.trace.filter(step => step.startsWith(`context_write:${TODAY}`)).at(-1)).toBe(`context_write:${TODAY}:weight`);
-      // The floor arms the evaluation an hour after the first one started, five seconds inside the cooldown of its card.
-      expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 60 * 60_000 });
-      vi.setSystemTime(firstRun + 60 * 60_000);
-      await o.pass();
-      expect(runs(o.state).map(run => run.outcome)).toEqual(['proposed']);
-      expect(entry(o.state, HEALTH_TRIGGER_ID)).toEqual({ due_at: firstRun + 5_000 + 60 * 60_000 });
-      vi.setSystemTime(firstRun + 5_000 + 60 * 60_000);
-      await o.pass();
+      const evaluations = await twoEvaluations(o, JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T15:30', title: 'Buffer', notify_guests: null, reason: 'The afternoon opened up; a short buffer before the review keeps it steady.' }));
       expect(runs(o.state)).toEqual([{ mode: 'live', outcome: 'proposed' }, { mode: 'live', outcome: 'proposed' }]);
       expect(cards(o.state)).toHaveLength(2);
-      const evaluations = world.requests.filter(r => r.request.response_format?.name === 'health_proposal').map(r => JSON.stringify(r.request));
       expect(evaluations).toHaveLength(2);
       expect(evaluations[0]).toContain('Nothing proposed earlier on 2026-10-21.');
       expect(evaluations[1]).toContain('Earlier on 2026-10-21 you proposed:');
       expect(evaluations[1]).toContain('\\"title\\":\\"Focus block\\",\\"start\\":\\"2026-10-21T11:30\\",\\"end\\":\\"2026-10-21T12:30\\",\\"answer\\":\\"waiting for the owner\\"');
       for (const leak of LEAKS) for (const [where, text] of [['the model requests', evaluations.join('\n')], ['tables and storage', dump(o.state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
     });
-  });
+  }));
+
+  it('puts no second card up for the same change the owner is still deciding on, whatever the model says this time', sameDay(async () => {
+    await withOwner(async o => {
+      const again = JSON.stringify({ ...JSON.parse(world.decision), reason: 'Still a heavy afternoon; an hour clear before it keeps the day steady.' });
+      expect(await twoEvaluations(o, again)).toHaveLength(2);
+      expect(runs(o.state)).toEqual([{ mode: 'live', outcome: 'proposed' }, { mode: 'live', outcome: 'duplicate' }]);
+      expect(cards(o.state)).toHaveLength(1);
+    });
+  }));
 
   it('asks nothing when the owner has not shared health, or withdrew it: no recompute and no read of their readings', async () => {
     await withOwner(async o => {

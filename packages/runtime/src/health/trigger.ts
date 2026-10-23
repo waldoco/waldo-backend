@@ -43,7 +43,7 @@ export type EarlierProposal = Readonly<{ action: string; event_id?: string; titl
 export type HealthCardAdmission = Readonly<{ verdict: 'send' } | { verdict: 'wait'; until: number } | { verdict: 'spent' }>;
 export type HealthTriggerOutcome =
   | 'idle' | 'opted_out' | 'held_quiet' | 'held_cooldown' | 'no_health' | 'nothing_coming' | 'budget_gate'
-  | 'stale_day' | 'no_op' | 'invalid' | 'egress_refused' | 'proposed' | 'shadow_proposed' | 'failed';
+  | 'stale_day' | 'no_op' | 'invalid' | 'egress_refused' | 'duplicate' | 'proposed' | 'shadow_proposed' | 'failed';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
@@ -277,6 +277,13 @@ export const healthTriggerPrompt = (input: Readonly<{
   ].join('\n\n');
 };
 
+// A card already up on this owner-local day is never put up again while the owner is still deciding on it, put it off or
+// skipped it. The change is its action, event, times and title; the reason is only the model's wording of it.
+const STILL_OPEN: ReadonlySet<EarlierProposal['answer']> = new Set(['waiting', 'deferred', 'false_alarm']);
+const instantOf = (iso: string | undefined): number | null => (iso === undefined ? null : Date.parse(iso));
+export const sameChange = (args: ProposeCalendarChangeArgs, card: EarlierProposal): boolean =>
+  card.action === args.action && card.event_id === args.event_id && card.title === args.title && instantOf(card.start) === instantOf(args.start) && instantOf(card.end) === instantOf(args.end);
+
 export type HealthDecision = Readonly<{ kind: 'no_op' } | { kind: 'propose'; args: ProposeCalendarChangeArgs }>;
 
 // Owner-local "YYYY-MM-DDTHH:MM" to an instant in the owner's zone. A time the clock skips at a spring-forward change does
@@ -393,6 +400,7 @@ export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthT
     if (decision.kind === 'no_op') return finish('no_op');
     if (!calendarEgressClear(decision.args, healthWordsOf(view))) return finish('egress_refused');
     if (mode === 'shadow') return finish('shadow_proposed');
+    if (book.proposedOn(localDay).some(card => STILL_OPEN.has(card.answer) && sameChange(decision.args, card))) return finish('duplicate');
     const args = asking ? { ...decision.args, reason: `${decision.args.reason} ${HEALTH_KEEP_ASKING}` } : decision.args;
     const approvalId = await deps.propose(args, id);
     deps.charge(budgetKey);
