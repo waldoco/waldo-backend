@@ -5,7 +5,6 @@ import {
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
 import { CURRENT_CONSENT_VERSION } from './consent-ledger';
-import type { FindingStore } from './findings';
 import { bodyDigest } from './request-book';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -28,6 +27,8 @@ export type FirstRunHost = Readonly<{
   setBriefTime(time: string, timezone: string): Promise<boolean>;
   // Admits one main-chat message under clientId; repeating the id returns the first admission.
   admitFirstLook(clientId: string, text: string): Promise<boolean>;
+  // Withdraws the look-up as the consent route does: every finding hidden, erased and barred.
+  withdrawLookup(): Promise<unknown>;
 }>;
 export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_started' | 'not_connected' | 'not_offered' | 'completed' | 'unavailable';
 
@@ -38,7 +39,7 @@ const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: pri
 // The owner's first run. One row survives restarts; a second start returns the same run. The answers themselves live where
 // they are used: the name and this week's priority as owner-stated claims, the Brief time in the day plan, the agreements in
 // the consent ledger. This row holds step states, ids and times only.
-export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, findings: FindingStore, host: FirstRunHost, now: () => number) => {
+export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, host: FirstRunHost, now: () => number) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS onboarding_runs (
     id INTEGER PRIMARY KEY CHECK (id = 1), run_id TEXT NOT NULL, started_at INTEGER NOT NULL, completed_at INTEGER,
     steps_json TEXT NOT NULL, first_look_id TEXT, brief_time TEXT)`);
@@ -67,11 +68,14 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
     const base = run ? steps(run) : Object.fromEntries(appOnboardingStepV1Schema.options.map(name => [name, 'pending'])) as Steps;
     // Connecting Google is its own flow; the step reads as done from the live connection.
     const google = base.google !== 'done' && run && await host.googleConnected() ? 'done' : base.google;
+    // While the run is open the agreements step reads from the ledger itself, however they were accepted, so a copy bump shows
+    // it pending again; a finished run keeps the step it finished with.
+    const agreements = !run || run.completed_at !== null ? base.agreements : consent.agreed() ? 'done' : 'pending';
     const body = {
       version: 1 as const,
       state: !run ? 'not_started' as const : run.completed_at === null ? 'in_progress' as const : 'completed' as const,
       run_id: run?.run_id ?? null, started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null,
-      steps: { ...base, google },
+      steps: { ...base, google, agreements },
       first_look: { message_id: run?.first_look_id ?? null },
       brief: { time: run?.brief_time ?? null, timezone_confirmed: host.timezoneConfirmed() },
       channel: { surface: host.proactiveSurface() },
@@ -91,15 +95,18 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
     if (run.completed_at !== null) return 'completed';
     if (action.action === 'agreements.accept') {
       if (action.terms_version !== CURRENT_CONSENT_VERSION.terms || action.notice_version !== CURRENT_CONSENT_VERSION.privacy_notice) return 'stale_version';
+      // A yes the server does not offer records nothing, so the step is never half accepted.
+      if (action.owner_lookup && !consent.offered('owner_lookup')) return 'not_offered';
+      if (!action.owner_lookup) await host.withdrawLookup();
       consent.attestAge(at);
       consent.grant('terms', action.terms_version, at);
       consent.grant('privacy_notice', action.notice_version, at);
       if (action.owner_lookup) consent.grant('owner_lookup', action.notice_version, at);
-      else if (consent.withdraw('owner_lookup', at).changed) findings.eraseAll();
-      step(run, 'agreements', 'done');
+      step(row()!, 'agreements', 'done');
       return null;
     }
-    if (steps(run).agreements !== 'done') return 'agreements_required';
+    // The ledger answers, as the link route asks it: after a copy bump both refuse until the new copy is accepted.
+    if (!consent.agreed()) return 'agreements_required';
     switch (action.action) {
       case 'name.set': {
         const saved = answer(NAME_REF, 'preference', `Wants to be called ${action.name}`, action.name);
@@ -146,7 +153,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
         return null;
       case 'complete': {
         // What the owner left unanswered stays unasked: the rest is learned in the first week, in context.
-        const current = steps(run);
+        const current = { ...steps(run), agreements: 'done' as const };
         for (const name of APP_ONBOARDING_SKIPPABLE_V1) if (current[name] === 'pending') current[name] = name === 'google' && await host.googleConnected() ? 'done' : 'skipped';
         write({ steps: current, completed_at: at });
         return null;

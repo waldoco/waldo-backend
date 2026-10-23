@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
-import { appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema } from '../../contracts/src/app/onboarding';
+import { describe, expect, it, vi } from 'vitest';
+import { appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema } from '../../contracts/src/app/onboarding';
+import { PROACTIVE_SURFACES } from '../src/channels/proactive-surface';
 import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
 import { claimStore } from '../src/memory/claims';
@@ -10,15 +11,16 @@ import { findingStore } from '../src/onboarding/findings';
 import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
-type Calls = { acts: unknown[]; admitted: string[]; rpc: number };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent'>>;
-const NO_CHAT: ChatChannels = { offered: () => false, linked: async () => 'unknown', issue: async () => null };
+type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered'>>;
+const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
-    const calls: Calls = { acts: [], admitted: [], rpc: 0 };
+    const calls: Calls = { acts: [], admitted: [], rpc: 0, hidden: [] };
     let clock = 1_000;
     const deps: OwnerOnboardingDeps = {
       storage: state.storage, doName: 'owner-name', now: () => clock++, assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
+      lookupOffered: fakes.lookupOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }),
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
@@ -142,7 +144,7 @@ describe('chat channels in the first run', () => {
   const chat = (state: Record<string, 'linked' | 'not_linked' | 'unknown'>, offered: string[] = ['imessage', 'whatsapp', 'telegram']) => {
     const issued: string[] = [];
     const channels: ChatChannels = {
-      offered: provider => offered.includes(provider), linked: async provider => state[provider] ?? 'not_linked',
+      offered: async provider => offered.includes(provider), linked: async provider => state[provider] ?? 'not_linked',
       issue: async provider => { issued.push(provider); return { provider, code: CODE, text: provider === 'telegram' ? `/link ${CODE}` : `waldo ${CODE}`, address: null, send_url: null, expires_in_seconds: 600 }; },
     };
     return { issued, channels };
@@ -187,7 +189,7 @@ describe('chat channels in the first run', () => {
     await act({ action: 'start' }); await act(agree);
     const response = await send('/app/v1/onboarding/channel-link', { provider: 'telegram' });
     expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
-  }, { chat: { offered: () => true, linked: async () => 'not_linked', issue: async () => null } }));
+  }, { chat: { offered: async () => true, linked: async () => 'not_linked', issue: async () => null } }));
   it('issues nothing when the app session is no longer current', () => {
     const { issued, channels } = chat({});
     let ended = false;
@@ -242,7 +244,7 @@ describe('one consent representation per purpose', () => {
     expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
   }));
   it('cannot store a health purpose even by a direct write', () => owner(async ({ storage }) => {
-    const ledger = consentLedger(storage.sql);
+    const ledger = consentLedger(storage.sql, { lookupOffered: true });
     expect(ledger.grant('storage_compute' as never, 1, 1)).toBe('stale_version');
     for (const purpose of ['storage_compute', 'model_processing', 'whoop']) {
       expect(() => storage.sql.exec("INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, 'granted', 1, 1)", purpose)).toThrow();
@@ -286,11 +288,19 @@ describe('health step reads both grants a cloud wearable needs', () => {
 });
 
 describe('consent and findings routes', () => {
-  const seed = (storage: DurableObjectStorage) => {
-    const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql), findings = findingStore(storage.sql, claims, consent);
-    consent.grant('owner_lookup', 1, 1);
-    return findings.record({ category: 'work', text: 'Product manager at Acme', source_url: 'https://samrivera.dev/about', evidence_quote: 'product manager at Acme', anchor: 'samrivera.dev' }, 'About', 2) as { id: string };
+  const ledger = (storage: DurableObjectStorage) => consentLedger(storage.sql, { lookupOffered: true });
+  const stores = (storage: DurableObjectStorage) => {
+    const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = ledger(storage);
+    return { claims, consent, findings: findingStore(storage.sql, claims, consent) };
   };
+  const ACME = { category: 'work', text: 'Product manager at Acme', source_url: 'https://samrivera.dev/about', evidence_quote: 'product manager at Acme' } as const;
+  const PUNE = { category: 'based_in', text: 'Based in Pune since 2019', source_url: 'https://samrivera.dev/about', evidence_quote: 'Sam Rivera lives in Pune' } as const;
+  const seed = (storage: DurableObjectStorage) => {
+    const { consent, findings } = stores(storage);
+    consent.grant('terms', 1, 1); consent.grant('privacy_notice', 1, 1); consent.grant('owner_lookup', 1, 1);
+    return findings.record(ACME, 'About', 2) as { id: string };
+  };
+  const count = (storage: DurableObjectStorage) => storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings').one().n;
   it('withdrawing the look-up erases every finding in the same step', () => owner(async ({ storage, send }) => {
     seed(storage);
     expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json())).toMatchObject({ lookup: 'granted', total: 1 });
@@ -300,22 +310,76 @@ describe('consent and findings routes', () => {
     expect((await send('/app/v1/consents/withdraw', { request_id: 'withdraw-0002', purpose: 'terms' })).status).toBe(400);
     expect(await (await send('/app/v1/consents', { request_id: 'grant-0001', purpose: 'owner_lookup', version: 9, age_attested_18_plus: true })).json()).toEqual({ error: 'stale_version' });
   }));
-  it('unticking the look-up in the agreements withdraws it and erases the findings', () => owner(async ({ storage, act }) => {
+  it('withdrawing hides every copy of what was found before the findings go, and bars them from coming back', () => owner(async ({ storage, calls, send }) => {
+    const { findings } = stores(storage);
+    const { id } = seed(storage);
+    findings.record(PUNE, 'About', 3);
+    findings.decide(id, { action: 'keep' }, 4);
+    const change = appConsentChangeV1Schema.parse(await (await send('/app/v1/consents/withdraw', { request_id: 'withdraw-hide-1', purpose: 'owner_lookup' })).json());
+    expect(change.findings_erased).toBe(2);
+    expect(calls.hidden.flat().sort()).toEqual([ACME.text, ACME.evidence_quote, PUNE.text, PUNE.evidence_quote].sort());
+    expect(claimStore(storage.sql).allClaims()).toHaveLength(0);
+    // A later yes, and the same pages found again, bring nothing back.
+    expect((await send('/app/v1/consents', { request_id: 'grant-again-1', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true })).status).toBe(200);
+    expect(findings.record(ACME, 'About', 9)).toBe('forgotten');
+    expect(findings.record(PUNE, 'About', 9)).toBe('forgotten');
+  }));
+  it('withdraws nothing when the copies cannot be hidden: the yes and the findings stay, and a retry finishes', () => {
+    let failing = true;
+    return owner(async ({ storage, send }) => {
+      seed(storage);
+      await expect(send('/app/v1/consents/withdraw', { request_id: 'withdraw-fail-1', purpose: 'owner_lookup' })).rejects.toThrow('history cleanup');
+      expect(ledger(storage).state('owner_lookup').status).toBe('granted');
+      expect(count(storage)).toBe(1);
+      failing = false;
+      expect(appConsentChangeV1Schema.parse(await (await send('/app/v1/consents/withdraw', { request_id: 'withdraw-fail-1', purpose: 'owner_lookup' })).json())).toMatchObject({ findings_erased: 1, replayed: false });
+      expect(count(storage)).toBe(0);
+    }, { hideText: async () => { if (failing) throw new Error('history cleanup is incomplete'); } });
+  });
+  it('unticking the look-up in the agreements withdraws it, hides the copies and bars the findings', () => owner(async ({ storage, calls, act }) => {
     seed(storage);
     await act({ action: 'start' }); await act({ ...agree, owner_lookup: false });
-    expect(storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings').one().n).toBe(0);
-    expect(consentLedger(storage.sql).state('owner_lookup').status).toBe('withdrawn');
+    expect(count(storage)).toBe(0);
+    expect(ledger(storage).state('owner_lookup').status).toBe('withdrawn');
+    expect(calls.hidden.flat().sort()).toEqual([ACME.text, ACME.evidence_quote].sort());
+    ledger(storage).grant('owner_lookup', 1, 10);
+    expect(stores(storage).findings.record(ACME, 'About', 11)).toBe('forgotten');
   }));
-  it('forgetting a finding with a short quote hides the long passage only, never every line that shares a word', () => owner(async ({ storage, send }) => {
-    const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql), findings = findingStore(storage.sql, claims, consent);
-    consent.grant('owner_lookup', 1, 1);
-    const { id } = findings.record({ category: 'based_in', text: 'Based in Pune since 2019', source_url: 'https://samrivera.dev/about', evidence_quote: 'Pune', anchor: 'samrivera.dev' }, 'About', 2) as { id: string };
-    const episodes = episodeIndex(storage.sql);
-    episodes.add('e1', 'owner', 'Book me a table in Pune on Friday', 1);
-    episodes.add('e2', 'waldo', 'Your site says: Based in Pune since 2019', 2);
+  it('refuses the look-up before the privacy notice that discloses it, and leaves it not granted', () => owner(async ({ send }) => {
+    const early = await send('/app/v1/consents', { request_id: 'grant-early-1', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true });
+    expect([early.status, await early.json()]).toEqual([409, { error: 'agreements_required' }]);
+    expect(appConsentListV1Schema.parse(await (await send('/app/v1/consents')).json()).consents.find(row => row.purpose === 'owner_lookup')).toMatchObject({ status: 'not_granted' });
+    expect((await send('/app/v1/consents', { request_id: 'grant-notice-1', purpose: 'privacy_notice', version: 1, age_attested_18_plus: true })).status).toBe(200);
+    expect(await (await send('/app/v1/consents', { request_id: 'grant-late-1', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true })).json()).toMatchObject({ consent: { purpose: 'owner_lookup', status: 'granted' } });
+  }));
+  it('offers no look-up while the server has it off: the app is told, and a yes is refused without half-recording the agreements', () => owner(async ({ storage, send, act }) => {
+    expect(appConsentListV1Schema.parse(await (await send('/app/v1/consents')).json()).owner_lookup_offered).toBe(false);
+    await send('/app/v1/consents', { request_id: 'grant-notice-2', purpose: 'privacy_notice', version: 1, age_attested_18_plus: true });
+    const refused = await send('/app/v1/consents', { request_id: 'grant-off-1', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true });
+    expect([refused.status, await refused.json()]).toEqual([409, { error: 'not_offered' }]);
+    await act({ action: 'start' });
+    const yes = await act(agree);
+    expect([yes.status, await yes.json()]).toEqual([409, { error: 'not_offered' }]);
+    expect(storage.sql.exec<{ purpose: string }>("SELECT purpose FROM consent_ledger WHERE purpose IN ('terms', 'owner_lookup')").toArray()).toEqual([]);
+    expect((await run(await act({ ...agree, owner_lookup: false }))).steps.agreements).toBe('done');
+  }, { lookupOffered: false }));
+  it('refuses a grant that names its own time: the server records when', () => owner(async ({ storage, send }) => {
+    const forged = await send('/app/v1/consents', { request_id: 'grant-forged-1', purpose: 'privacy_notice', version: 1, age_attested_18_plus: true, granted_at: 1 });
+    expect(forged.status).toBe(400);
+    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+  }));
+  it('forgetting a finding hides its copies first, and only passages long enough not to hide unrelated lines', () => owner(async ({ storage, calls, send }) => {
+    const { consent, findings } = stores(storage);
+    consent.grant('terms', 1, 1); consent.grant('privacy_notice', 1, 1); consent.grant('owner_lookup', 1, 1);
+    const { id } = findings.record({ ...PUNE, text: 'Pune' }, 'About', 2) as { id: string };
     expect((await send('/app/v1/findings/actions', { request_id: 'finding-forget-s', finding_id: id, action: 'forget' })).status).toBe(200);
-    expect(storage.sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY entry_id').toArray().map(row => row.text)).toEqual(['Book me a table in Pune on Friday', 'Your site says: [forgotten]']);
+    expect(calls.hidden).toEqual([[PUNE.evidence_quote]]);
   }));
+  it('forgets nothing when the copies cannot be hidden', () => owner(async ({ storage, send }) => {
+    const { id } = seed(storage);
+    await expect(send('/app/v1/findings/actions', { request_id: 'finding-forget-f', finding_id: id, action: 'forget' })).rejects.toThrow('history cleanup');
+    expect(count(storage)).toBe(1);
+  }, { hideText: async () => { throw new Error('history cleanup is incomplete'); } }));
   it('forgets one finding and hides its copies in the chat', () => owner(async ({ storage, send }) => {
     const { id } = seed(storage);
     expect(await (await send('/app/v1/findings/actions', { request_id: 'finding-keep-1', finding_id: id, action: 'keep' })).json()).toMatchObject({ outcome: 'kept' });
@@ -325,4 +389,37 @@ describe('consent and findings routes', () => {
     expect(claimStore(storage.sql).claims()).toHaveLength(0);
     expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json()).total).toBe(0);
   }));
+});
+
+describe('the first run reads every proactive surface the console can set', () => {
+  it('names the same surfaces as the console setting', () => {
+    expect([...appProactiveSurfaceV1Schema.options].sort()).toEqual([...PROACTIVE_SURFACES].sort());
+  });
+  it('reads a run whose owner chose the app with an iMessage copy in the console', () => owner(async ({ storage, send, act }) => {
+    storage.kv.put('proactive_surface_v1', 'app_imessage');
+    expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).channel).toEqual({ surface: 'app_imessage' });
+    await act({ action: 'start' }); await act(agree);
+    expect((await run(await act({ action: 'channel.set', surface: 'app_imessage' }))).channel).toEqual({ surface: 'app_imessage' });
+  }));
+});
+
+describe('failures an operator can see', () => {
+  const failures = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>);
+  it('logs a fixed code, and no text, when a link code cannot be issued', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    return owner(async ({ send, act }) => {
+      await act({ action: 'start' }); await act(agree);
+      const response = await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' });
+      expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
+      expect(failures(logged)).toEqual([{ hop: 'app_onboarding', ok: false, code: 'channel_link_issue' }]);
+    }, { chat: { offered: async () => true, linked: async () => 'not_linked', issue: async () => { throw new Error('directory down for owner-name'); } } }).finally(() => logged.mockRestore());
+  });
+  it('logs a fixed code, and no text, when the health plane cannot be read', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    return owner(async ({ act }) => {
+      await act({ action: 'start' }); await act(agree);
+      expect((await act({ action: 'health.connected' })).status).toBe(503);
+      expect(failures(logged)).toEqual([{ hop: 'app_onboarding', ok: false, code: 'health_consent_list' }]);
+    }, { rpc: async () => { throw new Error('directory down for owner-name'); } }).finally(() => logged.mockRestore());
+  });
 });

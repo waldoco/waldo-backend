@@ -23,13 +23,13 @@ describe('consent ledger', () => {
   });
   it('lists each purpose exactly once with the 18+ attestation', () => {
     const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }));
-    accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, consents }]);
-    rejected(appConsentListV1Schema, [{ consents }, { age_attested_18_plus: false, consents: consents.slice(1) }, { age_attested_18_plus: false, consents: [consents[0], consents[0], consents[1]] }]);
+    accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, owner_lookup_offered: false, consents }, { age_attested_18_plus: true, owner_lookup_offered: true, consents }]);
+    rejected(appConsentListV1Schema, [{ consents, owner_lookup_offered: false }, { age_attested_18_plus: false, consents }, { age_attested_18_plus: false, owner_lookup_offered: 'yes', consents }, { age_attested_18_plus: false, owner_lookup_offered: false, consents: consents.slice(1) }, { age_attested_18_plus: false, owner_lookup_offered: false, consents: [consents[0], consents[0], consents[1]] }]);
   });
   it('grants name a copy version and always carry the 18+ attestation; only the look-up can be withdrawn', () => {
     const grant = { request_id: 'consent-001', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true };
     accepted(appConsentGrantV1Schema, [grant, { ...grant, purpose: 'terms', version: APP_TERMS_VERSION_V1 }]);
-    rejected(appConsentGrantV1Schema, [{ ...grant, age_attested_18_plus: false }, { ...grant, version: 0 }, { ...grant, version: '1' }, { ...grant, purpose: '*' }, { ...grant, request_id: 'short' }, { ...grant, user_id: 'forged' }]);
+    rejected(appConsentGrantV1Schema, [{ ...grant, age_attested_18_plus: false }, { ...grant, version: 0 }, { ...grant, version: '1' }, { ...grant, purpose: '*' }, { ...grant, request_id: 'short' }, { ...grant, user_id: 'forged' }, { ...grant, granted_at: 1 }, { ...grant, at: 1 }]);
     accepted(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'owner_lookup' }]);
     rejected(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'terms' }, { request_id: 'withdraw-01', purpose: 'privacy_notice' }, { request_id: 'withdraw-01' }]);
     accepted(appConsentChangeV1Schema, [{ consent: granted, replayed: false, findings_erased: 0 }]);
@@ -68,7 +68,7 @@ describe('first run', () => {
       { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: true, owner_lookup: false },
       { ...r, action: 'name.set', name: 'Sam' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: 'Asia/Kolkata' },
       ...['imessage', 'whatsapp', 'telegram'].map(provider => ({ ...r, action: 'channel.linked', provider })),
-      { ...r, action: 'priority.set', text: 'Ship the board deck' }, ...['app', 'whatsapp', 'both'].map(surface => ({ ...r, action: 'channel.set', surface })), { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
+      { ...r, action: 'priority.set', text: 'Ship the board deck' }, ...['app', 'whatsapp', 'both', 'app_imessage'].map(surface => ({ ...r, action: 'channel.set', surface })), { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
       ...['name', 'google', 'health', 'brief_time', 'priority', 'channel'].map(step => ({ ...r, action: 'skip', step })), { ...r, action: 'complete' },
     ]);
     rejected(appOnboardingActionV1Schema, [

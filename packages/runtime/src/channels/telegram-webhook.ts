@@ -56,6 +56,8 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
+  OWNER_LOOKUP?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

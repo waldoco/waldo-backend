@@ -11,8 +11,9 @@ type LinkState = 'linked' | 'not_linked' | 'unknown';
 // the app route and in the console: the owner's own signed-in act, never a model tool, so a turn that read untrusted text has
 // no way to link a channel.
 export type ChatChannels = Readonly<{
-  // Whether this server can link the provider. Telegram stops being offered when its bot token is removed.
-  offered(provider: AppChatProviderV1): boolean;
+  // Whether this server can link the provider for this owner. Telegram stops being offered when its bot token is removed;
+  // iMessage is offered only where the owner has a number to text.
+  offered(provider: AppChatProviderV1): Promise<boolean>;
   // Read live: the owner directory for iMessage and WhatsApp, the binding the console reads for Telegram. 'unknown' when the directory cannot say.
   linked(provider: AppChatProviderV1): Promise<LinkState>;
   // A fresh one-time code, or null when it is not offered or the directory gave none.
@@ -23,11 +24,11 @@ type Context = Readonly<{ env: Env; kv: Kv; doName: string; auth: ConsoleAuth }>
 // Each provider declares what it needs, how its link is read, which code it takes and what the owner sends, so nothing here
 // branches on which surface it is.
 type Provider = Readonly<{
-  offered(context: Context): boolean;
+  // null where this server cannot link it for this owner; otherwise the address the owner texts, where Waldo knows it.
+  ready(context: Context): Promise<Readonly<{ address: string | null }> | null>;
   linked(context: Context): Promise<LinkState>;
   code(context: Context): Promise<string | null>;
   text(code: string): string;
-  address(env: Env): string | null;
 }>;
 
 const hinted = async (hint: Promise<string | null> | undefined): Promise<LinkState> => {
@@ -35,45 +36,55 @@ const hinted = async (hint: Promise<string | null> | undefined): Promise<LinkSta
   try { return (await hint) === null ? 'not_linked' : 'linked'; } catch { return 'unknown'; }
 };
 const sendWaldo = (code: string) => `waldo ${code}`;
+// The number this owner texts, as the console and the app's own link route read it: with Photon, the owner's assigned pool
+// number, which an owner who has not enrolled does not have yet; without it, the one configured address. Loaded lazily: this
+// module also runs in plain Node, where the Durable Object classes behind it cannot load.
+const iMessageNumber = async ({ env, doName }: Context): Promise<string | null> => {
+  try {
+    const { iMessageNumberView } = await import('./imessage/enrollment');
+    return (await iMessageNumberView(env as never, doName)).number;
+  } catch {
+    console.error(JSON.stringify({ hop: 'app_onboarding', ok: false, code: 'imessage_number' }));
+    return null;
+  }
+};
+const always = { address: null } as const;
 
 const PROVIDERS: Readonly<Record<AppChatProviderV1, Provider>> = {
   imessage: {
-    offered: ({ env, auth }) => !!env.IMESSAGE_WALDO_ADDRESS && !!auth.issueProviderLinkCode,
+    ready: async context => { if (!context.auth.issueProviderLinkCode) return null; const address = await iMessageNumber(context); return address ? { address } : null; },
     linked: ({ auth, doName }) => hinted(auth.iMessageHandleHint?.(doName)),
     code: ({ auth, doName }) => auth.issueProviderLinkCode!(doName, 'imessage'),
     text: sendWaldo,
-    address: env => env.IMESSAGE_WALDO_ADDRESS ?? null,
   },
   whatsapp: {
-    offered: ({ env, auth }) => !!env.WHATSAPP_ACCESS_TOKEN && !!env.WHATSAPP_PHONE_NUMBER_ID && !!auth.issueProviderLinkCode,
+    ready: async ({ env, auth }) => env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID && auth.issueProviderLinkCode ? always : null,
     linked: ({ auth, doName }) => hinted(auth.whatsAppHandleHint?.(doName)),
     code: ({ auth, doName }) => auth.issueProviderLinkCode!(doName, 'whatsapp'),
     text: sendWaldo,
-    address: () => null,
   },
   telegram: {
-    offered: ({ env }) => !!env.TELEGRAM_BOT_TOKEN,
+    ready: async ({ env }) => env.TELEGRAM_BOT_TOKEN ? always : null,
     linked: ({ kv }) => Promise.resolve(telegramLinked(kv) ? 'linked' : 'not_linked'),
     code: ({ auth, doName }) => auth.issueLinkCode(doName),
     text: code => `/link ${code}`,
-    address: () => null,
   },
 };
 
 export const chatChannelLinks = (deps: Readonly<{ env: Env; kv: Kv; doName: string; auth: ConsoleAuth | null }>): ChatChannels => {
   const { auth } = deps;
   const context = auth ? { ...deps, auth } : null;
-  const offered = (provider: AppChatProviderV1) => context !== null && PROVIDERS[provider].offered(context);
   return {
-    offered,
+    offered: async provider => context !== null && await PROVIDERS[provider].ready(context) !== null,
     linked: provider => context ? PROVIDERS[provider].linked(context) : Promise.resolve('unknown'),
     async issue(provider) {
-      if (!context || !offered(provider)) return null;
-      const { code, text, address } = PROVIDERS[provider];
+      if (!context) return null;
+      const { ready, code, text } = PROVIDERS[provider];
+      const where = await ready(context);
+      if (!where) return null;
       const issued = await code(context);
       if (!issued) return null;
-      const where = address(context.env);
-      return { provider, code: issued, text: text(issued), address: where, send_url: where ? iMessageSendUrl(where, issued) : null, expires_in_seconds: 600 };
+      return { provider, code: issued, text: text(issued), address: where.address, send_url: where.address ? iMessageSendUrl(where.address, issued) : null, expires_in_seconds: 600 };
     },
   };
 };

@@ -274,10 +274,11 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
-  const consent = consentLedger(sql), pages = observedPages(), findings = findingStore(sql, claims, consent);
-  if (seed.lookup?.consent) consent.grant('owner_lookup', CURRENT_CONSENT_VERSION.owner_lookup, now());
+  // The look-up as an owner reaches it: the server offers it, and the owner accepted the notice before saying yes to it.
+  const consent = consentLedger(sql, { lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent);
+  if (seed.lookup?.consent) for (const purpose of ['terms', 'privacy_notice', 'owner_lookup'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], now());
   const searchEngine = (async () => Response.json({ web: { results: (seed.web ?? []).map((page) => ({ title: page.title, url: page.url, description: page.snippet })) } })) as unknown as typeof fetch;
-  const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, claims, now })] : [web];
+  const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, now })] : [web];
   const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
   // An approved MCP card is an effect like any other: recorded, never run.
   const mcpDesk = { proposeMcpCall: async (proposal: unknown) => { effect('mcp.card', proposal); return nextId('card'); } };

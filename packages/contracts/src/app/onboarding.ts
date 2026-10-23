@@ -38,8 +38,11 @@ export const appConsentStateV1Schema = z.strictObject({
   if (state.status === 'withdrawn' && state.purpose !== 'owner_lookup') ctx.addIssue({ code: 'custom', path: ['status'], message: 'only owner_lookup can be withdrawn; terms and the notice end with the account' });
 });
 // age_attested_18_plus is true once the owner has said they are 18 or over; it is recorded on the account, never only ticked.
+// owner_lookup_offered is false while this server does not offer the look-up (until the notice that discloses it is published):
+// the app then does not ask, and a grant is refused not_offered. owner_lookup can be granted only after privacy_notice.
 export const appConsentListV1Schema = z.strictObject({
   age_attested_18_plus: z.boolean(),
+  owner_lookup_offered: z.boolean(),
   consents: z.array(appConsentStateV1Schema).length(appConsentPurposeV1Schema.options.length)
     .refine(rows => new Set(rows.map(row => row.purpose)).size === rows.length, 'each purpose is listed once'),
 });
@@ -59,7 +62,8 @@ export const appOnboardingStepStateV1Schema = z.enum(['pending', 'done', 'skippe
 export const APP_ONBOARDING_SKIPPABLE_V1 = ['name', 'google', 'health', 'brief_time', 'priority', 'channel'] as const;
 // Where Waldo's proactive messages go: the Brief, reminders and follow-ups. This is the console's own setting (app by default).
 // Choosing whatsapp or both before WhatsApp is linked is safe: delivery falls back to the app until the number is linked.
-export const appProactiveSurfaceV1Schema = z.enum(['app', 'whatsapp', 'both']);
+// app_imessage keeps the app taking the work and sends iMessage a copy.
+export const appProactiveSurfaceV1Schema = z.enum(['app', 'whatsapp', 'both', 'app_imessage']);
 // The chat channels an owner can link, the same flow for each: iMessage, WhatsApp and Telegram (the team's test channel while it
 // lasts; the server stops offering it by reporting not_offered). linked is read live from the owner directory, never from the
 // app's word. not_offered means this server cannot link it, so the app hides it; unknown means the directory could not be read.
@@ -129,8 +133,9 @@ export const appOnboardingActionV1Schema = z.discriminatedUnion('action', [
 export const appOnboardingResultV1Schema = z.strictObject({ request_id: requestId, onboarding: appOnboardingV1Schema, replayed: z.boolean() });
 
 // Look-up findings: what Waldo found about the owner on the public web, each with the page it came from. A finding is
-// external content and stays unconfirmed until the owner keeps or corrects it; only then does it become owner memory. It
-// is about the owner alone (there is no subject field) and its category is one of these: there is no category for health,
+// external content and stays unconfirmed until the owner keeps or corrects it; only then does it become owner memory. Whether
+// a page is the owner's, or a namesake's, is decided by the owner on each finding: forget removes it and bars it from coming
+// back. There is no subject field, and its category is one of these: there is no category for health,
 // religion, caste, politics or sexuality, so none can be stored. Every string renders as plain text, never markdown or links,
 // except source.url, which the app opens only as an http(s) link.
 export const appFindingCategoryV1Schema = z.enum(['work', 'education', 'public_work', 'based_in', 'public_profile', 'interest', 'achievement']);
@@ -168,7 +173,7 @@ export const appFindingResultV1Schema = z.strictObject({
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
-// channel. completed: the run is finished and changes go through the controls. request_reused: a
+// channel, or does not offer the look-up. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
 // request_id came back with a different body. not_found: no such finding.
 export const appOnboardingErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable']),

@@ -13,15 +13,16 @@ const links = (over: { env?: Record<string, string>; kv?: Kv; auth?: ReturnType<
   chatChannelLinks({ env: over.env ?? ALL_ENV, kv: over.kv ?? kv(), doName: 'owner-name', auth: over.auth === undefined ? auth() : over.auth });
 
 describe('chat channel links', () => {
-  it('offers a provider only where this server can link it, and offers none without the owner directory', () => {
-    expect(['imessage', 'whatsapp', 'telegram'].map(p => links().offered(p as never))).toEqual([true, true, true]);
-    expect(['imessage', 'whatsapp', 'telegram'].map(p => links({ env: {} }).offered(p as never))).toEqual([false, false, false]);
-    expect(['imessage', 'whatsapp', 'telegram'].map(p => links({ auth: null }).offered(p as never))).toEqual([false, false, false]);
+  it('offers a provider only where this server can link it, and offers none without the owner directory', async () => {
+    const offered = (over: Parameters<typeof links>[0] = {}) => Promise.all(['imessage', 'whatsapp', 'telegram'].map(p => links(over).offered(p as never)));
+    expect(await offered()).toEqual([true, true, true]);
+    expect(await offered({ env: {} })).toEqual([false, false, false]);
+    expect(await offered({ auth: null })).toEqual([false, false, false]);
     const { IMESSAGE_WALDO_ADDRESS: _drop, ...noImessage } = ALL_ENV;
-    expect(['imessage', 'whatsapp', 'telegram'].map(p => links({ env: noImessage }).offered(p as never))).toEqual([false, true, true]);
+    expect(await offered({ env: noImessage })).toEqual([false, true, true]);
     const { TELEGRAM_BOT_TOKEN: _retired, ...noTelegram } = ALL_ENV;
-    expect(links({ env: noTelegram }).offered('telegram')).toBe(false);
-    expect(links({ env: { ...ALL_ENV, WHATSAPP_PHONE_NUMBER_ID: '' } }).offered('whatsapp')).toBe(false);
+    expect(await links({ env: noTelegram }).offered('telegram')).toBe(false);
+    expect(await links({ env: { ...ALL_ENV, WHATSAPP_PHONE_NUMBER_ID: '' } }).offered('whatsapp')).toBe(false);
   });
 
   it('reads iMessage and WhatsApp from the owner directory, and Telegram from the binding the console reads', async () => {

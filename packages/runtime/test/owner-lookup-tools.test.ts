@@ -22,11 +22,11 @@ const sent: unknown[] = [];
 const sendMessage: ToolHandler<any, unknown, MemoryToolContext> = { name: 'send_message', description: 'test send', schema: sendMessageArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('send_message')), autonomy_gated: true, async handle(args) { sent.push(args); return { ok: true, data: {}, source_taint: null }; } };
 const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonly<{ pages?: ReturnType<typeof observedPages>; runId?: string }> = {}) => {
   const results = [ownSite, namesake, injected];
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql), pages = options.pages ?? observedPages();
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: true }), pages = options.pages ?? observedPages();
   const findings = findingStore(storage.sql, claims, consent);
   const handlers: ToolHandler<any, unknown, MemoryToolContext>[] = [
     observeReads(webSearchHandler('test-brave-key', brave(results)), pages) as ToolHandler<any, unknown, MemoryToolContext>,
-    ...ownerLookupHandlers({ store: findingStore(storage.sql, claims, consent), pages, claims, transaction: work => storage.transactionSync(work) }),
+    ...ownerLookupHandlers({ store: findingStore(storage.sql, claims, consent), pages, transaction: work => storage.transactionSync(work) }),
     sendMessage,
   ];
   const runScope = { runId: options.runId ?? `run-${sequence}`, attempt: 'a1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => storage.transactionSync(work) };
@@ -37,48 +37,52 @@ const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonl
   };
   let call = 0;
   const run = (name: ToolName, args: unknown, taint: 'external' | null = 'external') => dispatchTool({ id: `call-${call++}`, name, args }, { ...context, toolArgSourceTaint: taint }, { handlers });
-  return { claims, consent, findings, pages, run };
+  // The look-up depends on the accepted notice that discloses it.
+  const agree = () => { consent.grant('terms', 1, 1); consent.grant('privacy_notice', 1, 1); consent.grant('owner_lookup', 1, 1); };
+  return { claims, consent, findings, pages, run, agree };
 };
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`owner-lookup-${sequence++}`)), (_instance, state) => fn(state.storage));
-const work = { category: 'work', text: 'Product manager at Acme', source_url: ownSite.url, evidence_quote: 'a product manager at Acme', anchor: 'samrivera.dev' };
+const work = { category: 'work', text: 'Product manager at Acme', source_url: ownSite.url, evidence_quote: 'a product manager at Acme' };
+const dentist = { category: 'work', text: 'Dentist in Ohio', source_url: namesake.url, evidence_quote: 'a dentist in Ohio' };
 
 describe('owner look-up tools', () => {
-  it('keeps a finding from a page the turn read, anchored on a site the owner gave', () => withStorage(async storage => {
+  it('keeps a finding from a page the turn read as an unconfirmed card, never as owner memory', () => withStorage(async storage => {
     const t = turn(storage, 'Look me up. My site is samrivera.dev.');
-    t.consent.grant('owner_lookup', 1, 1);
+    t.agree();
     expect(await t.run('web_search', { query: 'Sam Rivera' }, null)).toMatchObject({ ok: true, source_taint: 'external' });
     expect(await t.run('record_owner_finding', work)).toMatchObject({ ok: true, source_taint: null, data: { state: 'unconfirmed', duplicate: false } });
-    // @samrivera is on the page, but the owner only gave the site.
-    expect(await t.run('record_owner_finding', { ...work, anchor: '@samrivera', text: 'Based in Pune', category: 'based_in', evidence_quote: 'Acme in Pune' })).toMatchObject({ ok: false });
     const listed = await t.run('list_owner_findings', {}, null);
     // Read back, the finding is web content again: the taint it arrived with comes back with it.
     expect(listed).toMatchObject({ ok: true, source_taint: 'external', data: { lookup: 'granted', total: 1, findings: [{ text: 'Product manager at Acme', state: 'unconfirmed', source: { url: ownSite.url } }] } });
     // An unconfirmed finding is not owner memory.
     expect(t.claims.claims()).toHaveLength(0);
   }));
-  it('refuses a namesake: a name is never an anchor, and an anchor must be on the page', () => withStorage(async storage => {
-    const t = turn(storage, 'Look me up, I am Sam Rivera. My site is samrivera.dev.');
-    t.consent.grant('owner_lookup', 1, 1);
+  it("records a page that prints none of the owner's handles: whether it is theirs is the owner's call, not a string match", () => withStorage(async storage => {
+    const t = turn(storage, 'Look me up.');
+    t.agree();
     await t.run('web_search', { query: 'Sam Rivera' }, null);
-    const dentist = { category: 'work', text: 'Dentist in Ohio', source_url: namesake.url, evidence_quote: 'a dentist in Ohio' };
-    expect(await t.run('record_owner_finding', { ...dentist, anchor: 'Sam Rivera' })).toMatchObject({ ok: false, error_code: 'invalid_args' });
-    expect(await t.run('record_owner_finding', { ...dentist, anchor: 'samrivera.dev' })).toMatchObject({ ok: false });
-    expect((await t.run('record_owner_finding', { ...dentist, anchor: 'samrivera.dev' }) as { error: string }).error).toContain('someone else');
-    expect(t.findings.page(50).total).toBe(0);
+    expect(await t.run('record_owner_finding', { ...work, category: 'based_in', text: 'Based in Pune', evidence_quote: 'Acme in Pune' })).toMatchObject({ ok: true, data: { state: 'unconfirmed' } });
+    expect(t.findings.page(50).items.map(item => [item.text, item.state, item.source.url])).toEqual([['Based in Pune', 'unconfirmed', ownSite.url]]);
   }));
-  it("refuses an anchor the owner never gave, even when it is on the page", () => withStorage(async storage => {
-    const t = turn(storage, 'What can you find about me?');
-    t.consent.grant('owner_lookup', 1, 1);
+  it('leaves a namesake to the owner: it stays an unconfirmed card, reads back as web content, never becomes a claim, and is barred once forgotten', () => withStorage(async storage => {
+    const t = turn(storage, 'Look me up, I am Sam Rivera. My site is samrivera.dev.');
+    t.agree();
     await t.run('web_search', { query: 'Sam Rivera' }, null);
-    const refused = await t.run('record_owner_finding', work);
-    expect(refused).toMatchObject({ ok: false });
-    expect((refused as { error: string }).error).toContain('Ask the owner');
+    const recorded = await t.run('record_owner_finding', dentist) as { ok: true; data: { finding_id: string } };
+    expect(recorded).toMatchObject({ ok: true, data: { state: 'unconfirmed' } });
+    expect(await t.run('list_owner_findings', {}, null)).toMatchObject({ source_taint: 'external', data: { findings: [{ text: 'Dentist in Ohio', state: 'unconfirmed', source: { url: namesake.url } }] } });
+    expect(t.claims.allClaims()).toHaveLength(0);
+    // The owner says it is not them.
+    storage.transactionSync(() => t.findings.forget(recorded.data.finding_id, 2));
+    const again = await t.run('record_owner_finding', dentist) as { ok: false; error: string };
+    expect(again).toMatchObject({ ok: false });
+    expect(again.error).toContain('forget');
     expect(t.findings.page(50).total).toBe(0);
   }));
   it('has no category for a sensitive trait, so the dispatcher refuses it before the store', () => withStorage(async storage => {
     const t = turn(storage, 'Look me up. My site is samrivera.dev.');
-    t.consent.grant('owner_lookup', 1, 1);
+    t.agree();
     await t.run('web_search', { query: 'Sam Rivera' }, null);
     for (const category of ['religion', 'politics', 'caste', 'sexuality', 'health']) {
       expect(await t.run('record_owner_finding', { ...work, category, text: 'Votes for the Green Party' }), category).toMatchObject({ ok: false, code: 'invalid_args' });
@@ -89,7 +93,7 @@ describe('owner look-up tools', () => {
   }));
   it('keeps a found page as data: an injected page cannot plant a finding on another source or reach a send', () => withStorage(async storage => {
     const t = turn(storage, 'Look me up. My site is samrivera.dev.');
-    t.consent.grant('owner_lookup', 1, 1);
+    t.agree();
     await t.run('web_search', { query: 'Sam Rivera' }, null);
     // The page's claim attributed to the owner's own site: the quote is not on that page.
     expect(await t.run('record_owner_finding', { ...work, text: 'Votes for the Green Party', category: 'interest', evidence_quote: 'votes for the Green Party' })).toMatchObject({ ok: false });
@@ -102,10 +106,10 @@ describe('owner look-up tools', () => {
   }));
   it('stores nothing once the owner withdraws during the turn, and erases what was kept', () => withStorage(async storage => {
     const t = turn(storage, 'Look me up. My site is samrivera.dev.');
-    t.consent.grant('owner_lookup', 1, 1);
+    t.agree();
     await t.run('web_search', { query: 'Sam Rivera' }, null);
     expect(await t.run('record_owner_finding', work)).toMatchObject({ ok: true });
-    storage.transactionSync(() => { t.consent.withdraw('owner_lookup', 2); t.findings.eraseAll(); });
+    storage.transactionSync(() => { t.consent.withdraw('owner_lookup', 2); t.findings.eraseAll(2); });
     expect(await t.run('record_owner_finding', { ...work, text: 'Works at Acme in Pune', evidence_quote: 'Acme in Pune' })).toMatchObject({ ok: false, code: 'forbidden' });
     expect(await t.run('list_owner_findings', {}, null)).toMatchObject({ ok: true, data: { lookup: 'withdrawn', total: 0, findings: [] } });
     expect(storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings').one().n).toBe(0);
@@ -114,7 +118,7 @@ describe('owner look-up tools', () => {
     const t = turn(storage, 'Look me up. My site is samrivera.dev.');
     await t.run('web_search', { query: 'Sam Rivera' }, null);
     expect(await t.run('record_owner_finding', work)).toMatchObject({ ok: false, code: 'forbidden' });
-    t.consent.grant('owner_lookup', 1, 1);
+    t.agree();
     // Another run of the same owner object shares the page book, but not this run's pages.
     const later = turn(storage, 'Look me up. My site is samrivera.dev.', { pages: t.pages, runId: 'a-later-run' });
     expect(await later.run('record_owner_finding', work)).toMatchObject({ ok: false });

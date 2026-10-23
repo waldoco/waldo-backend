@@ -748,6 +748,32 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
     return appSessionAuthority(this.env)(name, hash);
   }
+  // Hides retained copies of forgotten texts in every store a memory forget reaches, and throws when one still holds a copy.
+  // The memory forget tool and the look-up's forget and withdrawal share it, so a store added here is covered for both.
+  private async hideRetainedText(texts: readonly string[], scope?: RunEffectScope): Promise<void> {
+    const storage = this.ctx.storage;
+    scope?.admit();
+    const result = await redactConversationEntries(storage, texts, FORGOTTEN, scope);
+    await redactToolOutputLedger(storage, texts, FORGOTTEN, scope);
+    const mail = redactMailFollowupEntries(storage.kv, texts, FORGOTTEN, scope);
+    const prep = redactCalendarPrepEntries(storage.kv, texts, FORGOTTEN, scope);
+    const reports = redactJobReportEntries(storage.kv, texts, FORGOTTEN, scope);
+    forgetHeldWhatsApp(storage.kv, texts);
+    const cards = forgetWaitingCards(storage.sql, texts, Date.now());
+    const imessage = redactIMessageEntries(storage, texts, FORGOTTEN, scope);
+    const titles = redactThreadTitles(storage.kv, texts, FORGOTTEN, scope);
+    if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
+    // An owner who has not had a turn yet has no episodes table.
+    if (!storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) return;
+    const scrubEpisodes = () => {
+      const redact = literalTextRedactor(texts, FORGOTTEN);
+      for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
+        const text = redact(row.text);
+        if (text !== row.text) storage.sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
+      }
+    };
+    if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
+  }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
   // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
@@ -1156,6 +1182,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const current=async()=>{await this.appAuthority(name,hash);};
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
+            lookupOffered:this.env.OWNER_LOOKUP==='1',hideText:texts=>this.hideRetainedText(texts),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{
@@ -3319,29 +3346,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
-        hideHistory: async (texts, context) => {
-          const scope = context.runScope;
-          scope?.admit();
-          const result = await redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
-          const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          forgetHeldWhatsApp(this.ctx.storage.kv, texts);
-          const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now());
-          const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
-          const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
-          const scrubEpisodes = () => {
-            const redact = literalTextRedactor(texts, FORGOTTEN);
-            for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
-              const text = redact(row.text);
-              if (text !== row.text) storage.sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
-            }
-          };
-          if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
-        },
-      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql)), pages: this.lookupPages, claims: memory, transaction: work => storage.transactionSync(work) }), observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+        hideHistory: (texts, context) => this.hideRetainedText(texts, context.runScope),
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, { lookupOffered: this.env.OWNER_LOOKUP === '1' })), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();

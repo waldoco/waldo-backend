@@ -9,18 +9,23 @@ type Sql = Pick<SqlStorage, 'exec'>;
 export const CURRENT_CONSENT_VERSION: Readonly<Record<AppConsentPurposeV1, number>> = {
   terms: APP_TERMS_VERSION_V1, privacy_notice: APP_PRIVACY_NOTICE_VERSION_V1, owner_lookup: APP_PRIVACY_NOTICE_VERSION_V1,
 };
+// A purpose whose disclosure lives in another accepted copy: it can be granted, and counts, only while that copy is accepted.
+const DEPENDS_ON: Readonly<Partial<Record<AppConsentPurposeV1, AppConsentPurposeV1>>> = { owner_lookup: 'privacy_notice' };
 const AGE = 'age_18_plus';
 // The only purposes this ledger can hold. The table refuses any other, so a health purpose cannot reach it by any code path:
 // health consent has one representation, in the health plane, per source and purpose.
 const LEDGER_PURPOSES = [...appConsentPurposeV1Schema.options, AGE].map(purpose => `'${purpose}'`).join(', ');
 
 type Row = Readonly<{ purpose: string; action: 'granted' | 'withdrawn'; version: number | null; at: number }>;
-export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean }> | 'stale_version';
+export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean }> | 'stale_version' | 'notice_required' | 'not_offered';
+// lookupOffered is the server's switch for the look-up, off until the notice that discloses it is published. Off, the look-up
+// cannot be granted and a yes recorded earlier does not count; the rows stay as evidence.
+export type ConsentOptions = Readonly<{ lookupOffered: boolean }>;
 
 // The owner's consent ledger in the owner object, next to the data it governs, so a check and the write it guards can share
 // one transaction. Rows are only ever appended: a withdrawal is a new row, and the current state is the newest row per purpose.
 // terms and the notice end only with the account; the 18+ attestation is a row of its own.
-export const consentLedger = (sql: Sql) => {
+export const consentLedger = (sql: Sql, options: ConsentOptions) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS consent_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT, purpose TEXT NOT NULL CHECK (purpose IN (${LEDGER_PURPOSES})), action TEXT NOT NULL CHECK (action IN ('granted', 'withdrawn')),
     version INTEGER, at INTEGER NOT NULL)`);
@@ -35,19 +40,30 @@ export const consentLedger = (sql: Sql) => {
     const granted = lastGrant(purpose)!;
     return { purpose, version: granted.version, status: 'withdrawn', granted_at: granted.at, withdrawn_at: row.at };
   };
+  const offered = (purpose: AppConsentPurposeV1) => purpose !== 'owner_lookup' || options.lookupOffered;
+  // Live only for the copy that is current now, while the server offers it and the copy it depends on is live too.
+  const active = (purpose: AppConsentPurposeV1): boolean => {
+    const current = state(purpose), prerequisite = DEPENDS_ON[purpose];
+    return offered(purpose) && current.status === 'granted' && current.version === CURRENT_CONSENT_VERSION[purpose] && (prerequisite === undefined || active(prerequisite));
+  };
   const ageAttested = () => latest(AGE)?.action === 'granted';
   const append = (purpose: string, action: Row['action'], version: number | null, at: number) =>
     sql.exec('INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, ?, ?, ?)', purpose, action, version, at);
   return {
     state,
     ageAttested,
-    list: () => ({ age_attested_18_plus: ageAttested(), consents: appConsentPurposeV1Schema.options.map(state) }),
-    // Live only for the copy that is current now.
-    active: (purpose: AppConsentPurposeV1): boolean => { const current = state(purpose); return current.status === 'granted' && current.version === CURRENT_CONSENT_VERSION[purpose]; },
+    offered,
+    active,
+    // The terms and the notice, both at their current copy: what every step after the agreements needs.
+    agreed: (): boolean => active('terms') && active('privacy_notice'),
+    list: () => ({ age_attested_18_plus: ageAttested(), owner_lookup_offered: offered('owner_lookup'), consents: appConsentPurposeV1Schema.options.map(state) }),
     attestAge(at: number): void { if (!ageAttested()) append(AGE, 'granted', 1, at); },
     // Granting what is already granted at this version changes nothing, so a repeated yes leaves one record.
     grant(purpose: AppConsentPurposeV1, version: number, at: number): ConsentGrant {
       if (version !== CURRENT_CONSENT_VERSION[purpose]) return 'stale_version';
+      if (!offered(purpose)) return 'not_offered';
+      const prerequisite = DEPENDS_ON[purpose];
+      if (prerequisite !== undefined && !active(prerequisite)) return 'notice_required';
       const current = state(purpose);
       if (current.status === 'granted' && current.version === version) return { state: current, changed: false };
       append(purpose, 'granted', version, at);
