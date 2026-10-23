@@ -10,7 +10,10 @@ import { createOwnerResponder, type OwnerContextHost } from '../src/channels/own
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../src/identity/surface-owner-admission';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionSettings, type CompactionSettings } from '../src/conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionSettings, type CompactionSettings, type CompactionSpan } from '../src/conversation/compaction';
+import { redactConversationEntries } from '../src/channels/conversation-store';
+import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { forgetPurge } from '../src/memory/forget-purge';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { localTrustedBriefScheduleInput } from '../src/llm/run-loop-adapters';
 
@@ -22,13 +25,13 @@ const small = (settings: CompactionSettings): CompactionSettings => ({ ...settin
 
 // The model: the compaction instruction gets the summary, every other call a short reply. `during` runs while a summary
 // call is in flight.
-const model = (during: () => void = () => undefined) => {
+const model = (during: () => unknown = () => undefined, summary = SUMMARY) => {
   const calls: LLMGatewayRequest[] = [];
   const gateway: LLMGatewayAdapter = { complete: async (input): Promise<AdapterResult<LLMResponse>> => {
     calls.push(input);
     const compacting = input.request.system === COMPACTION_INSTRUCTION;
-    if (compacting) during();
-    return { ok: true, data: { model: input.request.model, text: compacting ? SUMMARY : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+    if (compacting) await during();
+    return { ok: true, data: { model: input.request.model, text: compacting ? summary : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
   } };
   return { gateway, calls, compactions: () => calls.filter(call => call.request.system === COMPACTION_INSTRUCTION) };
 };
@@ -49,12 +52,14 @@ const closableScope = (storage: DurableObjectStorage) => {
   return { scope, close: () => { closed = true; } };
 };
 type Args = Parameters<typeof createOwnerResponder>;
-const responderOn = (store: Args[1], gateway: LLMGatewayAdapter, options: Readonly<{ log?: (entry: TurnLogEntry) => void; scope?: RunEffectScope; tools?: Args[5] }> = {}) => {
+const responderOn = (store: Args[1], gateway: LLMGatewayAdapter, options: Readonly<{ log?: (entry: TurnLogEntry) => void; scope?: RunEffectScope; tools?: Args[5]; memory?: Args[2]; integration?: Args[21] }> = {}) => {
   const args: Args = ['fixture', store];
+  if (options.memory) args[2] = options.memory;
   args[3] = options.log ?? (() => undefined);
   if (options.tools) args[5] = options.tools;
   args[10] = gateway;
   if (options.scope) args[19] = options.scope;
+  if (options.integration) args[21] = options.integration;
   return createOwnerResponder(...args);
 };
 const say = (responder: ReturnType<typeof createOwnerResponder>, n: number, text = question(n)) =>
@@ -214,6 +219,43 @@ describe('a topic forgotten in the turn never reaches its summary', () => {
       expect(fake.compactions()).toHaveLength(0);
       expect(summaries(storage)).toHaveLength(0);
       expect(hops.filter(hop => hop.hop === 'compaction').at(-1)).toMatchObject({ ok: false, code: 'held_topic' });
+    });
+  });
+});
+
+const LOTUS_SUMMARY = 'Decisions:\n- The party is booked at the Lotus Hall.';
+const VENUE_SUMMARY = 'Decisions:\n- The owner booked a venue for the party.';
+const iso = () => new Date().toISOString();
+// Six rounds whose third books the Lotus Hall; the summary span is the older rounds, so that row is in it. With `forget`,
+// the sixth message asks Waldo to forget it and the model calls the forget tool, so the turn holds the topic.
+const lotusChat = async (responder: ReturnType<typeof createOwnerResponder>, forget = false) => {
+  for (const n of [1, 2]) await say(responder, n);
+  await say(responder, 3, `Question 3: book the Lotus Hall for the party. ${'q'.repeat(50)}`);
+  for (const n of [4, 5]) await say(responder, n);
+  await say(responder, 6, forget ? `Please forget the Lotus Hall plan. ${'q'.repeat(60)}` : question(6));
+};
+const forgetTool = { name: 'forget_memory', description: 'Forget a topic.', schema: forgetMemoryArgsSchema, trigger_allowlist: ['user_message'], autonomy_gated: false,
+  handle: async () => ({ ok: true as const, data: { forgotten: true }, source_taint: null }) };
+const forgettingGateway = (fake: ReturnType<typeof model>): LLMGatewayAdapter => ({ complete: async (input) => {
+  if (input.request.system !== COMPACTION_INSTRUCTION && JSON.stringify(input.request.messages.at(-1) ?? '').includes('Please forget the Lotus Hall plan') && !input.request.tool_turns?.length) {
+    return { ok: true, data: { model: input.request.model, text: '', tool_calls: [{ call_id: 'f1', name: 'forget_memory', arguments: JSON.stringify({ topic: 'Lotus Hall', scope_note: 'the plan' }) }], input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+  }
+  return fake.gateway.complete(input);
+} });
+const lastCompactionHop = (hops: readonly TurnLogEntry[]) => hops.filter(hop => hop.hop === 'compaction').at(-1);
+
+describe('the span a held topic leaves', () => {
+  it('the memory flush gets the rows the summary reads, without the rows that carry the topic', async () => {
+    await inOwner('compaction-flush-held-topic', async (storage) => {
+      const fake = model();
+      const spans: CompactionSpan[] = [];
+      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake),
+        { tools: [forgetTool as never], integration: { compactionFlush: async (span) => { spans.push(span); } } });
+      await lotusChat(responder, true);
+      await responder.compactIfDue!('owner');
+      expect(spans).toHaveLength(1);
+      expect(JSON.stringify(spans[0]!.messages)).not.toContain('Lotus Hall');
+      expect(spans[0]!.messages.map(message => message.content)).toEqual(fake.compactions()[0]!.request.messages.map(message => message.content));
     });
   });
 });

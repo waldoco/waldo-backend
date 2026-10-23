@@ -804,17 +804,18 @@ export const createOwnerResponder = (
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
       const plan = compactionPlan(tree, leafId, live, compaction);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
+      // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
+      // reads a row that carries it.
+      const cut = barrier();
+      const input = plan.input.filter((message) => !cut.holds(message.content));
+      if (!input.length) { hop(false, 'held_topic'); return; }
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       if (privateOwner?.compactionFlush) {
-        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input }); }
+        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: input }); }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
       const started = Date.now();
-      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
-      const cut = barrier();
-      const input = plan.input.filter((message) => !cut.holds(message.content));
-      if (!input.length) { hop(false, 'held_topic'); return; }
       const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
