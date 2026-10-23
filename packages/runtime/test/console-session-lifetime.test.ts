@@ -158,6 +158,8 @@ describe('cross-site requests to the console', () => {
       expect(consoleCrossSiteRefusal(at(path, 'POST', { origin: 'https://evil.test' }))?.status, `${path} without fetch metadata`).toBe(403);
       expect(consoleCrossSiteRefusal(at(path, 'POST', { 'sec-fetch-site': 'same-site', origin: 'https://sibling.waldo.test' }))?.status, `${path} from a sibling site`).toBe(403);
       expect(consoleCrossSiteRefusal(at(path, 'POST', {}))?.status, `${path} with neither header`).toBe(403);
+      for (const site of ['cross-site', 'same-site', 'none'])
+        expect(consoleCrossSiteRefusal(at(path, 'POST', { 'sec-fetch-site': site }))?.status, `${path} ${site} with Origin stripped`).toBe(403);
       expect(consoleCrossSiteRefusal(at(path, 'POST', sameOrigin)), `${path} from the console`).toBeNull();
       expect(consoleCrossSiteRefusal(at(path, 'POST', { origin: 'https://waldo.test' })), `${path} from the console, older browser`).toBeNull();
     }
