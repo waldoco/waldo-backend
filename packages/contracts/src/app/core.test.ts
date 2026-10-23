@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
@@ -109,6 +110,24 @@ describe('message times, cancel and ratings', () => {
     expect(routes).toContain('PUT /app/v1/chat/main/messages/{message_id}/rating');
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', closed_reason: 'cancelled', effects_unconfirmed: true }).success).toBe(true);
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', steps: [] }).success).toBe(false);
+  });
+});
+
+describe('chat revision 2: the reply draft on a running receipt', () => {
+  const running = { accepted: true, message_id: 'm', state: 'running' } as const;
+  it('is declared by chat=2 and absent from revision 1', () => {
+    expect(APP_CHAT_DRAFT_REVISION).toBe(2);
+    expect(appContractRevision('chat=2', 'chat')).toBe(APP_CHAT_DRAFT_REVISION);
+    for (const header of [null, 'chat=1', 'approvals=2']) expect(appContractRevision(header, 'chat')).toBeLessThan(APP_CHAT_DRAFT_REVISION);
+  });
+
+  it('accepts a non-empty draft up to the reply text bound', () => {
+    for (const draft of ['Here is the plan', 'x'.repeat(REPLY_TEXT_MAX_CHARS)]) expect(appMessageReceiptV1Schema.safeParse({ ...running, draft }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse(running).success).toBe(true);
+  });
+
+  it('rejects an empty, oversized or non-string draft', () => {
+    for (const draft of ['', 'x'.repeat(REPLY_TEXT_MAX_CHARS + 1), 42, null, ['Here']]) expect([draft, appMessageReceiptV1Schema.safeParse({ ...running, draft }).success]).toEqual([draft, false]);
   });
 });
 

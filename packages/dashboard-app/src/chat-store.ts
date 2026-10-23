@@ -5,6 +5,8 @@ import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired,
 export type LocalMessage = {
   clientId: string; text: string; sentAt: number; state: 'sending' | 'failed' | RunState; messageId: string | null;
   error: string | null; closedReason: string | null; effectsUnconfirmed: boolean; stopping: boolean; landed: boolean;
+  // The reply written so far, while the turn runs and the server streams replies.
+  draft?: string;
   // The newest history row when this was sent: only a row after it can be this message's server copy.
   after: string | null;
 };
@@ -39,6 +41,8 @@ const PAGE = 30;
 // app and the console), so the steady rate (12 a minute, plus a history read every 15 s) leaves the app most of it.
 const RECEIPT_DELAYS = [700, 1000, 1500, 2000, 3000, 4000];
 const RECEIPT_STEADY = 5000;
+// While a reply is being written the receipt carries it, so it is checked every second: still inside the shared budget.
+const RECEIPT_DRAFTING = 1000;
 // After ten minutes a turn is a long errand: one check every 15 s is still timely.
 const RECEIPT_LONG_AFTER = 10 * 60_000, RECEIPT_LONG = 15_000;
 const HISTORY_DURING_RUN = 15_000;
@@ -118,6 +122,7 @@ export function createChatStore(deps: ChatDeps) {
   const nextDelay = (clientId: string) => {
     const entry = polls.get(clientId), item = find(clientId);
     const tries = entry?.tries ?? 0;
+    if (item?.draft) return RECEIPT_DRAFTING;
     if (item && deps.now() - item.sentAt > RECEIPT_LONG_AFTER) return RECEIPT_LONG;
     return RECEIPT_DELAYS[tries] ?? RECEIPT_STEADY;
   };
@@ -128,7 +133,7 @@ export function createChatStore(deps: ChatDeps) {
     try {
       const receipt = await deps.receipt(clientId);
       entry.failures = 0;
-      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false });
+      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false, draft: receipt.draft });
       if (snap.notice) set({ notice: null });
       if (closed(receipt.state)) { polls.delete(clientId); await refresh(); scheduleIdle(); deps.settled?.(); return; }
       // Progress notes and earlier replies land in history while a long turn runs.

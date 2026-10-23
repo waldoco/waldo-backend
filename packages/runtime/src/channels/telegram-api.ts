@@ -1,6 +1,7 @@
 import type { TelegramOwnerApi } from './telegram-listener';
 import { redactSecretUrls } from './egress-guard';
-import { plainTelegram } from './rich-format';
+import { plainTelegram, telegramRichReply } from './rich-format';
+import type { ReplyDraftSurface } from '../conversation/reply-stream';
 
 // Every Bot API call is bounded: a hung response (the API applied the change but the
 // connection never completed) must reject, or a single wedged egress stalls the whole turn.
@@ -16,6 +17,26 @@ export class TelegramRejection extends Error {
 export type TelegramFinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML'; fallback_text?: string }>;
 
 export const TELEGRAM_MESSAGE_MAX_CHARS = 4_096;
+
+// The reply while it is written, as a Telegram draft (sendMessageDraft): an ephemeral preview that Telegram clears when the
+// bot sends its next message, so the final reply replaces it and nothing half-written stays in the chat. Formatted as the
+// final reply is, plain when Telegram refuses the markup of a cut reply. A blocked send (unlinked owner) stops the stream.
+// Telegram limits a bot to about one message a second per chat; ninety drafts cover a minute and a half of writing.
+export const telegramReplyDraft = (call: (method: string, body: object) => Promise<unknown>, chatId: number, draftId: number): ReplyDraftSurface => ({
+  show: async (text) => {
+    const target = { chat_id: chatId, draft_id: draftId };
+    let sent: unknown;
+    try { sent = await call('sendMessageDraft', { ...target, text: telegramRichReply(text).text, parse_mode: 'HTML' }); }
+    catch (error) {
+      if (!(error instanceof TelegramRejection) || error.errorCode !== 400) throw error;
+      sent = await call('sendMessageDraft', { ...target, text });
+    }
+    if (sent === undefined) throw new Error('telegram draft blocked');
+  },
+  minIntervalMs: 1_000,
+  maxUpdates: 90,
+  maxChars: TELEGRAM_MESSAGE_MAX_CHARS,
+});
 
 // Telegram caps one message at 4,096 chars. Long outbound text splits on paragraph, then
 // sentence, boundaries into sequential messages; a single sentence longer than the cap is

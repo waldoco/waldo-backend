@@ -9,6 +9,7 @@ import {
 } from '@waldo/contracts';
 import { fromOpenAIStrictArguments, openAIStrictParameters } from './strict-schema';
 import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
 import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
@@ -87,7 +88,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
       };
-      let response = await this.client.responses.create(body, { signal: controller.signal });
+      const client = this.client;
+      const send = (params: OpenAI.Responses.ResponseCreateParamsNonStreaming) => input.stream
+        ? streamedResponse(client, params, controller.signal, input.stream)
+        : client.responses.create(params, { signal: controller.signal });
+      let response = await send(body);
       // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
       // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
@@ -96,7 +101,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
         searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
         const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
-        response = await this.client.responses.create({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] }, { signal: controller.signal });
+        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
       }
       const text = withCitedLinks(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
@@ -145,6 +150,34 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       input.runScope?.signal.removeEventListener('abort', abortRun);
     }
   }
+}
+
+// One create, streamed. The response's first message streams to the reply only when the model labels it its final answer
+// (the Responses API `phase`; the installed SDK does not type it yet): commentary, reasoning and an unlabelled message never
+// do. A tool call after it takes it back. The terminal event carries the same Response the unstreamed call returns, so
+// everything after this reads one shape.
+async function streamedResponse(client: OpenAIResponsesClient, body: OpenAI.Responses.ResponseCreateParamsNonStreaming, signal: AbortSignal, sink: ReplyDeltaSink): Promise<OpenAI.Responses.Response> {
+  const events = await client.responses.create({ ...body, stream: true }, { signal });
+  let messages = 0, streaming: number | null = null, streamed = false;
+  for await (const event of events) {
+    if (event.type === 'response.output_item.added') {
+      if (event.item.type === 'message') {
+        messages += 1;
+        streaming = messages === 1 && (event.item as { phase?: unknown }).phase === 'final_answer' ? event.output_index : null;
+      } else if (event.item.type === 'function_call' && streamed) {
+        streamed = false;
+        sink.retract();
+      }
+    } else if (event.type === 'response.output_text.delta' && event.output_index === streaming) {
+      streamed = true;
+      sink.delta(event.delta);
+    } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+      return event.response;
+    } else if (event.type === 'response.failed' || event.type === 'error') {
+      throw new Error(`OpenAI stream ${event.type}`);
+    }
+  }
+  throw new Error('OpenAI stream ended without a result');
 }
 
 // Without tool search every function goes up front, non-strict, as it always has. With it (the tool search guide,
