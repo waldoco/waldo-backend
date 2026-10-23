@@ -329,6 +329,6 @@ Evals: T1, T2, T4 and T15 become nightly scenarios with synthetic files, held ou
 
 ## Observed, inferred, unverified
 
-- **Observed:** every `file:line` above in `/home/user/wt/1355` at `bf44a08d`; Anthropic PDF and Vision pages (platform.claude.com, 23 Oct); installed SDK type files; `pnpm-lock.yaml`; #1449 tracker and comments via the REST API; #1431's design at `63c99da2`.
+- **Observed:** every `file:line` above in the #1355 tree at `bf44a08d`; Anthropic PDF and Vision pages (platform.claude.com, 23 Oct); installed SDK type files; `pnpm-lock.yaml`; #1449 tracker and comments via the REST API; #1431's design at `63c99da2`.
 - **Inference:** the Workers isolate memory multiplier; Gmail `attachmentId` stability; OpenAI token costs; provider-side prefix caching on the OpenAI route; that saved conversation entries exclude tool results; that the app reads no tool-turn contract.
 - **Unverified (host unreachable from this session):** OpenAI file-input and function-output docs, OpenAI size limits, and Google's policy page itself (cited through the repo's 21 Oct browser read and a search summary). S1's staging smoke is the proof step for OpenAI.
