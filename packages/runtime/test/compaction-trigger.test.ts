@@ -347,6 +347,17 @@ describe('a forget that lands while the summary is being written', () => {
     }
   });
 
+  it('a row the store scrubbed when it saved it still reads as the summary read it', async () => {
+    await inOwner('compaction-scrubbed-source', async (storage) => {
+      const fake = model();
+      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway, { scope: closableScope(storage).scope });
+      for (let n = 1; n <= 6; n += 1) await say(responder, n, n === 3 ? `Question 3: I signed in at https://example.invalid/cb?code=abc123 ${'q'.repeat(40)}` : question(n));
+      await responder.compactIfDue!('owner');
+      expect(JSON.stringify(fake.compactions()[0]!.request.messages)).toContain('?code=abc123');
+      expect(summaries(storage).map(row => row.modelPayload)).toEqual([SUMMARY]);
+    });
+  });
+
   it('a forget of a topic the span does not carry leaves the summary to be written', async () => {
     const result = await compactWith('compaction-other-forget-in-flight', true, LOTUS_SUMMARY, (storage, memory) => {
       memory.barrier('Bluefin', iso());
