@@ -27,6 +27,8 @@ import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
+import { OwnerDO } from '../src/channels/owner-do';
+import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -984,7 +986,9 @@ it('an iMessage-only owner\'s reminder whose host stays offline fails just past 
 // A message longer than one iMessage goes to the bridge as two commands, one per part, each frozen under its own key. The model
 // writes `text` for the due job, and the host reports on each part in turn: sent, or proved never sent. The bridge takes one
 // command at a time, so each next part goes on the owner's next hand-off try, seconds later; the job's record waits for the
-// bridge until the last report. Answers the commands the bridge received.
+// bridge until the last report. Before that retry, the drain that handed over a part polls the bridge's slot, which that part
+// holds until the host pulls it; here each poll's pause moves the test's clock instead of sleeping. Answers the commands the
+// bridge received.
 const LONG = 'Call Sam about the harbour fund before lunch. '.repeat(120).trim();
 const inTwoParts = async (w: Awaited<ReturnType<typeof world>>, job: 'reminder' | 'heartbeat', reports: readonly ('sent' | 'not_started')[]) => {
   expect(LONG.length).toBeGreaterThan(4_096);
@@ -992,6 +996,9 @@ const inTwoParts = async (w: Awaited<ReturnType<typeof world>>, job: 'reminder' 
   const received: { text: string; commandId: string }[] = [];
   const t0 = Date.now();
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  const host = Object.getOwnPropertyDescriptor(OwnerDO.prototype, 'imessageHost')!.get!;
+  vi.spyOn(OwnerDO.prototype as unknown as { imessageHost: OwnerHost }, 'imessageHost', 'get')
+    .mockImplementation(function (this: OwnerDO) { return { ...host.call(this), wait: async (ms: number) => { vi.setSystemTime(Date.now() + ms); } }; });
   try {
     proof.reply = LONG;
     try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
