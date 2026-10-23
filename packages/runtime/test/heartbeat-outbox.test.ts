@@ -158,7 +158,7 @@ it('partial ACK bookkeeping replays every frozen cooldown without resending or s
 it('failure before the job is written leaves no intent or cooldown and a later producer retry can commit', async () => {
   await withTransport(async f => {
     await f.scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler: f.scheduler, sql: f.sql, loops: f.loops, plans: dayPlanBook(f.sql), timezone: 'Asia/Kolkata', now: f.now,
-      transaction: work => f.storage.transactionSync(work), providerDown: () => false, checked: () => undefined,
+      transaction: work => f.storage.transactionSync(work), providerDown: () => false, outbox: () => f.outbox.records(), checked: () => undefined,
       enqueue: () => { throw new Error('storage failed before the job was written'); },
     }) });
     expect(f.outbox.records()).toEqual([]); expect(f.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);

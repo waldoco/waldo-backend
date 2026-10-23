@@ -45,8 +45,8 @@ export type Sql = Pick<SqlStorage, 'exec'>;
 // The past-due loops a check-back may name: open, past due, not from a mail source (those have their own review), and not
 // told about within the cooldown. The cooldown filter lives in SQL BEFORE the LIMIT: paging the earliest-due loops and
 // filtering in JS would starve a 21st notifiable loop forever while the front page sits in cooldown. `only` narrows the
-// scan to the loops a job was given.
-export const dueLoops = (sql: Sql, now: number, timezone: string, only?: readonly string[]): Loop[] => {
+// scan to the loops a job was given; `held` leaves out loop occurrences a check-back message still holds.
+export const dueLoops = (sql: Sql, now: number, timezone: string, only?: readonly string[], held: readonly Readonly<{ id: string; due: string }>[] = []): Loop[] => {
   const ids = only ?? [];
   if (only && !ids.length) return [];
   return sql.exec<Loop>(
@@ -57,10 +57,17 @@ export const dueLoops = (sql: Sql, now: number, timezone: string, only?: readonl
          SELECT 1 FROM heartbeat_notified n
          WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)
        ${only ? `AND l.id IN (${ids.map(() => '?').join(', ')})` : ''}
+       ${held.map(() => 'AND NOT (l.id = ? AND l.due = ?)').join(' ')}
      ORDER BY l.due LIMIT ?`,
-    localIso(now, timezone).slice(0, 16), now - RENOTIFY_COOLDOWN_MS, ...ids, DUE_SCAN_LIMIT,
+    localIso(now, timezone).slice(0, 16), now - RENOTIFY_COOLDOWN_MS, ...ids, ...held.flatMap(loop => [loop.id, loop.due]), DUE_SCAN_LIMIT,
   ).toArray();
 };
+
+// The loop occurrences a check-back message holds: one not yet settled (waiting for its window, or sending), and one that
+// did not go out within the cooldown. A failed or held send is not written again every tick, yet only a delivered one marks
+// its loops told. A loop given a new due time since is a new occurrence and is not held.
+const heldByOutbox = (records: readonly FinalRecord[], now: number) => records.flatMap(record =>
+  record.heartbeat && (!record.settled || (record.status !== 'delivered' && record.createdAt >= now - RENOTIFY_COOLDOWN_MS)) ? record.heartbeat.loops : []);
 
 // What one tick did about past-due loops: why no job was written, or the job that holds them (written now, written by an
 // earlier fire of this occurrence, or still open from an earlier tick).
@@ -78,6 +85,8 @@ export type HeartbeatDeps = Readonly<{
   transaction<T>(work: () => T): T;
   // Every provider the worker could use is down: a job written now could only wait, so the next tick asks again.
   providerDown(): boolean;
+  // The final outbox's records, read inside the scan's transaction.
+  outbox(): readonly FinalRecord[];
   // Writes the check-back job for these loops, synchronously, inside the scan's transaction.
   enqueue(loops: readonly Loop[], tick: Readonly<{ entryId: string; occurrence: number; runId: string; now: number }>): MachineEnqueued['code'];
   checked(code: HeartbeatCheck, detail: string): void;
@@ -126,7 +135,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       return;
     }
     const { code, count } = deps.transaction(() => {
-      const notify = dueLoops(deps.sql, firedAt, deps.timezone);
+      const notify = dueLoops(deps.sql, firedAt, deps.timezone, undefined, heldByOutbox(deps.outbox(), firedAt));
       if (notify.length === 0) return { code: 'unchanged' as const, count: 0 };
       if (deps.providerDown()) return { code: 'held_breaker' as const, count: notify.length };
       const made = deps.enqueue(notify, { entryId: entry.id, occurrence: entry.occurrence_at, runId, now: firedAt });

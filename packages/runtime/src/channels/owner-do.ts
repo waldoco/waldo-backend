@@ -3915,7 +3915,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await heartbeatTick({
           scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
           transaction: work => storage.transactionSync(work),
-          providerDown: () => workerRouteDown(modelAccess),
+          providerDown: () => workerRouteDown(modelAccess), outbox: () => finalOutbox.records(),
           enqueue: (due, tick) => {
             const made = enqueueMachine(this.jobs(), heartbeatJobSpec(due, { ...tick, surface: channel, timezone: clock.timezone }));
             if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, tick.now); queued = made.job.id; }

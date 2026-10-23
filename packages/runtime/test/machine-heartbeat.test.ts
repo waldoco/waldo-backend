@@ -50,7 +50,7 @@ const withHeartbeat = <T,>(now: number, work: (h: Harness) => Promise<T>): Promi
         heartbeat: heartbeatTick({
           scheduler, sql, loops, plans: dayPlanBook(sql), timezone: TZ, now: () => clock.at,
           transaction: work => state.storage.transactionSync(work),
-          providerDown: () => down.breaker,
+          providerDown: () => down.breaker, outbox: () => new TelegramFinalOutbox(state.storage.kv, () => clock.at).records(),
           enqueue: (due, ctx) => {
             const made = enqueueMachine(book, heartbeatJobSpec(due, { ...ctx, surface: 'app', timezone: TZ }));
             if (down.crash) { down.crash = false; throw new Error('crash-injection: after the job write, inside its transaction'); }

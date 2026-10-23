@@ -195,7 +195,7 @@ describe('reading one id whose row this Worker cannot read', () => {
       const before = rowsLike(sql, unreadableCard);
       const loops = loopBook(sql, { newId: () => 'loop-1', now: () => now });
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now - MINUTE, dueAt: now - MINUTE, payloadRefs: { id: HEARTBEAT_ID } });
-      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, transaction: work => state.storage.transactionSync(work), providerDown: () => false, enqueue: () => 'enqueued', checked: () => undefined }) });
+      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, transaction: work => state.storage.transactionSync(work), providerDown: () => false, outbox: () => [], enqueue: () => 'enqueued', checked: () => undefined }) });
       expect(rowsLike(sql, unreadableCard)).toEqual(before);
       expect(scheduler.lookup(readableCard)).toMatchObject({ state: 'entry', entry: { due_at: now } });
     });
