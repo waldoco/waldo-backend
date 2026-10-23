@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { SignInRequired, signInHref } from './model';
+import { confirmHref, isStepUpRefusal, SignInRequired, signInHref, StepUpRequired } from './model';
 
 export type OwnerView = 'invites' | 'account';
 type InviteRow = { email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null };
@@ -54,6 +54,7 @@ export async function submitOwnerControl(attempt: Attempt, origin: string): Prom
   const result = await fetch(`${READ_PATH}/actions`, { method: 'POST', body: form, credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { accept: 'application/json' } });
   if (result.status === 401) throw new SignInRequired();
   let raw: unknown; try { raw = await result.json(); } catch { throw new Error('The request outcome is unconfirmed. Check this request before any new creation.'); }
+  if (isStepUpRefusal(result.status, raw)) throw new StepUpRequired();
   if (result.status === 403 || result.status === 400 || result.status === 429 || (result.status === 409 && (!object(raw) || !raw.receipt))) throw new OwnerChangeError('The change was refused or these records changed. Refresh and review before making a new request.', false);
   const decoded = readOwnerResult(raw, origin);
   if (!result.ok && !((result.status === 409 && decoded.receipt.state === 'rejected') || (result.status === 503 && ['unconfirmed', 'incomplete'].includes(decoded.receipt.state)))) throw new Error('The request outcome is unconfirmed. Inspect the records before any new request.');
@@ -80,7 +81,7 @@ export function OwnerReceipt({ result, onDismiss }: { result: OwnerResult; onDis
 }
 export function OwnerControlsPanel({ view, embedded=false }: { view: OwnerView; embedded?:boolean }) {
   const [read, setRead] = useState<OwnerRead | null>(null), [failure, setFailure] = useState<string | null>(null), [signedOut, setSignedOut] = useState(false);
-  const [actionFailure, setActionFailure] = useState<string | null>(null);
+  const [actionFailure, setActionFailure] = useState<string | null>(null), [stepUp, setStepUp] = useState(false);
   const [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [result, setResult] = useState<OwnerResult | null>(null), [blocked, setBlocked] = useState(false);
   const attempt = useRef<Attempt | null>(null), inFlight = useRef(false), generation = useRef(0);
   useEffect(() => {
@@ -91,7 +92,7 @@ export function OwnerControlsPanel({ view, embedded=false }: { view: OwnerView; 
   useEffect(() => { generation.current++; setResult(null); setActionFailure(null); setBlocked(false); setSignedOut(false); setBusy(false); attempt.current = null; return () => { generation.current++; }; }, [view]);
   const send = async (value: Attempt) => {
     if (inFlight.current) return;
-    const active = generation.current; inFlight.current = true; setBusy(true); setActionFailure(null);
+    const active = generation.current; inFlight.current = true; setBusy(true); setActionFailure(null); setStepUp(false);
     try {
       const receipt = await submitOwnerControl(value, window.location.origin);
       if (generation.current !== active) return;
@@ -100,11 +101,11 @@ export function OwnerControlsPanel({ view, embedded=false }: { view: OwnerView; 
       else setRetry(number => number + 1);
     } catch (error) {
       if (generation.current !== active) return;
-      const expired = error instanceof SignInRequired;
-      setActionFailure(expired ? 'Sign in to inspect the request outcome.' : error instanceof OwnerChangeError ? error.message : 'The request outcome is unconfirmed. Check the same request before any new creation or removal.');
-      setSignedOut(expired); setBlocked(!(error instanceof OwnerChangeError) || error.uncertain); setRead(null); if (!expired) setRetry(number => number + 1);
+      const expired = error instanceof SignInRequired, confirm = error instanceof StepUpRequired;
+      setActionFailure(expired ? 'Sign in to inspect the request outcome.' : confirm || error instanceof OwnerChangeError ? error.message : 'The request outcome is unconfirmed. Check the same request before any new creation or removal.');
+      setSignedOut(expired); setStepUp(confirm); setBlocked(!confirm && (!(error instanceof OwnerChangeError) || error.uncertain)); setRead(null); if (!expired) setRetry(number => number + 1);
     } finally { inFlight.current = false; if (generation.current === active) setBusy(false); }
   };
   const start = (value: string, confirmation = '') => { if (!read || inFlight.current || blocked) return; const next = { record: read, value, confirmation, id: crypto.randomUUID() }; attempt.current = next; setResult(null); void send(next); };
-  return <>{!embedded&&<div className="controls-section-heading"><span className="eyebrow">{view === 'invites' ? 'Bring someone along' : 'Owner control'}</span><h1>{view === 'invites' ? 'Invites.' : 'Account.'}</h1></div>}{view==='invites'&&<p className="muted">Invites let someone join Waldo. They do not share your data.</p>}{result && <OwnerReceipt result={result} onDismiss={() => setResult(previous => previous ? { ...previous, invite: undefined } : null)}/>}{actionFailure && <section className="panel" role="alert"><p>{actionFailure}</p>{signedOut && <a href={signInHref()}>Sign in</a>}</section>}{failure && <section className="panel" role="alert"><p>{failure}</p>{signedOut ? <a href={signInHref()}>Sign in</a> : <button disabled={busy} onClick={() => setRetry(number => number + 1)}>Retry read</button>}</section>}{blocked && !signedOut && attempt.current && <button disabled={busy} onClick={() => void send(attempt.current!)}>Check the same request</button>}{!read && !failure && !signedOut && <p role="status">Reading your {view}…</p>}{read && !signedOut && (read.view === 'invites' ? <MemberInvites key={read.revision} record={read} busy={busy} blocked={blocked} onSubmit={email => start(email)}/> : <AccountRemoval key={read.revision} record={read} busy={busy} blocked={blocked} onSubmit={confirmation => start('', confirmation)}/>)}{!signedOut && <button disabled={busy} onClick={() => setRetry(number => number + 1)}>Refresh owner controls</button>}</>;
+  return <>{!embedded&&<div className="controls-section-heading"><span className="eyebrow">{view === 'invites' ? 'Bring someone along' : 'Owner control'}</span><h1>{view === 'invites' ? 'Invites.' : 'Account.'}</h1></div>}{view==='invites'&&<p className="muted">Invites let someone join Waldo. They do not share your data.</p>}{result && <OwnerReceipt result={result} onDismiss={() => setResult(previous => previous ? { ...previous, invite: undefined } : null)}/>}{actionFailure && <section className="panel" role="alert"><p>{actionFailure}</p>{stepUp && <a href={confirmHref()}>Get an email code</a>}{signedOut && <a href={signInHref()}>Sign in</a>}</section>}{failure && <section className="panel" role="alert"><p>{failure}</p>{signedOut ? <a href={signInHref()}>Sign in</a> : <button disabled={busy} onClick={() => setRetry(number => number + 1)}>Retry read</button>}</section>}{blocked && !signedOut && attempt.current && <button disabled={busy} onClick={() => void send(attempt.current!)}>Check the same request</button>}{!read && !failure && !signedOut && <p role="status">Reading your {view}…</p>}{read && !signedOut && (read.view === 'invites' ? <MemberInvites key={read.revision} record={read} busy={busy} blocked={blocked} onSubmit={email => start(email)}/> : <AccountRemoval key={read.revision} record={read} busy={busy} blocked={blocked} onSubmit={confirmation => start('', confirmation)}/>)}{!signedOut && <button disabled={busy} onClick={() => setRetry(number => number + 1)}>Refresh owner controls</button>}</>;
 }

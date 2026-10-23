@@ -33,8 +33,8 @@ export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CO
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
 // expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
-// signed_in plus the lifetime.
-export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number }>;
+// signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
+export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number }>;
 
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
 // name is recorded. Tokens never leave this function.
@@ -59,9 +59,12 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     if (Object.keys(live).length > 0) await store.put('console:sessions', live);
     else await store.delete('console:sessions');
   };
-  const addSession = async (replacing: string | null = null): Promise<string> => {
-    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS };
+  // A browser that proved a code keeps that proof through a link sign-in that replaces its session.
+  const addSession = async (replacing: string | null, verified: boolean): Promise<string> => {
     const sessions = await readSessions();
+    const replaced = replacing ? sessions[replacing] : undefined;
+    const verifiedAt = verified ? now() : replaced && replaced.expires >= now() ? replaced.verified_at : undefined;
+    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS, ...(verifiedAt === undefined ? {} : { verified_at: verifiedAt }) };
     if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
@@ -79,7 +82,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       const link = await store.get<Grant>('console:link');
       if (!link || link.token !== token || link.expires < now()) return null;
       await store.delete('console:link');
-      return addSession(current);
+      return addSession(current, false);
     },
     // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime. A read another site
     // started is not the owner's use and renews nothing.
@@ -96,7 +99,8 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       await writeSessions(sessions);
       return renewed;
     },
-    grant: (replacing: string | null = null) => addSession(replacing),
+    // Only an email code grants a session, so a grant is a proven code.
+    grant: (replacing: string | null = null) => addSession(replacing, true),
     async signOut(token: string): Promise<void> {
       const sessions = await readSessions();
       delete sessions[token];

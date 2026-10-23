@@ -97,7 +97,7 @@ describe('a fresh email code before an action that creates lasting access', () =
     const calls = directory();
     const o = await owner('step-up-classic');
     await o.codeAge(3 * HOUR);
-    for (const fields of [{ action: 'device.pair' }, { action: 'google.connect', value: 'calendar' }, { action: 'invite.create', value: 'friend@example.test' }, { action: 'account.delete', value: 'DELETE' }]) {
+    for (const fields of [{ action: 'device.pair' }, { action: 'google.connect', value: 'calendar' }, { action: 'invite.create', value: 'friend@example.test' }, { action: 'account.delete', value: 'DELETE' }] as Record<string, string>[]) {
       const page = await o.post(CONSOLE_ACTION_PATH, { csrf: 'any', ...fields }, { accept: 'text/html' });
       expect(page.status, fields.action).toBe(403);
       expect(await page.text(), fields.action).toContain('/console/signin?confirm=1');

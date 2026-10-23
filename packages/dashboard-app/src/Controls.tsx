@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { SignInRequired, signInHref } from './model';
+import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
 import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
@@ -214,7 +214,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ActionResult | null>(null);
-  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean } | null>(null);
+  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean; stepUp?: boolean } | null>(null);
   const [page, setPage] = useState<ActivityCursors>({});
   const attempt = useRef<Attempt | null>(null);
   const inFlight = useRef(false);
@@ -240,7 +240,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
       if (!uncertain) attempt.current = null;
       if (e instanceof SignInRequired) {
         setResult(null); setError(null); setState({ kind: 'error', message: e.message, signedOut: true });
-      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false });
+      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false, stepUp: e instanceof StepUpRequired });
     } finally { inFlight.current = false; setBusy(false); }
   };
   const act = (action: ControlAction, fields: ControlFields = {}) => {
@@ -266,7 +266,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}
     <div className="tools"><button className="quiet" disabled={busy} onClick={refresh}>Refresh</button></div>
     {result && <ControlReceipt result={result} onCheck={result.receipt.state === 'unconfirmed' ? check : undefined} onRefresh={refresh} busy={busy}/>}
-    {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href={signInHref()}>Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
+    {error && <section className="panel" role="alert"><h2>{error.stepUp ? 'Confirm it\'s you.' : error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href={signInHref()}>Sign in</a> : <div className="control-actions">{error.stepUp && <a className="button" href={confirmHref()}>Get an email code</a>}{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
     {state.kind !== 'ready' ? <ControlsFeedback state={state} onRefresh={refresh}/> : <div className="controls-stack" key={`${state.data.view}:${state.data.revision}`}>{content}</div>}
   </>;
 }

@@ -8,6 +8,11 @@ export const OWNER_COOKIE = 'waldo_owner';
 // reauthentication ceiling; the app bearer keeps its own 12 hours.
 export const CONSOLE_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+// An action that creates lasting access needs an email code from the last 2 hours. That is GitHub's sudo mode ("a
+// two-hour session timeout period before prompting you for authentication again"), and OWASP's Authentication Cheat
+// Sheet asks for current credentials before sensitive features. Unlike GitHub's, the window does not restart with each
+// sensitive action: it runs from the code.
+export const CONSOLE_STEP_UP_MS = 2 * 60 * 60_000;
 // A request another site started (Fetch Metadata): under Lax it can still be a top-level visit carrying the cookies, so
 // it may read a session but never renews one, and the console refuses it any write or flow start.
 export const fromAnotherSite = (request: Request): boolean => {
