@@ -63,7 +63,7 @@ The cookie is the owner's console session. It must never appear in chat, the rep
    unset WALDO_CONSOLE_COOKIE
    ```
 
-   If you skip the sign-out, the console session cookie stays valid for up to 12 hours (`Max-Age=43200`).
+   If you skip the sign-out, the console session stays signed in for up to 7 days unused, or 30 days in use.
 
 ## Command
 

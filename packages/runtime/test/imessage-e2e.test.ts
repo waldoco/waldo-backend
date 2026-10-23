@@ -59,7 +59,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   forbiddenEgress.length = 0;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
-    if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
+    if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
     if (fn === 'admin_overview') return Response.json(null);
     return null;
@@ -92,7 +92,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const action = (name: string, fields: Record<string, string> = {}, token = csrf) => {
     const form = new FormData(); form.set('action', name); form.set('csrf', token);
     for (const [k, v] of Object.entries(fields)) form.set(k, v);
-    return call(new Request('https://imessage.fixture.invalid/console/action', { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+    return call(new Request('https://imessage.fixture.invalid/console/action', { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
   };
   const host = new SimulatedHost(call, HOST_ORIGIN);
   const bridgeStub = () => env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', host.bridgeId, host.accountId)));
@@ -117,7 +117,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     const read = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }));
     const controls = await read.json() as { csrf: string; revision: string };
     const body = new URLSearchParams({ csrf: controls.csrf, revision: controls.revision, view: 'imessage', action: name, request_id: `e2e-${crypto.randomUUID()}`, ...fields });
-    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', headers: { cookie, origin: HOST_ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
     return { status: response.status, body: await response.json() };
   };
   return { fx, ownerName, ownerStub, action, dashboard, host, bridgeStub, call, pump, settle, pairAndActivate, csrf };
@@ -427,7 +427,7 @@ it('two owners on two bridges are isolated: keys, commands, replies and status n
   let bSession = '', bCsrf = '';
   await runInDurableObject(bStub, async (_i, state) => { state.storage.kv.put('do_name', bName); bSession = await consoleAccess(state.storage).grant(); bCsrf = (await consoleAccess(state.storage).session(bSession))!.csrf; });
   const bCookie = `waldo_console=${bSession}; waldo_owner=${bName}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${bName}.session_fixture`)}`;
-  const bAction = (name: string, fields: Record<string, string> = {}) => { const f = new FormData(); f.set('action', name); f.set('csrf', bCsrf); for (const [k, v] of Object.entries(fields)) f.set(k, v); return a.call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: f, headers: { cookie: bCookie }, redirect: 'manual' })); };
+  const bAction = (name: string, fields: Record<string, string> = {}) => { const f = new FormData(); f.set('action', name); f.set('csrf', bCsrf); for (const [k, v] of Object.entries(fields)) f.set(k, v); return a.call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: f, headers: { cookie: bCookie, origin: HOST_ORIGIN }, redirect: 'manual' })); };
   const hostB = new SimulatedHost(a.call, HOST_ORIGIN);
   const code = (await (await bAction('imessage.pair')).text()).split('\n')[0]!;
   expect((await hostB.redeem(code)).status).toBe(200);
@@ -580,7 +580,7 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   expect(seen).toContain('"sent":true,"surface":"imessage"');
   expect(seen).not.toContain(ticket);
   // The ticket is the issuing owner's, and it opens the console once.
-  const redeem = async () => (await w.call(new Request(`${HOST_ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: ticket }) }))).status;
+  const redeem = async () => (await w.call(new Request(`${HOST_ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { origin: HOST_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: ticket }) }))).status;
   expect(await redeem()).toBe(303);
   expect(await redeem()).toBe(403);
   expect(w.host.nativeSends).toHaveLength(1);

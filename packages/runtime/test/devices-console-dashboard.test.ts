@@ -62,7 +62,7 @@ async function world() {
   const act = async (action: string, fields: Record<string, string> = {}, over: { csrf?: string; revision?: string; request_id?: string } = {}): Promise<Acted> => {
     const current = over.revision && over.csrf ? null : await read();
     const body = new URLSearchParams({ csrf: over.csrf ?? current!.csrf, revision: over.revision ?? current!.revision, view: 'devices', action, request_id: over.request_id ?? `device-request-${++n}`, ...fields });
-    const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/actions', { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/actions', { method: 'POST', headers: { cookie, origin: 'https://bridge.test', accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
     return { status: response.status, body: await response.json(), cache: response.headers.get('cache-control') };
   };
   const seed = new Uint8Array(32).map((_, index) => index), pkcs8 = new Uint8Array(48);
@@ -98,7 +98,7 @@ async function world() {
     const read = await call(new Request('https://bridge.test/console/dashboard/api/v1/owner?view=account', { headers: { cookie, accept: 'application/json' } }));
     const current = await read.json() as { csrf: string; revision: string };
     const body = new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'account', action: 'account.delete', confirmation: 'DELETE', request_id: 'erase-request-0001' });
-    const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/owner/actions', { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/owner/actions', { method: 'POST', headers: { cookie, origin: 'https://bridge.test', accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
     return { status: response.status, body: await response.json() as { receipt?: { state: string; signed_out?: boolean } } };
   };
   return { owner, device, directory, ownerStub, deviceStub, read, act, redeem, connect, stored, commands, stall, removeAccount };

@@ -68,7 +68,7 @@ describe('mounted Memory read navigation',()=>{
   await mount('#/memory/spots?cursor=slow');const old=requests[0]!;
   await hashTo('#/memory/spots');expect(old.options.signal?.aborted).toBe(true);
   await act(async()=>resolve(new Response('{"error":"memory_unavailable"}',{status})));await settle();
-  expect(host.textContent).toContain('<script>claim</script>');expect(host.textContent).not.toContain('Memory unavailable.');expect(host.querySelector('a[href="/console/signin"]')).toBeNull();assertReadOnly();
+  expect(host.textContent).toContain('<script>claim</script>');expect(host.textContent).not.toContain('Memory unavailable.');expect(host.querySelector('a[href^="/console/signin"]')).toBeNull();assertReadOnly();
  });
  it('restarts an invalid cursor with exactly one first-page read',async()=>{
   const original=globalThis.fetch;vi.stubGlobal('fetch',vi.fn((url:string,options:RequestInit)=>{
@@ -85,6 +85,6 @@ describe('mounted Memory read navigation',()=>{
  it.each([401,503])('shows truthful current %s recovery without launching a write',async(status)=>{
   vi.stubGlobal('fetch',vi.fn(async(url:string,options:RequestInit)=>{requests.push({url,options});return new Response('{"error":"memory_unavailable"}',{status});}));
   await mount('#/memory/spots');expect(host.textContent).toContain('Memory unavailable.');
-  if(status===401)expect(host.querySelector('a[href="/console/signin"]')).not.toBeNull();else expect(host.textContent).toContain('Retry read');assertReadOnly();
+  if(status===401)expect(host.querySelector('a[href="/console/signin#/memory/spots"]')).not.toBeNull();else expect(host.textContent).toContain('Retry read');assertReadOnly();
  });
 });
