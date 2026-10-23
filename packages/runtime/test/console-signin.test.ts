@@ -574,3 +574,15 @@ describe('signing in again in the same browser', () => {
     expect(await response.text()).toContain('Sign-in is having trouble');
   });
 });
+
+describe('confirming it is you before an action that creates lasting access', () => {
+  it('the sign-in page in confirm mode says why it asks, and still sends the code by email', async () => {
+    const html = await (await handleConsole(new Request('https://w.test/console/signin?confirm=1'), { OWNER_DO: owners().ns }, auth()))!.text();
+    expect(html).toContain('<h1>Confirm it\'s you</h1>');
+    expect(html).toContain('an email code from the last 2 hours');
+    expect(html).toContain('action="/console/signin"');
+    expect(html).not.toContain('Join with your invite');
+    const plain = await (await handleConsole(new Request('https://w.test/console/signin'), { OWNER_DO: owners().ns }, auth()))!.text();
+    expect(plain).toContain('<h1>Sign in to Waldo</h1>');
+  });
+});
