@@ -12,6 +12,8 @@ import { CONSOLE_ACTIONS, CONSOLE_GOOGLE_START_PATH } from '../src/channels/cons
 import { CONSOLE_PHOTON_START_PATH, IMESSAGE_CONSOLE_ACTIONS } from '../src/channels/imessage/console';
 import { WHATSAPP_LINK_CONFIRM_ACTION } from '../src/channels/whatsapp-link-console';
 import { BROWSER_TRIAL_PATH } from '../src/channels/browser-trial-consent';
+import { MCP_START_PATH } from '../src/connectors/mcp-connections';
+import { consoleCrossSiteRefusal } from '../src/channels/console-cross-site';
 
 const root = 'https://telegram-owner';
 const HOUR = 60 * 60_000;
@@ -139,7 +141,7 @@ const everyAction = (): readonly string[] => {
   return [...new Set([...CONSOLE_ACTIONS, ...IMESSAGE_CONSOLE_ACTIONS, WHATSAPP_LINK_CONFIRM_ACTION, ...Object.values(views ?? {}).flat(), ...Object.values(owner ?? {})])].sort();
 };
 const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
-const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
+const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown; startsFlow?: unknown }>>>;
 const LASTING = ['account.delete', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
   'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
 const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
@@ -165,7 +167,19 @@ describe('every console action is classified before it ships', () => {
     expect(classified[CONSOLE_GOOGLE_START_PATH]?.gated, 'the Google start follows a link only a gated google.connect mints').toBe(false);
     for (const [path, rule] of Object.entries(classified)) {
       expect(typeof rule.gated, path).toBe('boolean');
+      expect(typeof rule.startsFlow, path).toBe('boolean');
       expect(oneLine(rule.why), path).toBe(true);
+    }
+  });
+
+  // One list: the cross-site guard refuses a GET another site sends exactly where this table says the GET begins a flow.
+  it('refuses a GET another site sends on exactly the routes the table marks as starting a flow', () => {
+    const flows = Object.entries(routes()).filter(([, rule]) => rule.startsFlow === true).map(([path]) => path).sort();
+    expect(flows).toEqual([BROWSER_TRIAL_PATH, CONSOLE_GOOGLE_START_PATH, CONSOLE_PHOTON_START_PATH, MCP_START_PATH].sort());
+    const sample = (path: string) => path.endsWith('/') ? `${path}${'n'.repeat(43)}` : path;
+    for (const path of [...Object.keys(routes()), '/console', '/console/devices', '/console/imessage', `${CONTROLS_PATH}?view=day`]) {
+      const refused = consoleCrossSiteRefusal(new Request(`https://w.test${sample(path)}`, { headers: { 'sec-fetch-site': 'cross-site' } }));
+      expect([path, refused?.status ?? null]).toEqual([path, flows.includes(path) ? 403 : null]);
     }
   });
 });
