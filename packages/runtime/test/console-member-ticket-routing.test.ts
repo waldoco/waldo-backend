@@ -20,6 +20,7 @@ afterEach(() => vi.unstubAllGlobals());
 async function fixture(owner = MEMBER, issuedAt?: number) {
   const rpcState = { open: true, failOpen: false, live: true, revoke: true as boolean | null };
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const opened: string[] = [];
   const messages: string[] = [];
   // Every external request fails except these fictional directory/session RPCs.
   vi.stubGlobal('fetch', vi.fn(async (input: string | Request, init?: RequestInit) => {
@@ -33,6 +34,10 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     rpcCalls.push({ name: url.pathname.split('/rpc/')[1]!, args });
     if (url.pathname.endsWith('/assert_channel_presence')) return Response.json(true);
     if (url.pathname.endsWith('/console_session_revoke')) return Response.json(rpcState.revoke);
+    if (url.pathname.endsWith('/console_session_list')) {
+      const at = new Date().toISOString();
+      return Response.json(rpcState.live ? opened.map(session => ({ session, created_at: at, last_seen_at: at })) : []);
+    }
     if (url.pathname.endsWith('/route_presence')) {
       expect(args.p_subject).toBe(SUBJECT);
       return Response.json([{ do_name: DEPLOY, subject: SUBJECT, timezone: null }]);
@@ -41,6 +46,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
       expect([DEPLOY, MEMBER]).toContain(args.p_do_name);
       if (url.pathname.endsWith('/console_session_open_for')) {
         if (rpcState.failOpen) throw new Error('synthetic session-open failure');
+        if (rpcState.open) opened.push(String(args.p_session_hash));
         return Response.json(rpcState.open);
       }
       return Response.json(rpcState.live);
@@ -286,5 +292,50 @@ describe('the cross-site guard, through the Worker', () => {
     const response = await worker.fetch(post, f.bindings);
     expect(response.status).toBe(303);
     expect(response.headers.get('set-cookie')).toContain(`${OWNER_COOKIE}=`);
+  });
+});
+
+describe('console pages and session clocks, through the Worker', () => {
+  const html = { ASSETS: { fetch: async () => new Response('<!doctype html><title>shell</title>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) } };
+
+  it('isolates every console page from the windows of other sites', async () => {
+    const f = await fixture();
+    const bindings = { ...f.bindings, ...html } as unknown as Cloudflare.Env;
+    const signedIn = cookies(await worker.fetch(f.post(), f.bindings));
+    for (const request of [new Request(`${ORIGIN}/console/signin`), new Request(f.link), new Request(`${ORIGIN}/console`, { headers: { cookie: signedIn } })]) {
+      const response = await worker.fetch(request, bindings);
+      expect(response.status, request.url).toBe(200);
+      expect(response.headers.get('content-type'), request.url).toContain('text/html');
+      expect(response.headers.get('cross-origin-opener-policy'), request.url).toBe('same-origin');
+    }
+  });
+
+  it('a page another site opens renews neither clock; the same page from the console renews both', async () => {
+    const f = await fixture();
+    const bindings = { ...f.bindings, ...html } as unknown as Cloudflare.Env;
+    const signedIn = cookies(await worker.fetch(f.post(), f.bindings));
+    const consoleToken = signedIn.split('; ').find(pair => pair.startsWith(`${CONSOLE_COOKIE}=`))!.slice(CONSOLE_COOKIE.length + 1);
+    const expiry = async () => {
+      let expires = 0;
+      await runInDurableObject(f.member, async (_instance, state) => {
+        expires = (await state.storage.get<Record<string, { expires: number }>>('console:sessions'))![consoleToken]!.expires;
+      });
+      return expires;
+    };
+    const soon = Date.now() + 24 * 60 * 60_000;
+    await runInDurableObject(f.member, async (_instance, state) => {
+      const sessions = (await state.storage.get<Record<string, { expires: number }>>('console:sessions'))!;
+      sessions[consoleToken]!.expires = soon;
+      await state.storage.put('console:sessions', sessions);
+    });
+    f.rpcCalls.length = 0;
+    const fromElsewhere = await worker.fetch(new Request(`${ORIGIN}/console`, { headers: { cookie: signedIn, 'sec-fetch-site': 'cross-site' } }), bindings);
+    expect(fromElsewhere.status).toBe(200);
+    expect(f.rpcCalls.map(call => call.name)).not.toContain('console_session_touch');
+    expect(await expiry()).toBe(soon);
+    const fromConsole = await worker.fetch(new Request(`${ORIGIN}/console`, { headers: { cookie: signedIn, 'sec-fetch-site': 'same-origin' } }), bindings);
+    expect(fromConsole.status).toBe(200);
+    expect(f.rpcCalls.map(call => call.name)).toContain('console_session_touch');
+    expect(await expiry()).toBeGreaterThan(soon);
   });
 });

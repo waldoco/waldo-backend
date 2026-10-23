@@ -300,3 +300,46 @@ describe('a new sign-in in a browser ends that browser\'s old sessions', () => {
     expect(d.calls.map(call => call.name)).toEqual(['console_session_revoke']);
   });
 });
+
+describe('a request another site started renews no session', () => {
+  const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
+  const at = 1_790_000_000_000;
+
+  it('the owner object reads such a session without renewing it', async () => {
+    let now = at;
+    const store = memoryStore();
+    const access = consoleAccess(store, () => now);
+    const token = await access.grant();
+    now += DAY;
+    store.put.mockClear();
+    expect(await access.session(token, false)).not.toBeNull();
+    expect(store.put).not.toHaveBeenCalled();
+    expect((await access.session(token))!.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+  });
+
+  it('the directory checks such a cookie against the live sessions without touching it', async () => {
+    const names: string[] = [];
+    let listed: string[] = [];
+    const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+      const name = url.split('/rpc/')[1]!;
+      names.push(name);
+      if (name === 'console_session_open_for') listed.push(String((JSON.parse(String(init.body)) as { p_session_hash: string }).p_session_hash));
+      if (name === 'console_session_list') return new Response(JSON.stringify(listed.map(session => ({ session, created_at: '2026-10-23T00:00:00Z', last_seen_at: '2026-10-23T00:00:00Z' }))));
+      return new Response('true');
+    });
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, () => at)!;
+    const cookie = `waldo_owner=${(await auth.ownerCookie('do-a'))!}`;
+    for (const site of ['cross-site', 'same-site']) {
+      names.length = 0;
+      expect(await auth.readOwnerCookie(new Request('https://w.test/console', { headers: { cookie, 'sec-fetch-site': site } })), site).toBe('do-a');
+      expect(names, site).toEqual(['console_session_list']);
+    }
+    listed = [];
+    expect(await auth.readOwnerCookie(new Request('https://w.test/console', { headers: { cookie, 'sec-fetch-site': 'cross-site' } }))).toBeNull();
+    for (const headers of [{ cookie }, { cookie, 'sec-fetch-site': 'same-origin' }, { cookie, 'sec-fetch-site': 'none' }]) {
+      names.length = 0;
+      await auth.readOwnerCookie(new Request('https://w.test/console', { headers }));
+      expect(names).toEqual(['console_session_touch']);
+    }
+  });
+});
