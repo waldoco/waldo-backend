@@ -3,15 +3,16 @@ import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
-import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
+import { IMessageBridgeDO, iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { ProgressPacer } from '../src/channels/progress-pacer';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
-import { SimulatedHost } from './helpers/imessage-sim-host';
+import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 import { appSubjectFor } from '../src/channels/app-api';
 import { consoleAuth } from '../src/identity/console-auth';
 import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
@@ -30,10 +31,17 @@ import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
-const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][], googleDead: false }));
+// A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
+const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][],
+  notes: [] as (string | null)[], progressInputs: [] as string[], progressHold: null as null | (() => Promise<void>), googleDead: false }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
   if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); proof.systems.push(String(input.instructions ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
+  if (format === 'progress_note') {
+    proof.progressInputs.push(JSON.stringify(input.input ?? ''));
+    if (proof.progressHold) { const h = proof.progressHold; proof.progressHold = null; await h(); }
+    return { id: 'scripted', output: [], output_text: JSON.stringify({ note: proof.notes.length ? proof.notes.shift() : 'Working through your request now.' }), usage: { input_tokens: 1, output_tokens: 1 } };
+  }
   return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 // A dead grant, when a test asks for one: the calendar read reports invalid_grant to the host and fails 401.
@@ -48,7 +56,7 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.googleDead = false; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
@@ -552,8 +560,8 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
   await replyFor(w, 'Send me my console link');
-  // The link goes first and the reply waits behind it: the bridge holds one outstanding command at a time, and the
-  // reply's handoff is retried once the link's delivery has settled.
+  // The link goes first and the reply waits behind it: the bridge holds one outstanding command at a time. The reply polls
+  // the slot for a few seconds, then its handoff is retried once the link's delivery has settled.
   const first = (await w.host.pull()).delivery!;
   const link = JSON.parse(first.body);
   expect(link).toMatchObject({ operation: 'send', allowSMSFallback: false, attachments: [], target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
@@ -582,7 +590,7 @@ it('an iMessage owner\'s own request queues the console link on the same bridge,
   expect(w.host.nativeSends).toHaveLength(1);
   expect(forbiddenEgress).toEqual([]);
   } finally { vi.useRealTimers(); }
-});
+}, 15_000);
 
 it('an iMessage turn with no public origin on record mints nothing, says so, and still replies', async () => {
   const w = await world();
@@ -1247,3 +1255,369 @@ it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes o
     expect(alarm).toBe(next);
   } finally { await clearOwnerAlarm(w.ownerStub); }
 }, 15_000);
+
+// Progress notes. The pacer's marks shrink to test scale; the wait still counts from the message's send time, which the
+// simulated host puts a second before it posts the event.
+const progressTiming = (stub: DurableObjectStub, firstMs: number, secondMs: number) => runInDurableObject(stub, async instance => {
+  (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = { firstMs, secondMs, minTurnMs: 0 };
+});
+// The host pulls the next command once it is there and sends it, as the real host's poll does. Polling stays well inside
+// the bridge's edge limit (120 requests a minute per host address); the real host pulls every 2 s.
+const sendNext = async (w: Awaited<ReturnType<typeof world>>): Promise<Delivery> => {
+  let delivery: Delivery | null = null;
+  await vi.waitFor(async () => { const pulled = await w.host.pull(); expect(pulled.status).toBe(200); delivery = pulled.delivery; expect(delivery).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+  await w.host.postResult(delivery!, await w.host.execute(delivery!));
+  return delivery!;
+};
+const sentTexts = (w: Awaited<ReturnType<typeof world>>) => w.host.nativeSends.map(send => send.text);
+const traceRows = (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) =>
+  state.storage.sql.exec<{ hop: string; ok: number; note: string | null }>('SELECT hop, ok, note FROM trace_log ORDER BY id').toArray());
+const waitFor = (check: () => boolean) => vi.waitFor(() => expect(check()).toBe(true), { timeout: 8_000, interval: 25 });
+
+it('a slow iMessage turn sends one progress note, then its reply, in that order', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  proof.notes.push('Looking at dinner spots near you and checking tonight on your calendar.');
+  proof.hold = async () => { await sendNext(w); };
+  await replyFor(w, 'Find me three dinner options near me tonight and check my calendar');
+  await sendNext(w);
+  await w.pump(2);
+  expect(sentTexts(w)).toEqual(['Looking at dinner spots near you and checking tonight on your calendar.', 'Scripted owner reply.']);
+  expect((await outbox(w.ownerStub)).map(r => [r.replyRef.split(':')[0], r.state, r.result?.state])).toEqual([['progress', 'settled', 'local_recorded'], ['reply', 'settled', 'local_recorded']]);
+  expect(proof.progressInputs).toHaveLength(1);
+  expect((await traceRows(w.ownerStub)).filter(row => row.hop === 'progress_note')).toEqual([{ hop: 'progress_note', ok: 1, note: 'sent:model' }]);
+  expect(forbiddenEgress).toEqual([]);
+}, 20_000);
+
+it('a progress pacer that cannot start leaves the turn to answer as usual', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  vi.spyOn(ProgressPacer.prototype, 'start').mockImplementation(() => { throw new Error('pacer unavailable'); });
+  await replyFor(w, 'What time is it?');
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed']);
+}, 20_000);
+
+it('a fast iMessage turn sends no note and asks the model for none', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'What time is it?');
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect(proof.progressInputs).toEqual([]);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
+}, 20_000);
+
+it('a very long iMessage turn sends two notes at most, each written from the steps so far, and never a third', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true); });
+  await progressTiming(w.ownerStub, 1_200, 7_000);
+  proof.notes.push('Checking your reminders first.', 'Still comparing a few places against your evening.');
+  // The first model call asks for a tool; the second holds the turn while both notes go out.
+  proof.outputs.push([{ type: 'function_call', call_id: 'reminders', name: 'list_reminders', arguments: '{}' }], []);
+  proof.hold = async () => { proof.hold = async () => {
+    await sendNext(w); await sendNext(w);
+    await new Promise(resolve => setTimeout(resolve, 2_500));
+    expect((await w.host.pull()).delivery).toBeNull();
+  }; };
+  await replyFor(w, 'Find me three dinner options near me tonight and check my calendar');
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Checking your reminders first.', 'Still comparing a few places against your evening.', 'Scripted owner reply.']);
+  expect(proof.progressInputs).toHaveLength(2);
+  expect(proof.progressInputs[1]).toContain('list_reminders');
+  // Steps are tools only: a hop that merely starts with tool_ (tool_eligibility) is not one.
+  expect(proof.progressInputs[1]).toContain('Steps finished so far, in order: list_reminders.');
+  expect(proof.progressInputs[1]).toContain('Checking your reminders first.');
+}, 30_000);
+
+it('a note the model is still writing when the reply freezes is dropped, never sent after the reply', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  proof.progressHold = () => released;
+  proof.hold = () => waitFor(() => proof.progressInputs.length === 1);
+  await replyFor(w, 'Plan my Saturday around the farmers market');
+  await sendNext(w);
+  release();
+  await w.pump(2);
+  await vi.waitFor(async () => expect((await traceRows(w.ownerStub)).filter(row => row.hop === 'progress_note')).toEqual([{ hop: 'progress_note', ok: 0, note: 'closed:model' }]), { timeout: 8_000 });
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
+}, 20_000);
+
+it('a note the host has not pulled when the reply lands is withdrawn by the reply as not_started', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  const queued: string[] = [], markQueued = IMessageFinalOutbox.prototype.markQueued;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'markQueued').mockImplementation(function (this: IMessageFinalOutbox, replyRef: string) { queued.push(replyRef); return markQueued.call(this, replyRef); });
+  proof.hold = () => waitFor(() => queued.some(ref => ref.startsWith('progress:')));
+  await replyFor(w, 'Find me a dentist near work');
+  await sendNext(w);
+  await w.pump(2);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  const [note, reply] = await outbox(w.ownerStub);
+  expect(note).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_superseded' } });
+  expect(reply).toMatchObject({ replyRef: expect.stringMatching(/^reply:/), state: 'settled', result: { state: 'local_recorded' } });
+}, 20_000);
+
+it('a reply behind a note the host already pulled, still unsent after the wait, retries in a second', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  const retries: (number | undefined)[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
+    if (ref.startsWith('reply:')) retries.push(delay); return retryLater.call(this, ref, maxAge, delay);
+  });
+  let note: Delivery | null = null;
+  proof.hold = async () => { await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 }); };
+  await replyFor(w, 'Find me a dentist near work');
+  expect(retries[0]).toBe(1_000);
+  await w.host.postResult(note!, await w.host.execute(note!));
+  // The retry is a second out; the owner's alarm hands the reply over once it is due.
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await w.pump(3);
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Working through your request now.', 'Scripted owner reply.']);
+}, 20_000);
+
+const admissions = () => {
+  const admitted: string[] = [], admit = IMessageOwnerInbox.prototype.admit;
+  vi.spyOn(IMessageOwnerInbox.prototype, 'admit').mockImplementation(async function (this: IMessageOwnerInbox, ...args: Parameters<typeof admit>) {
+    const result = await admit.apply(this, args); admitted.push(result.kind); return result;
+  });
+  return () => admitted.filter(kind => kind === 'admitted').length;
+};
+
+it('a reply that meets a note the host is still sending waits for that send and goes out before the owner\'s next message runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  const enqueue = IMessageBridgeDO.prototype.enqueueReply, outcomes: string[] = [];
+  vi.spyOn(IMessageBridgeDO.prototype, 'enqueueReply').mockImplementation(async function (this: IMessageBridgeDO, input) {
+    const outcome = await enqueue.call(this, input); outcomes.push(`${input.replyRef.split(':')[0]}:${outcome.kind}`); return outcome;
+  });
+  const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
+    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+  });
+  let note: Delivery | null = null, duringNextTurn: string[] = [];
+  proof.hold = async () => {
+    await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+    setTiming({ firstMs: 60_000, secondMs: 60_000, minTurnMs: 0 });
+    expect((await w.host.send(w.host.message('Make it vegetarian'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // The reply meets the slot the note still holds; the host finishes that send a moment later.
+    void waitFor(() => outcomes.includes('reply:busy')).then(async () => { await w.host.postResult(note!, await w.host.execute(note!)); });
+    proof.hold = async () => { await sendNext(w).catch(() => undefined); duringNextTurn = sentTexts(w); };
+  };
+  await replyFor(w, 'Find me three dinner options near me tonight');
+  await w.pump(2);
+  await sendNext(w);
+  expect(outcomes).toContain('reply:busy');
+  expect(duringNextTurn).toEqual(['Working through your request now.', 'Scripted owner reply.']);
+  expect(sentTexts(w)).toEqual(['Working through your request now.', 'Scripted owner reply.', 'Scripted owner reply.']);
+  expect(retries).toEqual([]);
+}, 30_000);
+
+it('a note from the next turn never reaches the owner before the reply still waiting from the turn before it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 600_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
+    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+  });
+  const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
+  vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
+    drops.push(args[0]); return dropProgress.apply(this, args);
+  });
+  const LATER = 'Switching the options to vegetarian ones.';
+  proof.notes.push('Looking at dinner spots near you.', LATER);
+  const hostStep = async () => {
+    const pulled = await w.host.pull(); expect(pulled.status).toBe(200);
+    if (pulled.delivery) await w.host.postResult(pulled.delivery, await w.host.execute(pulled.delivery));
+  };
+  let note: Delivery | null = null;
+  proof.hold = async () => {
+    // Turn 1: the host has pulled note 1 and is still sending it.
+    await vi.waitFor(async () => { note = (await w.host.pull()).delivery; expect(note).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+    // Turn 2's note falls due once the bridge's own short hold for a waiting reply has lapsed.
+    setTiming({ firstMs: 10_000, secondMs: 600_000, minTurnMs: 0 });
+    expect((await w.host.send(w.host.message('Make it vegetarian'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // The slow send finishes only after reply 1 has given up its polls and gone to its retry.
+    void vi.waitFor(() => expect(retries.some(ref => ref.startsWith('reply:'))).toBe(true), { timeout: 15_000, interval: 50 })
+      .then(async () => { await w.host.postResult(note!, await w.host.execute(note!)); });
+    // Turn 2 runs while the host keeps pulling, until its note has been settled or sent.
+    proof.hold = () => vi.waitFor(async () => { await hostStep(); expect(drops.includes('progress_yields') || sentTexts(w).includes(LATER)).toBe(true); }, { timeout: 20_000, interval: 500 });
+  };
+  await replyFor(w, 'Find me three dinner options near me tonight');
+  await w.pump(2);
+  // Reply 2 met the slot reply 1 held; its retry is an owner alarm, which this harness runs through pump.
+  await vi.waitFor(async () => { await hostStep(); await w.pump(1); expect(sentTexts(w)).toHaveLength(3); }, { timeout: 20_000, interval: 500 });
+  expect(sentTexts(w)).toEqual(['Looking at dinner spots near you.', 'Scripted owner reply.', 'Scripted owner reply.']);
+  expect(proof.progressInputs).toHaveLength(2);
+  const later = (await outbox(w.ownerStub)).filter(r => r.replyRef.startsWith('progress:') && r.replyRef.endsWith(':1'))[1];
+  expect(later).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_yields' } });
+}, 60_000);
+
+it('a turn that starts just after a reply counts its wait from that reply, not from the owner\'s earlier message', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 60_000, 600_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  proof.hold = async () => {
+    expect((await w.host.send(w.host.message('And book the earliest one'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // By the time its turn starts, the second message is older than that turn's first mark.
+    setTiming({ firstMs: 2_000, secondMs: 600_000, minTurnMs: 0 });
+    await new Promise(resolve => setTimeout(resolve, 2_500));
+    proof.hold = async () => { await sendNext(w); await new Promise(resolve => setTimeout(resolve, 500)); };
+  };
+  await replyFor(w, 'Find me a dentist near work');
+  await w.pump(2);
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Scripted owner reply.']);
+  expect(proof.progressInputs).toEqual([]);
+}, 30_000);
+
+it('two messages already waiting when a drain starts each have their reply handed over before the next one runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const admitted = admissions();
+  let duringThirdTurn: string[] = [];
+  proof.hold = async () => {
+    for (const text of ['And the weather there', 'And what to wear']) expect((await w.host.send(w.host.message(text))).status).toBe(200);
+    await waitFor(() => admitted() === 3);
+    proof.hold = async () => { await sendNext(w); proof.hold = async () => { await sendNext(w).catch(() => undefined); duringThirdTurn = sentTexts(w); }; };
+  };
+  await replyFor(w, 'Plan a day trip to the coast');
+  await w.pump(2);
+  await sendNext(w);
+  expect(duringThirdTurn).toEqual(['Scripted owner reply.', 'Scripted owner reply.']);
+  expect(sentTexts(w)).toHaveLength(3);
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed', 'completed']);
+}, 30_000);
+
+it('an iMessage turn that sent a progress note keeps the alarm for the owner\'s reminder two hours out', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  const due = await runInDurableObject(w.ownerStub, (_i, state) => remindInTwoHours(state));
+  proof.hold = async () => { await sendNext(w); };
+  try {
+    await handedTurn(w, 'Book me a table somewhere quiet tonight');
+    expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Working through your request now.']);
+    // The note wakes nothing: the reminder keeps its entry, and the alarm holds the schedule's next one.
+    const { alarm, next, reminder } = await ownerAlarm(w.ownerStub);
+    expect(reminder).toBe(due);
+    expect(alarm).toBe(next);
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 20_000);
+
+it('with capture off, neither the owner\'s words nor the note reach the console or the trace table', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  const lines: string[] = [];
+  for (const method of ['log', 'warn', 'error', 'info'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+  proof.notes.push('Reading the Priya thread about plan zebra-6612 now.');
+  proof.hold = async () => { await sendNext(w); };
+  await replyFor(w, 'My HRV was 4471 so find a calm plan zebra-6612 with Priya');
+  await sendNext(w);
+  expect(sentTexts(w)[0]).toBe('Reading the Priya thread about plan zebra-6612 now.');
+  const rows = JSON.stringify(await traceRows(w.ownerStub));
+  for (const secret of ['4471', 'zebra-6612', 'Priya']) {
+    expect(rows).not.toContain(secret);
+    expect(lines.join('\n')).not.toContain(secret);
+  }
+}, 20_000);
+
+it('the bridge refuses a note once its reply is in the mailbox, a note never waits for the slot, and a waiting reply keeps notes off it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Morning');
+  const [reply] = await outbox(w.ownerStub);
+  expect(reply).toMatchObject({ replyRef: expect.stringMatching(/^reply:/), state: 'queued' });
+  const turn = reply!.replyRef.split(':')[1];
+  const handoff = (replyRef: string, commandId: string, text = 'A note.') => w.bridgeStub().enqueueReply({ replyRef, commandId, text, ownerDoName: reply!.ownerDoName,
+    revision: reply!.revision, bindingDigest: reply!.bindingDigest, ...(reply!.subject !== undefined ? { subject: reply!.subject } : {}) });
+  // While the reply holds the slot a note is refused at once.
+  expect(await handoff(`progress:${turn}:1`, 'wpn1_early')).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_busy' } });
+  await sendNext(w);
+  // Once the reply is sent the slot is free, and a note for that turn is still refused: it would follow its reply.
+  expect(await handoff(`progress:${turn}:1`, 'wpn1_late')).toMatchObject({ kind: 'terminal', result: { reason: 'progress_superseded' } });
+  // A note for another turn takes the free slot; once the host has pulled it, a reply waits, and while it waits no note goes.
+  expect(await handoff('progress:imsg-other:1', 'wpn1_other', 'Checking the other thing.')).toEqual({ kind: 'queued' });
+  const pulled = (await w.host.pull()).delivery!;
+  expect(await handoff('reply:imsg-other', 'wrc_other', 'The other answer.')).toEqual({ kind: 'busy' });
+  await w.host.postResult(pulled, await w.host.execute(pulled));
+  expect(await handoff('progress:imsg-third:1', 'wpn1_third')).toMatchObject({ kind: 'terminal', result: { reason: 'progress_yields' } });
+  expect(await handoff('reply:imsg-other', 'wrc_other', 'The other answer.')).toEqual({ kind: 'queued' });
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Checking the other thing.', 'The other answer.']);
+}, 20_000);
+
+it('a note that passed the slot check is still refused if a reply started waiting while it was being prepared', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Morning');
+  const [reply] = await outbox(w.ownerStub);
+  await sendNext(w);
+  const handoff = (replyRef: string, commandId: string, text: string) => w.bridgeStub().enqueueReply({ replyRef, commandId, text, ownerDoName: reply!.ownerDoName,
+    revision: reply!.revision, bindingDigest: reply!.bindingDigest, ...(reply!.subject !== undefined ? { subject: reply!.subject } : {}) });
+  // The note's preparation (its key) waits until the reply below has met the slot and the slot is free again.
+  let release!: () => void, entered = false;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const bridge = IMessageBridgeDO.prototype as unknown as { key: (...args: unknown[]) => Promise<string | null> }, key = bridge.key;
+  vi.spyOn(bridge, 'key').mockImplementation(async function (this: unknown, ...args: unknown[]) {
+    if (!entered) { entered = true; await released; }
+    return key.apply(this, args);
+  });
+  const note = handoff('progress:imsg-late:1', 'wpn1_late', 'Checking a few places.');
+  await waitFor(() => entered);
+  expect(await handoff('reply:imsg-first', 'wrc_first', 'The first answer.')).toEqual({ kind: 'queued' });
+  expect(await handoff('reply:imsg-second', 'wrc_second', 'The second answer.')).toEqual({ kind: 'busy' });
+  await sendNext(w);
+  release();
+  expect(await note).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_yields' } });
+  expect(await handoff('reply:imsg-second', 'wrc_second', 'The second answer.')).toEqual({ kind: 'queued' });
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'The first answer.', 'The second answer.']);
+}, 20_000);
+
+it('a note whose handoff threw is settled as possibly sent, never retried, and the reply goes out as before', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 1_200, 60_000);
+  const enqueue = IMessageBridgeDO.prototype.enqueueReply, attempts: string[] = [];
+  vi.spyOn(IMessageBridgeDO.prototype, 'enqueueReply').mockImplementation(function (this: IMessageBridgeDO, input) {
+    attempts.push(input.replyRef);
+    if (input.replyRef.startsWith('progress:')) throw new Error('bridge unavailable');
+    return enqueue.call(this, input);
+  });
+  proof.hold = () => waitFor(() => attempts.some(ref => ref.startsWith('progress:')));
+  await replyFor(w, 'Find me a dentist near work');
+  await sendNext(w);
+  await w.pump(2);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect(attempts.filter(ref => ref.startsWith('progress:'))).toHaveLength(1);
+  const [note, reply] = await outbox(w.ownerStub);
+  expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
+  expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
+}, 20_000);
