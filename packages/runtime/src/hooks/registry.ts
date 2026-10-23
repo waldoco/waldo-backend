@@ -99,8 +99,8 @@ import {
   sessionStateSchema,
   sessionToolAllowed,
   sourceTaintSchema,
-  STANDING_CHANGE_TOOLS,
-  taintGateNeedsOwnerApproval,
+  isExternalSourceTaint,
+  taintGateBlocksDirectExecution,
   toolNameSchema,
   triggerTypeSchema,
   rememberArgsSchema,
@@ -113,6 +113,7 @@ import {
   archiveThreadArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
+import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
 
@@ -433,20 +434,52 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
-// Every external-tainted privileged call is pointed at propose_action: the owner's approval replays exactly that call
-// with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
-// tool outside its handler set), so no dead card reaches the owner.
+// Every external-tainted call that needs the owner is pointed at propose_action: the owner's approval replays exactly that
+// call with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
+// tool outside its handler set, a handler bound to the live turn), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
 
-// The taint law with the one exception the arguments cannot show: a loop the mail follow-through bound to an observed
-// source closes without a card, as it opened without one. Any other loop, or an id the store does not know, is the owner's.
+// The owner's ruling for a turn that has read outside text: every tool that changes something sends its change to the
+// owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
+// tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
   tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
+  || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
+
+// One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
+// handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
+export const recordNeedsOwnerCard = async (
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
 ): Promise<boolean> => {
-  if (!taintGateNeedsOwnerApproval(tool, taint, args)) return false;
-  if (tool !== 'close_loop' || ctx.loopIsSourceBound === undefined) return true;
-  const id = typeof args === 'object' && args !== null ? (args as { id?: unknown }).id : undefined;
-  return typeof id !== 'string' || !(await ctx.loopIsSourceBound(id));
+  if (record.claim === null) return false;
+  switch (record.tainted?.exempt) {
+    case 'draft': case 'honest_origin': return false;
+    case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
+    case 'commits_on_card': return !typedBrowserStep(tool, args);
+    default: return true;
+  }
+};
+
+// A loop bound to an observed mail source records that source, its title never enters a prompt as the owner's
+// (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back: it is the owner-enabled mail
+// follow-through. An open names its source in the frozen arguments. A close names only an id, which cannot say whose loop
+// it is, so the owner's loop store answers; unwired, or for an id it does not know, the loop is the owner's. Any other
+// tool marked source_bound has no binding here and is carded.
+const boundToObservedSource = async (tool: ToolName, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>): Promise<boolean> => {
+  const record = typeof args === 'object' && args !== null ? args as { source_ref?: unknown; id?: unknown } : undefined;
+  if (tool === 'open_loop') return typeof record?.source_ref === 'string';
+  if (tool === 'close_loop') return typeof record?.id === 'string' && ctx.loopIsSourceBound !== undefined && await ctx.loopIsSourceBound(record.id);
+  return false;
+};
+
+// A typed browse_act command runs on the owner's browser host, which refuses every request but GET and holds a submit for
+// the owner's browser card, so the step changes nothing outside Waldo's own page. A download saves into the owner's
+// workspace, and a call with no typed command takes the legacy path, whose stop before a commit is a model's judgment.
+const typedBrowserStep = (tool: ToolName, args: unknown): boolean => {
+  const command = tool === 'browse_act' && typeof args === 'object' && args !== null ? (args as { command?: unknown }).command : undefined;
+  const operation = typeof command === 'object' && command !== null ? (command as { operation?: unknown }).operation : undefined;
+  return typeof operation === 'string' && operation !== 'download';
 };
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
@@ -463,8 +496,7 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return tool.result;
     }
 
-    const gated = PRIVILEGED_ACTION_TOOLS.includes(tool.data) || STANDING_CHANGE_TOOLS.includes(tool.data);
-    if (!gated) {
+    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data) && TOOL_RECORDS[tool.data].claim === null) {
       return ok();
     }
 
@@ -482,7 +514,7 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       if (needsOwner) return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
-    // A standing change is not privileged: past the taint law it runs on the owner's own turn as any tool does.
+    // A write that is not privileged runs past the taint law on the owner's own turn as any tool does.
     if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) return ok();
 
     // This admits a request only; native Mac custody authorizes each effect.
