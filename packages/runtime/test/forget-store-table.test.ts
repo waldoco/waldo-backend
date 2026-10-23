@@ -26,7 +26,6 @@ const TABLES: Record<string, Row> = {
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   claim_recall_ready: exempt('claim ids'),
-  cost_ledger: exempt('day, call kind, responsibility id, trigger enum, model name, token counts and cost; no owner text'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
   schedule_settings: exempt('a setting key and an enum value (the health proposal mode); no owner text'),
   health_trigger_pending: exempt('an owner-local day and the time it was marked; no owner text, zone word or reading'),
