@@ -510,3 +510,51 @@ describe('Calendar mutation notification compatibility', () => {
     }
   });
 });
+
+// A block Waldo adds to protect the owner's time carries its kind in a private property on the owner's own copy of the
+// event, so the calendar demand behind Weight can tell a rest block from deep work after the owner moves or retitles it.
+describe('the kind of a protected block on the owner\'s calendar', () => {
+  const start = '2026-10-11T10:00:00Z', end = '2026-10-11T11:00:00Z';
+  const recording = (answer: (url: URL) => unknown) => {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      calls.push({ url, init: init ?? {} });
+      return Response.json(answer(url));
+    }) as typeof fetch;
+    return { calls, client: googleClient(app, { refresh_token: 'synthetic' }, fetcher, undefined, { connection_id: 'local:owner@example.test', email: 'owner@example.test' }) };
+  };
+  const created = () => ({ id: 'blk-1', summary: 'Recharge', start: { dateTime: start }, end: { dateTime: end }, etag: 'v1' });
+  const privateOf = (init: RequestInit) => (JSON.parse(String(init.body)) as { extendedProperties?: { private?: Record<string, string> } }).extendedProperties?.private;
+
+  it('writes the kind with the operation marker, and on its own when there is no marker', async () => {
+    const marker = 'a'.repeat(64);
+    for (const [input, expected] of [
+      [{ block: 'rest', operationMarker: marker }, { waldoOperation: marker, waldoBlock: 'rest' }],
+      [{ block: 'deep_work' }, { waldoBlock: 'deep_work' }],
+      [{ operationMarker: marker }, { waldoOperation: marker }],
+      [{}, undefined],
+    ] as const) {
+      const { calls, client } = recording(created);
+      await client.createEvent({ title: 'Recharge', start, end, ...input });
+      expect(privateOf(calls[0]!.init)).toEqual(expected);
+    }
+  });
+
+  it('never names the kind when Waldo moves or cancels an event, so Google keeps the one already on it', async () => {
+    const marker = 'b'.repeat(64);
+    const { calls, client } = recording(created);
+    await client.moveEvent('blk-1', start, end, 'v1', marker);
+    await client.cancelEvent('blk-1', 'v2', marker);
+    // A patch replaces only the keys it names; a key sent as null would delete the kind.
+    expect(calls.map(call => privateOf(call.init))).toEqual([{ waldoOperation: marker }, { waldoOperation: marker }]);
+  });
+
+  it('reads the kind back only for the two kinds Waldo writes', async () => {
+    const event = (id: string, kind?: string) => ({ id, summary: id, start: { dateTime: start }, end: { dateTime: end }, ...(kind === undefined ? {} : { extendedProperties: { private: { waldoBlock: kind } } }) });
+    const { client } = recording(() => ({ kind: 'calendar#events', items: [event('rest', 'rest'), event('deep', 'deep_work'), event('other', 'nap'), event('plain')] }));
+    const page = await client.calendarPage!('primary', '2026-10-11T00:00:00Z', '2026-10-12T00:00:00Z', 50, false);
+    expect(page.events.map(item => [item.id, item.block])).toEqual([['rest', 'rest'], ['deep', 'deep_work'], ['other', undefined], ['plain', undefined]]);
+  });
+});
