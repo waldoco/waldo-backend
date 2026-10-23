@@ -3,7 +3,7 @@ import {
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type ToolHandler,
 } from '@waldo/contracts';
 import { md5Hex } from '../../channels/md5';
-import { parseSeries, type Reading, type SleepStages } from '../../health/producer';
+import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -170,7 +170,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const sources = parsed.series.sources.filter((source) => consent.sources.has(source.source));
+    const sources = untruncated(parsed.series, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;

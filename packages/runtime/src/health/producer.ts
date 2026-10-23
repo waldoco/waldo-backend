@@ -82,7 +82,7 @@ export const parseSeries = (raw: unknown): Parsed => {
 
 // A read that reached its row cap returned the newest rows, so the oldest day it holds may be partial. That day is
 // dropped, never computed from part of its readings.
-const untruncated = (series: Series, code: string): Series => {
+export const untruncated = (series: Series, code: string): Series => {
   if (!series.sources.some(source => source.truncated)) return series;
   console.log(JSON.stringify({ hop: 'health_series', ok: true, code }));
   return {
