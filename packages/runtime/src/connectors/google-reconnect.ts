@@ -3,7 +3,8 @@ import { googleHas, GoogleError, type GoogleClient } from './google';
 // One reconnect notice per failure episode. The notice fires on the healthy -> failing
 // transition while no notice is outstanding; while the grant keeps failing the circuit breaker
 // (google-circuit.ts) owns retries and the notice stays silent; recovery clears the outstanding
-// record and re-arms the episode. The caller records the notice only once it was delivered.
+// record and re-arms the episode. The caller records the notice once it is out of its hands: a button send that a surface
+// accepted, or a plain notice the delivery outbox took into custody, which then delivers it or ends it.
 export const reauthNoticeTransition = (
   state: Readonly<{ failing: boolean; noticed: boolean }>,
   error: string,

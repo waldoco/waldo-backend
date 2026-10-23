@@ -41,11 +41,13 @@ describe('revoking a Google grant at Google', () => {
 
 describe('the Worker side of a disconnect', () => {
   const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
-  // The connector-proxy answers the revoke op; the signed RPC deletes the row's Vault secret.
-  const world = (edge: (body: Record<string, unknown>) => Response | Promise<Response>, deleted: unknown = true) => {
+  // The connector-proxy answers the revoke op; the signed RPC deletes the row's Vault secret. gmail_push_route lists every live
+  // Google connection for the mailbox, across owners: by default only this one.
+  const world = (edge: (body: Record<string, unknown>) => Response | Promise<Response>, deleted: unknown = true, holders: () => Response = () => Response.json([{ do_name: 'owner', connection: 'conn-1' }])) => {
     const calls: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === 'https://db.test/rest/v1/rpc/gmail_push_route') { calls.push(`rpc:gmail_push_route:${String((JSON.parse(String(init?.body)) as { p_account?: unknown }).p_account)}`); return holders(); }
       if (url === 'https://db.test/functions/v1/connector-proxy') {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         calls.push(`edge:${String(body.op)}`);
@@ -59,8 +61,20 @@ describe('the Worker side of a disconnect', () => {
 
   it('asks the edge to revoke at Google first, then deletes the secret, and reports both', async () => {
     const w = world(body => Response.json(body.op === 'revoke' && body.connection === 'conn-1' && body.do_name === 'owner' ? { data: { provider: 'revoked' } } : { error: { status: 404, message: 'unknown operation' } }));
-    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: true, google: 'revoked' });
-    expect(w.calls).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+    expect(await w.proxy.revoke('owner', 'conn-1', 'Owner@Example.test')).toEqual({ removed: true, google: 'revoked' });
+    expect(w.calls).toEqual(['rpc:gmail_push_route:owner@example.test', 'edge:revoke', 'rpc:connection_revoke']);
+  });
+
+  // Google's revocation ends Waldo's whole authorization for that Google user, so it would end every other owner's grant on
+  // the same mailbox. While another owner holds it, or when that cannot be told, Google is not asked; the delete still runs.
+  it.each([
+    ['another owner holds the same mailbox', () => Response.json([{ do_name: 'owner', connection: 'conn-1' }, { do_name: 'other-owner', connection: 'conn-9' }]), 'shared'],
+    ['the lookup fails', () => new Response('down', { status: 503 }), 'unavailable'],
+    ['the lookup answers something else', () => Response.json({ rows: 'unexpected' }), 'unavailable'],
+  ] as const)('when %s, Google is not asked and the secret is still deleted', async (_case, holders, google) => {
+    const w = world(() => Response.json({ data: { provider: 'revoked' } }), true, holders);
+    expect(await w.proxy.revoke('owner', 'conn-1', 'owner@example.test')).toEqual({ removed: true, google });
+    expect(w.calls).toEqual(['rpc:gmail_push_route:owner@example.test', 'rpc:connection_revoke']);
   });
 
   it.each([
@@ -73,18 +87,18 @@ describe('the Worker side of a disconnect', () => {
     ['an edge that answers no JSON', () => new Response('<html>', { status: 502 }), 'unavailable'],
   ] as const)('when %s, the secret is still deleted and the outcome says so', async (_case, edge, google) => {
     const w = world(edge);
-    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: true, google });
+    expect(await w.proxy.revoke('owner', 'conn-1', 'Owner@Example.test')).toEqual({ removed: true, google });
     expect(w.calls.at(-1)).toBe('rpc:connection_revoke');
   });
 
   it('a delete the database refuses fails the disconnect, whatever Google said', async () => {
     const w = world(() => Response.json({ data: { provider: 'revoked' } }), new Response('down', { status: 503 }));
-    await expect(w.proxy.revoke('owner', 'conn-1')).rejects.toThrow();
-    expect(w.calls).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+    await expect(w.proxy.revoke('owner', 'conn-1', 'Owner@Example.test')).rejects.toThrow();
+    expect(w.calls).toEqual(['rpc:gmail_push_route:owner@example.test', 'edge:revoke', 'rpc:connection_revoke']);
   });
 
   it('a row the database had already revoked reports removed: false', async () => {
     const w = world(() => Response.json({ data: { provider: 'not_held' } }), false);
-    expect(await w.proxy.revoke('owner', 'conn-1')).toEqual({ removed: false, google: 'not_held' });
+    expect(await w.proxy.revoke('owner', 'conn-1', 'Owner@Example.test')).toEqual({ removed: false, google: 'not_held' });
   });
 });

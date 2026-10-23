@@ -17,18 +17,20 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('disconnect fixture forbids model calls'); } }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-const world = vi.hoisted(() => ({ calls: [] as string[], bodies: [] as string[], edge: (() => Response.json({ data: { provider: 'revoked' } })) as () => Response, rpc: (() => Response.json(true)) as () => Response, google: (() => new Response('{}', { status: 200 })) as () => Response }));
+const world = vi.hoisted(() => ({ calls: [] as string[], bodies: [] as string[], edge: (() => Response.json({ data: { provider: 'revoked' } })) as () => Response, rpc: (() => Response.json(true)) as () => Response, google: (() => new Response('{}', { status: 200 })) as () => Response, holders: [] as string[] }));
 beforeEach(() => {
   world.calls = []; world.bodies = [];
   world.edge = () => Response.json({ data: { provider: 'revoked' } });
   world.rpc = () => Response.json(true);
   world.google = () => new Response('{}', { status: 200 });
+  world.holders = ['conn-1'];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const raw = init?.body ? String(init.body) : '';
     world.bodies.push(raw);
     if (url === 'https://edge.test/functions/v1/connector-proxy') { world.calls.push(`edge:${String((JSON.parse(raw) as { op?: unknown }).op)}`); return world.edge(); }
     if (url === 'https://edge.test/rest/v1/rpc/connection_revoke') { world.calls.push('rpc:connection_revoke'); return world.rpc(); }
+    if (url === 'https://edge.test/rest/v1/rpc/gmail_push_route') { world.calls.push('rpc:gmail_push_route'); return Response.json(world.holders.map((connection, n) => ({ do_name: `owner-${n}`, connection }))); }
     if (url === 'https://oauth2.googleapis.com/revoke') { world.calls.push('google:revoke'); return world.google(); }
     return new Response('unexpected', { status: 500 });
   });
@@ -60,7 +62,7 @@ describe('disconnecting Google', () => {
     world.edge = () => Response.json({ data: { provider: outcome } });
     await disconnecting(`disconnect-vault-${outcome}`, { id: 'conn-1', email: EMAIL, scopes: [CALENDAR] }, async (owner, state) => {
       expect(await owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
-      expect(revoking()).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+      expect(revoking()).toEqual(['rpc:gmail_push_route', 'edge:revoke', 'rpc:connection_revoke']);
       expect(await state.storage.get('google:accounts')).toEqual([]);
       expect(hops(state)).toEqual([{ hop: 'google_disconnect', ok: ok ? 1 : 0, note: outcome }]);
       expect(traces(state)).not.toContain(EMAIL);
@@ -71,9 +73,19 @@ describe('disconnecting Google', () => {
     world.edge = () => Response.json({ error: { status: 404, message: 'unknown operation' } });
     await disconnecting('disconnect-old-edge', { id: 'conn-1', email: EMAIL, scopes: [CALENDAR] }, async (owner, state) => {
       expect(await owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
-      expect(revoking()).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+      expect(revoking()).toEqual(['rpc:gmail_push_route', 'edge:revoke', 'rpc:connection_revoke']);
       expect(await state.storage.get('google:accounts')).toEqual([]);
       expect(hops(state)).toEqual([{ hop: 'google_disconnect', ok: 0, note: 'unavailable' }]);
+    });
+  });
+
+  it('a mailbox another owner also connected is not revoked at Google, so their grant keeps working; the secret is still deleted', async () => {
+    world.holders = ['conn-1', 'conn-other'];
+    await disconnecting('disconnect-shared', { id: 'conn-1', email: EMAIL, scopes: [CALENDAR] }, async (owner, state) => {
+      expect(await owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
+      expect(revoking()).toEqual(['rpc:gmail_push_route', 'rpc:connection_revoke']);
+      expect(await state.storage.get('google:accounts')).toEqual([]);
+      expect(hops(state)).toEqual([{ hop: 'google_disconnect', ok: 0, note: 'shared' }]);
     });
   });
 
@@ -81,7 +93,7 @@ describe('disconnecting Google', () => {
     world.rpc = () => new Response('down', { status: 503 });
     await disconnecting('disconnect-delete-refused', { id: 'conn-1', email: EMAIL, scopes: [CALENDAR] }, async (owner, state) => {
       await expect(owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).rejects.toThrow();
-      expect(revoking()).toEqual(['edge:revoke', 'rpc:connection_revoke']);
+      expect(revoking()).toEqual(['rpc:gmail_push_route', 'edge:revoke', 'rpc:connection_revoke']);
       expect(await state.storage.get('google:accounts')).toEqual([expect.objectContaining({ id: 'conn-1' })]);
     });
   });

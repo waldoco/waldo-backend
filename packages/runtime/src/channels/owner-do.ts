@@ -2822,9 +2822,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     // A dead grant's notice where no connect button can go (the app, iMessage): plain text, no link, through the delivery outbox,
     // which takes it to the app transcript for an owner the directory admits there, or to iMessage for an owner whose only
-    // surface it is. Each failure episode queues its own record, which names the grant only by a digest.
+    // surface it is. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
+    // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none.
     const queueReauthNotice = async (id: string): Promise<void> => {
       const trace = `google-reauth:${(await sha256Hex(id)).slice(0, 16)}:${Date.now()}`;
+      if (!(await health())[id]) { log({ trace, hop: 'google_reauth_notice', ms: 0, ok: true, code: 'grant_recovered' }); return; }
       const email = (await accounts()).find((known) => known.id === id)?.email;
       try {
         if (owner === 0) throw new Error('owner_unbound');
@@ -2849,7 +2851,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (!transition.send) return;
         // A new ticket revokes the owner's open ones, so where no button can carry it nothing is minted.
-        if (nativeSurface(channel)) return queueReauthNotice(id);
+        if (nativeSurface(channel)) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
@@ -2949,7 +2951,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Google is asked to revoke the grant first; whatever it answers, Waldo forgets the grant. Only a failed delete of a
         // Vault secret fails the disconnect, and keeps the account so the owner can try again.
         const revoked = account.refresh_token ? await revokeGoogleGrant(fetch, account.refresh_token)
-          : !id.startsWith('local:') && vault && doName ? (await vault.revoke(doName, id)).google : null;
+          : !id.startsWith('local:') && vault && doName ? (await vault.revoke(doName, id, account.email)).google : null;
         if (revoked) log({ trace: `google:${Date.now()}`, hop: 'google_disconnect', ms: 0, ok: revoked === 'revoked' || revoked === 'already_invalid', code: revoked });
         const { [id]: _profile, ...profiles } = await googleProfiles();
         const remaining = all.filter((known) => known.id !== id);

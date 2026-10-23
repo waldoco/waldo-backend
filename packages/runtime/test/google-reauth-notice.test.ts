@@ -180,6 +180,26 @@ describe('a Google grant that stops working, on the app', () => {
     });
   });
 
+  // The notice is queued in the owner object's serial order, never beside an alarm pass that drains the outbox. A grant that
+  // recovers before its turn comes gets none, and the episode stays open for the next failure.
+  it('waits its turn behind running work, and a grant that recovers meanwhile gets no notice', async () => {
+    const name = 'reauth-app-recovered-first';
+    await world(name, 'app', async w => {
+      let release!: () => void;
+      const busy = (w.owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(() => new Promise<void>(resolve => { release = resolve; }));
+      await w.read('app');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(w.notices(), 'nothing is queued while other work runs').toEqual([]);
+      grant.dead = false;
+      expect(await w.read('app'), 'the first probe of a failing grant goes through').toBe(true);
+      release(); await busy;
+      await vi.waitFor(() => expect(w.hops('google_reauth_notice')).toEqual([1]), { timeout: 5_000, interval: 20 });
+      expect(w.notices()).toEqual([]);
+      expect(w.state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'google_reauth_notice'").toArray()).toEqual([{ note: 'grant_recovered' }]);
+      expect(await w.state.storage.get('google:reauth-noticed') ?? {}).toEqual({});
+    });
+  });
+
   it('an app the owner has since unlinked gets nothing delivered', async () => {
     const name = 'reauth-app-unlinked';
     await world(name, 'app', async w => {

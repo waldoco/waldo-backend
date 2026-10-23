@@ -7,8 +7,9 @@ import type { CalendarWatch, GmailWatch } from './google-push';
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
 export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly string[]; profile?: GoogleProfile }>;
 // What a disconnect did: whether the signed delete removed the row's secret, and what Google said when asked to revoke the
-// grant first. 'unavailable' is an edge that could not be asked, including one that predates the revoke operation.
-export type GoogleRevokeResult = Readonly<{ removed: boolean; google: GoogleRevokeOutcome | 'unavailable' }>;
+// grant first. 'shared' is a mailbox another live connection also holds, so Google was not asked; 'unavailable' is a check or
+// an edge that could not answer (an edge that predates the revoke operation included), so Google was not asked either.
+export type GoogleRevokeResult = Readonly<{ removed: boolean; google: GoogleRevokeOutcome | 'shared' | 'unavailable' }>;
 export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
@@ -20,7 +21,7 @@ export type GoogleProxy = Readonly<{
   calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
-  revoke(doName: string, connection: string): Promise<GoogleRevokeResult>;
+  revoke(doName: string, connection: string, account: string): Promise<GoogleRevokeResult>;
 }>;
 
 const METHODS = GOOGLE_METHODS;
@@ -93,9 +94,14 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return { historyId: data.historyId, expiration: data.expiration };
     },
     // Google is asked first, and no answer of its keeps the secret: the delete runs whatever it was, and only a failed
-    // delete fails the disconnect.
-    revoke: async (doName, connection) => {
-      const google = await post({ do_name: doName, op: 'revoke', connection })
+    // delete fails the disconnect. Google's revocation ends Waldo's whole authorization for that Google user, so it would end
+    // every other owner's grant on the same mailbox: it is asked only when this is the mailbox's one live connection.
+    revoke: async (doName, connection, account) => {
+      const mailbox = account.toLowerCase();
+      const others = await rpc('gmail_push_route', `gmailroute.${mailbox}`, { p_account: mailbox })
+        .then((rows) => Array.isArray(rows) ? rows.filter((row: { connection?: unknown }) => row?.connection !== connection).length : null)
+        .catch(() => null);
+      const google = others === null ? 'unavailable' as const : others > 0 ? 'shared' as const : await post({ do_name: doName, op: 'revoke', connection })
         .then((json) => { const said = (json as { data?: { provider?: unknown } }).data?.provider; return GOOGLE_REVOKE_OUTCOMES.find((known) => known === said) ?? 'unavailable'; })
         .catch(() => 'unavailable' as const);
       return { removed: (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true, google };
