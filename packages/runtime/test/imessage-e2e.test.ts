@@ -486,9 +486,13 @@ it('non-minted ids never reach a bridge; an unknown tuple leaves no storage; one
     expect(tables).toEqual([]); // the unsigned request created no bridge tables
   });
   const ip = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
+  // The local limiter counts an address in fixed wall-clock minutes, 120 a minute. A burst that crosses a minute is split
+  // between two windows, and twice the limit plus one always fills one of them; a burst inside one minute is cut off by 130.
+  const minute = (ms: number) => Math.floor(ms / 60_000), start = Date.now();
   const statuses: number[] = [];
-  for (let i = 0; i < 130; i++) statuses.push((await forged(w, ghost.bridgeId, ghost.accountId, ip)).status);
-  expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  while (statuses.length < 241 && statuses.at(-1) !== 429) statuses.push((await forged(w, ghost.bridgeId, ghost.accountId, ip)).status);
+  expect(statuses.at(-1)).toBe(429);
+  if (minute(start - 1_000) === minute(Date.now() + 1_000)) expect(statuses.length).toBeLessThanOrEqual(130);
   expect(statuses.filter((s) => s !== 401 && s !== 429)).toEqual([]);
   expect((await w.host.heartbeat()).status).toBe(200); // another address is unaffected
 });
