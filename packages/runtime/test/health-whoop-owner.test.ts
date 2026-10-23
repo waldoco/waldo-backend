@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { whoopDeletions } from '../src/health/providers/whoop-map';
+import { handoffHash } from '../src/channels/connect-confirm';
 import { addNight, connected, DAY, harness, NOW, night, newPlane, newWorld, recoveryRecord, sleepRecord, workoutRecord } from './helpers/whoop-fakes';
 
 // Distinctive synthetic readings: if one shows up in a log line, the owner object kept a value.
@@ -7,17 +8,21 @@ const LEAKS = ['47.318', '430', '93.5'];
 const signals = (plane: { samples: Map<string, { payload: Record<string, unknown> }> }) => [...plane.samples.values()].map(s => s.payload.signal as string);
 
 describe('WHOOP connect and callback', () => {
-  it('starts with both of the owner\'s WHOOP grants live, and hands the app a first-party start link carrying an eight-character state, hashed', async () => {
+  it('starts with both of the owner\'s WHOOP grants live, and hands the app a first-party start link carrying an eight-character state and a one-time code, both stored hashed', async () => {
     const h = harness();
     const url = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
     expect(url.origin).toBe('https://worker.example.invalid');
     expect(url.pathname).toMatch(/^\/oauth\/whoop\/start\/[A-Za-z0-9]{8}$/);
-    expect(url.search).toBe('');
-    const state = url.pathname.split('/').at(-1)!;
+    expect(url.search).toMatch(/^\?handoff=[A-Za-z0-9_-]{22}$/);
+    const state = url.pathname.split('/').at(-1)!, code = url.searchParams.get('handoff')!;
     expect(h.plane.sessions).toHaveLength(1);
     expect(h.plane.sessions[0]).toMatch(/^[0-9a-f]{64}$/);
     expect(h.plane.sessions[0]).not.toContain(state);
+    expect(h.plane.handoffs).toEqual([await handoffHash(code)]);
     expect(url.toString()).not.toContain('client-secret-fixture');
+    // Each start is its own code, so a link the app opened once is never reissued.
+    const again = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
+    expect(again.searchParams.get('handoff')).not.toBe(code);
   });
 
   // WHOOP's express authorization is the two grants for the whoop source. The answer names the missing one so the app can send

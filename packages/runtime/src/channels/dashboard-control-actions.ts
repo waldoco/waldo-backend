@@ -1,4 +1,5 @@
-import {parseConsoleAction,NOTICES,waitingMayApprove,waitingMayChange,type ConsoleAction,type ConsoleView} from './console';
+import {parseConsoleAction,NOTICES,waitingMayApprove,waitingMayChange,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
+import {HANDOFF_PARAM} from './connect-confirm';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
@@ -35,12 +36,15 @@ const listedAction=(action:ConsoleAction,data:unknown,rows:string):boolean=>{
  return Array.isArray(items)&&items.some((item:Readonly<{id?:unknown;actions?:unknown}>)=>item?.id===action.id&&has(item.actions));
 };
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
-// The only destination a Google connect receipt may carry is this deployment's own /c/<ticket> path.
+// A Google connect receipt carries one of this deployment's own start links and nothing else: the console's start path,
+// which only the signed-in owner's browser can follow, or a /c/<ticket> link with the one-time handoff code that binds
+// the browser the app opens it in.
+const GOOGLE_STARTS=[new RegExp(`^${CONSOLE_GOOGLE_START_PATH}[A-Za-z0-9_-]{43}$`),new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`)];
 export const googleConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
  if(!link)return {state:'rejected',message:NOTICES['google.connect.failed']!};
- const destination=new URL(link);
- if(!origin||destination.origin!==origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
- return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
+ const destination=origin?new URL(link,origin):null;
+ if(!destination||destination.origin!==origin||destination.hash||!GOOGLE_STARTS.some(start=>start.test(destination.pathname+destination.search)))return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
+ return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname+destination.search};
 };
 // An MCP connect either finished without sign-in or continues on this deployment's own start link,
 // which redirects to the provider only for the signed-in owner. No other destination is ever returned.

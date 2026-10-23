@@ -12,6 +12,8 @@ import { signConsoleTicket } from '../identity/console-ticket';
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_PATH}/google`;
+// Behind the console session, like the MCP start link: only the signed-in owner's browser turns it into a Google redirect.
+export const CONSOLE_GOOGLE_START_PATH = `${CONSOLE_GOOGLE_PATH}/start/`;
 export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
 // B9: the background task list as a first-class read-only JSON endpoint (same console session).
 export const CONSOLE_RUNS_PATH = `${CONSOLE_PATH}/runs`;

@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleConnectTicket, newTicket, ticketHash, BEGIN_SESSION_PATH } from '../src/channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from '../src/connectors/google';
 import { checkBrowser } from '../src/connectors/oauth-browser-binding';
-import { setCookies } from './support/cookie-jar';
+import { handoffHash } from '../src/channels/connect-confirm';
+import { cookieJar, setCookies } from './support/cookie-jar';
+import { forgedBinding } from './support/forged-binding';
 
 const NONCE = 'G'.repeat(43);
 const TICKET = 'AbCdEfGhIjKlMnOpQrStUv'; // 22 base64url chars
 const ORIGIN = 'https://waldo.example';
+const STATE_SECRET = 'fictional-oauth-state-secret';
 const LIVE = { status: 'ok', do_name: '5458446350', provider: 'google', session: 's1', begun: false, owner_hint: 'a•••@example.com' };
 
 // The directory as the Worker sees it: one answer per function, and every call recorded.
@@ -26,7 +29,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const owner = (doReply: { url?: string | null; nonce?: string } = { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1', nonce: NONCE }) => {
   const doCalls: Array<{ path: string; body: string }> = [];
   const env = {
-    SUPABASE_PROJECT_URL: 'https://proj.example', SUPABASE_PUBLISHABLE_KEY: 'pk', WALDO_ROUTER_HMAC_SECRET: 'router-secret',
+    SUPABASE_PROJECT_URL: 'https://proj.example', SUPABASE_PUBLISHABLE_KEY: 'pk', WALDO_ROUTER_HMAC_SECRET: 'router-secret', WALDO_OAUTH_STATE_SECRET: STATE_SECRET,
     OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (input: string, init?: RequestInit) => { doCalls.push({ path: new URL(input).pathname, body: String(init?.body ?? '') }); return Response.json(doReply); } }) },
   };
   return { env, doCalls };
@@ -104,8 +107,8 @@ describe('handleConnectTicket', () => {
     expect(set).toContain('Max-Age=43200');
     expect(set).toContain('SameSite=Lax');
     const atCallback = new Request(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`, { headers: { cookie: set!.split(';')[0]! } });
-    expect(await checkBrowser(atCallback, 'google', NONCE, Date.now())).toBe('bound');
-    expect(await checkBrowser(atCallback, 'google', 'H'.repeat(43), Date.now())).toBe('missing');
+    expect(await checkBrowser(atCallback, STATE_SECRET, 'google', NONCE, Date.now())).toBe('bound');
+    expect(await checkBrowser(atCallback, STATE_SECRET, 'google', 'H'.repeat(43), Date.now())).toBe('missing');
   });
 
   it('refuses a Continue posted from another site or without an origin, and spends nothing', async () => {
@@ -147,11 +150,126 @@ describe('handleConnectTicket', () => {
     expect(response.headers.get('location')).toBeNull();
   });
 
+  it('runs no connect link without the OAuth state secret: nothing is resolved, bound or redirected', async () => {
+    const { env, doCalls } = owner();
+    answers.connect_session_resolve = LIVE;
+    const without = { ...env, WALDO_OAUTH_STATE_SECRET: undefined };
+    const logs = vi.spyOn(console, 'log');
+    for (const response of [await open(without), await proceed(without)]) {
+      expect([response.status, response.headers.get('location'), setCookies(response), await response.text()]).toEqual([404, null, [], 'not found']);
+    }
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('router-secret');
+    logs.mockRestore();
+    expect(rpcCalls).toEqual([]);
+    expect(doCalls).toEqual([]);
+  });
+
   it('DO mint failure -> failed page, never a naked 500', async () => {
     const { env } = owner({ url: null });
     answers.connect_session_resolve = LIVE;
     const response = await proceed(env);
     expect(response.status).toBe(502);
     expect(await response.text()).toContain('could not be connected');
+  });
+});
+
+// A ticket the app holds carries a one-time handoff code; the directory redeems the code once, for that ticket only.
+describe('a /c/ link handed to the app binds only the browser the app opened it in', () => {
+  const CODE = 'HaNdOfFcOdE0123456789_';
+  const handoffTicket = async () => {
+    const expected = await handoffHash(CODE);
+    let spent = false;
+    answers.connect_session_resolve = { ...LIVE, handoff: true };
+    vi.stubGlobal('fetch', async (url: unknown, init?: RequestInit) => {
+      const fn = String(url).split('/rpc/')[1]!, args = JSON.parse(String(init?.body ?? '{}'));
+      rpcCalls.push({ fn, args });
+      if (fn === 'connect_session_hand_off') { const ok = !spent && args.p_handoff_hash === expected && args.p_ticket_hash === await ticketHash(TICKET); if (ok) spent = true; return Response.json(ok); }
+      if (fn === 'connect_session_begin' && answers[fn] === undefined) { answers[fn] = null; return Response.json({ status: 'ok', do_name: LIVE.do_name }); }
+      return Response.json(answers[fn] ?? null);
+    });
+  };
+  const browser = () => {
+    const jar = cookieJar();
+    return {
+      jar,
+      get: async (env: unknown, query = '') => jar.take(await open(env, TICKET, { headers: jar.size() ? { cookie: jar.header() } : {} }, query)),
+      post: async (env: unknown, query = '') => jar.take(await open(env, TICKET, { method: 'POST', headers: { origin: ORIGIN, ...(jar.size() ? { cookie: jar.header() } : {}) } }, query)),
+    };
+  };
+
+  it('redeems the code on the first GET, binds that browser to the hop, and shows whose Waldo it joins', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    const app = browser();
+    const page = await app.get(env, `?handoff=${CODE}`);
+    expect([page.status, page.headers.get('location')]).toEqual([200, null]);
+    expect(await page.text()).toContain('a•••@example.com');
+    const [bound] = setCookies(page);
+    expect(bound).toContain(`Path=/c/${TICKET}`);
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_hand_off']);
+    expect(JSON.stringify(rpcCalls)).not.toContain(CODE);
+    expect(doCalls).toEqual([]);
+  });
+
+  it('continues from that browser: spends the ticket, binds the callback, goes to Google and lets go of the hop', async () => {
+    await handoffTicket();
+    const { env } = owner();
+    const app = browser();
+    await app.get(env, `?handoff=${CODE}`);
+    const continued = await app.post(env, `?handoff=${CODE}`);
+    expect(continued.status).toBe(303);
+    expect(new URL(continued.headers.get('location')!).origin).toBe('https://accounts.google.com');
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_hand_off', 'connect_session_resolve', 'connect_session_begin']);
+    expect(await checkBrowser(new Request(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`, { headers: { cookie: app.jar.header() } }), STATE_SECRET, 'google', NONCE, Date.now())).toBe('bound');
+    expect(app.jar.size()).toBe(1);
+  });
+
+  it('binds nothing and redirects nowhere for the link without its code, in a browser the app did not hand it to', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    const other = browser();
+    for (const query of ['', '?handoff=', '?handoff=short', `?handoff=${'x'.repeat(22)}`]) {
+      for (const send of [other.get, other.post]) {
+        const response = await send(env, query);
+        expect([query, response.status, response.headers.get('location'), setCookies(response)]).toEqual([query, 403, null, []]);
+        expect(await response.text()).toContain('Start the connection again');
+      }
+    }
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
+    expect(doCalls).toEqual([]);
+    // The owner's app browser can still take its own link.
+    expect((await browser().get(env, `?handoff=${CODE}`)).status).toBe(200);
+  });
+
+  it('refuses the code a second time in another browser, and lets the browser that redeemed it reload', async () => {
+    await handoffTicket();
+    const { env } = owner();
+    const app = browser();
+    expect((await app.get(env, `?handoff=${CODE}`)).status).toBe(200);
+    const forwarded = await browser().get(env, `?handoff=${CODE}`);
+    expect([forwarded.status, forwarded.headers.get('location'), setCookies(forwarded)]).toEqual([403, null, []]);
+    const forwardedContinue = await browser().post(env, `?handoff=${CODE}`);
+    expect([forwardedContinue.status, setCookies(forwardedContinue)]).toEqual([403, []]);
+    expect((await app.get(env, `?handoff=${CODE}`)).status).toBe(200);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
+  });
+
+  it('refuses a Continue from a browser that built the hop binding from the link, after the app redeemed the code', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    expect((await browser().get(env, `?handoff=${CODE}`)).status).toBe(200);
+    const forged = await open(env, TICKET, { method: 'POST', headers: { origin: ORIGIN, cookie: await forgedBinding('handoff', await ticketHash(TICKET)) } });
+    expect([forged.status, forged.headers.get('location'), setCookies(forged)]).toEqual([403, null, []]);
+    expect(await forged.text()).not.toContain(STATE_SECRET);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
+    expect(doCalls).toEqual([]);
+  });
+
+  it('leaves a chat link a bearer link behind the confirm step: no code asked, none redeemed', async () => {
+    answers.connect_session_resolve = LIVE;
+    const { env } = owner();
+    expect((await open(env)).status).toBe(200);
+    expect((await proceed(env)).status).toBe(303);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_hand_off');
   });
 });
