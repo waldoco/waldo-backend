@@ -7,6 +7,9 @@ import type { Loop } from './loops';
 // read tools only, so a check-back can look but never act; a loop check-back may also close the loops it was given.
 export const CHECK_BACK_TOOLS: readonly ToolName[] = CHILD_READ_TOOLS;
 export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'close_loop'];
+// A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
+// card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
+export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'propose_action'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Say what you checked and what you found, and ask at most one question.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
