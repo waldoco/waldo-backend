@@ -75,6 +75,9 @@ export type LLMGatewayRequest = {
   headers: GatewayConstantHeaders;
   // Set only for a reply shown while it is written. An adapter that cannot stream ignores it.
   stream?: ReplyDeltaSink;
+  // A later step on another provider can answer now (not settled, circuit closed), so a streamed call whose first token is
+  // late has somewhere to go. Without it the call keeps its whole limit.
+  failoverAhead?: true;
 };
 
 // V2 runtime effects are prepared and durably keyed by RunLoopDO before an adapter may issue
@@ -523,9 +526,12 @@ export class RuntimeLLMProvider {
       let gatewayResult: LLMGatewayResult;
       let searchDegraded = false;
       try {
+        const failoverAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider
+          && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
         const send = (request: LLMRequest) => {
           input.runScope?.admit();
           return this.gateway.complete({
+            ...(failoverAhead ? { failoverAhead: true as const } : {}),
             ...(input.runScope ? { runScope: input.runScope } : {}),
             request,
             route: effectiveRoute,

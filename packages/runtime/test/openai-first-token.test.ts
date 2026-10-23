@@ -16,6 +16,7 @@ const request = (fallback: readonly typeof opus[], stream = true): LLMGatewayReq
   return {
     request: body, route: { trigger: 'user_message', primary: sol, fallback: [...fallback], floor: 'template' }, step: sol,
     context: 'full_context', fallback_step: 'configured_model', headers: { 'cf-aig-collect-log-payload': 'false' }, ...(stream ? { stream: sink } : {}),
+    ...(fallback.length ? { failoverAhead: true as const } : {}),
   };
 };
 const message = { type: 'message', id: 'msg-1', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'Your day.', annotations: [] }] };

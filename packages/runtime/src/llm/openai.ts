@@ -95,11 +95,9 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       let ttftMs: number | undefined;
       const send = async (params: OpenAI.Responses.ResponseCreateParamsNonStreaming) => {
         if (!input.stream) return client.responses.create(params, { signal: controller.signal });
-        // Only a route with another provider ahead has somewhere to go when the first token is late; without one the call
-        // keeps its whole limit, as an unstreamed call does.
-        const steps = [input.route.primary, ...input.route.fallback];
-        const failoverAhead = steps.slice(steps.findIndex((step) => step.model === input.step.model) + 1).some((step) => step.provider !== input.step.provider);
-        const streamed = await streamedResponse(client, params, controller, input.stream, failoverAhead ? this.firstTokenTimeoutMs : undefined);
+        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+        // without one the call keeps its whole limit, as an unstreamed call does.
+        const streamed = await streamedResponse(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
         ttftMs ??= streamed.ttftMs;
         return streamed.response;
       };
