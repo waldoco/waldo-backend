@@ -120,7 +120,7 @@ describe('a Mac result follow-up on a directory-backed deploy', () => {
   }));
   const clear = (name: string) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => { await state.storage.deleteAlarm(); });
 
-  it.each([['Telegram-bound', false], ['dual-bound', true]] as const)('a %s owner gets the report as the admitted owner, on the Telegram chain, recalling no health claim by the result\'s words', async (_label, dual) => {
+  it.each([['Telegram-bound', false], ['dual-bound', true]] as const)('a %s owner gets the report as the admitted owner, on the chain of the surface it lands on, recalling no health claim by the result\'s words', async (_label, dual) => {
     const name = `mac_followup_owner_${dual ? 'dual' : 'telegram'}`, asked: string[] = [], sent: string[] = [];
     model.calls = 0; model.requests = [];
     directory(name, 'current', asked, sent);
@@ -134,7 +134,8 @@ describe('a Mac result follow-up on a directory-backed deploy', () => {
       expect((JSON.parse(request!) as { prompt_cache_key?: string }).prompt_cache_key).toBe(`waldo:${PRINCIPAL}`);
       expect(request).not.toContain('prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
       expect(request).not.toContain('Knee physio exercises every morning');
-      expect((await inspect(name)).chain).toEqual([{ chatId: `telegram-${SUBJECT}`, ownerId: PRINCIPAL }]);
+      // A Telegram-only owner reads it on Telegram; one who also uses the app reads it in the app, and Telegram has a copy.
+      expect((await inspect(name)).chain).toEqual([{ chatId: dual ? `owner:${PRINCIPAL}` : `telegram-${SUBJECT}`, ownerId: PRINCIPAL }]);
       // The owner is asked through the binding that admits it, once per unit of work (the boot day plan is another unit).
       expect([...new Set(asked)]).toEqual([dual ? 'owner_runtime_authority' : 'common_owner_authority']);
     } finally { await clear(name); }

@@ -2469,6 +2469,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const inbox=macInbox(this.ctx.storage);
     // The alarm calls this for every owner: with nothing pending it must not touch any runtime.
     if(!inbox.pending().length)return;
+    // An owner linked on Telegram who also uses the app has their scheduled work delivered in the app with a plain Telegram
+    // copy, and the job is admitted through the app binding either way; the report goes there too.
+    if(channel==='telegram' && consoleAuth(this.env) && this.appBound())channel='app';
     // A surface this deploy cannot run, or one with no owner bound, keeps the rows pending and backs off, instead of throwing
     // out of the alarm or spinning on it.
     let runtime:OwnerRuntime|null=null;
