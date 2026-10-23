@@ -62,6 +62,8 @@ export type OwnerResponder = Readonly<{
   // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract. The scope
   // is the call's own: its deadline bounds every attempt and its signal aborts the request in flight.
   threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
+  // The model's raw answer writing one progress note for a turn still running; the scope is the note's own, as above.
+  progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 

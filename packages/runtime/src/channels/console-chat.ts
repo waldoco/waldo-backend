@@ -19,8 +19,8 @@ type ChatEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace;
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
 
-// Forged requests: the cookies are SameSite=Strict already; a credentialed call must also come from this origin and
-// carry the console header. Origin is required on a write, since browsers always send it there.
+// Forged requests: the cookies are SameSite=Lax, so a cross-site read could carry them; a credentialed call must also
+// come from this origin and carry the console header. Origin is required on a write, since browsers always send it there.
 const sameSite = (request: Request, url: URL): boolean => {
   if (request.headers.get(CONSOLE_CHAT_HEADER) !== '1') return false;
   const site = request.headers.get('sec-fetch-site');
@@ -114,7 +114,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   });
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); } catch { return answer(503, { error: 'chat_unavailable' }); }
-  // The owner object refuses a session past its 12 hours or revoked since the cookie check: to the console that is a sign-in.
+  // The owner object refuses a session that has ended or was revoked since the cookie check: to the console that is a sign-in.
   if (response.status === 403) return answer(401, { error: 'sign_in_required' });
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);
