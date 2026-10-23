@@ -305,3 +305,17 @@ it('a reminder is not a house-keeping job: paused on a later day, it says so aga
     }
   });
 });
+
+it('a paused forget cleanup is named to the owner and listed, without the topic', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('notice-forget-purge')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const { sql, kv } = state.storage;
+    const at = Date.parse('2030-11-01T14:00:00Z');
+    sql.exec(`INSERT INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, last_fired_at, quarantined_until, created_at, updated_at)
+      VALUES ('forget-purge', 'forget_purge', ?, ?, NULL, '{"id":"forget-purge"}', 'quarantined', 3, ?, ?, ?, ?)`, at, at, at, at + DAY_MS, at, at);
+    sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES ('forget-purge:run', 'forget-purge', 'forget_purge', ?, 3, 'quarantined', 'run', ?, 0)", at, at);
+    const [notice] = dueFailureNotices(sql, kv, at, ZONE);
+    expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 10:00.");
+    expect(pausedJobs(sql, at, ZONE)).toEqual([{ name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
+  });
+});

@@ -15,6 +15,7 @@ const JOB_NAMES: Partial<Record<ScheduleKind, string>> = {
   standing_order: 'One of your standing orders',
   dreaming: 'My overnight memory pass',
   pre_activity_spot: 'My regular check of your calendar and mail',
+  forget_purge: 'My cleanup of something you asked me to forget',
 };
 // Jobs that only keep Waldo's own house in order: the owner hears the first time one is paused, then nothing until it has
 // run well again. The console's schedule section keeps showing the pause meanwhile.
