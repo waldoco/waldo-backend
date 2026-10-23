@@ -30,6 +30,8 @@ const world = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(), trace: [] as string[], requests: [] as LLMGatewayRequest[],
   busy: [] as { start: string; end: string }[], changed: [] as CalendarChange[], events: [] as CalendarItem[],
   access: 'granted', scoresAccess: true, decision: '' as string, latencyMs: 0,
+  // How many update records the sweep had saved each time the health row was read.
+  recorded: null as null | (() => number), recordedAtRead: [] as number[],
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -84,7 +86,7 @@ const pillars = ['recovery', 'form', 'weight'] as const;
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; world.latencyMs = 0; printed.length = 0;
+  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; world.latencyMs = 0; world.recorded = null; world.recordedAtRead = []; printed.length = 0;
   // A month of one to two hours of meetings a day, and today's hour at 10:00 so far.
   world.busy = Array.from({ length: 31 }, (_, i) => block(addDays(TODAY, -i), 10, i === 0 ? 1 : 1 + (i % 3) * 0.5));
   world.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T11:30', end: '2026-10-21T12:30', title: 'Focus block', notify_guests: null, reason: 'Load is peaking with the offsite; an hour clear before it keeps the day steady.' });
@@ -100,6 +102,7 @@ beforeEach(() => {
     if (fn === 'health_scores_read') {
       const day = String(payload.day), row = world.rows.get(day);
       world.trace.push(`scores_read:${day}`);
+      if (world.recorded) world.recordedAtRead.push(world.recorded());
       if (!world.scoresAccess) return Response.json({ unavailable: 'consent_withdrawn' });
       return Response.json(row ? { scores: { day, timezone: TZ, compiled_at: new Date().toISOString(), freshness: 'fresh', ...row } } : { unavailable: 'no_readings' });
     }
@@ -144,6 +147,8 @@ const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>
     if (google) await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
       scopes: [`${AUTH}calendar.events`, `${AUTH}calendar.events.freebusy`, `${AUTH}calendar.calendarlist.readonly`] }]);
     const owner = new OwnerDO(state, CONFIG as never) as unknown as Owner;
+    world.recorded = () => state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'update_cards'").toArray().length
+      ? state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM update_cards').one().n : 0;
     const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     // The ten-minute sweep's update check, as the schedule runs it.
@@ -183,8 +188,11 @@ describe('Weight follows the day', () => {
       await morning(o);
       const weightBefore = (world.rows.get(TODAY)!.weight as Record<string, unknown>).zone;
       offsiteAdded();
+      world.recordedAtRead = [];
       await o.sweep();
       expect(calendarLogs()).toEqual([{ ok: true, code: 'asked' }]);
+      // The sweep saved what changed before it read the health row, so a slow or failed read cannot lose the change.
+      expect(world.recordedAtRead).toEqual([1]);
       expect(entry(o.state, HEALTH_RECOMPUTE_ID)).toEqual({ due_at: Date.now() + HEALTH_RECOMPUTE_WINDOW_MS });
       // A second change inside the window is the same recompute.
       vi.setSystemTime(Date.now() + 20_000);

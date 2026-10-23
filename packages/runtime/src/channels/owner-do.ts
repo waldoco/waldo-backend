@@ -3987,11 +3987,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceFollowups = proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
         const changes = await collectChanges(updates, client, now, sourceFollowups);
         const day = localIso(now, clock.timezone).slice(0, 10);
+        let id = changes.length ? updates.record(day, now, changes, null) : null;
         // Weight follows the day: a change on the owner's today asks for a recompute. A failed ask never costs the update.
         if (changes.some(change => touchesDay(change, day, clock.timezone))) await recompute.calendarChanged().then(
           code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
           () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' }));
-        let id = changes.length ? updates.record(day, now, changes, null) : null;
         updates.pruneMail(now);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
         const { volume } = loops.proactivity();
