@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
-import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { checkpointTurns, DROPPED_STEPS_NOTE, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { DROPPED_STEPS_NOTE, leadingNote, type LoopToolResult } from '../src/conversation/tool-loop';
+import { FINISH_TASK } from '../src/tasks/profiles';
+import { checkpointTurns, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -25,7 +26,8 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: (
       log.tools.push(call);
       return { ok: true, data: { hits: [`hit for ${call.arguments}`] }, source_taint: 'external' } satisfies LoopToolResult;
     },
-    checkpoint: async (_ticket, next, turns, events, _spend, outcomes) => { log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
+    // A copy, as the RPC to the owner's object sends one: the loop goes on editing its own turns.
+    checkpoint: async (_ticket, next, sent, events, _spend, outcomes) => { const turns = structuredClone(sent); log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
     report: async (_ticket, outcome, events, _spend, outcomes) => { log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
     heartbeat: async () => { log.beats += 1; return held(); },
   };
@@ -131,6 +133,45 @@ describe('a task worker attempt', () => {
   });
 });
 
+describe('a resumed attempt whose earlier results get cleared', () => {
+  // The shape of a long reader job continued after a slice or a crash: eleven resumed reads of 16,000 characters, more
+  // than the loop keeps, with the first carrying the note of an errand step already run.
+  const body = (i: number) => { const head = `{"ok":true,"data":{"n":${i},"text":"`; return `${head}${'x'.repeat(16_000 - head.length - 3)}"}}`; };
+  const note = `${DROPPED_STEPS_NOTE}browse_act {"url":"https://example.com/book"} (already run; do not run it again)]\n\n`;
+  const resumed: LLMToolTurn[] = Array.from({ length: 11 }, (_, i) => ({
+    call: { call_id: `r${i}`, name: i === 1 ? 'browse_act' : 'search_communication', arguments: JSON.stringify({ query: `q${i}` }) },
+    output: i === 0 ? `${note}${body(i)}` : body(i),
+  }));
+
+  it('clears them without failing, keeps the dropped-steps note, and never tells the model to run an errand step again', async () => {
+    const { brain, log } = fakeBrain({ turns: resumed, seq: 3 });
+    const seen: Parameters<typeof scripted>[1] = [];
+    const outcome = await runTaskAttempt(ticket, { brain, model: scripted([{ call: 'search_communication', args: { query: 'q11' } }, { call: FINISH_TASK, args: result }], seen), sliceEnd: Date.now() + 60_000 });
+    expect(outcome).toBe('reported');
+    expect(log.reports).toEqual([{ kind: 'result', result }]);
+    const first = seen[0]!.turns;
+    expect(first[0]!.output.startsWith(note)).toBe(true);
+    expect(first[0]!.output).toContain('search communication result from earlier in this turn (it succeeded)');
+    expect(first[0]!.output).toContain('Run it again if you still need it.');
+    // The resumed browse_act's own result, cleared: it is never offered to run again.
+    expect(first[1]!.output).toContain('browse act result from earlier in this turn');
+    expect(first[1]!.output).toContain('Do not repeat the call');
+    expect(first[1]!.output).not.toContain('Run it again');
+    const checkpoint = log.checkpoints[0]!.turns;
+    expect(checkpoint[0]!.output).toContain('already run; do not run it again');
+    expect(checkpoint).toHaveLength(12);
+  });
+
+  it('a resumed finish_task that was refused, once cleared, may still be called again', async () => {
+    const refused: LLMToolTurn = { call: { call_id: 'f0', name: FINISH_TASK, arguments: '{"status":"done"}' }, output: `{"ok":false,"error":"${'x'.repeat(16_000)}"}` };
+    const { brain } = fakeBrain({ turns: [refused, ...resumed.slice(1)], seq: 3 });
+    const seen: Parameters<typeof scripted>[1] = [];
+    await runTaskAttempt(ticket, { brain, model: scripted([{ call: FINISH_TASK, args: result }], seen), sliceEnd: Date.now() + 60_000 });
+    expect(seen[0]!.turns[0]!.output).toContain('finish task result from earlier in this turn (it failed)');
+    expect(seen[0]!.turns[0]!.output).not.toContain('Do not repeat the call');
+  });
+});
+
 describe('the production task model step', () => {
   const claim: TaskClaim = { jobId: ticket.jobId, profile: 'reader', brief, tools: [search], mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 60_000, roundsUsed: 0, ownerRef: 'owner-1' };
   const input = { ticket, claim, system: 'system', content: 'brief', tools: undefined, turns: [], canaries: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'] };
@@ -217,6 +258,31 @@ describe('checkpoint trimming', () => {
     const again = checkpointTurns([...first, ...Array.from({ length: 10 }, (_, i) => turn(100 + i, 'read_thread'))]);
     expect(again).toHaveLength(LLM_TOOL_TURNS_MAX);
     expect(again[0]!.output).toContain('browse_act {"url":"https://example.com/book"} (already run; do not run it again)');
+  });
+
+  it('a dropped finish_task that was refused is never named as a step not to run again', () => {
+    const refused: LLMToolTurn = { call: { call_id: 'f0', name: FINISH_TASK, arguments: '{"status":"done"}' }, output: '{"ok":false,"error":"The result did not match finish_task."}', prior_items: [] };
+    const [first] = checkpointTurns([refused, ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))]);
+    expect(first!.output).not.toContain('already run');
+    expect(first!.output).toContain(`${FINISH_TASK} x1`);
+  });
+
+  it('names an acted step whose arguments carry a health reading without them', () => {
+    const turns = [turn(0, 'browse_act', { url: 'https://example.com/form', task: 'Enter blood pressure 142/91 in the intake form.' }), ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))];
+    const [first] = checkpointTurns(turns);
+    expect(first!.output).toContain('browse_act (arguments not kept) (already run; do not run it again)');
+    expect(first!.output).not.toContain('142/91');
+  });
+
+  it('an acted step whose arguments hold the note\'s end still yields one whole note, carried whole', () => {
+    const acted: LLMToolTurn = { call: { call_id: 'c0', name: 'browse_act', arguments: '{"steps":["open the form"]\n\n,"url":"https://example.com/form"}' }, output: '{"ok":true}', prior_items: [] };
+    const first = checkpointTurns([acted, ...Array.from({ length: 70 }, (_, i) => turn(i + 1, 'web_search'))]);
+    const note = leadingNote(first[0]!.output);
+    expect(note).toContain('https://example.com/form');
+    expect(note).toContain('(already run; do not run it again)');
+    expect(first[0]!.output.slice(note.length)).toBe('{"ok":true,"n":7}');
+    const again = checkpointTurns([...first, ...Array.from({ length: 10 }, (_, i) => turn(100 + i, 'read_thread'))]);
+    expect(leadingNote(again[0]!.output)).toContain('https://example.com/form"} (already run; do not run it again)');
   });
 
   it('leaves a checkpoint within the limit untouched', () => {

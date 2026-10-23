@@ -8,9 +8,11 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
-import { taskHost, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
-import { DROPPED_STEPS_NOTE } from '../src/tasks/worker-loop';
+import { taskHost, UNKEPT_EFFECT, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
+import { DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
+import { FINISH_TASK } from '../src/tasks/profiles';
+import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
 import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { TOOL_RECORDS } from '../src/tools/records';
 
@@ -242,6 +244,64 @@ describe('the task brain host', () => {
       const [kept] = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
       expect(kept!.output).toBe(`${note}${UNKEPT_OUTPUT}`);
       expect(book.get(t.jobId)!.checkpoint_json).not.toContain('synthetic server text');
+    });
+  });
+
+  it('a lab-results mail: no checkpoint or result keeps the reading, and the resumed attempt reads the mail again', async () => {
+    await withHost(async ({ host, ticket, book, handler, ran }) => {
+      const t = ticket();
+      handler.search = async () => ({ messages: [{ from: 'lab@clinic.example', subject: 'Your results', body: 'Your LDL is 162 mg/dL and your HbA1c 6.1%. Please book a follow-up.' }] });
+      const results = [] as string[];
+      const model = (script: readonly Readonly<{ call: string; args: unknown }>[]): TaskModel => {
+        let n = 0;
+        return async ({ turns }) => {
+          const next = script[Math.min(n, script.length - 1)]!;
+          n += 1;
+          results.push(...turns.map(turn => turn.output));
+          return { response: { text: '', tool_calls: [{ call_id: `c${n}:${next.call}`, name: next.call, arguments: JSON.stringify(next.args) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } };
+        };
+      };
+      const read = { call: 'search_communication', args: { query: 'from:lab@clinic.example' } };
+      // The first slice reads the mail and checkpoints.
+      expect(await runTaskAttempt(t, { brain: host, model: model([read]), sliceEnd: 0 })).toBe('continue');
+      expect(book.get(t.jobId)!.checkpoint_json).not.toMatch(/162|6\.1/);
+      expect(JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns[0].output).toBe(UNKEPT_OUTPUT);
+      // The next slice reads the mail again, then tries a result with the reading in it, which is refused, then one in words.
+      const numbers = { status: 'done', summary: 'Your LDL is 162 mg/dL and your HbA1c 6.1%.', findings: [{ text: 'LDL 162 mg/dL', source_ref: 'gmail:lab' }], proposals: [], left: [] };
+      const words = { status: 'done', summary: 'Your lab results came in: cholesterol is above the usual range, and the clinic asks you to book a follow-up.', findings: [{ text: 'The clinic sent your lab results and asks for a follow-up.', source_ref: 'gmail:lab' }], proposals: [], left: [] };
+      expect(await runTaskAttempt(t, { brain: host, model: model([read, { call: FINISH_TASK, args: numbers }, { call: FINISH_TASK, args: words }]), sliceEnd: Date.now() + 60_000 })).toBe('reported');
+      expect(ran).toEqual(['search_communication', 'search_communication']);
+      expect(results.some(output => output.includes('162 mg/dL') && output.startsWith('{"ok":true'))).toBe(true);
+      expect(results.some(output => output.includes('health readings') && output.includes('in words'))).toBe(true);
+      const row = book.get(t.jobId)!;
+      expect(row).toMatchObject({ status: 'reported', outcome: 'done' });
+      expect(row.result_json).not.toMatch(/162|6\.1/);
+      expect(JSON.parse(row.result_json!)).toEqual(words);
+      expect(row.checkpoint_json).not.toMatch(/162|6\.1/);
+      // The refused result's call carried the reading: its arguments are not kept either.
+      expect(JSON.parse(row.checkpoint_json!).turns.at(-1)).toMatchObject({ call: { name: FINISH_TASK, arguments: '{}' }, output: UNKEPT_OUTPUT });
+    });
+  });
+
+  it('an errand step whose output carries a reading is not kept, and is never offered to run again', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      const turns = [{ call: call('browse_act'), output: '{"ok":true,"data":{"page":"Booked. Your pulse at check-in: 88 bpm."}}' }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      const [kept] = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
+      expect(kept!.output).toBe(UNKEPT_EFFECT);
+    });
+  });
+
+  it('a result that still carries a reading when it reaches the brain is not stored; the owner hears it was not kept', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      expect(await host.report(t, { kind: 'result', result: { status: 'done', summary: 'Your LDL is 162 mg/dL.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      const row = book.get(t.jobId)!;
+      expect(row.result_json).not.toContain('162');
+      expect(JSON.parse(row.result_json!)).toMatchObject({ status: 'partial', findings: [], proposals: [] });
     });
   });
 

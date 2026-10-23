@@ -28,6 +28,8 @@ import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
+import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { jobBook } from '../src/tasks/jobs';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -1576,3 +1578,29 @@ it('a note whose handoff threw is settled as possibly sent, never retried, and t
   expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
   expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
 }, 20_000);
+
+it('an iMessage-only owner\'s background task reports on iMessage, and its worker\'s hops are logged on that surface', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  type Rpc = { taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0001', newToken: () => 'tok-imsg' });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-1', origin: 'imsg-turn', surface: 'imessage',
+      brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    expect(await (instance as unknown as Rpc).taskClaim(ticket)).not.toBe('fenced');
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Asha waits on the quote.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    return job.id;
+  });
+  const report = 'Asha is still waiting on the quote you promised her.';
+  const delivery = await scheduledOnIMessage(w, report);
+  await hostReports(w, delivery);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => 'unused' }).get(jobId)).toMatchObject({ status: 'applied' });
+    // The brain's hops (the worker's report) and the lane's (the report applied) are logged under the same owner surface.
+    const owners = state.storage.sql.exec<{ hop: string; owner: string | null }>("SELECT hop, owner FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray();
+    expect(owners.map(row => row.hop)).toEqual(['task_reported', 'task_applied']);
+    expect(owners[0]!.owner).toBe(owners[1]!.owner);
+  });
+});
