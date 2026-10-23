@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { SignInRequired } from './model';
+import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
 import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
@@ -146,8 +146,8 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
       <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
       <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>
     </section>}
-    {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This session is valid until {sessions.until}.</p>
-      <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, valid until {item.until}</li>)}</ul>
+    {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This browser stays signed in while you use it; left unused, it signs out at {sessions.until}.</p>
+      <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, signs out {item.until} if unused</li>)}</ul>
       <p className="meta">Device names are not recorded, only when each browser signed in. Signing out of one browser isn’t offered here.</p>
       <div className="control-actions"><button disabled={busy} onClick={() => onAction('session.signout')}>Sign out of this browser</button><button disabled={busy} onClick={() => { if (window.confirm('Sign out of every browser and the app?')) onAction('session.signout.all'); }}>Sign out everywhere</button></div>
     </section>}
@@ -156,7 +156,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
 
 export function ControlsFeedback({ state, onRefresh }: { state: Exclude<ControlsState, { kind: 'ready' }>; onRefresh: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-block"><span className="visually-hidden">Loading your controls…</span><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
-  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href="/console/signin">Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
+  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
 // Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
@@ -200,7 +200,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
     {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
-    {receipt.signed_out ? <a href="/console/signin">Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
+    {receipt.signed_out ? <a href={signInHref()}>Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }
 
@@ -222,7 +222,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ActionResult | null>(null);
-  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean } | null>(null);
+  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean; stepUp?: boolean } | null>(null);
   const [page, setPage] = useState<ActivityCursors>({});
   const attempt = useRef<Attempt | null>(null);
   const inFlight = useRef(false);
@@ -248,7 +248,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
       if (!uncertain) attempt.current = null;
       if (e instanceof SignInRequired) {
         setResult(null); setError(null); setState({ kind: 'error', message: e.message, signedOut: true });
-      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false });
+      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false, stepUp: e instanceof StepUpRequired });
     } finally { inFlight.current = false; setBusy(false); }
   };
   const act = (action: ControlAction, fields: ControlFields = {}) => {
@@ -274,7 +274,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}
     <div className="tools"><button className="quiet" disabled={busy} onClick={refresh}>Refresh</button></div>
     {result && <ControlReceipt result={result} onCheck={result.receipt.state === 'unconfirmed' ? check : undefined} onRefresh={refresh} busy={busy}/>}
-    {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href="/console/signin">Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
+    {error && <section className="panel" role="alert"><h2>{error.stepUp ? 'Confirm it\'s you.' : error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href={signInHref()}>Sign in</a> : <div className="control-actions">{error.stepUp && <a className="button" href={confirmHref()}>Get an email code</a>}{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
     {state.kind !== 'ready' ? <ControlsFeedback state={state} onRefresh={refresh}/> : <div className="controls-stack" key={`${state.data.view}:${state.data.revision}`}>{content}</div>}
   </>;
 }
