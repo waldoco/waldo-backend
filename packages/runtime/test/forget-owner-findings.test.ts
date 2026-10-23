@@ -161,6 +161,17 @@ describe('owner findings', () => {
     expect(findings.record({ ...finding, text: 'Product manager at Acme, Pune' }, 'Team', 5)).toBe('forgotten');
     expect(findings.page(50).total).toBe(0);
   }));
+  it('keeps a claim the owner stated themselves when a finding that only pointed at it is erased', () => withStorage(storage => {
+    const { claims, consent, findings } = stores(storage);
+    agree(consent);
+    claims.add({ kind: 'fact', text: 'Product manager at Acme', source: 'stated', evidence: 'I am a product manager at Acme', origin: 'owner', source_ref: 'owner, m1' }, new Date(1).toISOString());
+    const { id } = findings.record(finding, 'Team', 2) as { id: string };
+    expect(findings.decide(id, { action: 'keep' }, 3)).toBe('kept');
+    expect(claims.claims()).toHaveLength(1);
+    storage.transactionSync(() => findings.eraseAll(4));
+    expect(claims.claims().map(claim => [claim.text, claim.source_ref])).toEqual([['Product manager at Acme', 'owner, m1']]);
+    expect(findings.page(50).total).toBe(0);
+  }));
   it("purges a kept finding's claim from derived memory, not only the claims table", () => withStorage(storage => {
     const { claims, consent, findings } = stores(storage);
     agree(consent);
