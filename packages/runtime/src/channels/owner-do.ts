@@ -4099,7 +4099,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           })()),
           profile: profile(shown.claims()), spots: shown.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => shown.claims(status)), forgettingSpots: memory.claims('purging'), forgettingTopics: this.forgetPurgeJob().status(),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
-          nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
+          nodes: shown.nodes(), edges: shown.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
@@ -4161,9 +4161,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!node) return false;
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
-          // The label goes the way of any forget: custody and the claims table now, every other store through the job.
-          memory.purge([], new Date(now).toISOString(), [node.label]);
-          await this.forgetPurgeJob().track([node.label]);
+          // The label leaves every store outside the claims table through the job; the spots behind the pattern stay, as the
+          // console tells the owner.
+          await this.forgetPurgeJob().track([node.label], 'history');
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
