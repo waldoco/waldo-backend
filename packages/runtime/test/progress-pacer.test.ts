@@ -117,6 +117,20 @@ describe('progress pacer wording', () => {
     await pacer.close();
   });
 
+  it('a first note the model declines or the surface does not take keeps the second mark, which quotes only a note that went out', async () => {
+    const declined = pacerWith({ write: async (draft) => { declined.drafts.push(draft); return draft.index === 1 ? null : 'Still comparing a few places against your evening.'; } });
+    await vi.advanceTimersByTimeAsync(10 * timing.secondMs);
+    expect(declined.events.map(event => event.outcome)).toEqual(['declined', 'sent']);
+    expect(declined.sent).toEqual([{ index: 2, text: 'Still comparing a few places against your evening.' }]);
+    expect(declined.drafts[1]!.earlier).toBeNull();
+    await declined.pacer.close();
+    const refused = pacerWith({ send: async (index, text) => { refused.sent.push({ index, text }); return index === 2; } });
+    await vi.advanceTimersByTimeAsync(10 * timing.secondMs);
+    expect(refused.events.map(event => event.outcome)).toEqual(['unsent', 'sent']);
+    expect(refused.drafts.map(draft => draft.earlier)).toEqual([null, null]);
+    await refused.pacer.close();
+  });
+
   it('a failed or over-long first note falls back to the fixed line; a failed second note is skipped', async () => {
     const { pacer, sent, events } = pacerWith({ write: async (draft) => { if (draft.index === 1) return 'x'.repeat(PROGRESS_NOTE_MAX_CHARS + 1); throw new Error('model unavailable'); } });
     await vi.advanceTimersByTimeAsync(10 * timing.secondMs);

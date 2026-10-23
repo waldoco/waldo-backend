@@ -204,3 +204,14 @@ it('a drain waits once for a busy bridge: the replies behind it there keep their
     expect(outbox.dueAt()).toBeLessThanOrEqual(Date.now() + IMESSAGE_BUSY_RETRY_MS);
   });
 });
+
+it('a drain settles a note its evicted turn left frozen as possibly sent, and never hands it to the bridge', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage), calls: string[] = [];
+    outbox.freezeProgress(turn('a', 'hello', 'running'), 1, 'Looking now.');
+    const bridges = { idFromName: (name: string) => name, get: () => ({ enqueueReply: async ({ replyRef }: { replyRef: string }) => { calls.push(replyRef); return { kind: 'queued' }; } }) };
+    await drainIMessageOutbox({ storage: state.storage, id: state.id, env: { IMESSAGE_BRIDGE_DO: bridges } as never }, 600_000);
+    expect(calls).toEqual([]);
+    expect(outbox.get('progress:a:1')).toMatchObject({ state: 'settled', text: '', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_stale' } });
+  });
+});

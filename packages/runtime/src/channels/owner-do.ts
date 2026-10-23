@@ -731,8 +731,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const abort = new AbortController(), scope = inbox.scope(record, abort.signal);
       this.activeScope = scope; this.activeAbort = abort; let completed = false;
       const timeout = setTimeout(() => abort.abort(), Math.max(0, scope.deadline - Date.now()));
-      this.iMessageProgress = this.startIMessageProgress(record, scope);
       try {
+        this.iMessageProgress = this.startIMessageProgress(record, scope);
         const subject = appSubjectFor(record.ownerDoName);
         await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: record.text } }, 'imessage', true, scope);
         completed = true;
@@ -747,12 +747,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Short notes while a long iMessage turn runs (see progress-pacer). The model writes each one; it freezes under the turn's
   // own scope and goes to the bridge from inside the turn, which already holds the serial queue, so nothing is queued
   // behind the turn and nothing re-arms: a note that cannot go at once is settled unsent. WALDO_IMESSAGE_PROGRESS=0 is off.
+  // Notes never fail the turn: a pacer that cannot start leaves them off.
   private startIMessageProgress(record: IMessageInboxRecord, scope: RunEffectScope): ProgressPacer | null {
     if (this.env.WALDO_IMESSAGE_PROGRESS === '0') return null;
-    let runtime: OwnerRuntime;
-    // A runtime that cannot be built fails the turn itself; the notes just stay off.
-    try { runtime = this.setup('imessage'); } catch { return null; }
-    const outbox = new IMessageFinalOutbox(this.ctx.storage), trace = ownerTurnTrace('imessage', record.updateId);
+    try { return this.iMessagePacer(record, scope); } catch { console.error('imessage progress notes off for this turn'); return null; }
+  }
+  private iMessagePacer(record: IMessageInboxRecord, scope: RunEffectScope): ProgressPacer {
+    const runtime = this.setup('imessage'), outbox = new IMessageFinalOutbox(this.ctx.storage), trace = ownerTurnTrace('imessage', record.updateId);
     const pacer = new ProgressPacer(record.text, {
       since: Math.max(Math.min(record.occurredAt, record.admittedAt), outbox.lastSentAt() ?? 0),
       ...(this.iMessageProgressTiming ? { timing: this.iMessageProgressTiming } : {}),
@@ -766,7 +767,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         scope.commit(() => outbox.freezeProgress(record, index, text));
         return handOffIMessageProgress(this.imessageHost, `progress:${record.id}:${index}`);
       },
-      log: ({ index, outcome, writer, ms }) => runtime.log({ trace, hop: 'progress_note', ms, ok: outcome === 'sent', code: `${outcome}:${writer}`, detail: `note=${index}` }),
+      log: ({ index, outcome, writer, ms }) => runtime.log({ trace, hop: 'progress_note', ms, ok: outcome === 'sent' || outcome === 'declined', code: `${outcome}:${writer}`, detail: `note=${index}` }),
     });
     pacer.start();
     return pacer;

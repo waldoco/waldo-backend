@@ -69,7 +69,8 @@ iMessage shows no typing dots, so a long owner turn sends at most two short note
   extra model call.
 - **What.** The auxiliary model writes each line from the owner's message and the names of the tools the turn has
   finished. It never sees tool outputs or arguments, and it never states an outcome. If the model cannot write note 1, a
-  fixed line goes instead; note 2 is skipped, or declined by the model when it has nothing new to say.
+  fixed line goes instead; note 2 is skipped, or declined by the model when it has nothing new to say. A first note the
+  model declines still leaves the second mark.
 - **Delivery.** A note uses the reply outbox under `progress:<turn>:<n>` and is handed to the bridge once, from inside the
   turn:
   - It is never retried and wakes nothing.
@@ -81,7 +82,10 @@ iMessage shows no typing dots, so a long owner turn sends at most two short note
   - The bridge refuses a note once its own owner's reply for that turn is in the mailbox (`progress_superseded`).
   - Any other message, from any owner (a reply, a proactive copy or a system reply), withdraws a note the host has not
     pulled (`progress_preempted`).
-  - A note never waits for the slot (`progress_busy`), and while a reply waits, no note takes it (`progress_yields`).
+  - A note never waits for the slot (`progress_busy`).
+  - A note never goes ahead of an earlier message of its own owner that is still waiting for the bridge, such as the last
+    turn's reply on its retry (`progress_yields`, checked in the owner's outbox). While another owner's reply waits, the
+    bridge holds notes off for 5 s (`progress_yields`).
   - A reply that finds the slot busy waits for it as above, and the slot is read before any directory lookup.
 - **Messages during a long turn.** iMessage has no steer or stop path. A message the owner sends meanwhile waits and runs
   as the next turn, after the current reply has gone to the bridge.

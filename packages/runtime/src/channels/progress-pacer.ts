@@ -114,13 +114,15 @@ export class ProgressPacer {
       text = index === 1 ? PROGRESS_FALLBACK : null;
     }
     if (this.closed) return log('closed');
-    if (text === null || !text.trim()) return log('declined');
-    // The same link guards a reply gets: no sign-in or connect URL, and no artifact link without a receipt this turn.
-    const line = guardArtifactLinks(redactSecretUrls(text.trim()).text, new Set());
-    this.earlier = line;
-    let queued = false;
-    try { queued = await (this.sending = this.deps.send(index, line)); } catch { queued = false; } finally { this.sending = null; }
-    log(queued ? 'sent' : 'unsent');
+    if (text !== null && text.trim()) {
+      // The same link guards a reply gets: no sign-in or connect URL, and no artifact link without a receipt this turn.
+      const line = guardArtifactLinks(redactSecretUrls(text.trim()).text, new Set());
+      let queued = false;
+      try { queued = await (this.sending = this.deps.send(index, line)); } catch { queued = false; } finally { this.sending = null; }
+      // The second note is told only of a first one the owner may have seen.
+      if (queued) this.earlier = line;
+      log(queued ? 'sent' : 'unsent');
+    } else log('declined');
     if (index === 1) this.arm(2);
   }
 }

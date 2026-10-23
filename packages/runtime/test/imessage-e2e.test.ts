@@ -7,6 +7,7 @@ import { IMessageBridgeDO, iMessageBridgeName } from '../src/channels/imessage/b
 import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { ProgressPacer } from '../src/channels/progress-pacer';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
@@ -900,6 +901,16 @@ it('a slow iMessage turn sends one progress note, then its reply, in that order'
   expect(forbiddenEgress).toEqual([]);
 }, 20_000);
 
+it('a progress pacer that cannot start leaves the turn to answer as usual', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  vi.spyOn(ProgressPacer.prototype, 'start').mockImplementation(() => { throw new Error('pacer unavailable'); });
+  await replyFor(w, 'What time is it?');
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed']);
+}, 20_000);
+
 it('a fast iMessage turn sends no note and asks the model for none', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -1074,6 +1085,28 @@ it('a note from the next turn never reaches the owner before the reply still wai
   expect(later).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_yields' } });
 }, 60_000);
 
+it('a turn that starts just after a reply counts its wait from that reply, not from the owner\'s earlier message', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await progressTiming(w.ownerStub, 60_000, 600_000);
+  let setTiming!: (timing: unknown) => void;
+  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  const admitted = admissions();
+  proof.hold = async () => {
+    expect((await w.host.send(w.host.message('And book the earliest one'))).status).toBe(200);
+    await waitFor(() => admitted() === 2);
+    // By the time its turn starts, the second message is older than that turn's first mark.
+    setTiming({ firstMs: 2_000, secondMs: 600_000, minTurnMs: 0 });
+    await new Promise(resolve => setTimeout(resolve, 2_500));
+    proof.hold = async () => { await sendNext(w); await new Promise(resolve => setTimeout(resolve, 500)); };
+  };
+  await replyFor(w, 'Find me a dentist near work');
+  await w.pump(2);
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Scripted owner reply.']);
+  expect(proof.progressInputs).toEqual([]);
+}, 30_000);
+
 it('two messages already waiting when a drain starts each have their reply handed over before the next one runs', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -1146,6 +1179,34 @@ it('the bridge refuses a note once its reply is in the mailbox, a note never wai
   expect(await handoff('reply:imsg-other', 'wrc_other', 'The other answer.')).toEqual({ kind: 'queued' });
   await sendNext(w);
   expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'Checking the other thing.', 'The other answer.']);
+}, 20_000);
+
+it('a note that passed the slot check is still refused if a reply started waiting while it was being prepared', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Morning');
+  const [reply] = await outbox(w.ownerStub);
+  await sendNext(w);
+  const handoff = (replyRef: string, commandId: string, text: string) => w.bridgeStub().enqueueReply({ replyRef, commandId, text, ownerDoName: reply!.ownerDoName,
+    revision: reply!.revision, bindingDigest: reply!.bindingDigest, ...(reply!.subject !== undefined ? { subject: reply!.subject } : {}) });
+  // The note's preparation (its key) waits until the reply below has met the slot and the slot is free again.
+  let release!: () => void, entered = false;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const bridge = IMessageBridgeDO.prototype as unknown as { key: (...args: unknown[]) => Promise<string | null> }, key = bridge.key;
+  vi.spyOn(bridge, 'key').mockImplementation(async function (this: unknown, ...args: unknown[]) {
+    if (!entered) { entered = true; await released; }
+    return key.apply(this, args);
+  });
+  const note = handoff('progress:imsg-late:1', 'wpn1_late', 'Checking a few places.');
+  await waitFor(() => entered);
+  expect(await handoff('reply:imsg-first', 'wrc_first', 'The first answer.')).toEqual({ kind: 'queued' });
+  expect(await handoff('reply:imsg-second', 'wrc_second', 'The second answer.')).toEqual({ kind: 'busy' });
+  await sendNext(w);
+  release();
+  expect(await note).toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'progress_yields' } });
+  expect(await handoff('reply:imsg-second', 'wrc_second', 'The second answer.')).toEqual({ kind: 'queued' });
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.', 'The first answer.', 'The second answer.']);
 }, 20_000);
 
 it('a note whose handoff threw is settled as possibly sent, never retried, and the reply goes out as before', async () => {
