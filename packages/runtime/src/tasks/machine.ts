@@ -25,6 +25,8 @@ export type MachineSpec = Readonly<{
   text: Readonly<{ title: string; goal: string; done_when: string }>;
   items: readonly MachineItem[]; timezone: string; now: number; deadlineAt: number;
   source?: MachineBrief['source']; runId?: string; recordId?: number;
+  // The job's own digest of its inputs, where it already has one its apply compares against (meeting prep's event digest).
+  inputDigest?: string;
 }>;
 export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }>;
 
@@ -41,7 +43,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
     effort: 'standard', timezone: spec.timezone, started_at: spec.now,
     // A change detector over the data the job was started on, not a guard against an adversary, so MD5 is enough.
     machine: {
-      job: spec.job, input_digest: md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
+      job: spec.job, input_digest: spec.inputDigest ?? md5Hex(JSON.stringify(items)), scope: spec.scope, refs: items.map(item => item.ref),
       ...(spec.source ? { source: spec.source } : {}), ...(spec.runId ? { run_id: spec.runId } : {}), ...(spec.recordId === undefined ? {} : { record_id: spec.recordId }),
     },
   };
@@ -62,7 +64,7 @@ export const workerRouteDown = (access: OwnerModelAccess): boolean => {
 };
 
 // Why a machine job with news still told the owner nothing: its gate closed between the check and the apply.
-export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'no_source';
+export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'held_budget' | 'no_source';
 export type MachineApplied = 'delivered' | 'skipped' | Readonly<{ held: MachineHeld }>;
 // A job's apply: rechecks its gates, runs its apply turn and delivers. It calls `settle` exactly once, as the commit of its
 // delivery or alone when nothing goes out; `settle` throws ClosedRunError for a job cancelled or forgotten meanwhile. A
@@ -72,7 +74,7 @@ export type MachineHandler = Readonly<{
   apply: MachineApplier;
   // The worker checked and found nothing: the job's own record that its data was checked, written in one transaction with
   // `settle`, so the same data does not start another job.
-  noNews?(row: JobRow, settle: () => void): void;
+  noNews?(row: JobRow, settle: () => void): void | Promise<void>;
 }>;
 export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler>>>;
 
@@ -93,8 +95,8 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
       detail: `rounds=${after.rounds}:cost_usd=${after.cost_usd.toFixed(4)}:attempts=${after.attempt}`, ...fields,
     });
   };
-  const quietly = (name: string, fields: Partial<TurnLogEntry> = {}, close: (settle: () => void) => void = (settle) => settle()) => {
-    try { close(settle); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
+  const quietly = async (name: string, fields: Partial<TurnLogEntry> = {}, close: (settle: () => void) => void | Promise<void> = (settle) => settle()) => {
+    try { await close(settle); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
     done(name, fields);
   };
   if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });

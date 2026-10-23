@@ -116,11 +116,12 @@ import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
-import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
+import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, type PrepGate } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
+import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { UPDATE_CARD_FRESH_MS, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
@@ -4129,6 +4130,50 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gmail: { book: gmailPushBook(identity), config: gmailPush(), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
+    // Whether a prep note for this occurrence could go out now: not in quiet hours, and admitted by the owner's pre-activity
+    // budget. Advisory: the commit that queues the note runs the authoritative admission.
+    const prepGate = async (connectionId: string, occurrence: string, start: number, timezone: string): Promise<PrepGate | null> => {
+      if (quiet()) return 'held_quiet';
+      const now = Date.now();
+      const candidate = { event_id: await sha256Hex(JSON.stringify([connectionId, occurrence])), push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: start };
+      const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
+      return ['send', 'degrade'].includes(admission.verdict) && admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram') ? null : 'held_budget';
+    };
+    // Queues a prep note when the owner's pre-activity budget admits it, `commit` and the budget charge in the same transaction.
+    const prepEnqueue = (connectionId: string, timezone: string, current: () => Promise<void>) => async (id: string, text: string, calendarPrep: CalendarPrepReceipt, commit: () => void): Promise<boolean> => {
+      await current();
+      const cooldownKey = await sha256Hex(JSON.stringify([connectionId, calendarPrep.occurrence]));
+      const doName = identity.get<string>('do_name')!;
+      let admitted = false;
+      await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
+        ownerSubject: String(owner), doName, ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}), expiresAt: Date.parse(calendarPrep.start), calendarPrep,
+      }, work => storage.transactionSync(() => {
+        if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>(`${channel}_subject`) !== String(owner)
+          || identity.get<boolean>(`${channel}_unlinked`) || calendarCounterHold() !== null || !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())
+          || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
+        const now = Date.now();
+        const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
+        const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
+        if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram')) return;
+        work(); commit();
+        // Chat output, on Telegram or in the app, never consumes an APNs budget reservation.
+        calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
+        admitted = true;
+      }));
+      if (admitted) await scheduler.rearm();
+      return admitted;
+    };
+    const prepDisabled = () => !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
+    // The prep job's apply: the existing prep decision, with no tools, on the event as it stands and what the worker found.
+    const meetingPrepApply = meetingPrepApplier({
+      briefs: briefBook, timezone: clock.timezone, now: () => Date.now(),
+      held: () => quiet() ? 'held_quiet' : loops.proactivity().volume === 'low' ? 'held_volume' : prepDisabled() || !schedPrefs.enabled('event_briefs') ? 'held_preference' : null,
+      client: () => google.client('calendar'),
+      current: connectionId => calendarOwnerCurrent(connectionId, clock.timezone),
+      transaction: work => storage.transactionSync(work),
+      decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT)),
+      enqueue: (id, text, receipt, commit) => prepEnqueue(receipt.connectionId, clock.timezone, () => calendarOwnerCurrent(receipt.connectionId, clock.timezone))(id, text, receipt, commit),
+    });
     const briefs = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
@@ -4150,34 +4195,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             await calendarOwnerCurrent(connectionId, timezone);
             if (!proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity()) || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
           };
+          let jobs = 0;
           const queued = await briefBook.groundedSweep({ client, now: Date.now(), timezone, current,
             known: id => finalOutbox.records().some(record => record.id === id),
+            gate: (prep, start) => prepGate(connectionId, prep.occurrence, start, timezone),
+            machine: prep => storage.transactionSync(() => {
+              if (workerRouteDown(modelAccess)) return 'held_breaker';
+              const made = enqueueMachine(this.jobs(), meetingPrepSpec({ ...prep, surface: channel }));
+              if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, Date.now()); jobs += 1; }
+              return made.code;
+            }),
+            checked: (code, id) => log({ trace, hop: 'machine_check', ms: 0, ok: true, code, detail: id }),
             decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
-            enqueue: async (id, text, calendarPrep, commit) => {
-              await current();
-              const cooldownKey = await sha256Hex(JSON.stringify([connectionId, calendarPrep.occurrence]));
-              const doName = identity.get<string>('do_name')!;
-              let admitted = false;
-              await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
-                ownerSubject: String(owner), doName, ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}), expiresAt: Date.parse(calendarPrep.start), calendarPrep,
-              }, work => storage.transactionSync(() => {
-                if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>(`${channel}_subject`) !== String(owner)
-                  || identity.get<boolean>(`${channel}_unlinked`) || calendarCounterHold() !== null || !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())
-                  || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
-                const now = Date.now();
-                const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
-                const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
-                if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram')) return;
-                work(); commit();
-                // Chat output, on Telegram or in the app, never consumes an APNs budget reservation.
-                calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
-                admitted = true;
-              }));
-              if (admitted) await scheduler.rearm();
-              return admitted;
-            },
+            enqueue: prepEnqueue(connectionId, timezone, current),
           });
-          log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; delivery unconfirmed` });
+          if (jobs) await armTaskJobsWake(storage, Date.now());
+          log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; ${jobs} prep jobs written; delivery unconfirmed` });
           await updateCheck(`update:${entry.occurrence_at}`);
           return;
         }
@@ -4413,7 +4446,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       monthSpend: () => spend?.(),
       taskContext: () => { const egress = parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST); return { authenticatedUserId: ownerRef(), sanitise, ...(egress ? { egressAllowlist: egress } : {}) }; },
