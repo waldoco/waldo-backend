@@ -3827,7 +3827,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       accounts, cancel: () => scheduler.cancelReadable(WATCH_UPKEEP_ID),
       calendar: { book: calendarPushBook(identity), origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
         resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID() },
-      gmail: { book: gmailPushBook(identity), config: gmailPush(), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
+      gmail: { book: gmailPushBook(identity), config: gmailPush(this.env.GMAIL_PUSH_PROJECT), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault },
       log: line => log({ trace: `${entry.id}:${entry.occurrence_at}`, ...line }),
     });
     const briefs = async (entry: ScheduleEntry) => {
