@@ -73,7 +73,7 @@ select is(pg_temp.keys(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example
 select is(pg_temp.keys(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example.invalid')->'freshness'),array['newest_derived','refusals_7d','sources'],'freshness carries only sources, refusals and the newest derived day');
 select is(pg_temp.keys(pg_temp.src(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example.invalid')->'freshness','apple')),array['newest_upload_at','rejected_readings_7d','source','uploads_7d'],'a source carries only its newest upload and seven-day counts');
 select is((pg_temp.src(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example.invalid')->'freshness','apple')->>'newest_upload_at')::timestamptz,
-  (select created_at from waldo.health_requests where request_id='hf-in-2'),'the newest Apple upload is the latest accepted receipt');
+  (select date_trunc('milliseconds',created_at) from waldo.health_requests where request_id='hf-in-2'),'the newest Apple upload is the latest accepted receipt, to the millisecond');
 select is((pg_temp.src(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example.invalid')->'freshness','apple')->>'uploads_7d')::int,2,'only uploads from the last seven days are counted');
 select is(pg_temp.src(pg_temp.of(pg_temp.admin('hf-owner-a'),'hf-tester@example.invalid')->'freshness','apple')->'rejected_readings_7d',
   '[{"count":2,"reason":"invalid_sample"},{"count":1,"reason":"unsupported_signal"}]'::jsonb,'per-reading rejections in the window are counted by reason, never by signal');
