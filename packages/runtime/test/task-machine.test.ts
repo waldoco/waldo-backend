@@ -320,6 +320,29 @@ describe('applying a machine job', () => {
     });
   });
 
+  it('a no-news hook that throws waits like an apply, then settles silently, and an owner task report behind it still applies', async () => {
+    await withBook(async (h) => {
+      const id = reportMachine(h.book, nothing);
+      h.clock.at = T0 + 1;
+      const owner = h.book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'own-behind', origin: 'tg-1', surface: 'app', brief: ownerBrief, dueAt: T0 + 1, deadlineAt: T0 + 3_600_000 }).job;
+      expect(h.book.report(h.book.startAttempt(owner.id)!, found, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      let calls = 0;
+      const l = lane(h);
+      const deps = l.deps({ applyTools: () => [], machine: { heartbeat: { apply: async () => { throw new Error('a no-news job reached its applier'); }, noNews: async () => { calls += 1; throw new Error('calendar unavailable'); } } } });
+      await runJobsLane(deps);
+      expect(h.book.get(owner.id)!.status).toBe('applied');
+      expect([...l.sent.keys()]).toEqual([`task:${owner.id}`]);
+      expect(h.book.get(id)).toMatchObject({ status: 'reported', deferrals: 1 });
+      expect(hops(l.log, 'machine_apply_deferred')).toHaveLength(1);
+      h.clock.at = T0 + 61 * 60_000;
+      await runJobsLane(deps);
+      expect(calls).toBe(2);
+      expect(h.book.get(id)!.status).toBe('applied');
+      expect(hops(l.log, 'machine_dropped')).toHaveLength(1);
+      expect(hops(l.log, 'machine_no_news')).toHaveLength(0);
+    });
+  });
+
   it('a job cancelled while its applier runs delivers nothing: the settle throws inside the delivery and rolls it back', async () => {
     await withBook(async (h) => {
       const id = reportMachine(h.book, found);

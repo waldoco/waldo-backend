@@ -95,25 +95,32 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
       detail: `rounds=${after.rounds}:cost_usd=${after.cost_usd.toFixed(4)}:attempts=${after.attempt}`, ...fields,
     });
   };
-  const quietly = async (name: string, fields: Partial<TurnLogEntry> = {}, close: (settle: () => void) => void | Promise<void> = (settle) => settle()) => {
-    try { await close(settle); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
+  const quietly = (name: string, fields: Partial<TurnLogEntry> = {}) => {
+    try { settle(); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; return; }
     done(name, fields);
+  };
+  // A hook that could not run (no model, a source that did not answer) is retried like a task report, then dropped silently,
+  // so a row that keeps failing never holds up the rows behind it.
+  const unavailable = (error: unknown) => {
+    if (error instanceof ClosedRunError) return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+    if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
+    return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
   };
   if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
   const handler = deps.appliers[taskBrief(row).machine!.job];
   const result = jobResult(row)!;
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention.
-  if (!result.findings.length && !result.proposals.length) return quietly('machine_no_news', {}, handler?.noNews && ((settle) => handler.noNews!(row, settle)));
+  if (!result.findings.length && !result.proposals.length) {
+    if (!handler?.noNews) return quietly('machine_no_news');
+    try { await handler.noNews(row, settle); } catch (error) { return unavailable(error); }
+    return done('machine_no_news');
+  }
   if (!handler) return quietly('machine_held', { code: 'no_applier' });
   const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
   let applied: MachineApplied;
   try {
     applied = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
-  } catch (error) {
-    if (error instanceof ClosedRunError) return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
-    if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
-    return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
-  }
+  } catch (error) { return unavailable(error); }
   if (applied === 'delivered') done('machine_applied');
   else if (applied === 'skipped') done('machine_skipped');
   else done('machine_held', { code: applied.held });

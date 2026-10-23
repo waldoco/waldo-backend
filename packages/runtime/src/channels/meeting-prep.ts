@@ -65,10 +65,11 @@ export const meetingPrepApplier = (deps: MeetingPrepApplyDeps): MachineHandler =
     deps.transaction(io.settle);
     return { held: 'held_budget' };
   },
-  // The worker found nothing that makes a note worth sending: the occurrence counts as prepped on this digest.
+  // The worker found nothing that makes a note worth sending: the occurrence counts as prepped on this digest, once the
+  // event still reads as the job's. A calendar that does not answer settles the job unrecorded, so the next sweep asks again.
   noNews: async (row, settle) => {
     const machine = taskBrief(row).machine!;
-    const client = await deps.client();
+    const client = await deps.client().catch(() => null);
     const latest = client ? await client.event(machine.refs[0]!).catch(() => null) : null;
     const identity = latest ? await prepIdentity(machine.source!.connection_id, latest) : null;
     deps.transaction(() => {

@@ -187,6 +187,19 @@ describe('applying a prep job', () => {
     });
   });
 
+  it('the worker found nothing and the calendar cannot be read: the job settles, nothing is recorded, and the next sweep asks again', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const job = report(h, NOTHING);
+      const a = applyingWith(h, { client: async () => { throw new Error('calendar connection unavailable'); } });
+      await a.lane();
+      expect(h.book.get(job.id)!.status).toBe('applied');
+      expect(h.briefed()).toEqual([]);
+      await h.sweep({ now: h.now + 10 * 60_000 });
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+
   it('an event that changed since the job was written holds the job with no decision; the next sweep asks again', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
