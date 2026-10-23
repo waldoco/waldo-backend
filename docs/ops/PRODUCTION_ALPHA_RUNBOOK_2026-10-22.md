@@ -87,6 +87,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
 | `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |
 | `OWNER_LOOKUP` | `0` | `0` | `0` until the privacy notice that discloses the look-up is published (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. |
+| `PHONE_SMS_VERIFY` | `0` | `0` | `0` until the owner has a Twilio account with a Verify service (six-digit codes, ten minutes or less), a spend cap and alert, has reviewed Twilio's DPA, and the notice naming Twilio is published. Off unless `1`; with it on, the console and app phone views offer a texted code (`identity/phone-sms.ts`). |
 | `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
 | `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
@@ -115,6 +116,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
 | `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | `identity/phone-sms.ts` | no texted code; the phone views offer the link code only | not set until `PHONE_SMS_VERIFY` goes on. A malformed account (`AC…`) or service (`VA…`) id, or an empty token, keeps it off. |
 
 One more secret is in an open PR: #1393 adds `WALDO_OAUTH_STATE_SECRET` for MCP, fail-closed. Freeze the secret list on the stand-up SHA (S0).
 

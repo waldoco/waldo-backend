@@ -203,3 +203,25 @@ describe('one-time values in receipts', () => {
     ] as const) expect(() => readActionResult(value, action, 'https://x.test')).toThrow('unsupported');
   });
 });
+
+describe('the phone read', () => {
+  const phone = { version: 1, view: 'phone', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64), status: {},
+    data: { phone: '+919800000001', verified: false, sms: true, challenge: { state: 'pending', expires_at: 1_800_000_600, retry_at: null, checks_left: 5 }, actions: ['phone.sms_send', 'phone.sms_check'] } };
+  it('reads the number on file, its proof and the code in flight, dropping anything else', () => {
+    const { status: _status, ...expected } = phone;
+    expect(readControls({ ...phone, data: { ...phone.data, code: '424242' } }, 'phone')).toEqual(expected);
+    expect(readControls({ ...phone, data: { ...phone.data, phone: null, challenge: null, actions: [] } }, 'phone').data).toMatchObject({ phone: null, challenge: null });
+  });
+  it('refuses a malformed read instead of showing it', () => {
+    for (const data of [{ ...phone.data, phone: '98000 00001' }, { ...phone.data, verified: 'no' }, { ...phone.data, actions: ['phone.sms_resend'] },
+      { ...phone.data, challenge: { ...phone.data.challenge, state: 'sent' } }, { ...phone.data, challenge: { ...phone.data.challenge, checks_left: 6 } },
+      { ...phone.data, challenge: { ...phone.data.challenge, retry_at: '1' } }, { ...phone.data, sms: undefined }])
+      expect(() => readControls({ ...phone, data }, 'phone'), JSON.stringify(data)).toThrow('unsupported');
+  });
+  it('sends the code as its own field and nothing else', async () => {
+    let sent: FormData | undefined;
+    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => { sent = init?.body as FormData; return Response.json({ receipt: { state: 'recorded', message: 'Your number is verified.' }, duplicate: false }); });
+    await submitControl({ csrf: phone.csrf, revision: phone.revision, view: 'phone' }, 'phone.sms_check', { code: '424242' }, 'phone-request-1');
+    expect(Object.fromEntries(sent!.entries())).toEqual({ csrf: phone.csrf, view: 'phone', revision: phone.revision, request_id: 'phone-request-1', action: 'phone.sms_check', code: '424242' });
+  });
+});

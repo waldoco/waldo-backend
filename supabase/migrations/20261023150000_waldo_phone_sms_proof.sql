@@ -39,6 +39,7 @@ begin
   return v_owner;
 end $$;
 
+comment on column waldo.owners.phone is 'Contact phone (E.164) given at signup. Unverified until phone_verified_at is set; Waldo sends nothing to an unverified number except a Twilio Verify code the owner asks for.';
 comment on column waldo.owners.phone_verified_at is 'When the number on file was proven: a link code texted to Waldo from it, or a code Twilio Verify texted to it at the owner''s request (waldo.verify_owner_phone). NULL = unverified; a change of number clears it, and no whatsapp presence may link while NULL.';
 
 -- One challenge per owner. The hold keeps every other owner from having a code sent to the same number while this
