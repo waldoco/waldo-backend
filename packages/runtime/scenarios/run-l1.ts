@@ -154,6 +154,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     const turnText = async () => {
       if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
       if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
+      if (turn.startsWith('@job ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(5), time, undefined, undefined, undefined, undefined, 'external');
       if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       return responder.respond(inboundTurn({ updateId: n, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(turn) }), time);
     };
