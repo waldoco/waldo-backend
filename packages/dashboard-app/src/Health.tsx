@@ -53,7 +53,7 @@ function UploadsSection({ uploads, now }: { uploads: Uploads | null; now: Date }
         <p><At iso={s.newest_upload_at} now={now} lead="Last upload "/></p>
         <p>{plural(s.uploads_7d, 'upload')} in the last 7 days{rejected > 0 && `, ${plural(rejected, 'reading')} rejected`}</p></div>;
     })}
-    {refused > 0 && <p>{plural(refused, 'upload')} refused in the last 7 days ({tally(refusals(uploads))}).</p>}
+    {refused > 0 && <p>{plural(refused, 'upload')} refused in the last 7 days ({tally(refusals(uploads))}). Only uploads refused after sign-in are counted.</p>}
     {uploads.newest_derived && <p>Newest derived day: {uploads.newest_derived.day}, <At iso={uploads.newest_derived.compiled_at} now={now}/>.</p>}
   </section>;
 }
@@ -103,7 +103,7 @@ export function AdminHealthView({ state, now, onRefresh }: { state: AdminHealthS
   if (state.kind === 'error') return <section className="panel" role="alert"><h2>This page is unavailable.</h2><p>{state.message}</p>{onRefresh && <button onClick={onRefresh}>Retry</button>}</section>;
   const { owners } = state.data;
   return <>
-    <div className="section-head"><h2>Tester health.</h2><p>When each tester’s uploads arrived, what was refused and why, and what they agreed to. Counts, times and codes only: no readings or scores.</p>{onRefresh && <button className="quiet" onClick={onRefresh}>Refresh</button>}</div>
+    <div className="section-head"><h2>Tester health.</h2><p>When each tester’s uploads arrived, what was refused and why, and what they agreed to. Counts, times and codes only: no readings or scores. Refusals count uploads refused after sign-in; a signed-out or rate-limited upload is not counted.</p>{onRefresh && <button className="quiet" onClick={onRefresh}>Refresh</button>}</div>
     <section className="panel"><div className="table-scroll" tabIndex={0} role="region" aria-label="Tester health records"><table>
       <thead><tr>{['Tester', 'Consent', 'Newest upload', 'Uploads, 7 days', 'Refused, 7 days', 'Rejected readings, 7 days', 'Newest derived day'].map(h => <th key={h} scope="col">{h}</th>)}</tr></thead>
       <tbody>{owners.map(o => <tr key={o.id}>

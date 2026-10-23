@@ -63,6 +63,7 @@ describe('owner health view', () => {
     expect(html).toContain('12 uploads in the last 7 days');
     expect(html).toContain('2 readings rejected');
     expect(html).toContain('3 uploads refused');
+    expect(html).toContain('Only uploads refused after sign-in are counted.');
   });
   it('shows both consents, each in its own state', () => {
     const html = view();
