@@ -13,7 +13,8 @@ import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
-import { CONSOLE_PATH } from './channels/console';
+import { CONSOLE_PATH, consoleCookie } from './channels/console';
+import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
 import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
@@ -105,25 +106,30 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   const ticket = await readConsoleTicket(value, env.WALDO_ROUTER_HMAC_SECRET);
   const auth = consoleAuth(env);
   if (!ticket || !auth) return rejected();
-  const hasOwner = (request.headers.get('cookie') ?? '').split(';').some(part => part.trim().startsWith(`${OWNER_COOKIE}=`));
-  try { if (hasOwner && await auth.readOwnerCookie(request) !== ticket.owner) return rejected(); }
+  let presented: string | null;
+  try { presented = await auth.readOwnerCookie(request); }
   catch { return new Response('Sign-in is temporarily unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } }); }
+  // A link never switches a browser signed in to another owner. A cookie that names no live session (it outlives its
+  // row) is no account to protect: the sign-in replaces it.
+  if (presented !== null && presented !== ticket.owner) return rejected();
   const response = await forwardTicketConsole(request, env, ticket.owner);
   if (request.method !== 'POST' || response.status !== 303 || !response.headers.get('set-cookie')) return response;
   let ownerCookie: string | null;
-  try { ownerCookie = await auth.ownerCookie(ticket.owner); }
+  try { ownerCookie = await auth.ownerCookie(ticket.owner, request); }
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`);
+  headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, headers });
 };
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
     oauthStateSecret(env);
+    const crossSite = consoleCrossSiteRefusal(request);
+    if (crossSite) return crossSite;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
@@ -209,4 +215,9 @@ export default {
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
+} satisfies ExportedHandler<Env>;
+
+export default {
+  ...worker,
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
 } satisfies ExportedHandler<Env>;

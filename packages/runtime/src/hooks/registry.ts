@@ -111,6 +111,8 @@ import {
   writeSheetCellArgsSchema,
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
+  recordOwnerFindingArgsSchema,
+  listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
@@ -258,6 +260,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   browse_page: browsePageArgsSchema,
   browse_act: browseActArgsSchema,
   delegate_task: delegateTaskArgsSchema,
+  record_owner_finding: recordOwnerFindingArgsSchema,
+  list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
 export const jwtValidateHook: HookHandler<HookRuntimeContext> = {
