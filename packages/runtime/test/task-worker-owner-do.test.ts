@@ -5,7 +5,7 @@ import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
 import { persistInboxWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
-import type { JobRow } from '../src/tasks/jobs';
+import { jobBook, type JobRow } from '../src/tasks/jobs';
 import { taskWorkerName } from '../src/tasks/worker-do';
 
 // The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
@@ -118,6 +118,65 @@ it('cancel_task in an owner turn ends the task and withdraws the card its errand
     await say(instance, state, 2, 'Actually, cancel that');
     expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
     expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card).one().status).toBe('skipped');
+  });
+}, 30_000);
+
+it('three model failures in one job open the breaker for that job\'s next attempt and for the owner\'s next turn', async () => {
+  const name = 'task-breaker-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  type Rpc = { drainInbox(): Promise<void>; taskClaim(...args: unknown[]): Promise<{ providerHealth?: unknown } | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const say = async (instance: unknown, state: DurableObjectState, update: number, text: string) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: name }, update,
+      JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: update, text } }));
+    await (instance as Rpc).drainInbox();
+  };
+  // The deferred job's next try is made due now, and the owner's alarm starts it on a worker that runs on its own alarm.
+  const nextTry = async (deferrals: number) => {
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("UPDATE task_jobs SET due_at = ? WHERE status = 'queued'", Date.now());
+      await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+    });
+    await runDurableObjectAlarm(stub);
+    return until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'queued' && job.deferrals === deferrals);
+  };
+  const openaiHealth = () => runInDurableObject(stub, (instance) =>
+    (instance as unknown as { providerHealth: { snapshot(): { provider: string; failures: number; opened_at: number | null }[] } }).providerHealth.snapshot().find(entry => entry.provider === 'openai'));
+
+  seen.outputs.push(fn('start_task', BRIEF), []);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    await say(instance, state, 1, 'Go through my inbox since Monday and tell me who is waiting on me');
+  });
+
+  // Exactly three model failures. Attempt 1 misses twice (the full request, then the reduced one) and defers; the owner's
+  // breaker hears both. Attempt 2 starts from those two: its third miss opens the breaker, so it skips its reduced retry.
+  seen.down = 3;
+  expect(await nextTry(1)).toMatchObject({ status: 'queued', deferrals: 1 });
+  expect(await openaiHealth()).toMatchObject({ failures: 2, opened_at: null });
+  expect(await nextTry(2)).toMatchObject({ status: 'queued', deferrals: 2 });
+  expect(seen.down).toBe(0);
+  expect(await openaiHealth()).toMatchObject({ failures: 3, opened_at: expect.any(Number) });
+
+  // The job's next attempt claims a seed that shows the provider open.
+  await runInDurableObject(stub, async (instance, state) => {
+    const ticket = jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => crypto.randomUUID() }).startAttempt(jobs(state.storage.sql)[0]!.id)!;
+    const claim = await (instance as unknown as Rpc).taskClaim(ticket);
+    expect(claim === 'fenced' ? null : claim.providerHealth).toEqual([{ provider: 'openai', failures: 3, opened_at: expect.any(Number) }]);
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, [])).toBe('deferred');
+  });
+  // A real worker on that seed defers without calling the model at all.
+  const before = seen.bodies.length;
+  expect(await nextTry(4)).toMatchObject({ status: 'queued', deferrals: 4 });
+  expect(seen.bodies.length).toBe(before);
+
+  // The owner's next turn sees the same open breaker: it reaches the floor without asking the provider.
+  await runInDurableObject(stub, async (instance, state) => {
+    await say(instance, state, 2, 'What should I pack for Goa?');
+    expect(seen.bodies.length).toBe(before);
+    const queued = (state.storage.kv.get<{ payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
+    expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(true);
+    await state.storage.deleteAlarm();
   });
 }, 30_000);
 

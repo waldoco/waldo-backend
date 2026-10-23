@@ -3,7 +3,7 @@ import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENA
 import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { checkpointTurns, DROPPED_STEPS_NOTE, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, taskModel, TaskProviderUnavailable, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { checkpointTurns, DROPPED_STEPS_NOTE, FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, TaskBreaker, taskModel, TaskProviderUnavailable, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -15,7 +15,7 @@ const search = { name: 'search_communication', description: 'Search mail.', para
 
 type Script = Array<{ call: string; args?: unknown } | { text: string } | 'unavailable' | 'hang'>;
 const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: () => boolean = () => true) => {
-  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[] }>, reports: [] as TaskOutcome[], events: [] as TurnLogEntry[] };
+  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[]; outcomes?: readonly ProviderOutcome[] }>, reports: [] as TaskOutcome[], reportOutcomes: [] as Array<readonly ProviderOutcome[] | undefined>, events: [] as TurnLogEntry[] };
   let saved: readonly LLMToolTurn[] = initial.turns ?? [];
   let seq = initial.seq ?? 0;
   const brain: TaskBrainPort = {
@@ -25,8 +25,8 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: (
       log.tools.push(call);
       return { ok: true, data: { hits: [`hit for ${call.arguments}`] }, source_taint: 'external' } satisfies LoopToolResult;
     },
-    checkpoint: async (_ticket, next, turns, events) => { log.checkpoints.push({ seq: next, turns, events }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
-    report: async (_ticket, outcome, events) => { log.reports.push(outcome); log.events.push(...events); return 'accepted'; },
+    checkpoint: async (_ticket, next, turns, events, _spend, outcomes) => { log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
+    report: async (_ticket, outcome, events, _spend, outcomes) => { log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
     heartbeat: async () => { log.beats += 1; return held(); },
   };
   return { brain, log };
@@ -162,6 +162,37 @@ describe('the production task model step', () => {
     expect(failure).toBeInstanceOf(TaskProviderUnavailable);
     expect((failure as TaskProviderUnavailable).event).toMatchObject({ ok: false, cost_kind: 'worker' });
     expect((failure as TaskProviderUnavailable).event).not.toHaveProperty('usage');
+  });
+});
+
+describe('the worker\'s provider breaker', () => {
+  const step = (health: TaskBreaker, gateway: Parameters<typeof taskModel>[1]) => taskModel({ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', health }, gateway);
+
+  it('the model step runs on the owner\'s breaker as the claim brought it, and each round\'s outcomes go back with that round', async () => {
+    // The owner's breaker already holds two OpenAI misses, so the worker's first miss opens it.
+    const { brain, log } = fakeBrain({ providerHealth: [{ provider: OPENAI_PROVIDER, failures: 2, opened_at: null }] });
+    const health = new TaskBreaker();
+    const { gateway, calls } = faultInjectedProviders({
+      [OPENAI_PROVIDER]: [{ fault: 'server_error', status: 503 }],
+      [ANTHROPIC_PROVIDER]: [{ tool: 'search_communication', args: '{"query":"from:client"}' }, { text: 'Nothing waits on you.' }],
+    });
+    expect(await runTaskAttempt(ticket, { brain, model: step(health, gateway), health, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+    // OpenAI is asked once: its reduced-context retry and the second round skip it, open.
+    expect(calls.map(call => call.provider)).toEqual([OPENAI_PROVIDER, ANTHROPIC_PROVIDER, ANTHROPIC_PROVIDER]);
+    expect(log.checkpoints.map(point => point.outcomes)).toEqual([[{ provider: OPENAI_PROVIDER, ok: false }, { provider: ANTHROPIC_PROVIDER, ok: true }]]);
+    expect(log.reportOutcomes).toEqual([[{ provider: ANTHROPIC_PROVIDER, ok: true }]]);
+  });
+
+  it('every provider down: the unavailable report carries the misses that made it so', async () => {
+    const { brain, log } = fakeBrain();
+    const health = new TaskBreaker();
+    const { gateway } = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ fault: 'server_error', status: 503 }], [ANTHROPIC_PROVIDER]: [{ fault: 'server_error', status: 503 }] });
+    expect(await runTaskAttempt(ticket, { brain, model: step(health, gateway), health, sliceEnd: Date.now() + 60_000 })).toBe('reported');
+    expect(log.reports).toEqual([{ kind: 'unavailable' }]);
+    const sent = log.reportOutcomes[0]!;
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every(outcome => !outcome.ok)).toBe(true);
+    expect(new Set(sent.map(outcome => outcome.provider))).toEqual(new Set([OPENAI_PROVIDER, ANTHROPIC_PROVIDER]));
   });
 });
 

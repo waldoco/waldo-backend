@@ -309,6 +309,8 @@ type CircuitState = {
   failures: number;
   opened_at: number | null;
 };
+// A breaker's state as data, so a breaker in another object can carry on from it.
+export type BreakerSnapshot = readonly Readonly<CircuitState & { provider: Provider }>[];
 
 type PostLlmHookResult =
   | { ok: true; response: LLMResponse }
@@ -386,6 +388,16 @@ export class InMemoryCircuitBreaker implements CircuitBreaker {
 
   recordSuccess(provider: Provider): void {
     this.state.delete(provider);
+  }
+
+  snapshot(): BreakerSnapshot {
+    return [...this.state].map(([provider, state]) => ({ provider, ...state }));
+  }
+
+  // Replaces this breaker's state with the snapshot's. An open time is kept as it was, so the cooldown runs from the opening.
+  restore(snapshot: BreakerSnapshot): void {
+    this.state.clear();
+    for (const { provider, failures, opened_at } of snapshot) this.state.set(provider, { failures, opened_at });
   }
 
   recordFailure(provider: Provider): void {

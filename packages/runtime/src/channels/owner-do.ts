@@ -200,7 +200,7 @@ import { runJobsLane } from '../tasks/lane';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
 import { promiseRetry, RETRY_FIRST_TRY_MS } from '../tasks/retry-turn';
 import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
-import type { TaskOutcome, TaskSpend } from '../tasks/worker-loop';
+import type { ProviderOutcome, TaskOutcome, TaskSpend } from '../tasks/worker-loop';
 import type { LoopToolResult } from '../conversation/tool-loop';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
@@ -410,6 +410,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       spend: () => { try { return self.setup(self.taskChannel()).monthSpend(); } catch { return undefined; } },
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      providerHealth: self.providerHealth,
     });
   })();
 
@@ -432,11 +433,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book.
   async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return this.tasks.claim(ticket); }
   async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return this.tasks.tool(ticket, call, canaries); }
-  async taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'> {
-    return this.tasks.checkpoint(ticket, seq, turns, events, spend);
+  async taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'> {
+    return this.tasks.checkpoint(ticket, seq, turns, events, spend, outcomes);
   }
-  async taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): ReturnType<OwnerTaskRpc['taskReport']> {
-    return this.tasks.report(ticket, outcome, events, spend);
+  async taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): ReturnType<OwnerTaskRpc['taskReport']> {
+    return this.tasks.report(ticket, outcome, events, spend, outcomes);
   }
   async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return this.tasks.heartbeat(ticket); }
 

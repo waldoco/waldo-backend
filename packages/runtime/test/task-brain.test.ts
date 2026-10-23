@@ -6,6 +6,7 @@ import { TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contr
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
+import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
 import { DROPPED_STEPS_NOTE } from '../src/tasks/worker-loop';
@@ -30,6 +31,8 @@ type Harness = Readonly<{
   serial<T>(work: () => Promise<T>): Promise<T>;
   browse: { ms: number; throws?: boolean };
   handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
+  // The owner's provider breaker, on the harness clock.
+  health: InMemoryCircuitBreaker;
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -44,6 +47,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
     const browse: Harness['browse'] = { ms: 0 };
     const handler: Harness['handler'] = {};
+    const health = new InMemoryCircuitBreaker({ now: () => clock.at });
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -54,12 +58,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
+      providerHealth: health,
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health });
   });
 
 describe('the task brain host', () => {
@@ -358,6 +363,29 @@ describe('the task brain host', () => {
       expect(ran).toEqual([]);
       expect(log.find(entry => entry.hop === 'spend_hold')).toMatchObject({ cost_kind: 'worker', code: 'spend_ceiling_reached:browse_act', job_id: t.jobId });
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('a worker\'s claim carries the owner\'s breaker, and the provider outcomes it sends back are replayed into it in order', async () => {
+    await withHost(async ({ host, ticket, health }) => {
+      const spend = { rounds: 1, costUsd: 0 };
+      const fail = { provider: 'openai', ok: false } as const, served = { provider: 'openai', ok: true } as const;
+      health.recordFailure('openai');
+      const t = ticket();
+      const claim = await host.claim(t);
+      expect(claim === 'fenced' ? null : claim.providerHealth).toEqual([{ provider: 'openai', failures: 1, opened_at: null }]);
+      // In order: the success clears the first failure, so one failure is left, not three.
+      expect(await host.checkpoint(t, 1, [], [], spend, [fail, served, fail])).toBe('ok');
+      expect(health.snapshot()).toEqual([{ provider: 'openai', failures: 1, opened_at: null }]);
+      // A stale checkpoint (a sequence already written) is not replayed.
+      expect(await host.checkpoint(t, 1, [], [], spend, [fail, fail])).toBe('stale');
+      expect(health.snapshot()).toEqual([{ provider: 'openai', failures: 1, opened_at: null }]);
+      // The unavailable report is the one that matters most: it carries the misses that ended the attempt.
+      expect(await host.report(t, { kind: 'unavailable' }, [], spend, [fail, fail])).toBe('deferred');
+      expect(health.isOpen('openai')).toBe(true);
+      // A late report from the attempt that already ended is fenced, and its outcomes are not replayed.
+      expect(await host.report(t, { kind: 'unavailable' }, [], spend, [served])).toBe('fenced');
+      expect(health.isOpen('openai')).toBe(true);
     });
   });
 

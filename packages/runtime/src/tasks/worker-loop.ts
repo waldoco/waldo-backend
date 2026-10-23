@@ -1,13 +1,13 @@
 import {
   buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type TaskProfile, type TaskResult,
+  type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
 import { runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
 import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
-import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
+import { InMemoryCircuitBreaker, RuntimeLLMProvider, type BreakerSnapshot, type CircuitBreaker, type LLMGatewayAdapter } from '../llm/provider';
 import { sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
 import { unreplayable } from './profiles';
@@ -23,15 +23,21 @@ export type TaskClaim = Readonly<{
   // The owner's month spend against their ceiling, read when the attempt claims. Past it a worker runs on the cheap route,
   // the way an owner turn does; an object with no ceiling sends none.
   spend?: Readonly<{ spentUsd: number; ceilingUsd: number }>;
+  // The owner's provider breaker as it stood at the claim, so a provider the owner's turns or earlier attempts found down is
+  // not asked again. An object that keeps no breaker sends none.
+  providerHealth?: BreakerSnapshot;
 }>;
 export type TaskSpend = Readonly<{ rounds: number; costUsd: number }>;
 // What the attempt ended with. unavailable: no model provider answered, which is not the task's failure and not a crash.
 export type TaskOutcome = Readonly<{ kind: 'result'; result: TaskResult } | { kind: 'unavailable' } | { kind: 'failed'; code: string }>;
+// One model provider's answer or miss, as the worker's breaker recorded it. Names and booleans only.
+export type ProviderOutcome = Readonly<{ provider: Provider; ok: boolean }>;
 export type TaskBrainPort = Readonly<{
   claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'>;
   tool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'>;
-  checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'>;
-  report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
+  // outcomes: the provider outcomes recorded since the last checkpoint or report, in order.
+  checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'>;
+  report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   // Renews the lease; false once the attempt is fenced.
   heartbeat(ticket: TaskTicket): Promise<boolean>;
 }>;
@@ -39,6 +45,18 @@ export type TaskBrainPort = Readonly<{
 // A model step for one task round: the job's system prompt and brief, the profile's tools and the turns so far.
 export type TaskModel = (input: Readonly<{ ticket: TaskTicket; claim: TaskClaim; system: string; content: string; tools: readonly LLMTool[] | undefined; turns: readonly LLMToolTurn[]; canaries: readonly string[] }>)
   => Promise<Readonly<{ response: Awaited<ReturnType<ToolLoopStep>>; event: TurnLogEntry }>>;
+
+// The worker's provider breaker: the owner's breaker as each claim brings it, and every success and failure recorded since,
+// kept in order for the brain to replay into the owner's breaker with the next checkpoint or report.
+export class TaskBreaker implements CircuitBreaker {
+  private readonly breaker = new InMemoryCircuitBreaker();
+  private readonly outcomes: ProviderOutcome[] = [];
+  seed(snapshot: BreakerSnapshot): void { this.breaker.restore(snapshot); }
+  isOpen(provider: Provider): boolean { return this.breaker.isOpen(provider); }
+  recordSuccess(provider: Provider): void { this.breaker.recordSuccess(provider); this.outcomes.push({ provider, ok: true }); }
+  recordFailure(provider: Provider): void { this.breaker.recordFailure(provider); this.outcomes.push({ provider, ok: false }); }
+  drain(): ProviderOutcome[] { return this.outcomes.splice(0); }
+}
 
 export class TaskProviderUnavailable extends Error { constructor(readonly event: TurnLogEntry) { super('no model provider answered'); } }
 export class TaskModelFailed extends Error { constructor(readonly code: string, readonly event: TurnLogEntry) { super(`task model call failed: ${code}`); } }
@@ -113,27 +131,29 @@ const newCanaries = (): string[] => Array.from({ length: 3 }, () => crypto.rando
 
 // Runs the attempt until it reports, is fenced, or this alarm's slice ends (then the next alarm continues it under the same
 // lease from the checkpoint just written). Never throws: whatever happens is told to the brain, which is the only retry owner.
-export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain: TaskBrainPort; model: TaskModel; sliceEnd: number; now?: () => number }>): Promise<'reported' | 'continue' | 'fenced' | 'lost'> {
+// health is the breaker the model step records into; the claim seeds it, and its outcomes go back with each checkpoint and report.
+export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain: TaskBrainPort; model: TaskModel; sliceEnd: number; now?: () => number; health?: TaskBreaker }>): Promise<'reported' | 'continue' | 'fenced' | 'lost'> {
   const now = deps.now ?? Date.now;
   const brain: TaskBrainPort = {
     claim: (t) => toBrain(() => deps.brain.claim(t)), tool: (t, c, k) => toBrain(() => deps.brain.tool(t, c, k)),
-    checkpoint: (t, n, turns, events, spent) => toBrain(() => deps.brain.checkpoint(t, n, turns, events, spent)),
-    report: (t, outcome, events, spent) => toBrain(() => deps.brain.report(t, outcome, events, spent)),
+    checkpoint: (t, n, turns, events, spent, outcomes) => toBrain(() => deps.brain.checkpoint(t, n, turns, events, spent, outcomes)),
+    report: (t, outcome, events, spent, outcomes) => toBrain(() => deps.brain.report(t, outcome, events, spent, outcomes)),
     heartbeat: (t) => deps.brain.heartbeat(t),
   };
   let claim: TaskClaim | 'fenced';
   try { claim = await brain.claim(ticket); } catch { return 'lost'; }
   if (claim === 'fenced') return 'fenced';
+  deps.health?.seed(claim.providerHealth ?? []);
   const canaries = newCanaries();
   const events: TurnLogEntry[] = [];
   let spend = { rounds: 0, costUsd: 0 };
   let seq = claim.seq;
   let finished: TaskResult | undefined;
   let exit: LoopExit = 'completed';
-  const flush = () => { const sent = { events: events.splice(0), spend }; spend = { rounds: 0, costUsd: 0 }; return sent; };
+  const flush = () => { const sent = { events: events.splice(0), spend, outcomes: deps.health?.drain() ?? [] }; spend = { rounds: 0, costUsd: 0 }; return sent; };
   const report = async (outcome: TaskOutcome): Promise<'reported' | 'fenced' | 'lost'> => {
-    const { events: sent, spend: spent } = flush();
-    try { return (await brain.report(ticket, outcome, sent, spent)) === 'fenced' ? 'fenced' : 'reported'; } catch { return 'lost'; }
+    const { events: sent, spend: spent, outcomes } = flush();
+    try { return (await brain.report(ticket, outcome, sent, spent, outcomes)) === 'fenced' ? 'fenced' : 'reported'; } catch { return 'lost'; }
   };
   const content = taskBriefText(claim.brief, claim.turns.length);
   try {
@@ -176,8 +196,8 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
       onSettle: (settled) => { exit = settled; },
       afterRound: async (turns) => {
         seq += 1;
-        const { events: sent, spend: spent } = flush();
-        if (await brain.checkpoint(ticket, seq, checkpointTurns(turns), sent, spent) === 'fenced') throw new TaskFenced();
+        const { events: sent, spend: spent, outcomes } = flush();
+        if (await brain.checkpoint(ticket, seq, checkpointTurns(turns), sent, spent, outcomes) === 'fenced') throw new TaskFenced();
         if (now() >= deps.sliceEnd) throw new TaskSliceEnded();
       },
     });

@@ -4,12 +4,13 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
-import { DROPPED_STEPS_NOTE, NOTE_END, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import { DROPPED_STEPS_NOTE, NOTE_END, type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
 // checks the attempt's ticket against the job book first, so a fenced attempt can neither read nor write. The jobs lane,
@@ -34,6 +35,9 @@ export type TaskHostDeps = Readonly<{
   wake(due: number): Promise<void>;
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
+  // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
+  // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
+  providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
 }>;
 
 // After a provider outage a task waits before its next attempt: 2, 5, 10, then every 20 minutes until its deadline.
@@ -82,6 +86,12 @@ export const taskHost = (deps: TaskHostDeps) => {
   // Jobs with a tool call running here now. Their worker is waiting on that call, so its lease cannot have lapsed.
   const busy = new Map<string, number>();
   const logEvents = (events: readonly TurnLogEntry[]) => { for (const event of events) deps.log(event); };
+  // Called only once the book has accepted the call's ticket: a fenced or stale call's outcomes are not replayed.
+  const replay = (outcomes: readonly ProviderOutcome[]) => {
+    for (const { provider, ok } of outcomes) {
+      if (ok) deps.providerHealth?.recordSuccess(provider); else deps.providerHealth?.recordFailure(provider);
+    }
+  };
   const hop = (row: Pick<JobRow, 'id' | 'profile'>, hopName: string, fields: Partial<TurnLogEntry> = {}) =>
     deps.log({ trace: `task:${row.id}`, hop: hopName, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
   const profileHandlers = async (row: JobRow) => {
@@ -134,6 +144,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         turns: jobCheckpoint(row).turns, seq: row.checkpoint_seq, deadlineAt: row.deadline_at, roundsUsed: row.rounds,
         ownerRef: deps.context(row.surface).authenticatedUserId,
         ...(spend ? { spend } : {}),
+        ...(deps.providerHealth ? { providerHealth: deps.providerHealth.snapshot() } : {}),
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted
@@ -198,17 +209,18 @@ export const taskHost = (deps: TaskHostDeps) => {
       });
       return result;
     },
-    async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'> {
+    async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes: readonly ProviderOutcome[] = []): Promise<'ok' | 'stale' | 'fenced'> {
       logEvents(events);
       const written = deps.book.checkpoint(ticket, seq, { turns: turns.map(keptTurn) }, spend);
       if (written === 'fenced') { fence(ticket.jobId); return written; }
+      if (written === 'ok') replay(outcomes);
       const row = deps.book.get(ticket.jobId)!;
       hop(row, 'task_checkpoint', { detail: `seq=${seq}:turns=${turns.length}` });
       const note = noteDue(row);
       if (note !== null && note <= deps.now()) await deps.wake(deps.now());
       return written;
     },
-    async report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'> {
+    async report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes: readonly ProviderOutcome[] = []): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'> {
       logEvents(events);
       const row = deps.book.get(ticket.jobId);
       if (!row) return 'fenced';
@@ -216,6 +228,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         ? deps.book.defer(ticket, deps.now() + deferDelay(row.deferrals), spend)
         : deps.book.report(ticket, outcome.kind === 'result' ? outcome.result : failedResult(outcome.code), spend);
       if (written === 'fenced' || written === 'duplicate') { if (written === 'fenced') fence(ticket.jobId); return written; }
+      replay(outcomes);
       fence(ticket.jobId);
       const after = deps.book.get(ticket.jobId)!;
       hop(after, written === 'deferred' ? 'task_deferred' : written === 'parked' ? 'task_parked' : 'task_reported', {
