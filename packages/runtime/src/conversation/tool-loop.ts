@@ -55,7 +55,7 @@ export const READ_REPEAT_AFTER_MS = MODEL_CALL_TIMEOUT_MS;
 // reconnect link, so two at once could send it twice. read_thread can relay a message, and read_tool_output reads a store
 // that sibling calls evict from. Anything not listed, and every write, approval or browse call, runs alone in model order.
 export const CONCURRENT_READ_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
-  'get_context', 'get_health', 'read_owner_context', 'read_memory', 'search_episodes', 'web_search',
+  'get_context', 'get_health', 'read_memory', 'search_episodes', 'web_search',
   'list_artifacts', 'read_artifact', 'list_reminders', 'list_responsibilities', 'list_health_logs',
   'list_standing_orders', 'workspace_list', 'workspace_read', 'workspace_search', 'skills_list',
 ]);

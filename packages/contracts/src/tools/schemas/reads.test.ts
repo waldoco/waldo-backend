@@ -8,7 +8,7 @@ import {
   connectServiceArgsSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema,
-  queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
+  queryAvailabilityArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
@@ -437,9 +437,9 @@ describe('dedicated source reads',()=>{
   expect(queryAvailabilityArgsSchema.parse(good).calendar_ids).toEqual(['primary']);
   for(const bad of [{...good,owner_id:'other'},{...good,calendar_ids:['primary','primary']},{...good,date_range:{from:'2026-10-05T09:00:00',to:good.date_range.to}},{...good,duration_minutes:0}])expect(queryAvailabilityArgsSchema.safeParse(bad).success).toBe(false);
  });
- it('owner context requires a bounded topic; no owner ID, approval or mutation argument',()=>{
-  expect(readOwnerContextArgsSchema.parse({topic:'gym'})).toEqual({topic:'gym',limit:8});
-  for(const bad of [{topic:'',limit:8},{topic:'gym',owner_id:'other'},{topic:'gym',approve:true},{topic:'gym',limit:13}])expect(readOwnerContextArgsSchema.safeParse(bad).success).toBe(false);
+ it('a topic read goes through read_memory query; no owner ID, approval or mutation argument',()=>{
+  expect(readMemoryArgsSchema.parse({query:'gym'})).toEqual({query:'gym',limit:10});
+  for(const bad of [{topic:'gym'},{query:''},{query:'gym',owner_id:'other'},{query:'gym',approve:true},{query:'gym',limit:51}])expect(readMemoryArgsSchema.safeParse(bad).success).toBe(false);
  });
 });
 
