@@ -12,11 +12,12 @@ type LinkState = 'linked' | 'not_linked' | 'unknown';
 // no way to link a channel.
 export type ChatChannels = Readonly<{
   // Whether this server can link the provider for this owner. Telegram stops being offered when its bot token is removed;
-  // iMessage is offered only where the owner has a number to text.
+  // iMessage is offered only where the owner has a number to text. Rejects when the directory cannot say, which is unknown,
+  // never not offered.
   offered(provider: AppChatProviderV1): Promise<boolean>;
   // Read live: the owner directory for iMessage and WhatsApp, the binding the console reads for Telegram. 'unknown' when the directory cannot say.
   linked(provider: AppChatProviderV1): Promise<LinkState>;
-  // A fresh one-time code, or null when it is not offered or the directory gave none.
+  // A fresh one-time code, or null when it is not offered or the directory gave none; rejects as offered() does.
   issue(provider: AppChatProviderV1): Promise<AppChannelLinkCodeV1 | null>;
 }>;
 
@@ -45,7 +46,7 @@ const iMessageNumber = async ({ env, doName }: Context): Promise<string | null> 
     return (await iMessageNumberView(env as never, doName)).number;
   } catch {
     console.error(JSON.stringify({ hop: 'app_onboarding', ok: false, code: 'imessage_number' }));
-    return null;
+    throw new Error('the owner directory cannot be read');
   }
 };
 const always = { address: null } as const;

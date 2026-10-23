@@ -51,10 +51,13 @@ describe('iMessage link step with Photon', () => {
     expect(await unenrolled.issue('imessage')).toBeNull();
     expect(auth.issueProviderLinkCode).not.toHaveBeenCalled();
   });
-  it('offers nothing when the directory cannot say which number the owner has', async () => {
-    const { enrolled } = world();
+  it('cannot say, rather than says not offered, when the directory cannot tell which number the owner has', async () => {
+    const { enrolled, auth } = world();
     vi.mocked(globalThis.fetch).mockImplementation(async () => { throw new Error('directory down'); });
-    expect(await enrolled.offered('imessage')).toBe(false);
-    expect(await enrolled.issue('imessage')).toBeNull();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(enrolled.offered('imessage')).rejects.toThrow('cannot be read');
+    await expect(enrolled.issue('imessage')).rejects.toThrow('cannot be read');
+    expect(auth.issueProviderLinkCode).not.toHaveBeenCalled();
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual({ hop: 'app_onboarding', ok: false, code: 'imessage_number' });
   });
 });

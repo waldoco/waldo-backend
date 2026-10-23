@@ -185,6 +185,18 @@ describe('chat channels in the first run', () => {
       expect(issued).toEqual([]);
     }, { chat: channels });
   });
+  it('reads a provider whose offer the directory cannot confirm as unknown, and answers unavailable rather than not offered', () => {
+    const unreadable: ChatChannels = { offered: async provider => { if (provider === 'imessage') throw new Error('the owner directory cannot be read'); return true; }, linked: async () => 'not_linked', issue: async () => null };
+    return owner(async ({ send, act }) => {
+      expect(appOnboardingChannelsV1Schema.parse(await (await send('/app/v1/onboarding/channels')).json()).channels).toEqual([
+        { provider: 'imessage', state: 'unknown' }, { provider: 'whatsapp', state: 'not_linked' }, { provider: 'telegram', state: 'not_linked' }]);
+      await act({ action: 'start' }); await act(agree);
+      const link = await send('/app/v1/onboarding/channel-link', { provider: 'imessage' });
+      expect([link.status, await link.json()]).toEqual([503, { error: 'unavailable' }]);
+      const linked = await act({ action: 'channel.linked', provider: 'imessage' });
+      expect([linked.status, await linked.json()]).toEqual([503, { error: 'unavailable' }]);
+    }, { chat: unreadable });
+  });
   it('answers unavailable when the directory gives no code', () => owner(async ({ send, act }) => {
     await act({ action: 'start' }); await act(agree);
     const response = await send('/app/v1/onboarding/channel-link', { provider: 'telegram' });

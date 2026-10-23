@@ -67,8 +67,9 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   if (request.method === 'GET') {
     if (path === '/app/v1/onboarding' && !url.search) return answer(appOnboardingV1Schema.parse(await host.firstRun.view()));
     if (path === CHANNELS_PATH && !url.search) {
+      // A provider whose offer the directory cannot confirm is unknown, never not offered: the app must not hide it for a blip.
       const channels = await Promise.all(appChatProviderV1Schema.options.map(async provider =>
-        ({ provider, state: await host.chat.offered(provider) ? await host.chat.linked(provider) : 'not_offered' as const })));
+        ({ provider, state: await host.chat.offered(provider).then(offered => offered ? host.chat.linked(provider) : 'not_offered' as const, () => 'unknown' as const) })));
       return answer(appOnboardingChannelsV1Schema.parse({ surface: host.proactiveSurface(), channels } satisfies AppOnboardingChannelsV1));
     }
     if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(host.consent.list()));
@@ -88,7 +89,9 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
     if (!host.consent.agreed()) return problem('agreements_required');
-    if (!(await host.chat.offered(link.data.provider))) return problem('not_offered');
+    const offered = await host.chat.offered(link.data.provider).catch(() => null);
+    if (offered === null) return problem('unavailable');
+    if (!offered) return problem('not_offered');
     const issued = await host.chat.issue(link.data.provider).catch(() => { logFailure('channel_link_issue'); return null; });
     return issued ? answer(appChannelLinkCodeV1Schema.parse(issued)) : problem('unavailable');
   }
@@ -197,7 +200,10 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     timezoneConfirmed: () => storage.kv.get<boolean>('timezone_confirmed') === true,
     proactiveSurface: () => proactiveSurface(storage.kv),
     setProactiveSurface: surface => setProactiveSurface(storage.kv, surface),
-    chatLink: async provider => await deps.chat.offered(provider) ? deps.chat.linked(provider) : 'not_offered',
+    chatLink: async provider => {
+      const offered = await deps.chat.offered(provider).catch(() => null);
+      return offered === null ? 'unknown' : offered ? deps.chat.linked(provider) : 'not_offered';
+    },
     async setBriefTime(time, timezone) {
       if (await deps.act({ action: 'timezone.set', id: '', value: timezone }) !== true) return false;
       if (await deps.act({ action: 'card.pin', id: 'card:brief', value: time }) !== true) return false;
