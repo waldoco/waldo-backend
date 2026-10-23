@@ -5,7 +5,7 @@ import type { TaskResult } from '@waldo/contracts';
 import type { CalendarItem, GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { calendarPrepDigest, eventBriefs, type PrepGate } from '../src/channels/event-briefs';
-import { meetingPrepApplier, meetingPrepSpec } from '../src/channels/meeting-prep';
+import { meetingPrepApplier, meetingPrepSpec, type MeetingPrepApplyDeps } from '../src/channels/meeting-prep';
 import type { CalendarPrepReceipt } from '../src/channels/telegram-final-outbox';
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, taskBrief, type JobBook, type JobRow } from '../src/tasks/jobs';
@@ -112,7 +112,8 @@ describe('the prep sweep writes a machine job for an accepted meeting', () => {
 });
 
 // The applier over the real job book; the decision and the delivery are fakes that record what they were given.
-const applying = (h: Harness, reply = JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }), admitted = true) => {
+const applying = (h: Harness, reply = JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }), admitted = true) => applyingWith(h, {}, reply, admitted);
+const applyingWith = (h: Harness, over: Partial<MeetingPrepApplyDeps>, reply = JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }), admitted = true) => {
   const decided: string[] = [], delivered: { id: string; receipt: CalendarPrepReceipt }[] = [], log: TurnLogEntry[] = [];
   const held = { code: null as 'held_quiet' | 'held_volume' | 'held_preference' | null };
   const handler = meetingPrepApplier({
@@ -120,6 +121,7 @@ const applying = (h: Harness, reply = JSON.stringify({ kind: 'notify', text: 'Pr
     client: async () => h.client, current: async () => undefined, transaction: work => h.storage.transactionSync(work),
     decide: async (_trace, prompt) => { decided.push(prompt); return reply; },
     enqueue: async (id, _text, receipt, commit) => { if (!admitted) return false; h.storage.transactionSync(commit); delivered.push({ id, receipt }); return true; },
+    ...over,
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
@@ -220,6 +222,53 @@ describe('applying a prep job', () => {
       expect(h.book.get(job.id)!.status).toBe('applied');
       expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_budget' });
     });
+  });
+
+  // A prep that did not reach the owner is not prepped: the next sweep, ten minutes on, asks again with a new job.
+  it.each(['held_quiet', 'held_volume', 'held_preference'] as const)('held by %s at apply: the next sweep writes a new job for the same event', async (code) => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const a = applying(h);
+      a.held.code = code;
+      await a.lane();
+      await h.sweep({ now: h.now + 10 * 60_000 });
+      expect(h.jobs().map(job => job.status)).toEqual(['applied', 'queued']);
+    });
+  });
+  it('refused by the budget at commit, or with the calendar disconnected: the next sweep writes a new job', async () => {
+    for (const disconnect of [false, true]) {
+      await withPrep(event => event, async (h) => {
+        await h.sweep();
+        report(h, FOUND);
+        const a = disconnect ? applyingWith(h, { client: async () => null }) : applying(h, undefined, false);
+        await a.lane();
+        await h.sweep({ now: h.now + 10 * 60_000 });
+        expect(h.jobs()).toHaveLength(2);
+      });
+    }
+  });
+  it('a parked job: the next sweep writes a new job', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      const [job] = h.jobs();
+      h.book.startAttempt(job!.id);
+      h.book.park(job!.id, 'provider_unavailable');
+      await applying(h).lane();
+      await h.sweep({ now: h.now + 10 * 60_000 });
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+  it('a prep that went out, or that the decision or the worker found nothing for, is not asked about again', async () => {
+    for (const result of [FOUND, NOTHING]) {
+      await withPrep(event => event, async (h) => {
+        await h.sweep();
+        report(h, result);
+        await applying(h).lane();
+        await h.sweep({ now: h.now + 10 * 60_000 });
+        expect(h.jobs()).toHaveLength(1);
+      });
+    }
   });
 
   it('a worker result carrying a health reading reaches the decision with the reading withheld', async () => {

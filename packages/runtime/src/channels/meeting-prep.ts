@@ -12,9 +12,10 @@ import type { CalendarPrepReceipt } from './telegram-final-outbox';
 // A prep job not done five minutes before the meeting is dropped: a note after that arrives too late to use.
 const MEETING_PREP_LEAD_MS = 5 * 60_000;
 
-// One job per occurrence, keyed by the event as it stands: a changed event is a new key once the open one settles.
+// One open job per occurrence, keyed per sweep: a job that settled without reaching the owner (held, parked, dropped) leaves
+// the next sweep free to ask again. A prep that was decided is recorded on its digest, so the sweep writes no job for it.
 export const meetingPrepSpec = (prep: PrepJob & Readonly<{ surface: string }>): MachineSpec => ({
-  job: 'meeting_prep', scope: prep.identity.id, key: `machine:meeting_prep:${prep.identity.id}:${prep.inputDigest}`, surface: prep.surface, text: MEETING_PREP_JOB_TEXT,
+  job: 'meeting_prep', scope: prep.identity.id, key: `machine:meeting_prep:${prep.identity.id}:${prep.inputDigest}:${prep.now}`, surface: prep.surface, text: MEETING_PREP_JOB_TEXT,
   items: [
     { ref: prep.event.id, detail: prepProjection(prep.event, prep.timezone) },
     { ref: 'mail_query', detail: prep.query ?? '(the meeting has no usable title or other attendee to search by)' },
