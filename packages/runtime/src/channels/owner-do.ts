@@ -418,10 +418,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   })();
 
-  // Task telemetry goes to the trace book of the surface that takes this owner's proactive work; an object with no runtime
-  // to log through keeps the outcome fields only, never a tool's input or output.
+  // Task telemetry and the worker's spend ceiling go through the runtime of the surface that takes this owner's proactive
+  // work, the one the jobs lane reports on; an object with no runtime to log through keeps the outcome fields only, never a
+  // tool's input or output.
   private taskChannel(): ChannelKind {
-    return this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : 'telegram';
+    return this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : this.imessageOnly() ? 'imessage' : 'telegram';
   }
   private taskLog(entry: TurnLogEntry): void {
     try { this.setup(this.taskChannel()).log(entry); }
