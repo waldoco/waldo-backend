@@ -65,7 +65,7 @@ const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_ou
 // external-tainted privileged calls outright.
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
-const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
+export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
 // Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
 export const PAID_RUNG_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act', 'execute_code']);
 // The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
