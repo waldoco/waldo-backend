@@ -77,8 +77,8 @@ const projections = {
     ledger: view.ledger,
   }),
   profile: (view: ConsoleView) => ({
-    // Existing removal may leave derived text behind. Do not present that text as settled.
-    sections: view.forgettingSpots.length ? [] : view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
+    // The profile is built from memory as the model may see it, so what a forget is still clearing is already left out.
+    sections: view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
     barriers: view.barriers,
     removal: { state: view.forgettingSpots.length ? 'incomplete' as const : 'none_recorded' as const, pending_count: view.forgettingSpots.length },
     holds: view.holds.map((hold) => ({ kind: hold.kind, reason: hold.reason, created_at: hold.created_at })),

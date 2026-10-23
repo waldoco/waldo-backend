@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
+import { forgetPurge } from '../src/memory/forget-purge';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { holdTopic } from './helpers/pending-topic';
 const OWNER = 'owner:1';
@@ -81,6 +82,27 @@ describe('live owner memory', () => {
     expect(s.store.claims()).toHaveLength(0);
     expect(s.history.at(-1)).toContain('Project codename is copper-lantern');
   });
+  it('an approved forget card removes exactly the claims it lists, now and on the purge job\'s later passes', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Has a dog', evidence_quote: 'I have a dog' }, s.ctx('I have a dog'));
+    await s.call('remember', { kind: 'fact', text: 'Has a dog named Bruno who fears thunder', evidence_quote: 'Bruno hides when it thunders' }, s.ctx('Bruno hides when it thunders'));
+    const replay = { authenticatedUserId: OWNER, trigger: 'user_message', toolArgSourceTaint: 'external', approvedTaintedAction: { tool: 'forget_memory', args_digest: 'd' } } as unknown as MemoryToolContext;
+    expect(await s.call('forget_memory', { claim_ids: [1], scope_note: 'dog' }, replay)).toMatchObject({ ok: true, data: { removed_ids: [1] } });
+    const kept = [[2, 'Has a dog named Bruno who fears thunder']];
+    expect(s.store.allClaims().map(c => [c.id, c.text])).toEqual(kept);
+    // The host hands the job every text the forget cleans, as the owner's object does; the job's passes keep the claim too.
+    const job = forgetPurge({ sql: s.sql, store: s.store, stores: [], now: () => Date.parse('2026-10-08T09:01:00Z'), arm: async () => undefined });
+    await job.track(s.history.at(-1)!);
+    await job.run();
+    expect(s.store.allClaims().map(c => [c.id, c.text])).toEqual(kept);
+  });
+  it('a forget by topic removes the claims that carry it, not other claims that share a selected claim\'s sentence', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'preference', text: 'Has a hobby', evidence_quote: 'I fish for Bluefin' }, s.ctx('I fish for Bluefin'));
+    await s.call('remember', { kind: 'preference', text: 'Has a hobby of painting', evidence_quote: 'I paint on Sundays' }, s.ctx('I paint on Sundays'));
+    expect(await s.call('forget_memory', { topic: 'Bluefin', scope_note: 'fishing' }, s.ctx('forget Bluefin'))).toMatchObject({ ok: true, data: { removed_ids: [1] } });
+    expect(s.store.allClaims().map(c => c.text)).toEqual(['Has a hobby of painting']);
+  });
   it('validates every forget selector before any mutation and barriers re-admission', async () => {
     const s = setup();
     await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'));
@@ -107,13 +129,14 @@ describe('live owner memory', () => {
     expect(await s.call('forget_memory', { source: { message_ref: 'tg-8', start: 16, end: 19 }, scope_note: 'quoted tea' }, context)).toMatchObject({ ok: false });
     expect(s.history).toHaveLength(0);
   });
-  it('reports history cleanup failure without deleting claims or claiming completion', async () => {
+  it('a cleanup that fails after the commit still reports the forget, with cleanup running, and never claims completion', async () => {
     const s = setup();
     await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'tea' }, s.ctx('tea'));
     const handlers = memoryHandlers({ sql: s.sql, store: s.store, conversationRef: CHAT, hideHistory: async () => { throw new Error('history unavailable'); } });
     const handler = handlers.find(h => h.name === 'forget_memory')!;
-    await expect(handler.handle(handler.schema.parse({ claim_ids: [1], scope_note: 'tea' }), s.ctx('forget tea'))).rejects.toThrow('history unavailable');
-    expect(s.store.claims()).toHaveLength(1);
+    expect(await handler.handle(handler.schema.parse({ claim_ids: [1], scope_note: 'tea' }), s.ctx('forget tea'))).toMatchObject({ ok: true, data: { removed_ids: [1], cleanup: 'running' } });
+    expect(s.store.claims()).toHaveLength(0);
+    expect(s.store.pendingTopics()).toContain('Tea');
   });
   it('filters pending topics only, preserving unrelated read results', async () => {
     const s = setup();
@@ -135,12 +158,16 @@ describe('live owner memory', () => {
   });
   it('keeps an unsettled forget out of recall, and a later forget_memory on the topic finishes it', async () => {
     const s = setup();
+    // As in the owner object: the forget's cleaning pass is the purge job's.
+    const purge = forgetPurge({ sql: s.sql, store: s.store, stores: [], now: () => Date.parse('2026-10-08T09:00:00Z'), arm: async () => undefined });
+    const handlers = memoryHandlers({ sql: s.sql, store: s.store, conversationRef: CHAT, now: () => new Date('2026-10-08T09:00:00Z'), hideHistory: texts => purge.track(texts) });
+    const forget = handlers.find(h => h.name === 'forget_memory')!;
     s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
     holdTopic(s.sql, 'oolong', '2026-10-07T08:00:00Z');
     expect(s.store.pendingTopics()).toEqual(['oolong']);
     const read = await s.call('read_memory', { query: 'tea' }, s.ctx('what tea do I like'));
     expect(JSON.stringify(read)).not.toContain('oolong');
-    expect(await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'))).toMatchObject({ ok: true });
+    expect(await forget.handle(forget.schema.parse({ topic: 'oolong', scope_note: 'oolong' }), s.ctx('forget oolong'))).toMatchObject({ ok: true, data: { cleanup: 'done' } });
     expect(s.store.pendingTopics()).toEqual([]);
   });
 });

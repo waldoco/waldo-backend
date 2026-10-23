@@ -118,9 +118,10 @@ describe('narrow controls read projection', () => {
     expect(result.data.runs[3]).toMatchObject({ status: 'running', ended: null, summary: null });
   });
 
-  it('suppresses profile while removal is incomplete without leaking purge text or ids', () => {
+  it('shows the profile while a removal is incomplete, without leaking purge text or ids', () => {
+    // The profile is built from memory with held items already left out, so it is shown, not blanked.
     const result = projectControls(SAMPLE_CONSOLE_VIEW, 'profile');
-    expect(result.data).toEqual({ sections: [], barriers: 1, removal: { state: 'incomplete', pending_count: 1 }, holds: [{ kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }] });
+    expect(result.data).toEqual({ sections: SAMPLE_CONSOLE_VIEW.profile, barriers: 1, removal: { state: 'incomplete', pending_count: 1 }, holds: [{ kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }] });
     expect(JSON.stringify(result)).not.toContain('4123');
     expect(JSON.stringify(result)).not.toContain('source_ref');
     const complete = projectControls({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] }, 'profile');
