@@ -170,7 +170,10 @@ describe('forget purge job', () => {
       const id = (text: string) => store.claims().find((claim) => claim.text === text)!.id;
       const [forgotten, named, afraid] = [id('Has a dog'), id('Has a dog named Bruno who fears thunder'), id('Bruno is afraid of storms')];
       sql.exec("UPDATE claims SET status = 'purging' WHERE id = ?", forgotten);
-      for (let pass = 0; pass < 3; pass += 1) await purge.run();
+      await purge.run();
+      // Held as history: a later pass never purges the claims table by them.
+      expect(sql.exec<{ scope: string }>('SELECT DISTINCT scope FROM topic_purge_pending').toArray()).toEqual([{ scope: 'history' }]);
+      for (let pass = 0; pass < 2; pass += 1) await purge.run();
       expect(store.allClaims().map((claim) => [claim.id, claim.text, claim.evidence]).sort()).toEqual([
         [named, `${FORGOTTEN} named Bruno who fears thunder`, 'owner, tg-2: "Bruno hides under the bed"'],
         [afraid, 'Bruno is afraid of storms', `owner, tg-1: "${FORGOTTEN}"`],
