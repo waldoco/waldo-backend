@@ -1,6 +1,5 @@
 -- The derived row keeps sleep debt and takes drivers only from a closed vocabulary (ADR-0081 amendment AW-3 and AW-7).
--- Sleep debt was computed with the three pillars after every upload, then dropped. This rebuilds #1127's change on the
--- current writer, whose zone-change answer and WHOOP basis #1127's fence-era body would have undone.
+-- Sleep debt was computed with the three pillars after every upload, then dropped.
 -- - public.health_context_daily.sleep_debt: one nullable column, so it inherits the row's consent fence, 24-month
 --   retention and purge on storage withdrawal or account deletion.
 -- - waldo.health_context_write is re-created whole from its last definition (20261021150000). It takes sleep debt only in

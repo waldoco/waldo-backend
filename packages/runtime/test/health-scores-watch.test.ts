@@ -46,6 +46,24 @@ describe('health scores v2: versions', () => {
   });
 });
 
+describe('Form v5: Recovery v2\'s inputs, and nothing else', () => {
+  // An hour that holds only active energy is Weight's. Form's hour count, its data horizon and the hour still filling are
+  // read from the hours Form reads, so adding such hours never moves Form.
+  const energyHours = (day: string, hours: readonly number[]): HourlyBucket[] => hours.map(h => ({
+    startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(), heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null, activeEnergyKcal: 15,
+  }));
+  it('never changes Form when hours holding only active energy are added, today or on earlier days', () => {
+    const plain = month();
+    const before = computeDailyScores(input(plain)).form;
+    const later = withTarget(plain, { hourly: [...plain[0]!.hourly, ...energyHours(TARGET, [20, 21])] });
+    expect(computeDailyScores({ ...input(later), asOf: `${TARGET}T21:30:00.000Z` }).form).toEqual(computeDailyScores({ ...input(plain), asOf: `${TARGET}T21:30:00.000Z` }).form);
+    const sparse = withTarget(plain, { hourly: [...plain[0]!.hourly.slice(0, 5), ...energyHours(TARGET, [13, 14, 15, 16, 17])] });
+    expect(computeDailyScores(input(sparse)).form).toEqual(computeDailyScores(input(withTarget(plain, { hourly: plain[0]!.hourly.slice(0, 5) }))).form);
+    const earlier = plain.map((d, i) => (i === 0 ? d : { ...d, hourly: [...d.hourly, ...energyHours(d.day, [2, 3, 4, 20, 21, 22])] }));
+    expect(computeDailyScores(input(earlier)).form).toEqual(before);
+  });
+});
+
 describe('Recovery v2: HRV, one method per night with a fallback', () => {
   const sdnnMonth = () => month(i => ({ overnightHrv: [{ value: 45 + wobble(i, 5), method: 'sdnn' }] }));
   it('uses SDNN with its mature baseline on a night whose RMSSD has no baseline yet, instead of dropping HRV', () => {

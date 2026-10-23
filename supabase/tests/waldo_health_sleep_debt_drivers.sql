@@ -4,7 +4,7 @@ select plan(29);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
--- Sleep debt on the derived row (rebuilt from #1127 on the current writer) and the closed driver vocabulary. Synthetic
+-- Sleep debt on the derived row, written through the current writer, and the closed driver vocabulary. Synthetic
 -- owner and synthetic values throughout.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$

@@ -5,9 +5,9 @@ import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableRea
 // reads an hour or day with no daylight or movement reading as missing, not zero; Weight v3 counts every day the calendar
 // reports, not only days with health readings. Form v4 compares a day still in progress with the same wall-clock hours of
 // earlier days, and judges a finished day on the hours it has. Recovery v2 reads HRV and resting heart rate against a
-// baseline of their own method only, with a fallback method; Form v5 is Form v4 on Recovery v2's inputs, with active-energy
-// hours among its hourly windows. Weight v4 reads physical load as the day's active energy, falling back to minutes. A
-// change in which inputs are admitted is a new version.
+// baseline of their own method only, with a fallback method; Form v5 is Form v4 on Recovery v2's inputs, and also clears a
+// day whose active-energy windows overlap. Weight v4 reads physical load as the day's active energy, falling back to
+// minutes. A change in which inputs are admitted is a new version.
 export const ALGORITHM = { recovery: 'recovery.candidate.v2', form: 'form.candidate.v5', weight: 'weight.candidate.v4', sleepDebt: 'sleep-debt.candidate.v1' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
