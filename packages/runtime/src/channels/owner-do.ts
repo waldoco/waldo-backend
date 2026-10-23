@@ -4315,9 +4315,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.heartbeat) {
         settleHeartbeat(record, this.ctx.storage.sql, scheduler);
         if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') {
-          if (forgetCancelled) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent: it named something you asked me to forget');
-          else if (lapsedUnsent) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent; your WhatsApp window stayed closed for 30 days');
-          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : partlySent ? 'heartbeat partly sent; the rest was not sent' : record.reason === 'provider_failed' ? 'heartbeat could not be delivered' : 'heartbeat delivery unconfirmed');
+          // The heartbeat's schedule run settled when the tick wrote the job, so a send that failed is told here, on the run of
+          // the send and on its own hop.
+          const [status, summary]: [Parameters<typeof runs.finish>[1], string] = forgetCancelled ? ['stopped', 'heartbeat not sent: it named something you asked me to forget']
+            : lapsedUnsent ? ['stopped', 'heartbeat not sent; your WhatsApp window stayed closed for 30 days']
+              : [delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : partlySent ? 'heartbeat partly sent; the rest was not sent' : record.reason === 'provider_failed' ? 'heartbeat could not be delivered' : 'heartbeat delivery unconfirmed'];
+          runs.finish(record.heartbeat.runId, status, summary);
+          log({ trace: record.trace, hop: 'heartbeat_delivery', ms: 0, ok: delivered, detail: summary, ...(record.reason ? { code: record.reason } : {}) });
         }
       }
       if (record.reminder) {
