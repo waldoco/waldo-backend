@@ -192,7 +192,7 @@ describe('readMemoryArgs', () => {
 describe('readMemoryResult', () => {
   const claim = {
     id: 1, kind: 'preference', text: 'Usually gym 11am', evidence: 'I go to the gym at 11', source: 'stated', origin: 'owner',
-    source_ref: 'owner, tg-1', learned_at: '2026-09-30T01:00:00Z', valid_from: null, verification_status: 'owner-grounded',
+    source_ref: 'owner, tg-1', verification_status: 'owner-grounded',
     supersedes_id: null, last_seen_at: '2026-09-30T01:00:00Z',
   };
   const result = { claims: [claim], omitted_claim_ids: [], complete: true, authority: 'context_only_not_action_approval' };
@@ -209,6 +209,12 @@ describe('readMemoryResult', () => {
     const { evidence: _evidence, ...unsourced } = claim;
     expect(readMemoryResultSchema.safeParse({ ...result, claims: [unsourced] }).success).toBe(false);
     expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: 'untrusted' }] }).success).toBe(false);
+  });
+
+  it('carries no validity start and no learned time: one is never written and the other repeats the row creation', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, verification_status: 'unverified' }] }).success).toBe(true);
+    for (const extra of [{ valid_from: null }, { valid_from: '2026-09-30T01:00:00Z' }, { learned_at: '2026-09-30T01:00:00Z' }])
+      expect([extra, readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, ...extra }] }).success]).toEqual([extra, false]);
   });
 
   it('rejects a read that claims completeness while omitting a claim, or the reverse, or any action authority', () => {

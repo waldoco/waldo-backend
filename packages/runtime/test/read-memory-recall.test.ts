@@ -61,7 +61,17 @@ describe('read_memory as the one recall function', () => {
       return m.call({ query: 'workout' }, ownerTurn());
     }) as { data: { claims: Record<string, unknown>[] } };
     expect(result.data.claims).toHaveLength(1);
-    expect(Object.keys(result.data.claims[0]!).sort()).toEqual(['evidence', 'id', 'kind', 'last_seen_at', 'learned_at', 'origin', 'source', 'source_ref', 'supersedes_id', 'text', 'valid_from', 'verification_status']);
+    expect(Object.keys(result.data.claims[0]!).sort()).toEqual(['evidence', 'id', 'kind', 'last_seen_at', 'origin', 'source', 'source_ref', 'supersedes_id', 'text', 'verification_status']);
+  });
+
+  it('reads a claim stored before provenance was recorded as unverified, as the memory prompt labels it', async () => {
+    const result = await inDo(async sql => {
+      const m = readMemory(sql); m.store.add(gym, '2026-09-30T01:00:00Z', 1);
+      sql.exec('UPDATE claims SET verification_status = NULL, origin = NULL, source_ref = NULL WHERE id = 1');
+      return m.call({ query: 'gym' }, machine);
+    });
+    expect(result).toMatchObject({ ok: true, data: { claims: [{ id: 1, origin: null, source_ref: null, verification_status: 'unverified' }] } });
+    expect(readMemoryResultSchema.safeParse((result as { data: unknown }).data).success).toBe(true);
   });
 
   it('excludes forgotten, superseded, untrusted and temporally ended claims', async () => {
