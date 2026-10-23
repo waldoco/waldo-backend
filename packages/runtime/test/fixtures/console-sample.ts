@@ -48,7 +48,6 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     step('Chat reply', '2026-09-23 22:40'), step('Memory update', '2026-09-23 22:40', '+1 held0 seen1 confirmed0 dismissed0 forgot0'),
     step('Reminder fired', '2026-09-23 22:45'), step('Day plan', '2026-09-23 03:00'), step('Brief / midday / close card', '2026-09-23 14:00', 'card:midday'),
     step('Fetch update card', null), step('Pre-event brief', '2026-09-23 09:50', 'google not connected', 'failed'), step('Nightly memory', '2026-09-23 03:00', '12 turns; MEMORY_CORE'),
-    step('Constellation promotion', '2026-09-23 03:00', 'nodes2 edges1 promoted1'),
   ],
   lastRequest: null,
   trace: [
