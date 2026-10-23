@@ -1,5 +1,5 @@
 import type { ApprovalReview } from './approvals';
-import { consoleMayApprove, type ConsoleView } from './console';
+import { waitingMayApprove, waitingMayChange, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
@@ -24,7 +24,7 @@ export function readControlsQuery(params: URLSearchParams): ControlsQuery | null
 
 const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
-  if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
+  if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? { account: review.account } : {}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
   if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
@@ -59,9 +59,9 @@ const projections = {
     timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
-      const canApprove = consoleMayApprove(item) && review !== null;
+      const canApprove = waitingMayApprove(item) && review !== null;
       const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
-      const actions = canApprove ? ['approval.approve', 'approval.skip']
+      const actions = canApprove ? ['approval.approve', ...(waitingMayChange(item) ? ['approval.edit'] : []), 'approval.skip']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions };

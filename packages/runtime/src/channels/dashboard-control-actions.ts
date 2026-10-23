@@ -1,4 +1,4 @@
-import {parseConsoleAction,NOTICES,consoleMayApprove,type ConsoleAction,type ConsoleView} from './console';
+import {parseConsoleAction,NOTICES,waitingMayApprove,waitingMayChange,type ConsoleAction,type ConsoleView} from './console';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
@@ -21,7 +21,7 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
+const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity']};
@@ -86,9 +86,10 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);
  if(action.action.startsWith('approval.')) {
   const p=view.approvals.find(p=>p.id===action.id);if(!p)return false;
-  if(action.action==='approval.approve')return consoleMayApprove(p);
+  if(action.action==='approval.approve')return waitingMayApprove(p);
+  if(action.action==='approval.edit')return waitingMayChange(p);
   if(action.action==='approval.undo')return p.state==='done'&&p.undoable&&p.kind==='calendar_change';
-  return consoleMayApprove(p)||(['email_send','message_send'].includes(p.kind)&&['open','review_only'].includes(p.state));
+  return waitingMayApprove(p)||(['email_send','message_send'].includes(p.kind)&&['open','review_only'].includes(p.state));
  }
  return true;
 }
@@ -140,7 +141,7 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
  'Review it in the app':'That approval was not shown in full here, so nothing was done.','Channel not connected':'That channel is not connected, so nothing was sent.',
  'Messaging is not set up':'Messaging is not set up, so nothing was sent.','Browsing is not set up':'Browsing is not set up, so nothing was done.','MCP is not set up':'MCP is not set up, so nothing ran.',
  'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Message changed':'The stored message no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
- 'Not done':'The browser action was not done.','That failed':'That did not work. Nothing else ran.',
+ 'Not done':'The browser action was not done.','Not sent':'Gmail refused the send, so nothing went out.','That failed':'That did not work. Nothing else ran.',
  'Nothing ran':'Nothing ran. The server did not carry out that call.','Call changed':'The stored call no longer matches what was approved, so nothing ran.',
  'Outcome unknown':'The operation outcome is unknown. Check the result before retrying; nothing was run again.',
  'Result not verified':'The result could not be verified. Check it before retrying.','Receipt not checked':'The result could not be verified. Check it before retrying.',
@@ -148,7 +149,8 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
 const APPROVAL_RECEIPT_FALLBACK:Readonly<Record<ControlReceipt['state'],string>>={recorded:'The decision was recorded.',incomplete:'The decision was only partly applied. Refresh the records.',
  rejected:'That decision was not carried out. Refresh the records and try again.',unconfirmed:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
 const approvalReceiptState=(out:ApprovalDecision):ControlReceipt['state']=>['Done','Undone','Not now','Later','Sent','Already sent','Verified','Tell me what to change'].includes(out.toast)?'recorded':out.toast==='Outcome unknown'?'unconfirmed'
- :['Already handled.','Nothing ran','Call changed','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected'].includes(out.toast)?'rejected':'unconfirmed';
+ :['Already handled.','Nothing ran','Call changed','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected',
+  'Email changed','Message changed','Not sent','Key already used','Messaging is not set up'].includes(out.toast)?'rejected':'unconfirmed';
 // The console derives the state from the decision; the app passes the state its status transition proved.
 // A desk refusal the console treats as unconfirmed is still a definite "nothing was done" once the
 // app's transition proves the row did not move; unknown outcomes never read as refusals.
