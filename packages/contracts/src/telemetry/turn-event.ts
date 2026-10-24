@@ -9,15 +9,16 @@ import { providerSchema } from '../model/roster';
 // `shape.voice_version` is set on calls whose system prompt carries the voice block.
 // v12: `tool_search_degraded` marks a model call answered after the model refused the tool search request shape and
 // every tool was resent up front; `tools_bytes` is the size of the offered catalogue either way.
-export const TURN_EVENT_SCHEMA_VERSION = '12';
+// v13: `rung_blocked` can name `device_offline`, a use_mac call refused because the owner's Mac was not connected.
+export const TURN_EVENT_SCHEMA_VERSION = '13';
 
 // Every v9 addition is a number, a boolean or a member of a closed vocabulary. Free text lives only in the
 // fields named by TURN_EVENT_TEXT_FIELDS, which the privacy gate strips whenever text capture is off.
 export const executionRungSchema = z.enum(['memory', 'connector', 'email', 'fetch', 'browser', 'sandbox', 'mac', 'human']);
 export type ExecutionRung = z.infer<typeof executionRungSchema>;
 
-// The last three are a page's own block (rungBlockedOutcomeSchema), which a tool hop reports when its tool returned one.
-export const rungBlockedReasonSchema = z.enum(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required']);
+// The last four are a tool's own structured block (rungBlockedOutcomeSchema), which a tool hop reports when its tool returned one.
+export const rungBlockedReasonSchema = z.enum(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required', 'device_offline']);
 export type RungBlockedReason = z.infer<typeof rungBlockedReasonSchema>;
 
 export const turnOutcomeSchema = z.enum(['answered', 'completed', 'failed', 'dropped', 'delivery_pending', 'blocked']);
