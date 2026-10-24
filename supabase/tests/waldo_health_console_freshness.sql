@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(46);
+select plan(56);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -113,13 +113,44 @@ select is(pg_temp.h('refusal_note','hf-owner-b','{"code":"invalid_request","stat
 select is(pg_temp.h('refusal_note','hf-owner-missing','{"code":"invalid_request","status":400}'),'{"error":"not_linked"}'::jsonb,'an unknown owner cannot be counted');
 select throws_ok($$ select waldo.health_refusal_note('hf-owner-b','{"code":"invalid_request","status":400}',pg_temp.at(),'unsigned') $$,'42501',null,'an unsigned note is refused');
 
--- The window and the retention: eight days back is stored but outside the window; 31 days back is pruned by the next note.
+-- No other owner's receipts or refusals reach an owner's freshness: the admin owner now has receipts and refusals of its own.
+insert into waldo.health_requests(owner_id,request_id,operation,payload_digest,response,created_at) values
+ ('a3000000-0000-0000-0000-0000000000f3','hf-a-1','ingest','d','{"source":"apple","accepted":1,"ignored":0,"deleted":0,"rejected":[{"change":"sample","index":0,"signal":"spo2","reason":"invalid_sample"},{"change":"sample","index":1,"signal":"hrv","reason":"revision_conflict"}]}',now()-interval '1 hour');
+select pg_temp.h('refusal_note','hf-owner-a','{"code":"epoch_conflict","status":409}');
+select pg_temp.h('refusal_note','hf-owner-a','{"code":"invalid_request","status":400}');
+select is(pg_temp.src(pg_temp.h('freshness_read','hf-owner-b')->'freshness','apple')->'rejected_readings_7d',
+  '[{"count":2,"reason":"invalid_sample"},{"count":1,"reason":"unsupported_signal"}]'::jsonb,'an owner sees only their own rejected readings');
+select is((select jsonb_agg(r->>'code'||':'||(r->>'status')||':'||(r->>'count') order by r->>'code') from jsonb_array_elements(pg_temp.h('freshness_read','hf-owner-b')->'freshness'->'refusals_7d') r),
+  '["consent_withdrawn:403:1","invalid_request:400:2"]'::jsonb,'an owner sees only their own refusal counts, and no code only another owner has');
+select is(pg_temp.src(pg_temp.h('freshness_read','hf-owner-a')->'freshness','apple')->'rejected_readings_7d',
+  '[{"count":1,"reason":"invalid_sample"},{"count":1,"reason":"revision_conflict"}]'::jsonb,'the other owner sees only theirs');
+select is((select jsonb_agg(r->>'code'||':'||(r->>'status')||':'||(r->>'count') order by r->>'code') from jsonb_array_elements(pg_temp.h('freshness_read','hf-owner-a')->'freshness'->'refusals_7d') r),
+  '["epoch_conflict:409:1","invalid_request:400:1"]'::jsonb,'and only their own refusal counts');
+
+-- The window: eight days back is stored but not listed.
 insert into waldo.health_ingest_refusals(owner_id,day,code,status,refusals,newest_at) values
- ('b3000000-0000-0000-0000-0000000000f3',(now() at time zone 'UTC')::date-8,'sample_conflict',409,5,now()-interval '8 days'),
- ('c3000000-0000-0000-0000-0000000000f3',(now() at time zone 'UTC')::date-31,'anchor_conflict',409,1,now()-interval '31 days');
+ ('b3000000-0000-0000-0000-0000000000f3',(now() at time zone 'UTC')::date-8,'sample_conflict',409,5,now()-interval '8 days');
 select ok(not exists (select 1 from jsonb_array_elements(pg_temp.h('freshness_read','hf-owner-b')->'freshness'->'refusals_7d') r where r->>'code'='sample_conflict'),'a refusal older than the window is not listed');
+
+-- Retention belongs to the health retention calls, not to the note: counts are kept 30 days, and an owner whose only
+-- expired rows are counts is still found by the sweep.
+insert into waldo.health_ingest_refusals(owner_id,day,code,status,refusals,newest_at) values
+ ('b3000000-0000-0000-0000-0000000000f3',(now() at time zone 'UTC')::date-31,'anchor_conflict',409,1,now()-interval '31 days'),
+ ('c3000000-0000-0000-0000-0000000000f3',(now() at time zone 'UTC')::date-31,'anchor_conflict',409,1,now()-interval '31 days');
 select pg_temp.h('refusal_note','hf-owner-b','{"code":"invalid_request","status":413}');
-select is((select count(*)::int from waldo.health_ingest_refusals where day<(now() at time zone 'UTC')::date-30),0,'counts older than 30 days are pruned for every owner');
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='c3000000-0000-0000-0000-0000000000f3'),1,'a note never deletes another owner''s counts');
+select pg_temp.h('retention','hf-owner-b');
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3' and day<(now() at time zone 'UTC')::date-30),0,'the owner''s retention call ages out their counts older than 30 days');
+select is((select refusals from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3' and code='sample_conflict'),5,'counts inside 30 days are kept');
+select waldo.health_retention_sweep('{"limit":50}',pg_temp.at(),pg_temp.sig('health.retention_sweep.'||md5('{"limit":50}'),pg_temp.at()));
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='c3000000-0000-0000-0000-0000000000f3'),0,'the sweep finds an owner whose only expired rows are refusal counts');
+
+-- Withdrawing storage purges the owner's counts. They are not kept by source, so all of them go; a model-processing
+-- withdrawal keeps them.
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3')>0,true,'the earlier model-processing withdrawal kept the counts');
+select pg_temp.h('consent_withdraw','hf-owner-b',jsonb_build_object('request_id','hf-withdraw-apple-s','source','apple','purpose','storage_compute','expected_epoch',1)::text);
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3'),0,'withdrawing storage purges the owner''s refusal counts');
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='a3000000-0000-0000-0000-0000000000f3'),2,'and no other owner''s');
 
 -- Deleting an owner deletes their counts.
 select pg_temp.h('refusal_note','hf-owner-c','{"code":"consent_required","status":403}');
