@@ -141,4 +141,3 @@ describe('admin tester freshness view', () => {
     expect(renderToStaticMarkup(<AdminHealthView state={{ kind: 'absent' }} now={NOW}/>)).toContain('Page not found');
   });
 });
-
