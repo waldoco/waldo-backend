@@ -73,6 +73,14 @@ describe('full waiting proposal review', () => {
     expect(pending).not.toMatch(/<button(?![^>]*disabled="")[^>]*>(Send this|Change it)/); expect(pending).not.toContain('/console/waiting');
   });
 
+  it('warns beside Send when an identical email may already have gone out', () => {
+    const email = waiting.data.proposals[1]!;
+    const warned = { ...email, review: { ...email.review!, earlier_unknown_at: 'Fri 23 Oct, 14:05' } } as typeof email;
+    const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [warned] } }} busy={false} onAction={noop}/>);
+    expect(html).toMatch(/role="alert"[^>]*>An identical email from Fri 23 Oct, 14:05 may already have gone out\. Check Gmail’s Sent folder before you send it again\.<\/p><div class="control-actions"><button class="primary"[^>]*>Send this email</);
+    expect(renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [email] } }} busy={false} onAction={noop}/>)).not.toContain('may already have gone out');
+  });
+
 });
 
 describe('recorded activity and pagination', () => {

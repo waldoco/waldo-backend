@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { consoleAccess } from '../src/channels/console';
+import { CONSOLE_ACTION_PATH, consoleAccess } from '../src/channels/console';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { emailProposal, sentMime } from './fixtures/email-send';
@@ -22,10 +22,16 @@ vi.mock('../src/connectors/google', async load => {
 
 type Waiting = { csrf: string; revision: string; data: { proposals: { id: string; kind: string; state: string; review: Record<string, unknown> | null; actions: string[] }[] } };
 
-it('the console Waiting view shows an email draft exactly, and approves, skips and changes it through the real action route', async () => {
-  proof.telegram = []; proof.sentRaw = []; proof.logged = [];
-  const name = `console-send-approvals-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
-  await runInDurableObject(stub, async (_unused, state) => {
+type Harness = Readonly<{
+  instance: OwnerDO; state: DurableObjectState; token: string; cookie: Readonly<{ cookie: string }>; desk: any;
+  read(): Promise<Waiting>;
+  act(waiting: Waiting, action: string, id: string, request: string): Promise<{ status: number; text: string }>;
+  row(id: string): { status: string; payload_json: string };
+}>;
+
+const withConsole = (label: string, body: (harness: Harness) => Promise<void>) => {
+  const name = `${label}-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  return runInDurableObject(stub, async (_unused, state) => {
     const settings = { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-webhook-secret', OPENAI_API_KEY: 'synthetic-model-key', WALDO_OWNER_TIMEZONE: 'UTC',
       GOOGLE_CLIENT_ID: 'fictional-client', GOOGLE_CLIENT_SECRET: 'fictional-secret', BROWSER: undefined };
     const instance = new OwnerDO(state, settings as never);
@@ -41,10 +47,18 @@ it('the console Waiting view shows an email draft exactly, and approves, skips a
     };
     const desk = (instance as any).setup('telegram').desk;
     const row = (id: string) => state.storage.sql.exec<{ status: string; payload_json: string }>('SELECT status, payload_json FROM ledger WHERE id = ?', id).one();
+    await body({ instance, state, token, cookie, desk, read, act, row });
+  });
+};
+
+const draft = { to: ['sam@example.test'], cc: ['pat@example.test'], subject: 'PRIVATE-SUBJECT Friday', body: 'PRIVATE-BODY See you at four.\n\nRo', account: 'owner@example.test' };
+
+it('the console Waiting view shows an email draft exactly, and approves, skips and changes it through the real action route', async () => {
+  proof.telegram = []; proof.sentRaw = []; proof.logged = [];
+  await withConsole('console-send-approvals', async ({ state, token, desk, read, act, row }) => {
     const logs = vi.spyOn(console, 'log').mockImplementation((...args) => { proof.logged.push(args.map(String).join(' ')); });
     const errors = vi.spyOn(console, 'error').mockImplementation((...args) => { proof.logged.push(args.map(String).join(' ')); });
     try {
-      const draft = { to: ['sam@example.test'], cc: ['pat@example.test'], subject: 'PRIVATE-SUBJECT Friday', body: 'PRIVATE-BODY See you at four.\n\nRo', account: 'owner@example.test' };
       const sendId = await desk.proposeSendEmail(await emailProposal({ ...draft, message_id: '<console-send@waldo-send>' }));
       const skipId = await desk.proposeSendEmail(await emailProposal({ ...draft, subject: 'PRIVATE-SUBJECT skip', message_id: '<console-skip@waldo-send>' }));
       const editId = await desk.proposeSendEmail(await emailProposal({ ...draft, subject: 'PRIVATE-SUBJECT edit', message_id: '<console-edit@waldo-send>' }));
@@ -90,5 +104,36 @@ it('the console Waiting view shows an email draft exactly, and approves, skips a
       expect(proof.logged.some(line => line.includes('"hop":"email_send"'))).toBe(true);
       expect(proof.logged.join('\n')).not.toMatch(/PRIVATE-/);
     } finally { logs.mockRestore(); errors.mockRestore(); }
+  });
+});
+
+it('warns on the console, as on the card, when an identical email may already have gone out', async () => {
+  proof.telegram = []; proof.sentRaw = [];
+  await withConsole('console-send-duplicate', async ({ state, desk, read }) => {
+    const earlierId = await desk.proposeSendEmail(await emailProposal({ ...draft, message_id: '<console-earlier@waldo-send>' }));
+    state.storage.sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ?", Date.now() - 60 * 60_000, earlierId);
+    const againId = await desk.proposeSendEmail(await emailProposal({ ...draft, message_id: '<console-again@waldo-send>' }));
+    const cards = proof.telegram.filter(call => call.method === 'sendMessage').map(call => String(call.body.text));
+    const at = cards.map(text => /An identical email from (.+?) may already have gone out/.exec(text)?.[1]).find(Boolean);
+    expect(at).toBeTruthy();
+    const shown = (await read()).data.proposals.find(item => item.id === againId)!;
+    expect([shown.actions, shown.review]).toEqual([['approval.send', 'approval.edit', 'approval.skip'], expect.objectContaining({ kind: 'email_send', earlier_unknown_at: at })]);
+    const fresh = await desk.proposeSendEmail(await emailProposal({ ...draft, subject: 'PRIVATE-SUBJECT other', message_id: '<console-other@waldo-send>' }));
+    expect((await read()).data.proposals.find(item => item.id === fresh)!.review).not.toHaveProperty('earlier_unknown_at');
+  });
+});
+
+it('the classic console form refuses Send and Change it, and changes no card with them', async () => {
+  await withConsole('console-classic-send', async ({ instance, state, token, cookie }) => {
+    const csrf = (await state.storage.get<Record<string, { csrf: string }>>('console:sessions'))![token]!.csrf;
+    const plan = () => state.storage.sql.exec('SELECT * FROM day_plan').toArray();
+    await (instance as any).setup('telegram').ready;
+    const before = plan();
+    for (const action of ['approval.send', 'approval.edit']) {
+      const response = await instance.fetch(new Request(`https://telegram-owner${CONSOLE_ACTION_PATH}`, { method: 'POST', headers: { ...cookie, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf, action, id: 'card:brief', value: '09:00' }) }));
+      expect([action, await response.text()]).toEqual([action, expect.not.stringContaining('recorded')]);
+    }
+    expect(plan()).toEqual(before);
   });
 });

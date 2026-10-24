@@ -68,6 +68,10 @@ describe('modern owner controls read', () => {
     expect(readControls({ ...value, data: { timezone: 'Not/AZone', proposals: [proposal] } }, 'waiting').data.timezone).toBeNull();
     const { account: _account, ...withoutAccount } = proposal.review;
     expect(readControls({ ...value, data: { proposals: [{ ...proposal, review: withoutAccount }] } }, 'waiting').data.proposals[0]?.review).not.toHaveProperty('account');
+    const earlier = (at: unknown) => readControls({ ...value, data: { proposals: [{ ...proposal, review: { ...proposal.review, earlier_unknown_at: at } }] } }, 'waiting').data.proposals[0]?.review;
+    expect(earlier('Fri 23 Oct, 14:05')).toMatchObject({ earlier_unknown_at: 'Fri 23 Oct, 14:05' });
+    expect(readControls(value, 'waiting').data.proposals[0]?.review).not.toHaveProperty('earlier_unknown_at');
+    expect(() => earlier(42)).toThrow();
     const calendar = { id: 'walk', kind: 'calendar_change', state: 'open', summary: 'Walk', actions: ['approval.approve', 'approval.skip'], review: { kind: 'calendar_change', action: 'create', title: 'Walk', event_id: null, start: null, end: null, reason: 'asked' } };
     expect(readControls({ ...value, data: { proposals: [calendar] } }, 'waiting').data.proposals[0]?.actions).toEqual(calendar.actions);
     for (const wrong of [
