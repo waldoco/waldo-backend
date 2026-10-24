@@ -117,6 +117,8 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string; earlier_unknown_at?: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
+  // A tool or action approval: the same frozen review its card and the app show (tool, masked arguments, what approving runs).
+  | Readonly<{ kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
       calendar_id?: string; attendees?: readonly string[]; send_updates?: 'all' | 'none'; location?: string; description?: string; add_meet_link?: boolean }>;
@@ -208,6 +210,8 @@ const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
 const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
 // The statuses a request can still be decided or edited from, which its expiry closes.
 const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
+// task_sources requests have no writer any more and approving one only answers that it expired, so they expire like the rest.
+const EXPIRING_KINDS: readonly string[] = [...PROPOSAL_KINDS, 'task_sources'];
 // The scope a browser approval names: the page without credentials, query string or fragment.
 const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
 const describeBrowser = (p: BrowserSubmitProposal) => {
@@ -524,8 +528,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // gates on status, and a messaging card keeps its buttons until a tap, which answers with the expiry.
   const expireDue = (id?: string) => {
     const now = deps.now();
-    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
-      ...PROPOSAL_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
+    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${EXPIRING_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
+      ...EXPIRING_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
     let closed = 0;
     for (const entry of rows) {
       let closes: boolean;
@@ -1249,6 +1253,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const p = JSON.parse(r.payload_json) as MessageSendProposal;
             return typeof p.channel === 'string' && typeof p.content === 'string' ? { kind: 'message_send', channel: p.channel, content: p.content } : null;
           }
+          if (r.kind === 'mcp_call' || r.kind === 'tainted_action' || r.kind === 'browser_submit') return { kind: r.kind, text: appReview(r).text };
           if (r.kind === 'google_task_change') {
             const proposal = googleTaskProposalSchema.parse(JSON.parse(r.payload_json));
             return r.proposal_digest ? { kind: 'google_task_change', account: proposal.account.email, proposal, proposal_digest: r.proposal_digest } : null;
@@ -1323,7 +1328,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
