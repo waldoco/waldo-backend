@@ -218,7 +218,7 @@ describe('the brain tool surface', () => {
         return { response: { text: '', tool_calls: [{ call_id: 'f', name: 'finish_task', arguments: JSON.stringify({ status: 'done', summary: 'Measured.', findings: [], proposals: [], left: [] }) }] }, event: { trace: 'task:size', hop: 'llm_task', ms: 0, ok: true } };
       } });
       expect(sent!.map((tool) => tool.name)).toContain('finish_task');
-      const round = { system: request.system, messages: request.messages, tools: sent };
+      const round = { ...request, tools: sent };
       measured[profile] = {
         openai: Math.round(bytes(openAIVisible((await openAIBody(round)).tools as WireTool[])) / BYTES_PER_TOKEN_EST),
         anthropic: Math.round(bytes(anthropicVisible((await anthropicBody(round)).tools as WireTool[])) / BYTES_PER_TOKEN_EST),
