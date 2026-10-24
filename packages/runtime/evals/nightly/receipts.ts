@@ -5,7 +5,7 @@
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs'>>;
 // memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 
@@ -105,4 +105,28 @@ export const toolWorked = (names: readonly string[], why: string, min = 1): Rece
 export const repliesOmit = (renderings: readonly string[], why: string): Receipt => ({
   why,
   holds: (trial) => trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => renderings.every((rendering) => !turn.text.toLowerCase().includes(rendering.toLowerCase()))),
+});
+
+const includesAny = (text: string, renderings: readonly string[]) => renderings.some((rendering) => text.toLowerCase().includes(rendering.toLowerCase()));
+// Waldo's replies after the owner's nth message (1-based).
+const repliesAfter = (trial: TrialEvidence, ownerMessage: number) => {
+  let seen = 0;
+  return trial.transcript.filter((turn) => { if (turn.role === 'owner') seen += 1; return turn.role === 'waldo' && seen > ownerMessage; });
+};
+
+// After the owner's nth message asked to forget something, nothing the model was sent and no reply carries it. The
+// owner's later messages never name it, so any rendering found came from Waldo's side.
+export const forgottenAfter = (ownerMessage: number, renderings: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => (trial.model_inputs ?? []).filter((input) => input.turn > ownerMessage).every((input) => !includesAny(input.text, renderings))
+    && repliesAfter(trial, ownerMessage).every((turn) => !includesAny(turn.text, renderings)),
+});
+
+// The last thing the model was sent still carries every one of these: what the owner did not ask to forget stays whole.
+export const lastInputCarries = (needles: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => {
+    const last = trial.model_inputs?.at(-1)?.text.toLowerCase() ?? '';
+    return needles.every((needle) => last.includes(needle.toLowerCase()));
+  },
 });
