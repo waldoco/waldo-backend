@@ -340,7 +340,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       comingItems: (from, to) => comingItemsFrom({
         events: async () => (await client.calendarPage!('primary', new Date(from).toISOString(), new Date(to).toISOString(), 20, false)).events, tasks: null, loops: () => loops.list(),
       }, from, to, TIMEZONE),
-      admit: () => true, charge: () => undefined, decide,
+      admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
       reschedule: async () => undefined, log: () => undefined,
     });
