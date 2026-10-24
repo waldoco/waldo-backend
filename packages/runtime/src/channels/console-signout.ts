@@ -1,5 +1,5 @@
 import { OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
-import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, clearConsoleCookie } from './console';
 import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
 import { fenceSession, ownerSessionHash, type FenceEnv } from './session-fence';
 
@@ -32,7 +32,7 @@ export const signedOut = (response: Response): boolean => new RegExp(`(?:^|,\\s*
 export const clearOwnerCookie = (response: Response): Response => {
   if (new RegExp(`(?:^|,\\s*)${OWNER_COOKIE}=;`).test(response.headers.get('set-cookie') ?? '')) return response;
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', `${OWNER_COOKIE}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+  headers.append('set-cookie', clearConsoleCookie(OWNER_COOKIE));
   return new Response(response.body, { status: response.status, headers });
 };
 
