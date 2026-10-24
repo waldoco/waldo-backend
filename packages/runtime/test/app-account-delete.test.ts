@@ -13,7 +13,7 @@ const SECRET = 'fictional-delete-app-router-secret-00000000000', DIRECTORY = 'ht
 const OWNER = '10000000-0000-0000-0000-000000000003', AUTH = '20000000-0000-0000-0000-000000000003', EMAIL = 'delete-owner@example.test';
 type App = (path: string, body?: unknown, credential?: string) => Promise<Response>;
 type Outcome = 'deleted' | 'refused' | 'throws';
-type Seen = { deletes: number; state: DurableObjectState; name: string };
+type Seen = { deletes: number; state: DurableObjectState; name: string; owner?: InstanceType<typeof OwnerDO> };
 
 // delete_owner revokes every session and the owner's authority, as the SQL function does, so the
 // signed-out assertions observe the fixture's directory rather than a constant.
@@ -50,6 +50,7 @@ const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'delete-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
     const instance = new OwnerDO(state, settings as never);
+    seen.owner = instance;
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app: App = async (path, body, credential) => {
       const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
@@ -91,6 +92,14 @@ it('an app-only owner deletes their account from the app: the directory removes 
     expect((await app('/controls?view=day', undefined, credential)).status).toBe(401);
     expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(401);
     expect((await app('/chat/main/messages', { client_message_id: 'after-delete-0001', text: 'hello' }, credential)).status).toBe(401);
+    // A task worker still running when the account went calls in once more: it is fenced, and writes no table back.
+    const ticket = { jobId: 'job_000000000001', attempt: 1, token: 'tok-before-delete' };
+    const owner = seen.owner!;
+    expect(await owner.taskClaim(ticket)).toBe('fenced');
+    expect(await owner.taskTool(ticket, { call_id: 'c1', name: 'search_communication', arguments: '{}' }, [])).toBe('fenced');
+    expect(await owner.taskCheckpoint(ticket, 1, [], [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+    expect(await owner.taskReport(ticket, { kind: 'failed', code: 'gone' }, [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+    expect(await owner.taskHeartbeat(ticket)).toBe(false);
     expect(seen.deletes).toBe(1);
     expect(stored(seen.state)).toBe(0);
   });
