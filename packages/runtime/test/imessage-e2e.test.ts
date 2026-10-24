@@ -1635,3 +1635,73 @@ it('a note whose handoff threw is settled as possibly sent, never retried, and t
   expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
   expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
 }, 20_000);
+
+// A Mac result reaches the owner where their proactive work goes: on iMessage for an owner whose only surface it is, and in
+// the app with one iMessage copy for an owner who chose both. The device directory answers for the owner's paired Mac.
+const MAC_OWNER = '10000000-0000-4000-8000-000000000001';
+const MAC_REPORT = 'Mac request request_imsg: completed (exit code 0).\nFixture result summary.';
+const macResultFor = async (w: Awaited<ReturnType<typeof world>>) => {
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith('/rpc/device_for_auth_v030')) return Response.json([{ owner_id: MAC_OWNER, do_name: w.ownerName, contract_version: '0.3.0', pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'shell_exec' }]);
+    return directory(input, init);
+  });
+  return runInDurableObject(w.ownerStub, async (instance) => (instance as unknown as { admitMacDelivery(value: unknown): Promise<boolean> }).admitMacDelivery({
+    kind: 'result', request_id: 'request_imsg', device_id: 'device_imsg', owner_id: MAC_OWNER, payload: { status: 'completed', exit_code: 0, output_tail: 'fixture output', truncated: false } }));
+};
+const macRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
+  state.storage.sql.exec<{ state: string }>('SELECT state FROM mac_result_inbox').toArray().map(row => row.state));
+const macPasses = async (w: Awaited<ReturnType<typeof world>>) => {
+  proof.reply = 'Fixture result summary.';
+  try {
+    for (let i = 0; i < 3; i++) {
+      await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('owner_alarm_last_v1', 0); });
+      await runDurableObjectAlarm(w.ownerStub); await w.settle();
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  } finally { proof.reply = 'Scripted owner reply.'; }
+  await w.pump();
+};
+
+it('an iMessage-only owner gets a Mac result on iMessage', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  expect(await macResultFor(w)).toBe(true);
+  await macPasses(w);
+  expect(await macRows(w)).toEqual(['finished']);
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the report reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: MAC_REPORT, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(forbiddenEgress).toEqual([]);
+}, 20_000);
+
+it('an owner who chose the app and iMessage gets a Mac result in the app and one iMessage copy of it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await answered(w, 'Morning');
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith('/rpc/owner_runtime_authority')) return Response.json({ owner_id: MAC_OWNER, auth_user_id: MAC_OWNER, do_name: w.ownerName, state_version: 1, admission_revision: '5' });
+    if (url.endsWith('/rpc/health_log_recent')) return Response.json([]);
+    return directory(input, init);
+  });
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.kv.put('app_subject', String(appSubjectFor(w.ownerName)));
+    state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
+    state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'app_imessage');
+    state.storage.sql.exec('DELETE FROM schedule');
+  });
+  expect(await macResultFor(w)).toBe(true);
+  await macPasses(w);
+  expect(await macRows(w)).toEqual(['finished']);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(deliveryRecords(state).filter(row => row.id.startsWith('device-')).map(row => [row.status, row.payload.text])).toEqual([['delivered', MAC_REPORT]]);
+    expect(copies(state).map(row => row.replyRef)).toEqual([expect.stringMatching(/^proactive:imessage-copy:device-/)]);
+  });
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the copy reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: MAC_REPORT, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(forbiddenEgress).toEqual([]);
+}, 20_000);
