@@ -17,11 +17,12 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
   location: z.string().min(1).max(300).optional().describe('Create only.'),
   add_meet_link: z.boolean().optional().describe('Create only: add a Google Meet link.'),
   send_updates: z.enum(['all', 'none']).optional().describe('Whether Google emails the guests about this change. Required with attendees.'),
+  block: z.enum(['rest', 'deep_work']).optional().describe('Create only, for a block of protected time: rest (a break, recovery or a lighter stretch) or deep_work (focused work). Leave it out for any other event.'),
 }).refine((args) => args.action === 'create' ? Boolean(args.title && args.start && args.end) : Boolean(args.event_id), {
   error: 'create needs title, start and end; move and cancel need event_id',
 }).refine((args) => args.action !== 'move' || Boolean(args.start && args.end), { error: 'move needs start and end' })
-  .refine((args) => args.action === 'create' || (args.attendees === undefined && args.description === undefined && args.location === undefined && args.add_meet_link === undefined), {
-    error: 'attendees, description, location and add_meet_link are for create only',
+  .refine((args) => args.action === 'create' || (args.attendees === undefined && args.description === undefined && args.location === undefined && args.add_meet_link === undefined && args.block === undefined), {
+    error: 'attendees, description, location, add_meet_link and block are for create only',
   })
   .refine((args) => args.attendees === undefined || args.send_updates !== undefined, { error: 'say whether to email the attendees: send_updates all or none' });
 export type ProposeCalendarChangeArgs = z.infer<typeof proposeCalendarChangeArgsSchema>;

@@ -212,7 +212,7 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(refreshFailure ? refreshFailure.status : error instanceof DriveRestError ? error.status : 502, refreshFailure ? refreshFailure.kind === 'auth' ? 'drive_auth_failed' : 'google_refresh_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
       }
     }
-    if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
+    if((body.method==='calendarPage'||body.method==='restBlocks')&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
     if(body.method==='calendarListsPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar_list'))return fail(403,'insufficient scopes');
     if(body.method==='searchContacts'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'contacts'))return fail(403,'insufficient scopes');

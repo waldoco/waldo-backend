@@ -39,7 +39,7 @@ where s.owner_id = :'diag_owner' order by s.source, s.purpose;
 \echo '== 4. Stored anchor per source (present or not; its content is never printed)'
 select source, epoch, char_length(anchor) > 0 as anchor_present from waldo.health_anchors where owner_id = :'diag_owner' order by source;
 
-\echo '== 5. Accepted uploads per UTC day, last 21 days (a refused upload stores no row: a gap here with the app running means refusals)'
+\echo '== 5. Accepted uploads per UTC day, last 21 days (a refused upload stores no receipt: a gap here with the app running means refusals, counted in section 11)'
 select (created_at at time zone 'UTC')::date as utc_day, response->>'source' as source, count(*) as uploads,
   sum((response->>'accepted')::int) as accepted, sum((response->>'ignored')::int) as ignored, sum((response->>'deleted')::int) as deleted,
   count(*) filter (where response ? 'rejected') as per_sample_uploads, sum(jsonb_array_length(coalesce(response->'rejected', '[]'))) as rejected_changes
@@ -69,5 +69,8 @@ group by 1, 2 order by 1 desc, 2;
 select c.day, c.created_at, c.updated_at, c.freshness as freshness_at_write, b.timezone as basis_timezone, b.day is not null as has_basis
 from public.health_context_daily c left join waldo.health_context_basis b on b.owner_id = :'diag_owner' and b.day = c.day
 where c.user_id = :'diag_auth' order by c.day desc limit 14;
+
+\echo '== 11. Refused uploads per UTC day by code and status, last 30 days (counted from 20261023120000; a 401 or 429 is never counted)'
+select day, code, status, refusals, newest_at from waldo.health_ingest_refusals where owner_id = :'diag_owner' order by day desc, code, status;
 
 rollback;
