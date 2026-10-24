@@ -11,10 +11,11 @@ export type Shape = 'root' | 'hexagon' | 'circle' | 'square' | 'triangle';
 export type GNode = { id: string; shape: Shape; title: string; summary: string; number?: number; connected?: boolean };
 export type GLink = { id: string; source: string; target: string; kind: 'angled' | 'solid' | 'dashed' | 'dotted'; distance: number; relation: 'layout' | 'saved-support' | 'shared-support' };
 
-/** A Spot's shape says where it came from: you said it, you confirmed it, or he inferred it. */
+/** A Spot's shape says where it came from: you said it, you confirmed it, or he inferred or confirmed it himself. */
 export const SOURCE: Record<string, { name: string; shape: Shape }> = {
   stated: { name: 'You said this', shape: 'circle' },
   confirmed: { name: 'You confirmed this', shape: 'square' },
+  waldo_confirmed: { name: 'Waldo confirmed', shape: 'triangle' },
   inferred: { name: 'He inferred this', shape: 'triangle' },
 };
 const sourceOf = (spot: Claim) => SOURCE[spot.source] ?? { name: 'Saved', shape: 'circle' as const };
