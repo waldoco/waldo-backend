@@ -61,6 +61,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
+  'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
+  'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.

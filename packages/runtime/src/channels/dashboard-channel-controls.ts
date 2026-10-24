@@ -4,12 +4,14 @@ import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import type { IMessageEnv } from './imessage/bridge-do';
 import { iMessageControlAct, iMessageControls, iMessageControlsStatus, type IMessageControls } from './imessage/dashboard';
 import type { DeviceBridgeDO } from '../devices/device-bridge-do';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
+import { phoneControlAct, phoneControls, type PhoneControls } from './dashboard-phone';
 import { deviceControlAct, devicesControls, devicesControlsStatus, type DashboardDeviceDirectory, type DevicesControls } from '../devices/dashboard-devices';
 
-// iMessage and device setup read the owner directory and bridge objects, not the console view,
+// iMessage, device and phone setup read the owner directory and bridge objects, not the console view,
 // so their reads and actions never build it. Their actions use the one control-action path; the owner DO
 // runs them on their own queue, apart from turns, so their receipts keep a book of their own.
-export const CHANNEL_CONTROL_VIEWS = ['imessage', 'devices'] as const;
+export const CHANNEL_CONTROL_VIEWS = ['imessage', 'devices', 'phone'] as const;
 export type ChannelControlView = (typeof CHANNEL_CONTROL_VIEWS)[number];
 export const CHANNEL_RECEIPT_BOOK_KEY = 'console:channel-control-receipts';
 export const channelControlView = (value: unknown): ChannelControlView | null => CHANNEL_CONTROL_VIEWS.find((view) => view === value) ?? null;
@@ -19,7 +21,7 @@ export const channelControlsQuery = (params: URLSearchParams): ChannelControlVie
 
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void> }>;
 export type ChannelControlsDeps = Readonly<{
-  imessage: IMessageEnv; devices: DashboardDeviceDirectory; deviceBridges?: DurableObjectNamespace<DeviceBridgeDO>;
+  imessage: IMessageEnv; phone: PhoneSmsEnv; devices: DashboardDeviceDirectory; deviceBridges?: DurableObjectNamespace<DeviceBridgeDO>;
   owner: string; csrf: string; expires: number; store: Store;
   sessions(): Promise<readonly { csrf: string; expires: number }[]>;
   onIMessageRevoked(bridgeDoName: string): void;
@@ -27,8 +29,8 @@ export type ChannelControlsDeps = Readonly<{
 
 // One entry per view. fresh() pairs the hashed read with an executor bound to that same read.
 type ChannelControl = Readonly<{
-  status(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls; status: unknown }>>;
-  fresh(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls; act(action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt | RevealingReceipt> }>>;
+  status(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls; status: unknown }>>;
+  fresh(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls; act(action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt | RevealingReceipt> }>>;
 }>;
 const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
   imessage: {
@@ -41,6 +43,10 @@ const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
   devices: {
     status: (deps) => devicesControlsStatus(deps.devices, deps.deviceBridges, deps.owner, deps.csrf),
     fresh: async (deps) => ({ controls: await devicesControls(deps.devices, deps.owner, deps.csrf), act: (action, fields) => deviceControlAct(deps.devices, deps.deviceBridges, deps.owner, action, fields) }),
+  },
+  phone: {
+    status: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), status: {} }),
+    fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields) }),
   },
 };
 

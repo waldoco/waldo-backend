@@ -283,3 +283,32 @@ describe("today's update cards", () => {
     ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
   });
 });
+
+describe('the phone view', () => {
+  const send = { view: 'phone', action: 'phone.sms_send', revision, request_id: 'phone-0001' };
+  const check = { view: 'phone', action: 'phone.sms_check', code: '424242', revision, request_id: 'phone-0002' };
+  const data = { phone: '+919800000001', verified: false, sms: true, challenge: { state: 'pending', expires_at: 1_800_000_600, retry_at: null, checks_left: 5 }, actions: ['phone.sms_send', 'phone.sms_check'] };
+
+  it('reads the number on file and acts on it with nothing but the code', () => {
+    expect(appControlQueryV1Schema.safeParse({ view: 'phone' }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: [] } }).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(send).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(check).success).toBe(true);
+  });
+
+  it('refuses a number, a malformed code, a code on a send, a check without one, or a phone action elsewhere', () => {
+    for (const bad of [
+      { ...send, value: '+14155550100' }, { ...send, id: '+14155550100' }, { ...send, phone: '+14155550100' }, { ...send, code: '424242' },
+      { ...check, code: undefined }, { ...check, code: '4242' }, { ...check, code: '42424a' }, { ...check, code: ' 424242' },
+      { ...send, view: 'connections' }, { ...check, view: 'account' }, { view: 'phone', action: 'timezone.set', value: 'UTC', revision, request_id: 'phone-0003' },
+      { view: 'day', action: 'timezone.set', value: 'UTC', code: '424242', revision, request_id: 'phone-0004' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('refuses a malformed phone projection', () => {
+    for (const bad of [{ ...data, phone: '98000 00001' }, { ...data, extra: true }, { ...data, actions: ['phone.sms_resend'] },
+      { ...data, challenge: { ...data.challenge, state: 'sent' } }, { ...data, challenge: { ...data.challenge, checks_left: 6 } }, { ...data, challenge: { ...data.challenge, retry_at: undefined } }])
+      expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: bad }).success, JSON.stringify(bad)).toBe(false);
+  });
+});

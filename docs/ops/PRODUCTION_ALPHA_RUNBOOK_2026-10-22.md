@@ -87,12 +87,26 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
 | `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |
 | `OWNER_LOOKUP` | `0` | `0` | `0` until the privacy notice that discloses the look-up is published (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. |
+| `PHONE_SMS_VERIFY` | `0` | `0` | `0` until every precondition in §1.2.1 is met. Off unless `1`; with it on, the console and app phone views offer a texted code (`identity/phone-sms.ts`). |
+| `PHONE_SMS_COUNTRIES` | `+91` | `+91` | `+91`. The country codes a code may be texted to, comma-separated. The ledger refuses any other number (`unsupported`), and an empty or malformed list keeps texting off. `+1` would admit every NANP number, Caribbean ones included [inference: NANP spans the US, Canada and Caribbean countries]; Twilio's geo permissions are the finer control (§1.2.1). |
+| `PHONE_SMS_DAILY_LIMIT` | `20` | `20` | `20`. Texts per UTC day across the whole server, counted by the ledger. The ledger holds any higher value to 200; a missing or malformed value keeps texting off. |
 | `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
 | `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
 | `WHATSAPP_ONBOARDING_URL`, `WHATSAPP_REENGAGE_TEMPLATE`, `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` | onboarding URL set; templates empty | empty | empty until Meta verification and a production number (D5) |
 | `GMAIL_PUSH_PROJECT` | `waldo-dev-492217` | `""` | `""` until the production Cloud project has its `waldo-gmail-push` topic and push subscription (S7). While it is empty, production starts no Gmail watch (`gmail_watch_skipped:unconfigured`) and `/events/gmail` answers 404; mail reads still work (`connectors/google-push.ts`, `channels/event-ingress.ts`). |
 | `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_SEARCH`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, tool search off, offload on. |
+
+#### 1.2.1 Before `PHONE_SMS_VERIFY=1` (hard preconditions)
+
+A texted code costs money for every send, and an open SMS endpoint is a target for SMS pumping. Every item below is done and checked before anyone sets the switch to `1`, on any environment.
+
+1. **Twilio account, Verify service and DPA.** A Verify service with six-digit codes valid ten minutes or less, and Twilio's DPA reviewed. The privacy notice naming Twilio is published.
+2. **Verify geo permissions.** In the Twilio console's Verify geo permissions, every country is off except those in `PHONE_SMS_COUNTRIES` (India for the alpha). Twilio: "Review your Verify Geographic Permissions and disable all countries that you do not plan to send messages to" [cited: [Twilio, preventing toll fraud](https://www.twilio.com/docs/verify/preventing-toll-fraud)].
+3. **Fraud Guard on.** Verify SMS Fraud Guard is on for the service, at Standard or Max (Verify > Services > the service > SMS tab). A blocked send shows as error 60410 in Twilio's logs, and Waldo logs it as `provider_refused` with `twilio_code: 60410` [cited: [Twilio, SMS Fraud Guard](https://www.twilio.com/docs/verify/preventing-toll-fraud/sms-fraud-guard)]. Twilio's page does not say whether it is on by default, so check it.
+4. **Spend ceiling and alert.** Twilio's usage triggers only call a webhook; they stop nothing [cited: [Twilio, usage triggers](https://www.twilio.com/docs/usage/api/usage-trigger)]. The hard ceiling is the ledger's server-wide cap, `PHONE_SMS_DAILY_LIMIT` (at most 200 a day). Also set a daily usage trigger that alerts the owner, and add the service's own rate limits as Twilio recommends [cited: [Twilio, preventing toll fraud](https://www.twilio.com/docs/verify/preventing-toll-fraud)]. Keeping a small prepaid balance with auto-recharge off would bound spend further [inference: check that the account's billing works that way].
+5. **Credentials.** Prefer an API key restricted to Verify (`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`) over the account auth token. Twilio's restricted keys list Verify among the supported products; choose the Verify permissions from Twilio's permission list [cited: [Twilio, restricted API keys](https://www.twilio.com/docs/iam/api-keys/restricted-api-keys)].
+6. **Open items, not settled here.** Whether India's DLT registration applies to Twilio Verify's own sender [inference: Twilio may handle it for Verify; confirm with Twilio before relying on it].
 
 ### 1.3 Worker secrets (names only)
 
@@ -117,6 +131,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
 | `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
+| `TWILIO_VERIFY_SERVICE_SID`, and either `TWILIO_API_KEY_SID` + `TWILIO_API_KEY_SECRET` (preferred) or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` | `identity/phone-sms.ts` | no texted code; the phone views offer the link code only | not set until `PHONE_SMS_VERIFY` goes on (§1.2.1). The API key, standard or restricted to Verify, is used whenever its SID is set; a malformed key (`SK…`), account (`AC…`) or service (`VA…`) id, or an empty secret or token, keeps texting off rather than falling back. |
 
 #1393 (merged 22 Oct as `e228a483`) moved Google and MCP OAuth state onto `WALDO_OAUTH_STATE_SECRET`. Freeze the secret list on the stand-up SHA (S0).
 
