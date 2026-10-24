@@ -46,11 +46,25 @@ export const busyMinutesByDay = (busy: readonly Readonly<{ start: string; end: s
 
 const dayRange = (from: string, to: string): string[] => Array.from({ length: daysBetween(from, to) + 1 }, (_, i) => shiftDay(from, i));
 
-export const calendarDemand = (deps: CalendarDemandDeps) => {
-  const { sql } = deps;
+// calendar_demand_dropped holds when each day was last dropped, so a read already in flight then cannot write it back.
+const demandTable = (sql: Pick<SqlStorage, 'exec'>) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS calendar_demand (
     day TEXT NOT NULL, timezone TEXT NOT NULL, calendars TEXT NOT NULL, busy_minutes INTEGER NOT NULL, partial INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
     PRIMARY KEY (day, timezone, calendars))`);
+  sql.exec('CREATE TABLE IF NOT EXISTS calendar_demand_dropped (day TEXT PRIMARY KEY, at INTEGER NOT NULL)');
+};
+
+// A calendar change on a cached day at `at`: the next read fetches that day again, in whatever zone and calendar set it
+// runs, and a read that started by then keeps its answer to itself.
+export const forgetDemandDay = (sql: Pick<SqlStorage, 'exec'>, day: string, at: number): void => {
+  demandTable(sql);
+  sql.exec('INSERT INTO calendar_demand_dropped (day, at) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET at = max(at, excluded.at)', day, at);
+  sql.exec('DELETE FROM calendar_demand WHERE day = ?', day);
+};
+
+export const calendarDemand = (deps: CalendarDemandDeps) => {
+  const { sql } = deps;
+  demandTable(sql);
 
   const selectedCalendars = async (client: DemandClient): Promise<string[] | null> => {
     if (!client.calendarListsPage) return null;
@@ -127,6 +141,7 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
       // The cache is keyed by the exact calendar set, so changing the selection or the zone reads again.
       const calendars = await sha256Hex(listed.map(source => `${source.email}\n${[...source.ids].sort().join('\n')}`).sort().join('\n\n'));
       sql.exec('DELETE FROM calendar_demand WHERE day < ? OR timezone <> ? OR calendars <> ?', shiftDay(today, -KEEP_DAYS), timezone, calendars);
+      sql.exec('DELETE FROM calendar_demand_dropped WHERE day < ?', shiftDay(today, -KEEP_DAYS));
       // A past day is final only once it was read after it ended; today is read again after 30 minutes.
       const cached = new Map(sql.exec<{ day: string; busy_minutes: number; partial: number; fetched_at: number }>(
         'SELECT day, busy_minutes, partial, fetched_at FROM calendar_demand WHERE timezone = ? AND calendars = ? AND day BETWEEN ? AND ?', timezone, calendars, from, to,
@@ -145,7 +160,8 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
         for (const day of stretch) {
           const value = read?.minutes.get(day) ?? null, partial = read?.partial ?? false;
           found.set(day, { busy_minutes: value, partial });
-          if (value !== null) sql.exec('INSERT OR REPLACE INTO calendar_demand (day, timezone, calendars, busy_minutes, partial, fetched_at) VALUES (?, ?, ?, ?, ?, ?)', day, timezone, calendars, value, partial ? 1 : 0, now);
+          if (value !== null) sql.exec(`INSERT OR REPLACE INTO calendar_demand (day, timezone, calendars, busy_minutes, partial, fetched_at) SELECT ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM calendar_demand_dropped WHERE day = ? AND at >= ?)`, day, timezone, calendars, value, partial ? 1 : 0, now, day, now);
         }
       }
       return { state: 'available', days: days.map(day => ({ day, busy_minutes: found.get(day)?.busy_minutes ?? null, partial: found.get(day)?.partial ?? false })) };

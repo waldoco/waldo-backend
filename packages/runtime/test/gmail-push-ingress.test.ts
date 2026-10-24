@@ -60,6 +60,18 @@ describe('Gmail push ingress', () => {
     vi.unstubAllGlobals();
   });
 
+  it('takes its project from the environment: unset is off, set expects that project\'s push account', async () => {
+    const unset = setup();
+    expect((await handleGmailPush(request(), unset.env, undefined, unset.verify)).status).toBe(404);
+    expect(unset.verify).not.toHaveBeenCalled();
+    expect(unset.rpc).toEqual([]);
+    vi.unstubAllGlobals();
+    const named = setup();
+    expect((await handleGmailPush(request(), { ...named.env, GMAIL_PUSH_PROJECT: 'waldo-dev' }, undefined, named.verify)).status).toBe(200);
+    expect(named.verify).toHaveBeenCalledWith('good-token', expect.objectContaining({ serviceAccount: config.serviceAccount }));
+    vi.unstubAllGlobals();
+  });
+
   it('is off until the project is named, and asks Pub/Sub to retry when an owner cannot take the wake', async () => {
     const { env, verify } = setup();
     expect((await handleGmailPush(request(), env, null, verify)).status).toBe(404);

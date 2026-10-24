@@ -96,6 +96,18 @@ describe('the body in a day card', () => {
     }
   });
 
+  it('the Brief and the Check-in plan around the body; the Close keeps it to a line, and every card stays silent without shared health', () => {
+    const prompt = (id: string) => dayCardPrompt(DAY_CARDS.find(card => card.id === id)!, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
+    for (const id of ['card:brief', 'card:midday']) {
+      expect(prompt(id)).toContain('what to protect and what could move, lighten or wait');
+      expect(prompt(id)).toContain('never say a change is made or a card is waiting');
+      expect(prompt(id)).not.toContain('at most one line');
+    }
+    expect(prompt('card:close')).toContain('at most one line');
+    expect(prompt('card:close')).not.toContain('what to protect');
+    for (const card of DAY_CARDS) expect(prompt(card.id)).toContain('say nothing about sleep, recovery or energy, and never guess or make up a score');
+  });
+
   it('with health shared, the Brief request carries the owner\'s shared health and the rule, and no stored row keeps the health', async () => {
     await briefFor('brief-body-shared', state => {
       const request = briefRequest();
@@ -105,6 +117,12 @@ describe('the body in a day card', () => {
       const stored = storedText(state);
       expect(stored).toContain(CARD_TEXT);
       for (const word of HEALTH_WORDS) expect(stored).not.toContain(word);
+      // The Brief can only offer a change: no tool it is given writes to the calendar or raises a card for one, so a change
+      // the owner wants goes through their own reply and the approval card it raises.
+      const tools = (JSON.parse(request!) as { tools?: { name?: string; function?: { name?: string } }[] }).tools ?? [];
+      const names = tools.map(tool => tool.name ?? tool.function?.name);
+      expect(names.length).toBeGreaterThan(0);
+      expect(names).not.toContain('propose_calendar_change');
     });
   });
 

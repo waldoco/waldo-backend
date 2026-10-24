@@ -11,6 +11,9 @@ export const appApprovalPart = (part: AppApprovalPart): AppApprovalPart => reply
 export const appApprovalLink = (approvalId: string): string => `waldo://approvals/${approvalId}`;
 // What a chat turn on the app tells the model when a tool needs Google: the app connects from its own screen.
 export const APP_CONNECT_GUIDANCE = 'No connect button was sent: the app chat has none. Tell the owner to go back to Home, open the menu at the top left, tap Connections and connect Google there - never quote or retype any link yourself.';
+// iMessage turns share the app's button-free caller, so a connect there is guidance too: the app's Connections screen, or the
+// console's for an owner without the app.
+export const IMESSAGE_CONNECT_GUIDANCE = 'No connect button was sent: iMessage carries none. Tell the owner to connect Google from Connections in the Waldo app, or from Connections in the Waldo console (send_console_link sends a console link here) - never quote or retype any link yourself.';
 
 // A turn's reply reaches the app through the transcript its own turn writes, so a plain send during a
 // turn is accepted and goes nowhere else. Scheduled work has no turn: while the alarm holds a delivery,
