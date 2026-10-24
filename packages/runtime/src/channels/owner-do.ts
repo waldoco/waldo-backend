@@ -2077,13 +2077,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     }
     const jsonAdmin = request.headers.get('accept') === 'application/json';
-    // The admin read, JSON or page, asks the directory for every owner's records and spend: it spends the console read budget.
-    if (url.pathname === CONSOLE_ADMIN_PATH && request.method === 'GET') {
+    // The admin read, JSON or page, asks the directory for every owner's records and spend: it is GET only, and spends the
+    // console read budget.
+    if (url.pathname === CONSOLE_ADMIN_PATH) {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: { ...DASHBOARD_OVERVIEW_HEADERS, allow: 'GET' } });
       const limited = this.consoleRateLimited('read');
       if (limited) return limited;
     }
     if (url.pathname === CONSOLE_ADMIN_PATH && jsonAdmin) {
-      if (request.method !== 'GET') return new Response('method not allowed', {status:405, headers:DASHBOARD_OVERVIEW_HEADERS});
       return adminRead(consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'), session.csrf);
     }
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST' && jsonAdmin) {
