@@ -1,4 +1,5 @@
 import { withRequestTimeout } from './request-timeout';
+import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
@@ -48,6 +49,8 @@ export type ConsoleAuth = Readonly<{
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
+  /** Spend across every owner for the last 30 days; null unless the database admits the caller as an admin. */
+  adminCostSummary(doName: string): Promise<AdminCostSummary | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
@@ -229,6 +232,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
+    adminCostSummary: async (doName) => {
+      const summary = await rpc('admin_cost_summary', `admincost.${doName}`, { p_do_name: doName });
+      return summary === null ? null : adminCostSummarySchema.parse(summary);
+    },
     invite: async (doName, email, code) => {
       const address = email.trim().toLowerCase();
       const hash = await linkCodeHash(code);

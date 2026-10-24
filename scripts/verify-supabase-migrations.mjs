@@ -76,6 +76,7 @@ const expectedMigrations = [
   '20261022170000_health_per_sample_rejection.sql',
   '20261023060000_waldo_connect_session_handoff.sql',
   '20261023090000_waldo_console_session_lifetime.sql',
+  '20261024010000_waldo_admin_cost_summary.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
