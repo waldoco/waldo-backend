@@ -12,8 +12,9 @@ import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
 type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 
 // Every action a console registry accepts. An action whose effect outlives this browser's session (a bound chat, a paired
-// Mac, a connected account or tool, a standing grant, an invite, the account's removal) needs an email code from the last
-// two hours, so a copied 30-day cookie cannot do it. Reading, arranging, deciding one item once, and removing access do not.
+// Mac, a connected account or tool, a standing grant, an invite, the account's removal), or that sends to other people as the
+// owner, needs an email code from the last two hours, so a copied 30-day cookie cannot do it. Reading, arranging, deciding
+// one change to the owner's own things once, and removing access do not.
 // A test fails when a registry gains an action this table does not name.
 export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
@@ -31,6 +32,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'approval.approve': { gated: false, why: 'Decides one held calendar change once; leaves no standing grant.' },
   'approval.skip': { gated: false, why: 'Declines one held change.' },
   'approval.undo': { gated: false, why: 'Reverses one decision.' },
+  'approval.send': { gated: true, why: 'Sends one held email or message as the owner, and an email reaches other people; it cannot be called back.' },
+  'approval.edit': { gated: false, why: 'Asks Waldo for a new draft of one held send; sends nothing.' },
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
@@ -64,14 +67,20 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.
-export const STEP_UP_ROUTES: Readonly<Record<string, StepUpRule>> = {
-  [CONSOLE_PHOTON_START_PATH]: { gated: true, why: 'Starts connecting Photon, which binds an iMessage line to this account.' },
-  [BROWSER_TRIAL_PATH]: { gated: false, why: 'Consents to one 60-second public fixture session with no sign-ins; it cannot be renewed.' },
-  '/console/browser-handoff': { gated: false, why: 'Shows or ends a browser run already in progress; it ends with that run.' },
-  [MCP_START_PATH]: { gated: false, why: 'Follows a single-use start link that only a gated mcp.connect mints.' },
-  [CONSOLE_GOOGLE_START_PATH]: { gated: false, why: 'Follows a single-use start link that only a gated google.connect mints.' },
-  '/console/workspace': { gated: false, why: 'Uploads, reads or removes the owner\'s own files; grants no access.' },
+// startsFlow: a GET there begins a flow rather than reads, so the cross-site guard refuses it when another site sends
+// it. A path ending in "/" is a prefix that needs a token after it. This is the only list of flow-starting GETs: a new
+// one belongs here, or behind a POST.
+export const STEP_UP_ROUTES: Readonly<Record<string, StepUpRule & Readonly<{ startsFlow: boolean }>>> = {
+  [CONSOLE_PHOTON_START_PATH]: { gated: true, startsFlow: true, why: 'Starts connecting Photon, which binds an iMessage line to this account.' },
+  [BROWSER_TRIAL_PATH]: { gated: false, startsFlow: true, why: 'Consents to one 60-second public fixture session with no sign-ins; it cannot be renewed.' },
+  '/console/browser-handoff': { gated: false, startsFlow: false, why: 'Shows or ends a browser run already in progress; it ends with that run.' },
+  [MCP_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated mcp.connect mints.' },
+  [CONSOLE_GOOGLE_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated google.connect mints.' },
+  '/console/workspace': { gated: false, startsFlow: false, why: 'Uploads, reads or removes the owner\'s own files; grants no access.' },
 };
+const FLOW_STARTS = Object.entries(STEP_UP_ROUTES).filter(([, rule]) => rule.startsFlow).map(([path]) => path);
+export const startsConsoleFlow = (path: string): boolean =>
+  FLOW_STARTS.some(start => start.endsWith('/') ? path.startsWith(start) && path.length > start.length : path === start);
 
 const gated = (table: Readonly<Record<string, StepUpRule>>) => new Set(Object.entries(table).filter(([, rule]) => rule.gated).map(([name]) => name));
 const GATED_ACTIONS = gated(STEP_UP_ACTIONS), GATED_ROUTES = gated(STEP_UP_ROUTES);

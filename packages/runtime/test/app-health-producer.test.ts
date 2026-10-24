@@ -122,9 +122,13 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
   it('does not run for a replayed batch, an empty one, a refused one or a caller with no way to defer', async () => {
     for (const answer of [{ ...receipt, replayed: true }, { ...receipt, accepted: 0, deleted: 0, ignored: 1 }, { error: 'epoch_conflict' }, { error: 'consent_required' }]) {
       answers.health_ingest = answer;
+      rpcs.length = 0; toOwner.length = 0;
       const d = deferrals();
       await ingest(batch, d.defer);
-      expect(d.work).toHaveLength(0);
+      await Promise.all(d.work);
+      // A refusal defers only its count; nothing is recomputed and the owner's object is not told.
+      expect(rpcs.map(r => r.fn)).toEqual('error' in answer ? ['health_ingest', 'health_refusal_note'] : ['health_ingest']);
+      expect(toOwner).toEqual([]);
     }
     answers.health_ingest = receipt;
     rpcs.length = 0;

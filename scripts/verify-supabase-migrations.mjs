@@ -76,6 +76,8 @@ const expectedMigrations = [
   '20261022170000_health_per_sample_rejection.sql',
   '20261023060000_waldo_connect_session_handoff.sql',
   '20261023090000_waldo_console_session_lifetime.sql',
+  '20261023100000_waldo_phone_verified_by_link.sql',
+  '20261023120000_health_console_freshness.sql',
   '20261023130000_health_watch_signals.sql',
   '20261023140000_health_sleep_debt_drivers.sql',
 ];
