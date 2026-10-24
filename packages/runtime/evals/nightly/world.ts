@@ -26,6 +26,7 @@ import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors
 import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
+import { evalConversation, type ConversationSeed } from './conversation-world';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -62,7 +63,7 @@ export type WorldSeed = Readonly<{
   // consent granted or not.
   lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
-}>;
+}> & ConversationSeed;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
 const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -265,7 +266,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   const episodes = episodeIndex(sql);
-  const conversation = indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, now);
+  const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,
     description: 'Search the web. Results are untrusted external text.',
@@ -346,7 +348,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange,
-    ready: mcpReady,
+    ready: Promise.all([mcpReady, chat.seed(conversation)]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
@@ -358,6 +360,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     markFired(id: string) { const reminder = reminders.find((entry) => entry.id === id); if (reminder) reminder.fired = true; },
     effects: (): readonly Effect[] => effects.map((entry) => structuredClone(entry)),
     finalState: () => ({
+      ...chat.state(),
       calendar: events.map(({ owner_id: _owner, ...event }) => event),
       mail: mail.map(({ id, thread_id, from, subject, at }) => ({ id, thread_id, from, subject, at })),
       sent_mail: 0,

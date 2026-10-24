@@ -29,7 +29,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
 | `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
-| `WALDO_EVAL_MAX_CALLS` | required for live | `3200`: `pnpm eval:plan` suggests 3000 in split mode and 2000 in joint mode for 3 trials of today's catalogue, and the workflow sets 3200 so a few more scenarios do not exhaust the budget, which fails the gate |
+| `WALDO_EVAL_MAX_CALLS` | required for live | `3200`: `pnpm eval:plan` suggests 3100 in split mode for 3 trials of today's catalogue, and the workflow sets 3200 so a few more scenarios do not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
 | `WALDO_EVAL_TRIALS` | optional | `3`, which pass^k needs |
@@ -71,16 +71,16 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 
 ## Calls and cost per run
 
-`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 84 scenarios, 81 of them runnable, at 3 trials:
+`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 85 scenarios, 82 of them runnable, at 3 trials:
 
 | | Split (default) | Joint |
 | --- | --- | --- |
-| Owner turns and fired reminders | 327 | 327 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 654 to 1,635 | 654 to 1,635 |
-| Judge calls | 1,293 | 336 |
-| Suggested `WALDO_EVAL_MAX_CALLS` | 3000 | 2000 |
+| Owner turns and fired reminders | 342 | 342 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 684 to 1,710 | 684 to 1,710 |
+| Judge calls | 1,302 | 339 |
+| Suggested `WALDO_EVAL_MAX_CALLS` | 3100 | 2100 |
 
-A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 81 runnable scenarios that is 3200. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
+A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 82 runnable scenarios (85 in the catalogue) the plan suggests 3100, and 3200 covers the room. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
 **Cost estimate.** [inference] This is an estimate, not a measurement.
 
@@ -122,7 +122,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 6. **Record the baseline.** Open the PR that sets the floor with the scorecard's Markdown (`live-scorecard.md`), the exact SHA, the models, the call and token counts, and the dashboard cost. The scorecard holds no reply text.
 7. **Raise the floor only with evidence.** Raise it when a later run's lower bound clears it. Never lower it to make a run pass; a drop is a regression to classify.
 
-`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (81), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
+`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (82), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
 
 ## The raw-history baseline
 

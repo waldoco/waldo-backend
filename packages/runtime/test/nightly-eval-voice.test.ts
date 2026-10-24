@@ -349,7 +349,7 @@ describe('the nightly catalogue', () => {
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h2-stale-health-reading')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'k1-owner-lookup')).toBe(true);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + PERSONALITY_SCENARIOS.length);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + PERSONALITY_SCENARIOS.length + 1);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {
