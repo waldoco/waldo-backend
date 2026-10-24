@@ -123,6 +123,15 @@ describe('live owner memory', () => {
     expect(s.store.allClaims()).toEqual([]);
     expect(result).toMatchObject({ ok: true, data: { removed_ids: [1, 2] } });
   });
+  it('a forget by topic does not list a claim that names the topic only in its source ref, which loses the words and stays', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Has a dog', evidence_quote: 'I have a dog' }, s.ctx('I have a dog'));
+    s.db.exec("UPDATE claims SET source_ref = 'owner, note about Rex' WHERE id = 1");
+    await s.call('remember', { kind: 'fact', text: 'Rex is a beagle', evidence_quote: 'Rex is a beagle' }, s.ctx('Rex is a beagle'));
+    const result = await s.call('forget_memory', { topic: 'Rex', scope_note: 'the dog' }, s.ctx('forget Rex'));
+    expect(s.store.allClaims()).toEqual([expect.objectContaining({ id: 1, text: 'Has a dog', source_ref: expect.not.stringContaining('Rex') })]);
+    expect(result).toMatchObject({ ok: true, data: { removed_ids: [2] } });
+  });
   it('validates every forget selector before any mutation and barriers re-admission', async () => {
     const s = setup();
     await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'));
