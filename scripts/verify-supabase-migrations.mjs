@@ -77,6 +77,7 @@ const expectedMigrations = [
   '20261023060000_waldo_connect_session_handoff.sql',
   '20261023090000_waldo_console_session_lifetime.sql',
   '20261023100000_waldo_phone_verified_by_link.sql',
+  '20261023120000_health_console_freshness.sql',
   '20261024010000_waldo_admin_cost_summary.sql',
 ];
 
