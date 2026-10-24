@@ -47,8 +47,9 @@ it('rejects tampered/oversize cookies and exact expiry; pending never extends th
   clock += 300_000;
   const proof = await auth.verifyEmail(initial, '123456');
   const p = (await auth.read(request(proof!)))!;
-  const phone = await auth.collectPhone(p, '+14155550100');
-  expect(await auth.read(request(phone!))).toMatchObject({ emailVerified: true, phone: '+14155550100', phoneVerification: 'not_configured', complete: false, expires: initial.expires });
+  for (const name of ['', '   ', 'x'.repeat(81), 'Sam\u0007Rivera']) expect(await auth.collectContact(p, name, '+14155550100')).toBeNull();
+  const phone = await auth.collectContact(p, 'Sam Rivera', '+14155550100');
+  expect(await auth.read(request(phone!))).toMatchObject({ emailVerified: true, name: 'Sam Rivera', phone: '+14155550100', phoneVerification: 'not_configured', complete: false, expires: initial.expires });
   expect(fetcher.mock.calls.every(c => !String(c[0]).includes('owner_for_auth'))).toBe(true);
   clock = initial.expires * 1000;
   expect(await auth.read(request(phone!))).toBeNull();
@@ -57,10 +58,10 @@ it('refuses phone before email proof and rechecks eligibility after proof (inclu
   const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({ user: { id: 'u', email: 'person@example.com', email_confirmed_at: '2026-10-01Z' } })).mockResolvedValueOnce(json(false));
   const auth = signupAuth(env, fetcher as typeof fetch, now)!;
   const initial = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
-  expect(await auth.collectPhone(initial, '+14155550100')).toBeNull();
+  expect(await auth.collectContact(initial, 'Sam Rivera', '+14155550100')).toBeNull();
   expect(fetcher).not.toHaveBeenCalled();
   const proof = await auth.verifyEmail(initial, '123456');
-  expect(await auth.collectPhone((await auth.read(request(proof!)))!, '+14155550100')).toBeNull();
+  expect(await auth.collectContact((await auth.read(request(proof!)))!, 'Sam Rivera', '+14155550100')).toBeNull();
 });
 it('supports resend with a hash, never leaking raw invite or Supabase session tokens to continuation', async () => {
   const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({})).mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}));
@@ -77,21 +78,23 @@ it('uses readable signed bearer progress that can be copied until expiry, withou
   const auth = signupAuth(env, fetcher as typeof fetch, now)!;
   const draft = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
   const emailProof = (await auth.verifyEmail(draft, '654321'))!;
-  const cookie = (await auth.collectPhone((await auth.read(request(emailProof)))!, '+14155550100'))!;
+  const cookie = (await auth.collectContact((await auth.read(request(emailProof)))!, 'Sam Rivera', '+14155550100'))!;
   const payload = atob(cookie.split('.')[0]!.replaceAll('-', '+').replaceAll('_', '/'));
   expect(JSON.parse(payload)).toMatchObject({ email: 'person@example.com', phone: '+14155550100', inviteHash: expect.stringMatching(/^[0-9a-f]{64}$/), complete: false });
   for (const absent of ['654321', 'synthetic-access', 'synthetic-refresh', 'ABCDEFGHJKLMNPQRSTUV']) expect(payload).not.toContain(absent);
   expect(await auth.read(new Request('https://w.test/console/signup', { headers: { cookie: `${SIGNUP_COOKIE}=${cookie}`, 'user-agent': 'another-synthetic-browser' } }))).toMatchObject({ emailVerified: true, phoneVerification: 'not_configured', complete: false });
 });
 
-it('completes a verified invite without phone using a distinct signed admission RPC', async () => {
+it('refuses to complete an invite without a phone, and completes one with it through a distinct signed admission RPC', async () => {
   const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({ user: { id: 'auth-1', email: 'person@example.com', email_confirmed_at: '2026-10-01Z' } })).mockResolvedValueOnce(json('owner-new'));
   const auth = signupAuth(env, fetcher as typeof fetch, now)!;
   const draft = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
   const verified = (await auth.read(request((await auth.verifyEmail(draft, '123456'))!)))!;
-  expect(await auth.complete(verified, '')).toBe('owner-new');
+  expect(await auth.complete(verified, '')).toBeNull();
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(await auth.complete(verified, '+14155550100')).toBe('owner-new');
   expect(String(fetcher.mock.calls[2]![0])).toBe('https://db.test/rest/v1/rpc/signup_owner_for_auth');
-  expect(JSON.parse(String(fetcher.mock.calls[2]![1].body))).toMatchObject({ p_auth_user: 'auth-1', p_email: 'person@example.com', p_phone: '', p_code_hash: verified.inviteHash });
+  expect(JSON.parse(String(fetcher.mock.calls[2]![1].body))).toMatchObject({ p_auth_user: 'auth-1', p_email: 'person@example.com', p_phone: '+14155550100', p_code_hash: verified.inviteHash });
 });
 
 it('fails closed without confirmed progress or after expiry and never uses phone as an identity key', async () => {
@@ -116,5 +119,17 @@ it('fails closed without confirmed progress or after expiry and never uses phone
 it.each([null, false, true, {}])('rejects non-owner admission replies (%j)', async reply => {
   const auth = signupAuth(env, vi.fn(async () => json(reply)) as typeof fetch, now)!;
   const p = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
-  expect(await auth.complete({ ...p, authUser: 'auth-1', emailVerified: true }, '')).toBeNull();
+  expect(await auth.complete({ ...p, authUser: 'auth-1', emailVerified: true }, '+14155550100')).toBeNull();
+});
+
+it('reads progress sealed before sign-up asked for a name as carrying none, and refuses a name that was changed in the cookie', async () => {
+  const seal = async (progress: object) => {
+    const payload = btoa(JSON.stringify(progress)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    return `${payload}.${await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, 0, `signup.${payload}`)}`;
+  };
+  const auth = signupAuth(env, vi.fn() as typeof fetch, now)!;
+  const { name: _name, ...older } = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
+  expect(await auth.read(request(await seal(older)))).toMatchObject({ email: 'person@example.com', name: null });
+  expect(await auth.read(request(await seal({ ...older, name: 'Sam\u0007Rivera' })))).toBeNull();
+  expect(await auth.read(request(await seal({ ...older, name: 'x'.repeat(81) })))).toBeNull();
 });

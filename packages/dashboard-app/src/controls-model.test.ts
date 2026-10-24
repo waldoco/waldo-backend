@@ -149,9 +149,17 @@ describe('revision-bound owner control actions', () => {
 
 describe('iMessage and device setup reads', () => {
   const bridge = { id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid', observed: true, host_version: 'host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] };
-  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
+  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, phone: null, photon: null, phone_on_file: null, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
   const device = { id: 'dev_fixture', label: '<b>Mac</b>', capabilities: ['machine_state_query'], created_at: '2026-10-16', actions: ['device.revoke', 'device.query'] };
   const devices = { ...day, view: 'devices', data: { actions: ['device.pair'], devices: [device], query_kinds: ['session_status'], notification_bodies: ['Your Mac is connected.'] }, status: { devices: [{ id: device.id, online: false, last_seen_at: null, commands: [{ class: 'machine_state_query', state: 'queued', result_state: null }] }] } };
+  it('reads the number on file and whether it is verified; an older server reads as not known', () => {
+    const { phone_on_file: _absent, ...older } = imessage.data;
+    expect(readControls({ ...imessage, data: older }, 'imessage').data.phone_on_file).toBeNull();
+    const onFile = { phone: '+15550000001', verified: false };
+    expect(readControls({ ...imessage, data: { ...imessage.data, phone_on_file: { ...onFile, raw: 'never-retain' } } }, 'imessage').data.phone_on_file).toEqual(onFile);
+    for (const phone_on_file of ['+15550000001', { phone: 5, verified: false }, { phone: '+15550000001', verified: 'no' }, { verified: true }])
+      expect(() => readControls({ ...imessage, data: { ...imessage.data, phone_on_file } }, 'imessage')).toThrow('unsupported');
+  });
   it('keeps only the listed fields and actions, and liveness beside the data', () => {
     const parsed = readControls({ ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, wrapped_credential: 'never-retain' }] }, status: { bridges: [{ ...imessage.status.bridges[0], quarantine: 'never-retain' }] } }, 'imessage');
     expect(parsed).toEqual(imessage); expect(JSON.stringify(parsed)).not.toContain('never-retain');
