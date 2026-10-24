@@ -64,7 +64,7 @@ it('serves every sub-view of the console memory graph under the app contract, wi
   });
 });
 
-it('reports an owner with no memory tables as unavailable, and a pending forget as partial with nothing quoted', async () => {
+it('reports an owner with no memory tables as unavailable, and a pending forget as partial without the held item', async () => {
   await owner(() => {}, async storage => {
     const response = await get(storage, 'view=constellation');
     expect(response.status).toBe(200);
@@ -72,10 +72,11 @@ it('reports an owner with no memory tables as unavailable, and a pending forget 
   });
   await owner(sql => { graph(sql); sql.exec("INSERT INTO purge_pending (claim_id, fingerprint, created_at) VALUES (1, 'fingerprint', '2026-10-03')"); }, async storage => {
     const claims = await get(storage, 'view=constellation&memory_view=claims&limit=50');
-    expect(data(claims.body)).toMatchObject({ state: 'partial', complete: false, items: [] });
+    // Only the claim being purged is held back; the rest of the graph stays readable.
+    expect(data(claims.body)).toMatchObject({ state: 'partial', complete: false, items: [{ id: 'memory:claim:2', text: 'Sleeps better after a walk' }] });
     const nodes = await get(storage, 'view=constellation&memory_view=interpretations&limit=50');
-    expect(data(nodes.body)).toMatchObject({ state: 'partial', items: [] });
-    expect(JSON.stringify([claims.body, nodes.body])).not.toMatch(/walk|Afternoon/i);
+    expect(data(nodes.body)).toMatchObject({ state: 'partial' });
+    expect(JSON.stringify([claims.body, nodes.body])).not.toContain('Walks after lunch');
   });
 });
 

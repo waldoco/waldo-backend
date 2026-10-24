@@ -794,7 +794,8 @@ describe('pinned blocks', () => {
       nightly(store, ops({ pin: [{ id: locker, block: 'profile', order: 1 }, { id: parks, block: 'profile', order: 2 }, { id: desk, block: 'profile', order: 3 }, { id: train, block: 'facts', order: 1 }] }));
       applyClaimOps(store, ops({ forget_claims: [locker] }), AT, 'owner agreed', undefined, undefined, true);
       applyClaimOps(store, ops({ dismiss: [parks] }), AT);
-      expect(store.allClaims().some((claim) => claim.id === locker)).toBe(false);
+      // The forgotten claim leaves the active set, and so its block, at once; the purge job deletes the row.
+      expect(store.claims().some((claim) => claim.id === locker)).toBe(false);
       expect(store.correct(desk, { kind: 'fact', text: 'Desk is by the door now', source: 'stated', evidence: '"desk moved to the door"', origin: 'owner', source_ref: 'owner, tg-77' }, AT)).toBe(true);
       expect(store.claims().find((claim) => claim.text === 'Desk is by the door now')).toMatchObject({ pinned: 'profile', pin_order: 3 });
       // A correction to an already-recorded owner fact retires the old row only; that twin takes the pin.

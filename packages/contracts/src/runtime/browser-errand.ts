@@ -11,7 +11,7 @@ const factsSchema = z.record(z.string().min(1).max(80), z.string().min(1).max(50
 
 // A page or site refusal the model can act on: answer a challenge another way, hand a login to the owner, or pick a
 // tier that runs scripts. Anything else an engine reports is a failure, never a guessed reason.
-export const browserErrandBlockedSchema = rungBlockedOutcomeSchema;
+export const browserErrandBlockedSchema = rungBlockedOutcomeSchema.extract(['challenge', 'login_required', 'js_required']);
 export type BrowserErrandBlocked = z.infer<typeof browserErrandBlockedSchema>;
 
 export const browserErrandEngineSchema = z.enum(['browser_use_v4', 'stagehand_browserbase']);
