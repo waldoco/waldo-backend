@@ -20,7 +20,8 @@ export const healthProviderListV1Schema = z.strictObject({ providers: z.array(he
 export const healthProviderConnectV1Schema = z.strictObject({ request_id: healthRequestIdV1Schema, provider: healthProviderV1Schema });
 // The address is Waldo's own start link, and it carries a one-time code (?handoff=) only this response holds. The app
 // opens it exactly as returned, once, in one browser session, within 10 minutes. The first load redeems the code and binds
-// that browser to the link, so the address opened anywhere else, copied out before or after, starts nothing. The page shows
+// whichever browser made it, so after that load, or once the code lapses, the address opened in any other browser starts
+// nothing; a copy opened before the app's own load binds its opener instead. The page shows
 // whose Waldo the account will join; on Continue it hands the browser to the provider's authorization page and binds the
 // attempt to that browser, so a callback that returns to any other browser connects nothing. Each connect is a fresh
 // request_id and a fresh address: a replayed response's address is spent once opened. It expires, and the connection is
