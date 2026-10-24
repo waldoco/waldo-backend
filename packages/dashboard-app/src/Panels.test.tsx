@@ -7,8 +7,9 @@ const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repea
 const noop = () => {};
 const waiting: WaitingRecord = { ...base, view: 'waiting', data: { timezone: null, proposals: [
   { id: 'calendar', kind: 'calendar_change', summary: 'Move event', state: 'open', actions: ['approval.approve', 'approval.skip'], review: { kind: 'calendar_change', action: 'move', title: 'Gym', event_id: 'gym-1', start: '2026-10-02T08:00Z', end: '2026-10-02T09:00Z', reason: 'Requested move' } },
-  { id: 'email', kind: 'email_send', summary: 'Send email', state: 'open', actions: ['approval.skip'], review: { kind: 'email_send', to: ['to@test.invalid'], cc: ['cc@test.invalid'], bcc: ['bcc@test.invalid'], subject: '<script>subject</script>', body: '<script>full email body</script>' } },
+  { id: 'email', kind: 'email_send', summary: 'Send email', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: ['cc@test.invalid'], bcc: ['bcc@test.invalid'], subject: '<script>subject</script>', body: '<script>full email body</script>' } },
   { id: 'message', kind: 'message_send', summary: 'Send message', state: 'unconfirmed', actions: [], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message words' } },
+  { id: 'ready-message', kind: 'message_send', summary: 'Send ready message', state: 'open', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Ready message words' } },
   { id: 'long-email', kind: 'email_send', summary: 'Long email', state: 'review_only', actions: ['approval.skip'], review: null },
   { id: 'undo', kind: 'calendar_change', summary: 'Recorded move', state: 'done', actions: ['approval.undo'], review: null },
 ] } };
@@ -49,24 +50,37 @@ describe('full waiting proposal review', () => {
     expect(none).toContain('No chat request recorded yet.');
   });
 
-  it('renders exact reviewed words and recipients, eligible calendar decisions, and chat-only sends', () => {
+  it('renders exact reviewed words, sender and recipients, and the decisions each draft offers', () => {
     const html = renderToStaticMarkup(<WaitingControls record={waiting} busy={false} onAction={noop}/>);
-    expect(html).toContain('to@test.invalid'); expect(html).toContain('cc@test.invalid'); expect(html).toContain('bcc@test.invalid');
-    expect(html).toContain('&lt;script&gt;full email body&lt;/script&gt;'); expect(html).not.toContain('<script>');
-    expect(html).toContain('Exact message words'); expect(html).toContain('gym-1'); expect(html).toContain('Requested move');
+    expect(html).toContain('to@test.invalid'); expect(html).toContain('cc@test.invalid'); expect(html).toContain('bcc@test.invalid'); expect(html).toContain('me@test.invalid');
+    expect(html).toContain('&lt;script&gt;full email body&lt;/script&gt;'); expect(html).toContain('&lt;script&gt;subject&lt;/script&gt;'); expect(html).not.toContain('<script>');
+    expect(html).toContain('Exact message words'); expect(html).toContain('Ready message words'); expect(html).toContain('gym-1'); expect(html).toContain('Requested move');
     expect(html.match(/Approve this calendar change/g)).toHaveLength(1);
+    expect(html.match(/>Send this email</g)).toHaveLength(1); expect(html.match(/>Send this message</g)).toHaveLength(1); expect(html.match(/>Change it</g)).toHaveLength(2);
     expect(html).toContain('Dismiss proposal'); expect(html).toContain('Undo calendar change');
-    expect(html).toContain('review card in chat'); expect(html).toContain('couldn’t confirm the review card was delivered');
+    expect(html).toContain('Sending can’t be undone'); expect(html).toContain('couldn’t confirm the review card was delivered');
     expect(html).toContain('no Send it button'); expect(html).toMatch(/<details[^>]*open=""/);
   });
 
-  it('never renders generic email approval even with erroneous action metadata and blocks pending decisions', () => {
+  it('sends only an open draft its read offered to send, and blocks pending decisions', () => {
     const email = waiting.data.proposals[1]!;
-    const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [{ ...email, actions: ['approval.approve', 'approval.undo'] }] } }} busy onAction={noop}/>);
-    expect(html).not.toMatch(/<button[^>]*>Approve/); expect(html).not.toContain('Undo calendar');
+    for (const proposal of [{ ...email, state: 'review_only' as const }, { ...email, actions: ['approval.skip' as const] }, { ...email, review: null }]) {
+      const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [{ ...proposal, actions: [...proposal.actions, 'approval.undo'] }] } }} busy={false} onAction={noop}/>);
+      expect(html).not.toMatch(/<button[^>]*>(Send|Change it)/); expect(html).not.toContain('Undo calendar');
+    }
     const pending = renderToStaticMarkup(<WaitingControls record={waiting} busy onAction={noop}/>);
-    expect(pending).toContain('disabled=""'); expect(pending).not.toContain('/console/waiting');
+    expect(pending.match(/<button[^>]*>(Send this email|Send this message|Change it)</g)).toHaveLength(4);
+    expect(pending).not.toMatch(/<button(?![^>]*disabled="")[^>]*>(Send this|Change it)/); expect(pending).not.toContain('/console/waiting');
   });
+
+  it('warns beside Send when an identical email may already have gone out', () => {
+    const email = waiting.data.proposals[1]!;
+    const warned = { ...email, review: { ...email.review!, earlier_unknown_at: 'Fri 23 Oct, 14:05' } } as typeof email;
+    const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [warned] } }} busy={false} onAction={noop}/>);
+    expect(html).toMatch(/role="alert"[^>]*>An identical email from Fri 23 Oct, 14:05 may already have gone out\. Check Gmail’s Sent folder before you send it again\.<\/p><div class="control-actions"><button class="primary"[^>]*>Send this email</);
+    expect(renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [email] } }} busy={false} onAction={noop}/>)).not.toContain('may already have gone out');
+  });
+
 });
 
 describe('recorded activity and pagination', () => {

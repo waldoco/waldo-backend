@@ -345,6 +345,23 @@ it('effect refresh outage retains pending custody and never retries provider aft
  expect(f.effects()).toBe(0);expect(f.rows.size).toBe(1);expect(f.hops).not.toContain('proxy_idem_store');expect(f.hops).not.toContain('proxy_health');
 });
 
+it('actual signed rest-block read requires event access, answers Waldo\'s rest blocks and never an effect intent',async()=>{
+ const input={do_name:'owner',op:'call',connection:'conn',method:'restBlocks',args:['primary','2026-10-03T00:00:00Z','2026-10-04T00:00:00Z']};
+ for(const scopes of [null,[],['https://www.googleapis.com/auth/calendar.events.freebusy'],['https://www.googleapis.com/auth/calendar.calendarlist.readonly']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
+ const block={id:'b1',status:'confirmed',summary:'Recharge',start:{dateTime:'2026-10-03T15:00:00+05:30'},end:{dateTime:'2026-10-03T16:00:00+05:30'},extendedProperties:{private:{waldoBlock:'rest'}}};
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:['https://www.googleapis.com/auth/calendar.events']}]:[]);
+  if(fn==='proxy_secret')return Response.json('fictional-refresh');
+  if(fn==='proxy_health')return Response.json(true);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access'});
+  if(url.includes('www.googleapis.com/calendar/'))return Response.json({kind:'calendar#events',items:[block]});
+  if(fn==='proxy_idem_claim')throw new Error('a read never claims an effect intent');
+  throw new Error('unexpected fictional transport');
+ }));
+ expect(await(await serve(await request(input))).json()).toEqual({data:{blocks:[{start:'2026-10-03T15:00:00+05:30',end:'2026-10-03T16:00:00+05:30'}],others:[]}});
+});
+
 it('maps calendar detail fields only for a Worker that asks for them, so either deploy order is safe',async()=>{
  const event={id:'e1',status:'confirmed',summary:'Weekly sync',updated:'2026-10-01T09:00:00.000Z',start:{dateTime:'2026-10-03T10:30:00+05:30'},end:{dateTime:'2026-10-03T11:00:00+05:30'},hangoutLink:'https://meet.example.test/abc-defg-hij',attachments:[{fileId:'drive-file-1',title:'Q4 plan'}],attendees:[{email:'asha@example.test',responseStatus:'accepted'}]};
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{

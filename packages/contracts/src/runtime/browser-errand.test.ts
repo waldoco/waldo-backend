@@ -30,6 +30,7 @@ describe('browser errand checkpoint', () => {
   it('names exactly three structured blocks and seven login states', () => {
     expect(browserErrandBlockedSchema.options).toEqual(['challenge', 'login_required', 'js_required']);
     expect(browserErrandBlockedSchema.safeParse('captcha').success).toBe(false);
+    expect(browserErrandBlockedSchema.safeParse('device_offline').success).toBe(false);
     expect(browserLoginStateSchema.safeParse('owner_in_control').success).toBe(true);
     expect(browserLoginStateSchema.safeParse('typing').success).toBe(false);
   });
