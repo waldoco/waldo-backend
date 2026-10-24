@@ -56,7 +56,7 @@ it.each(memoryWrites)('a dreaming job\'s %s writes nothing when the owner\'s bin
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`job-memory-${name}`)), async (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const reply = seed(store);
-    const before = JSON.stringify([store.claims(), store.nodes()]);
+    const before = JSON.stringify(store.claims());
     let revision = '5';
     // A fixed clock keeps the cached check inside its window, so only a fresh read can see the change.
     const at = Date.parse('2026-10-14T03:00:00Z');
@@ -70,6 +70,6 @@ it.each(memoryWrites)('a dreaming job\'s %s writes nothing when the owner\'s bin
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain } });
     await expect(call(responder)).rejects.toMatchObject({ code: 'rejected' });
-    expect(JSON.stringify([store.claims(), store.nodes()])).toBe(before);
+    expect(JSON.stringify(store.claims())).toBe(before);
   });
 });

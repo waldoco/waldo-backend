@@ -11,7 +11,7 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
   claims: ['text', 'evidence', 'aliases', 'source_ref'], thread_topic_index: ['topic'], memory_blocks: ['content', 'decision_log'],
   memory_inbox: ['claim', 'content'], patrol_log: ['summary'], goals: ['description', 'baseline', 'target', 'progress'],
   // Mirrors the collect() list in claims.ts forgetSources (a hand copy; keep in step with it).
-  episodes: ['text'], constellation_nodes: ['label', 'summary'], loops: ['title'], background_runs: ['summary'], reminder_notes: ['note'],
+  episodes: ['text'], loops: ['title'], background_runs: ['summary'], reminder_notes: ['note'],
 };
 
 type Sql = Pick<SqlStorage, 'exec'>;

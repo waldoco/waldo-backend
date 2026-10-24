@@ -23,7 +23,7 @@ export const backupAndCopySpots = (sql: Sql, store: ClaimStore, at: string): str
   if (store.backedUp(LEGACY_BACKUP)) return null;
   const old = legacy(sql);
   const spots = old.spots();
-  store.backup(LEGACY_BACKUP, { core_file_revisions: old.revisions(), spots, nodes: store.nodes(), edges: store.edges() }, at);
+  store.backup(LEGACY_BACKUP, { core_file_revisions: old.revisions(), spots }, at);
   for (const spot of spots) {
     sql.exec('INSERT OR IGNORE INTO claims (id, kind, text, source, evidence, status, created_at, last_seen_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       spot.id, CLAIM_KINDS.includes(spot.kind as never) ? spot.kind : 'observation', spot.text, spot.source, `${spot.evidence} (spot #${spot.id})`, spot.status, spot.created_at, spot.last_seen_at, spot.seen_count);

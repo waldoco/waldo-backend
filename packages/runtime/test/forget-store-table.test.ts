@@ -19,7 +19,6 @@ const TABLES: Record<string, Row> = {
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
   memory_backups: purged('forget-coverage.test.ts'), spots: purged('forget-coverage.test.ts'), core_file_revisions: purged('forget-coverage.test.ts'),
-  constellation_nodes: purged('forget-coverage.test.ts'), 
   run_candidates: purged('forget-tracer-stores.test.ts'), outbox: purged('forget-tracer-stores.test.ts'), held_candidates: purged('forget-tracer-stores.test.ts'),
   schedule: purged('forget-tracer-stores.test.ts'), update_cards: purged('forget-derived-stores.test.ts'), day_plan: purged('forget-derived-stores.test.ts'),
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
@@ -74,7 +73,6 @@ const TABLES: Record<string, Row> = {
   standing_orders: gap('trigger and escalation text; owner-made instructions stay preserved and a topic present keeps a forget incomplete (named in the owner message)'), loops: purged('memory-forget-do-provider.test.ts'), background_runs: purged('memory-forget-do-provider.test.ts'),
   ledger: gap('summary and payload JSON'), google_task_effect_ack: gap('exact provider acknowledgement JSON can contain task title/notes; the same payload and receipt also sit in the owner:effect KV record, which this table inventory does not list; effect recovery custody has no literal topic purge'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
-  constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
   responsibilities: gap('title, intent and closing evidence text; a literal forget does not reach it yet'), responsibility_items: gap('step title and worker result text; a literal forget does not reach it yet'),
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   // Product-schema tables (do-schema.ts), none wired to purge

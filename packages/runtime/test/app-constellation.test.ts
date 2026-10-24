@@ -22,8 +22,12 @@ const owner = async (seed: (sql: SqlStorage) => void, run: (storage: DurableObje
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-constellation-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => { seed(state.storage.sql); await run(state.storage, state.id.toString()); });
 };
+// Node rows as an owner holds them before the next memory open drops the tables.
 const graph = (sql: SqlStorage) => {
   claimStore(sql);
+  sql.exec(`CREATE TABLE constellation_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
+    status TEXT NOT NULL, first_seen TEXT NOT NULL, last_confirmed TEXT NOT NULL, supporting_spots TEXT NOT NULL)`);
+  sql.exec('CREATE TABLE constellation_edges (from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, relation TEXT NOT NULL, strength REAL NOT NULL, evidence_count INTEGER NOT NULL)');
   const claim = (text: string) => sql.exec(`INSERT INTO claims (kind, text, source, evidence, status, created_at, last_seen_at, seen_count, origin, source_ref)
     VALUES ('routine', ?, 'stated', 'Said so on Monday', 'active', '2026-10-01', '2026-10-02', 2, 'owner', 'app:1')`, text);
   claim('Walks after lunch'); claim('Sleeps better after a walk');

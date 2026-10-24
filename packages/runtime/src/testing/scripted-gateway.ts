@@ -44,7 +44,7 @@ const response = (model: ModelName, text: string, toolCalls?: LLMResponse['tool_
   },
 });
 
-const NO_CLAIM_OPS = '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
+const NO_CLAIM_OPS = '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_topic":null}';
 
 export type ScriptedGateway = LLMGatewayAdapter & Readonly<{
   // Every request the gateway received, in order, including claim_ops calls.

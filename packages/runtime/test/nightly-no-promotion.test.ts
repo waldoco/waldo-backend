@@ -56,7 +56,6 @@ it('a nightly pass makes no promotion call and logs no constellation hop; a recu
       expect(logged.some(line => line.includes('"hop":"machine_turn"') && line.includes('nightly')), 'the nightly pass ran').toBe(true);
       expect(logged.filter(line => /"hop":"constellation(_evidence)?"/.test(line))).toEqual([]);
       expect(formats).not.toContain('promotion');
-      expect(store.nodes()).toEqual([]);
       expect(store.claims('promoted')).toEqual([]);
       expect(store.claims().map(claim => claim.id).sort()).toEqual([1, 2]);
       expect(memoryPrompt(store)).toContain('Scrolls the phone in bed past midnight');
@@ -65,24 +64,21 @@ it('a nightly pass makes no promotion call and logs no constellation hop; a recu
   });
 });
 
-it('a claim and a node that earlier nights promoted stay stored and readable, and the owner can forget both', async () => {
+it('a claim an earlier night promoted stays readable, and the owner can forget it', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('promoted-stays-forgettable')), async (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     store.add(observation('Posterbot standup runs long on Mondays'), '2026-10-10T09:00:00Z', 1);
     store.setStatus(1, 'promoted');
-    const node = store.saveNode({ id: null, domain: 'work rhythm', label: 'Posterbot Mondays', summary: 'Posterbot standup runs long', strength: 0.7, status: 'active', supporting_spots: [1] }, '2026-10-11T00:00:00Z');
     const read = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined }).find(handler => handler.name === 'read_memory')!;
     const turn = { authenticatedUserId: 'owner:1', trigger: 'user_message', memoryTurn: { ownerId: 'owner:1', conversationRef: 'owner', current: { message_ref: 'tg-3', text: 'standup' }, recent: [] } } as unknown as MemoryToolContext;
     expect(await read.handle(read.schema.parse({ query: 'standup' }), turn)).toMatchObject({ ok: true, data: { claims: [{ id: 1 }] } });
     expect(store.recall('standup').map(claim => claim.id)).toEqual([1]);
-    expect(store.nodes().map(row => row.label)).toEqual(['Posterbot Mondays']);
 
-    applyClaimOps(store, JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_nodes: [node], forget_topic: 'Posterbot' }),
+    applyClaimOps(store, JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_topic: 'Posterbot' }),
       '2026-10-13T06:00:00Z', 'owner, tg-3', undefined, { owner: 'please forget Posterbot' }, true);
     expect(store.claims('promoted')).toEqual([]);
     expect(store.recall('standup')).toEqual([]);
     expect(await read.handle(read.schema.parse({ query: 'standup' }), turn)).toMatchObject({ ok: true, data: { claims: [] } });
-    expect(store.nodes().filter(row => row.status === 'active' && JSON.stringify(row).includes('Posterbot'))).toEqual([]);
     expect(memoryPrompt(store)).not.toContain('Posterbot');
   });
 });

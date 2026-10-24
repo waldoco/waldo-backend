@@ -246,9 +246,9 @@ describe('claims', () => {
       store.add({ kind: 'preference', text: 'Likes idli', source: 'stated', evidence: '"idli please"' }, AT);
       const ids = store.claims().map((claim) => claim.id);
       // The staging failure shape: an unrelated question, extractor hallucinates forgets.
-      const detail = applyClaimOps(store, ops({ forget_claims: ids, forget_nodes: [1], forget_topic: 'forgotten items' }), AT, 'owner, tg-cal', undefined,
+      const detail = applyClaimOps(store, ops({ forget_claims: ids, forget_topic: 'forgotten items' }), AT, 'owner, tg-cal', undefined,
         { owner: "What's on my calendar tomorrow?", shared: '', waldo: 'Coffee chat at 2pm.' });
-      expect(detail).toContain('forget-blocked4(no-intent)'); // 2 claims + 1 node + 1 topic
+      expect(detail).toContain('forget-blocked3(no-intent)'); // 2 claims + 1 topic
       expect(store.claims().map((claim) => claim.id)).toEqual(ids); // nothing purged
       expect(store.barriers()).toEqual([]); // no barrier without intent either
     });
@@ -343,31 +343,7 @@ describe('claims', () => {
     expect(other).toEqual([]);
   });
 
-  it('the nightly memory input shows claims only, never a stored node or edge', async () => {
-    await withSql((sql) => {
-      const store = claimStore(sql);
-      store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'stated', evidence: 'day one', origin: 'owner' }, AT);
-      const sleep = store.saveNode({ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [1] }, AT);
-      const days = store.saveNode({ id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [1] }, AT);
-      store.saveEdge({ from_id: days, to_id: sleep, relation: 'tends to precede', strength: 0.5, evidence_count: 3 });
-      for (const prompt of [memoryPrompt(store), nightlyInput(store, '[2026-09-24 08:00] owner: morning')]) {
-        expect(prompt).toContain('Short sleep before long meeting days');
-        expect(prompt).not.toMatch(/<node|<edge|Sleeps less before big days|Heavy days|tends to precede/);
-      }
-    });
-  });
 
-  it('forgetting a node drops its edges', async () => {
-    await withSql((sql) => {
-      const store = claimStore(sql);
-      const sleep = store.saveNode({ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [] }, AT);
-      const days = store.saveNode({ id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [] }, AT);
-      store.saveEdge({ from_id: days, to_id: sleep, relation: 'tends to precede', strength: 0.5, evidence_count: 3 });
-      expect(store.edges()).toHaveLength(1);
-      store.forgetNode(sleep);
-      expect(store.edges()).toEqual([]);
-    });
-  });
 });
 
 
@@ -724,14 +700,13 @@ describe('pinned blocks', () => {
 
 // Text built from memory earlier in a turn checks this count, not its own rendering, so every forget path must move it
 // and an ordinary write must not.
-it('every forget moves the forget generation; adding a claim or a node does not', async () => {
+it('every forget moves the forget generation; adding a claim does not', async () => {
   await withSql((sql) => {
     const store = claimStore(sql);
     expect(store.forgetGeneration()).toBe(0);
     store.add({ kind: 'fact', text: 'Prefers aisle seats', source: 'stated', evidence: '"Prefers aisle seats"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT);
-    const node = store.saveNode({ id: null, domain: 'travel', label: 'Seating', summary: 'Seat choice', strength: 1, status: 'active', supporting_spots: [1] }, AT);
     expect(store.forgetGeneration()).toBe(0);
-    const forgets = [() => store.barrier('window seats', AT), () => store.forgetNode(node), () => store.purge([1], AT)];
+    const forgets = [() => store.barrier('window seats', AT), () => store.purge([1], AT)];
     for (const [index, forget] of forgets.entries()) {
       forget();
       expect(store.forgetGeneration()).toBe(index + 1);

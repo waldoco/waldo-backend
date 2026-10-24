@@ -91,7 +91,7 @@ type Steps = Readonly<{
   heartbeat(): Promise<void>;
   // A reminder due now, one-off or daily; answers its id.
   reminder(repeat: 'none' | 'daily'): Promise<string>;
-  forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  forget(kind: 'spot', text: string): Promise<boolean | string>;
   // Meta's report on every message it accepted: it reached the phone, or it was refused for the closed window.
   report(kind: 'delivered' | 'refused'): Promise<void>;
   // The owner unlinks WhatsApp from the console.
@@ -129,7 +129,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const internals = owner as unknown as { turn(...args: unknown[]): Promise<void>; whatsappInflight: Set<Promise<void>>; serial(work: () => Promise<void>): Promise<void>;
-      setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
+      setup(channel: string): { act(input: { action: 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const realTurn = internals.turn.bind(owner);
     let runTurn = false;
     const turns = vi.spyOn(internals, 'turn').mockImplementation(async (...args: unknown[]) => { wire.events.push('turn'); if (runTurn) await realTurn(...args); });
@@ -161,9 +161,8 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           return set.id;
         },
         forget: async (kind, text) => {
-          if (kind === 'node') state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work',?,'synthetic',0.5,'active','now','now','[]')", text);
-          else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
-          const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims().find(row => row.text === text)!.id;
+          memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          const id = memory.claims().find(row => row.text === text)!.id;
           return internals.setup('whatsapp').act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
         report: async kind => {
@@ -217,7 +216,7 @@ const STOPPED_REMINDER = 'reminder not sent: it named something you asked me to 
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { timeout: 30_000 }, () => {
-  it.each(['node', 'spot'] as const)('cancels and scrubs it from the console (%s), and the reply never sends it', async kind => {
+  it.each(['spot'] as const)('cancels and scrubs it from the console (%s), and the reply never sends it', async kind => {
     await owned(`wa-forget-heartbeat-${kind}`, async ({ alarms, write, heartbeat, forget, outbox, job }) => {
       await heartbeat();
       await alarms(3);
@@ -285,7 +284,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await alarms(3);
       await write('hi');
       expect(outbox()).toMatchObject([{ status: 'accepted' }]);
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       expect(outbox()).toMatchObject([{ status: 'accepted', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await report('delivered');
       await alarms(1);
@@ -299,7 +298,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await heartbeat();
       await alarms(3);
       await write('hi');
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       await report('refused');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
@@ -322,7 +321,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
 });
 
 describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_000 }, () => {
-  it.each(['node', 'spot'] as const)('cancels a one-off reminder\'s waiting message (%s) and ends the reminder', async kind => {
+  it.each(['spot'] as const)('cancels a one-off reminder\'s waiting message (%s) and ends the reminder', async kind => {
     await owned(`wa-forget-reminder-${kind}`, async ({ alarms, write, reminder, forget, outbox, job, note }) => {
       const id = await reminder('none');
       await alarms(3);
@@ -349,7 +348,7 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       await write('hi');
       expect(job('reminder').run).toEqual([{ status: 'stopped', summary: 'reminder cancelled before delivery' }]);
 
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget', payload: { text: REMINDER.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
@@ -365,7 +364,7 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       await alarms(3);
       await write('hi');
       expect(outbox()).toMatchObject([{ status: 'accepted' }]);
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       expect(outbox()).toMatchObject([{ status: 'accepted', payload: { text: REMINDER.replace(SECRET, FORGOTTEN) } }]);
       await report('delivered');
       await alarms(1);
@@ -380,7 +379,7 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       const id = await reminder('none');
       await alarms(3);
       await write('hi');
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       await report('refused');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
@@ -393,7 +392,7 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
     await owned('wa-forget-reminder-unlinked', async ({ alarms, reminder, forget, unlink, outbox, job }) => {
       await reminder('none');
       await alarms(3);
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       await unlink();
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: expect.stringMatching(/^(owner_forget|surface_unlinked)$/) }]);
@@ -407,7 +406,7 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       await alarms(3);
       expect(outbox()).toMatchObject([{ status: 'pending' }]);
 
-      expect(await forget('node', SECRET)).toBe(true);
+      expect(await forget('spot', SECRET)).toBe(true);
       await write('hi');
       await alarms(1);
       expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
