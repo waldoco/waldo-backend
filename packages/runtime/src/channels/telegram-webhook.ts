@@ -61,8 +61,14 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
+  // The Google Cloud project holding Waldo's Gmail push topic in this environment; unset keeps Gmail push off.
+  GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
+  APP_AGREEMENTS?: string;
+  // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
+  OWNER_LOOKUP?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

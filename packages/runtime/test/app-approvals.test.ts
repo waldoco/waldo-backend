@@ -5,7 +5,8 @@ import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../.
 import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const CSRF = 'c'.repeat(64);
 
@@ -25,8 +26,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => { current++; }, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const get = (query = '') => appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host);
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
-    const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nSee you at four.';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>' }));
 
     const listed = await get();
     expect(listed.status).toBe(200);
@@ -86,7 +86,7 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const decide = async (body: unknown) => { const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host); return { status: response.status, text: await response.text() }; };
     const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nPRIVATE-BODY-TEXT';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>' }));
     const [item] = await desk.approvals(Date.now(), { id });
     const failed = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'receipt-0001' });
     expect(failed.status).toBe(409);
@@ -109,7 +109,7 @@ it('Not now keeps the approval open and its cards live, leaves it out of the def
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
     const list = async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals;
     const raw = 'To: b@x.test\r\nSubject: Later\r\n\r\nNot today.';
-    const id = await desk.proposeSendEmail({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>' }));
     const [item] = await list();
     expect(item).toMatchObject({ approval_id: id, state: 'open' });
     expect(item!.actions).toContain('defer');
@@ -145,7 +145,7 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
     const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
-    const id = await desk.proposeSendEmail({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>' }));
     const list = async () => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
     const [item] = await list();
     const answer = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -171,8 +171,7 @@ const deferDesk = async <T>(name: string, run: (tools: Readonly<{ desk: ReturnTy
       decide: body => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host),
       list: async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals,
       propose: async (subject, body) => {
-        const raw = `To: e@x.test\r\nSubject: ${subject}\r\n\r\n${body}`;
-        return desk.proposeSendEmail({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>`, raw, digest: await sha256Hex(raw) });
+        return desk.proposeSendEmail(await emailProposal({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>` }));
       },
       deferredAt: id => state.storage.sql.exec<{ deferred_at: number | null }>('SELECT deferred_at FROM ledger WHERE id = ?', id).one().deferred_at });
   });

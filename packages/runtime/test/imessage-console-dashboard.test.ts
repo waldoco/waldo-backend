@@ -54,7 +54,7 @@ async function world(o: { admin?: boolean } = {}) {
   const act = async (action: string, fields: Record<string, string> = {}, over: { csrf?: string; revision?: string; request_id?: string } = {}): Promise<Acted> => {
     const current = over.revision && over.csrf ? null : await read();
     const body = new URLSearchParams({ csrf: over.csrf ?? current!.csrf, revision: over.revision ?? current!.revision, view: 'imessage', action, request_id: over.request_id ?? `imsg-request-${++n}`, ...fields });
-    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, origin: HOST_ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
     return { status: response.status, body: await response.json(), location: response.headers.get('location'), cache: response.headers.get('cache-control') };
   };
   const host = new SimulatedHost(call, HOST_ORIGIN);
@@ -82,7 +82,7 @@ it('pairs and activates a Mac host from the new console: each code is shown once
   const opened = await w.call(new Request(`${HOST_ORIGIN}/console/imessage`, { redirect: 'manual', headers: { cookie: w.cookie } }));
   expect({ status: opened.status, location: opened.headers.get('location') }).toEqual({ status: 303, location: '/console#/connections/imessage' });
   const empty = await w.read();
-  expect(empty.data).toEqual({ enabled: true, address: 'waldo@fixture.invalid', phone: null, photon: null, linked_hint: null, admin: false, actions: ['imessage.link', 'imessage.pair'], bridges: [] });
+  expect(empty.data).toEqual({ enabled: true, address: 'waldo@fixture.invalid', phone: null, photon: null, phone_on_file: null, linked_hint: null, admin: false, actions: ['imessage.link', 'imessage.pair'], bridges: [] });
 
   const issued = await w.act('imessage.pair', {}, { request_id: 'imsg-pair-once' });
   expect(issued.status).toBe(200); expect(issued.location).toBeNull();

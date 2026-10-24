@@ -1,9 +1,10 @@
 import { healthIngestReceiptV1Schema, healthSampleV1Schema, type HealthSampleV1 } from '../../../../contracts/src/app/health-ingest';
 import { invokeHealth } from '../../channels/app-health';
+import { HANDOFF_CODE_TTL_MS, newHandoff } from '../../channels/connect-confirm';
 import { md5Hex } from '../../channels/md5';
 import { hex } from '../../identity/owner-directory';
 import { OAuthProxyError, type OAuthProxy } from '../../connectors/oauth-proxy-client';
-import { whoopClient, whoopStartUrl, whoopPins, WhoopError, WHOOP_ATTEMPT_TTL_MS, WHOOP_SCOPES, type EdgeReply, type WhoopCall, type WhoopConfig } from './whoop-client';
+import { whoopClient, whoopStartUrl, whoopPins, WhoopError, WHOOP_SCOPES, type EdgeReply, type WhoopCall, type WhoopConfig } from './whoop-client';
 import { whoopDeletions, whoopNightSamples, whoopWorkoutSamples, type WhoopDeletion, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
 
 // The owner object's side of WHOOP: connect, sync, webhook hints, disconnect. Every token lives at the oauth-proxy Edge
@@ -301,10 +302,10 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!consent) return { error: 'unavailable' };
       const missing = missingGrants(consent);
       if (missing.length > 0) return { error: 'consent_required', missing };
-      const state = newState(), hash = await sha256(state);
-      const session = await rpc('connect_session_issue', `connsess.issue.${doName()}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
+      const state = newState(), hash = await sha256(state), handoff = await newHandoff();
+      const session = await rpc('connect_session_issue_handoff', `connsess.issue_handoff.${doName()}.${SOURCE}.${CHANNEL}.${hash}.${handoff.hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash, p_handoff_hash: handoff.hash });
       if (typeof session !== 'string') return { error: 'unavailable' };
-      return { authorize_url: whoopStartUrl(config, state), expires_at: deps.now() + WHOOP_ATTEMPT_TTL_MS };
+      return { authorize_url: whoopStartUrl(config, state, handoff.code), expires_at: deps.now() + HANDOFF_CODE_TTL_MS };
     } catch { return { error: 'unavailable' }; }
   };
 

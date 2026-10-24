@@ -27,7 +27,8 @@ async function world() {
   const owners: FixtureOwner[] = [
     { do_name: `photon-op-${id}`, owner_id: '60000000-0000-4000-8000-000000000001', state: 'active', state_version: 1, admission_revision: 1, admin: true, email: 'op@example.invalid' },
     { do_name: `photon-alice-${id}`, owner_id: '60000000-0000-4000-8000-000000000002', state: 'active', state_version: 1, admission_revision: 1, email: 'alice@example.invalid', phone: ALICE },
-    { do_name: `photon-bob-${id}`, owner_id: '60000000-0000-4000-8000-000000000003', state: 'active', state_version: 1, admission_revision: 1, email: 'bob@example.invalid' },
+    // Bob typed Alice's number at sign-up: it is his number on file, unverified, and nothing is ever sent to it for him.
+    { do_name: `photon-bob-${id}`, owner_id: '60000000-0000-4000-8000-000000000003', state: 'active', state_version: 1, admission_revision: 1, email: 'bob@example.invalid', phone: ALICE },
   ];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn, a) => {
     if (fn === 'console_session_touch' || fn === 'console_auth_throttle') return Response.json(true);
@@ -81,15 +82,15 @@ async function world() {
     const action = (actionName: string, fields: Record<string, string> = {}) => {
       const form = new FormData(); form.set('action', actionName); form.set('csrf', csrf);
       for (const [k, v] of Object.entries(fields)) form.set(k, v);
-      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
     };
-    type Controls = { csrf: string; revision: string; data: { address: string | null; phone: string | null; photon: string | null; actions: string[] } };
+    type Controls = { csrf: string; revision: string; data: { address: string | null; phone: string | null; phone_on_file: { phone: string; verified: boolean } | null; photon: string | null; actions: string[] } };
     const controls = async () => (await get('/console/dashboard/api/v1/controls?view=imessage')).json() as Promise<Controls>;
     let n = 0;
     const act = async (actionName: string, fields: Record<string, string> = {}) => {
       const current = await controls();
       const body = new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'imessage', action: actionName, request_id: `photon-${name}-${++n}`, ...fields });
-      const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+      const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, origin: HOST_ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
       return { status: response.status, body: await response.json() as { receipt?: { state: string; message: string }; reveal?: { kind: string; value: string; to?: string } } };
     };
     return { stub, get, action, controls, act, name };
@@ -167,7 +168,7 @@ it('an owner gets their own Waldo number in one step and links it with one text;
   expect((await callback(binding)).status).toBe(200);
 
   const before = await w.alice.controls();
-  expect(before.data).toMatchObject({ address: null, phone: ALICE });
+  expect(before.data).toMatchObject({ address: null, phone: ALICE, phone_on_file: { phone: ALICE, verified: false } });
   expect(before.data.actions).toContain('imessage.enroll'); expect(before.data.actions).not.toContain('imessage.link');
   const enrolled = await w.alice.act('imessage.enroll', { phone: '+1 555 000 0011' });
   expect(enrolled.body.receipt).toMatchObject({ state: 'recorded' });
@@ -186,6 +187,9 @@ it('an owner gets their own Waldo number in one step and links it with one text;
 
   // The shared number is live. Alice texts it without a code: she is told to finish in her console, and reaches no Waldo.
   await w.sharedLive();
+  // Bob typing and enrolling Alice's number sent her nothing: the only messages are replies to her own texts.
+  await w.pump();
+  expect(await w.deliverNext()).toBeNull();
   expect((await w.host.send(w.host.message('hi waldo', { senderHandle: ALICE }))).status).toBe(200);
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ text: enrolledReply(CONSOLE_URL), chatGuid: `iMessage;-;${ALICE}`, ownerId: SYSTEM_OWNER_ID });
@@ -196,6 +200,9 @@ it('an owner gets their own Waldo number in one step and links it with one text;
   expect((await w.host.send(w.host.message(`waldo ${code}`, { senderHandle: ALICE }))).status).toBe(200);
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ text: LINK_REPLIES.redeemed, chatGuid: `iMessage;-;${ALICE}` });
+  // The code arrived from her number on file, so her console now reads it as verified; Bob's copy of it proves nothing.
+  expect((await w.alice.controls()).data.phone_on_file).toEqual({ phone: ALICE, verified: true });
+  expect((await w.bob.controls()).data.phone_on_file).toEqual({ phone: ALICE, verified: false });
   // Possession decided: now that Alice's phone is linked to her, nobody else can enroll it.
   const taken = await w.bob.act('imessage.enroll', { phone: ALICE });
   expect(taken.body.receipt).toMatchObject({ state: 'rejected' }); expect(taken.body.receipt!.message).toContain('unlink it from the other Waldo account');

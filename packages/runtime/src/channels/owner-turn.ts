@@ -816,7 +816,10 @@ export const createOwnerResponder = (
         privateRunScope?.admit();
       }
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
+      const input = plan.input.filter((message) => !barrier().shows(message.content));
+      if (!input.length) { hop(false, 'held_topic'); return; }
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }

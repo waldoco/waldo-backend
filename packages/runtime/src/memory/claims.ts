@@ -68,6 +68,8 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
+  // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
+  ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
 // Of those, the owner's goals are the owner's own record and keep their rows; the rest are Waldo's derived text and a row
 // that carries a forgotten text is deleted.
@@ -574,7 +576,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // one repeats them, it loses only the words. words (a forgotten claim's evidence, which may be a citation other claims share) are held the same way and
     // leave only the episode index. Every text is redacted longest first, so a shorter text redacted first cannot cut a longer
     // one into a fragment the longer one no longer matches; texts returns them all for the stores outside this table.
-    purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+    purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> }; deletedClaims: readonly number[] } {
       // Before anything is removed: if the count cannot move, nothing is forgotten either.
       forgetLanded();
       const forgotten = ids.length
@@ -637,6 +639,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasSourceLoops = tableExists(sql, 'loops');
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
       const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
+      const deletedClaims: number[] = [];
       const hasRunCandidates = tableExists(sql, 'run_candidates');
       const hasOutbox = tableExists(sql, 'outbox');
       const hasHeld = tableExists(sql, 'held_candidates');
@@ -687,7 +690,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // claim and redacts the forgotten sentence or quote where one repeats it.
         attempt('surviving_claims', () => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray()) {
-            if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); continue; }
+            if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); deletedClaims.push(row.rid); continue; }
             const redacted = [ci(row.text), ci(row.evidence), row.aliases === null ? null : ci(row.aliases), row.source_ref === null ? null : ci(row.source_ref)] as const;
             if (redacted[0] !== row.text || redacted[1] !== row.evidence || redacted[2] !== row.aliases || redacted[3] !== row.source_ref) { sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ?, source_ref = ? WHERE id = ?', ...redacted, row.rid); tally('redacted', 'claims'); }
           }
@@ -888,7 +891,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt, deletedClaims };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.

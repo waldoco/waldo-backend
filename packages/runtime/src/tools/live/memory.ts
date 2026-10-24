@@ -125,14 +125,15 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const inHistory = selected.size === 0 && deps.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n > 0
           && deps.sql.exec<{ text: string }>('SELECT text FROM episodes').toArray().some(row => !current.has(row.text) && purged.some(text => carriesTopic(row.text, text)));
         await ready(ctx);
-        let touched = false;
+        let touched = false; let deletedWith: readonly number[] = [];
         // Custody before destruction: the purge records the texts in custody, then deletes the claims and cleans the claims
         // table and its derived rows, all in one commit. The stores outside it are cleaned by the forget purge job, handed every
         // text after the commit; until it settles, the forget barrier keeps them out of the model's view.
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
-          const counts = store.purge([...selected.keys()], now(), purged, words).receipt;
+          const purge = store.purge([...selected.keys()], now(), purged, words), counts = purge.receipt;
+          deletedWith = purge.deletedClaims;
           touched = inHistory || [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
@@ -148,7 +149,10 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const history = swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running', scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        // A named topic or span also deletes other claims that carry it (aliases and other messages included), so the receipt
+        // lists those beside the selected ones.
+        const removed = [...new Set([...selected.keys(), ...deletedWith])].sort((a, b) => a - b);
+        return success({ removed_ids: removed, scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running', scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
       } },
   ];
 };
