@@ -22,9 +22,10 @@ export type PinBlock = (typeof PIN_BLOCKS)[number];
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
 export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
+// A claim Waldo inferred or confirmed waits for the owner's own confirm.
 const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
 const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
-  PROFILE_KINDS.includes(claim.kind) && claim.source !== 'inferred' && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
+  PROFILE_KINDS.includes(claim.kind) && !awaitsOwnerConfirm(claim) && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
 // Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
