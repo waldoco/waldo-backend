@@ -225,7 +225,7 @@ describe('the jobs lane', () => {
     await withLane(async ({ book, sent, deps }) => {
       const id = reported(book, 'k1', { ...result, findings: [{ text: 'Asha asked about the Lisbon trip.' }] });
       const lane = deps();
-      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { expect(book.forget(['Lisbon trip'])).toEqual([id]); await lane.deliver(key, trace, text, commit); } });
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [id], remaining: 0 }); await lane.deliver(key, trace, text, commit); } });
       expect(sent.size).toBe(0);
       expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
     });

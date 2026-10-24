@@ -16,7 +16,7 @@ import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { runBook } from '../src/channels/background-runs';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { jobBook } from '../src/tasks/jobs';
@@ -115,6 +115,11 @@ type Steps = Readonly<{
   // A background task whose brief carries the text, and the status of every task.
   task(text: string): void;
   tasks(): { status: string; cancel_reason: string | null }[];
+  // Every task row's brief, progress and result, as one string.
+  taskColumns(): string;
+  // A text taken into the forget purge job's custody as the forget tool takes it, then one pass of the job: the pass a turn
+  // start runs and the console's retry arms.
+  purgePass(text: string): Promise<void>;
   // A browser card that task's errand raised, waiting for the owner; returns its ledger id.
   taskCard(): Promise<string>;
   cardStatus(id: string): string;
@@ -221,6 +226,11 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
             .create({ kind: 'task', profile: 'reader', idempotencyKey: 'forget-task', origin: 'turn', surface: 'whatsapp', brief, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR });
         },
         tasks: () => state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray(),
+        taskColumns: () => JSON.stringify(state.storage.sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray()),
+        purgePass: async text => {
+          state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(text), text, new Date().toISOString());
+          await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+        },
         taskCard: () => approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
           currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
           .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
@@ -438,10 +448,21 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
 
 describe('owner forget reaches an open background task', { timeout: 30_000 }, () => {
   it.each(['node', 'spot'] as const)('cancels it from the console (%s), so its worker cannot report the text back', async kind => {
-    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, forget }) => {
+    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, taskColumns, forget }) => {
       task(SECRET);
       expect(await forget(kind, SECRET)).toBe(true);
       expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+    });
+  });
+
+  it('the forget purge job\'s pass cancels a task that carries a held text and leaves no copy in it', async () => {
+    await owned('wa-forget-task-pass', async ({ task, tasks, taskColumns, purgePass, heldTopics }) => {
+      task(SECRET);
+      await purgePass(SECRET);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+      expect(heldTopics()).toEqual([]);
     });
   });
 
