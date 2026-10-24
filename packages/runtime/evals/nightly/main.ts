@@ -4,9 +4,9 @@
 // judge's reasons (the voice judge's and any failed receipts too), for a local look at a failure.
 // WALDO_EVAL_RULES=1 prints the behaviour rules with their ids and standing, and runs nothing.
 // WALDO_EVAL_VERDICT=<rule id> with WALDO_EVAL_RUNS=<baseline.json>:<ablated.json>[,...] prints that rule's verdict from
-// scorecards already written, and runs nothing.
+// scorecards already written, says whether every card came from a live judge, and runs nothing.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { ablationRuns, ablationVerdict } from './ablation';
+import { ablationReport, ablationRuns } from './ablation';
 import { nightlyConfig } from './config';
 import { NIGHTLY_SCENARIOS, rawHistoryScenarios } from './catalogue';
 import { evalBehaviourPrompt, ruleInventory } from './rules';
@@ -20,7 +20,7 @@ if (process.env.WALDO_EVAL_RULES) {
   const status = (await ruleInventory(evalBehaviourPrompt())).find((entry) => entry.rule.id === id);
   if (!status) throw new Error(`no rule ${id}`);
   const runs = ablationRuns(process.env.WALDO_EVAL_RUNS ?? '', (path) => readFileSync(path, 'utf8'));
-  console.log(JSON.stringify({ id, ...ablationVerdict(status, runs) }, null, 2));
+  console.log(JSON.stringify(ablationReport(status, runs), null, 2));
 } else {
   // WALDO_EVAL_MEMORY=raw_history runs the memory cases without a claim store, as the baseline for memory changes;
   // its card is not gated. WALDO_EVAL_JUDGE_MODE=joint asks each judge about every dimension in one call (split is the default).

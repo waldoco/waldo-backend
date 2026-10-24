@@ -40,22 +40,24 @@ export const ablationRuns = (spec: string, read: (path: string) => string): Abla
 // The decision, fixed before any run. Ties and inconclusive results keep the rule.
 // keep: removing the rule adds 2 or more failures out of 5 on a scenario it governs, in any run; or the overall pass rate
 //   falls by 5 points or more in at least two runs, all moving the same way.
-// prune: at least two runs, each within 2 points overall, with no added failure, voice failure or receipt failure on a
-//   scenario it governs.
+// prune: at least two runs that took out this rule alone, each fully graded and within 2 points overall, with no added
+//   failure, voice failure or receipt failure on a scenario it governs.
 // uncovered: no scenario exercises the rule, so no run can show it is unneeded.
 export const TRIALS = 5;
 const KEEP_FAILURES = 2, KEEP_DROP = 0.05, PRUNE_BAND = 0.02, RUNS = 2;
 export type AblationRun = Readonly<{ baseline: Scorecard; ablated: Scorecard }>;
 export type AblationVerdict = Readonly<{ verdict: 'keep' | 'prune' | 'inconclusive' | 'uncovered'; reason: string }>;
 
-// A run whose budget ran out, or with a scenario cut short or broken by the harness, measured only part of what it set
-// out to. A blocked scenario never runs in any card, so it is the one gap allowed.
-const finished = (card: Scorecard) => !card.budget_exhausted && card.scenarios.every((row) => row.status !== 'incomplete' && !row.harness_errors?.length);
+// A run whose budget ran out, or with any trial cut short, broken by the harness or left ungraded by the judge, measured
+// only part of what it set out to. An ungraded trial also drops out of the overall rate, so a run whose judge failed on
+// every scenario the rule does not govern would hold the rate by construction. A blocked scenario never runs in any card,
+// so it is the one gap allowed.
+const finished = (card: Scorecard) => !card.budget_exhausted && card.scenarios.every((row) => row.status === 'blocked' || row.passed + row.failed === TRIALS);
 const scenarioIds = (card: Scorecard) => card.scenarios.map((row) => row.id).sort().join('\n');
 
 export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]): AblationVerdict => {
   if (status.kind === 'boundary') throw new Error('a hard-boundary rule is never ablated');
-  if (status.kind === 'uncovered') return { verdict: 'uncovered', reason: 'no scenario exercises this rule' };
+  if (status.kind === 'uncovered' || status.scenarios.length === 0) return { verdict: 'uncovered', reason: 'no scenario exercises this rule' };
   const id = status.rule.id;
   // Independent runs are different runs: a card given twice, in one pair or across two, is one run counted twice.
   const cards = runs.flatMap(({ baseline, ablated }) => [stableJson(baseline), stableJson(ablated)]);
@@ -65,7 +67,9 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
   for (const { baseline, ablated } of runs) {
     if (baseline.trials_per_scenario !== TRIALS || ablated.trials_per_scenario !== TRIALS) return { verdict: 'inconclusive', reason: `runs need ${TRIALS} trials per scenario` };
     const [candidate, ids] = ablated.candidate_model.split('+ablate:');
-    if (ids === undefined || !ids.split(',').includes(id) || baseline.candidate_model !== candidate || baseline.judge_model !== ablated.judge_model) {
+    // A run without several rules measures them together; crediting its effect to each one would prune each alone.
+    if (ids !== id && ids?.split(',').includes(id)) return { verdict: 'inconclusive', reason: 'a run pair took out more than this rule, so its effect is not this rule\'s alone' };
+    if (ids !== id || baseline.candidate_model !== candidate || baseline.judge_model !== ablated.judge_model) {
       return { verdict: 'inconclusive', reason: 'a run pair is not this rule against an unablated baseline on the same model, modes and judge' };
     }
   }
@@ -92,4 +96,11 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
   const clean = added.flat().every((change) => change.failures <= 0 && change.voice <= 0 && change.receipts <= 0);
   if (clean && deltas.every((delta) => Math.abs(delta!) <= PRUNE_BAND)) return { verdict: 'prune', reason: 'no governed scenario lost a trial and the overall rate held within 2 points in every run' };
   return { verdict: 'inconclusive', reason: 'the runs did not agree on a verdict' };
+};
+
+// What WALDO_EVAL_VERDICT prints. live is true only when every card names a live judge: the recorded judge grades nothing,
+// so recorded cards can never reach prune, and the flag keeps a verdict read from them from passing for a live one.
+export const ablationReport = (status: RuleStatus, runs: readonly AblationRun[]) => {
+  const judges = [...new Set(runs.flatMap(({ baseline, ablated }) => [baseline.judge_model, ablated.judge_model]))].sort();
+  return { id: status.rule.id, live: judges.length > 0 && !judges.includes('recorded'), judges, ...ablationVerdict(status, runs) };
 };

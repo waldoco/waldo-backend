@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
-import { ablating, ablationLabel, ablationRuns, ablationVerdict, TRIALS, type AblationRun } from '../evals/nightly/ablation';
+import { ablating, ablationLabel, ablationReport, ablationRuns, ablationVerdict, TRIALS, type AblationRun } from '../evals/nightly/ablation';
 import { nightlyConfig } from '../evals/nightly/config';
 import { RULE_COVERAGE, evalBehaviourPrompt, promptRules, ruleInventory, type RuleStatus } from '../evals/nightly/rules';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from '../evals/nightly/scorecard';
@@ -123,6 +123,23 @@ describe('the verdict on one rule', () => {
     expect(ablationVerdict(target, twice(() => pair(wide, { ...wide, 'spare-0': 2 })))).toMatchObject({ verdict: 'inconclusive' });
   });
 
+  it('keeps at a 5-point overall fall in every run, and not when only one of two runs falls', async () => {
+    target = await rule('Ask almost nothing');
+    const wide = { ...fullBase, ...Object.fromEntries(Array.from({ length: 15 }, (_, n) => [`spare-${n}`, 5])) };
+    const fall = () => pair(wide, { ...wide, 'spare-0': 3, 'spare-1': 2 });
+    expect(ablationVerdict(target, twice(fall))).toMatchObject({ verdict: 'keep' });
+    expect(ablationVerdict(target, [fall(), pair(wide, wide)])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('does not prune on a card that reports no overall rate', async () => {
+    target = await rule('Ask almost nothing');
+    const unrated = () => {
+      const run = pair(fullBase, fullBase);
+      return { ...run, ablated: { ...run.ablated, overall: { ...run.ablated.overall, pass_rate: null } } };
+    };
+    expect(ablationVerdict(target, twice(unrated))).toMatchObject({ verdict: 'inconclusive' });
+  });
+
   it('never prunes on one run counted twice: a repeated pair, a shared card or an identical copy is inconclusive', async () => {
     target = await rule('Ask almost nothing');
     const held = pair(fullBase, fullBase);
@@ -181,6 +198,8 @@ describe('the verdict on one rule', () => {
     expect(card('model', { [governed]: oneOfFive }).scenarios[0]!.status).toBe('graded');
     expect(ablationVerdict(target, twice(() => pair(fullBase, { ...fullBase, [governed]: oneOfFive })))).toMatchObject({ verdict: 'inconclusive' });
     expect(ablationVerdict(target, twice(() => pair({ ...fullBase, [governed]: oneOfFive }, fullBase)))).toMatchObject({ verdict: 'inconclusive' });
+    const governedBlocked = { ...fullBase, [governed]: Array(TRIALS).fill('blocked') as TrialOutcome[] };
+    expect(ablationVerdict(target, twice(() => pair(governedBlocked, governedBlocked)))).toMatchObject({ verdict: 'inconclusive' });
   });
 
   it('does not prune on a run that did not finish: a spent budget, a harness error or an incomplete scenario on either side', async () => {
@@ -208,5 +227,59 @@ describe('the verdict on one rule', () => {
     expect(ablationVerdict(target, twice(() => pair(fewer, fullBase)))).toMatchObject({ verdict: 'inconclusive' });
     const blocked = { ...fullBase, 't05-find-confirmation': Array(TRIALS).fill('blocked') as TrialOutcome[] };
     expect(ablationVerdict(target, twice(() => pair(blocked, blocked)))).toMatchObject({ verdict: 'prune' });
+  });
+
+  it('does not prune when the judge left a trial ungraded on any scenario, governed or not, on either side', async () => {
+    target = await rule('Ask almost nothing');
+    const judgeErrors: TrialOutcome[] = Array(TRIALS).fill('judge_error');
+    const others = Object.keys(fullBase).filter((id) => !governedBy(target).includes(id));
+    const allOthers = Object.fromEntries(Object.keys(fullBase).map((id) => [id, others.includes(id) ? judgeErrors : 5]));
+    const oneOther = { ...fullBase, [others[0]!]: judgeErrors };
+    const oneTrial = { ...fullBase, [others[0]!]: ['judge_error', ...trials(4)] as TrialOutcome[] };
+    for (const shape of [allOthers, oneOther, oneTrial]) {
+      expect(ablationVerdict(target, twice(() => pair(fullBase, shape)))).toMatchObject({ verdict: 'inconclusive' });
+      expect(ablationVerdict(target, twice(() => pair(shape, fullBase)))).toMatchObject({ verdict: 'inconclusive' });
+    }
+  });
+
+  it('does not prune when removing the rule adds only a voice failure or only a receipt failure on a governed scenario', async () => {
+    target = await rule('Ask almost nothing');
+    const governed = governedBy(target)[0]!;
+    const oneFail = { ...fullBase, [governed]: 4 };
+    const marked = (mark: Readonly<{ voice_failed?: number; receipt_failed?: number }>) => (): AblationRun => {
+      const run = pair(oneFail, oneFail);
+      return { ...run, ablated: { ...run.ablated, scenarios: run.ablated.scenarios.map((row) => (row.id === governed ? { ...row, ...mark } : row)) } };
+    };
+    expect(ablationVerdict(target, twice(marked({})))).toMatchObject({ verdict: 'prune' });
+    expect(ablationVerdict(target, twice(marked({ voice_failed: 1 })))).toMatchObject({ verdict: 'inconclusive' });
+    expect(ablationVerdict(target, twice(marked({ receipt_failed: 1 })))).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('gives no single-rule verdict from a run that took out more than this rule', async () => {
+    target = await rule('Ask almost nothing');
+    const other = await rule('Look before you ask');
+    const joint = () => ({ baseline: card('model', fullBase), ablated: card(ablationLabel('model', [target.rule.id, other.rule.id]), fullBase) });
+    expect(ablationVerdict(target, twice(joint))).toMatchObject({ verdict: 'inconclusive', reason: expect.stringContaining('more than this rule') });
+    const jointLoss = () => ({ baseline: card('model', fullBase), ablated: card(ablationLabel('model', [target.rule.id, other.rule.id]), { ...fullBase, 'e1-look-before-asking': 3 }) });
+    expect(ablationVerdict(target, [jointLoss()])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('calls a mapped rule with no scenarios uncovered, whatever the runs show', async () => {
+    target = await rule('Ask almost nothing');
+    const empty: RuleStatus = { rule: target.rule, kind: 'mapped', scenarios: [] };
+    expect(ablationVerdict(empty, twice(() => pair(fullBase, fullBase)))).toMatchObject({ verdict: 'uncovered' });
+  });
+
+  it('says whether the verdict came from live judges, so recorded cards are never read as a live result', async () => {
+    target = await rule('Ask almost nothing');
+    const live = twice(() => pair(fullBase, fullBase));
+    expect(ablationReport(target, live)).toMatchObject({ id: target.rule.id, live: true, judges: ['judge'], verdict: 'prune' });
+    const recordedPair = () => {
+      const run = pair(fullBase, fullBase);
+      return { baseline: { ...run.baseline, judge_model: 'recorded' }, ablated: { ...run.ablated, judge_model: 'recorded' } };
+    };
+    expect(ablationReport(target, twice(recordedPair))).toMatchObject({ live: false, judges: ['recorded'] });
+    expect(ablationReport(target, [live[0]!, recordedPair()])).toMatchObject({ live: false, judges: ['judge', 'recorded'] });
+    expect(ablationReport(target, [])).toMatchObject({ live: false, judges: [] });
   });
 });
