@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import handoffMigration from '../../../supabase/migrations/20261023060000_waldo_connect_session_handoff.sql?raw';
 import { whoopDeletions } from '../src/health/providers/whoop-map';
-import { handoffHash } from '../src/channels/connect-confirm';
+import { handoffHash, HANDOFF_CODE_TTL_MS } from '../src/channels/connect-confirm';
 import { addNight, connected, DAY, harness, NOW, night, newPlane, newWorld, recoveryRecord, sleepRecord, workoutRecord } from './helpers/whoop-fakes';
 
 // Distinctive synthetic readings: if one shows up in a log line, the owner object kept a value.
@@ -23,6 +24,12 @@ describe('WHOOP connect and callback', () => {
     // Each start is its own code, so a link the app opened once is never reissued.
     const again = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
     expect(again.searchParams.get('handoff')).not.toBe(code);
+  });
+
+  it('tells the app the link works for as long as its one-time code does, and that lifetime is the one the directory enforces', async () => {
+    const h = harness();
+    expect(await h.owner.connect()).toMatchObject({ expires_at: NOW + HANDOFF_CODE_TTL_MS });
+    expect(handoffMigration).toContain(`handoff_expires_at)\n    values (v_owner, p_provider, p_channel, p_ticket_hash, now() + interval '12 hours', p_handoff_hash, now() + interval '${HANDOFF_CODE_TTL_MS / 60_000} minutes')`);
   });
 
   // WHOOP's express authorization is the two grants for the whoop source. The answer names the missing one so the app can send

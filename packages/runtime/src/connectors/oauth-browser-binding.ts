@@ -7,6 +7,10 @@ import { constantTimeEqual } from './constant-time';
 // callback requires it before any owner object wakes. Only Waldo's host sets cookies for itself, so a browser that
 // did not take the hop has none.
 //
+// This stops a callback that lands in a browser that did not start the attempt. It does not stop a code injected into
+// the browser that did: for Google and MCP the PKCE verifier, held server-side, makes such a code unredeemable; WHOOP
+// has no PKCE, so its starting browser is trusted with its own callback.
+//
 // Everything that names an attempt (the provider and its nonce) is in the authorize or start address, so the value is a
 // MAC keyed with the OAuth state secret: holding the link is not enough to build it. With no secret there is no binding,
 // and every hop and callback that needs one refuses.

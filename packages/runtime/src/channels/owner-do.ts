@@ -1,7 +1,7 @@
 import { appControlsRequest } from './app-controls';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
 import { chatChannelLinks } from './chat-channel-links';
-import { consentLedger } from '../onboarding/consent-ledger';
+import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox';
@@ -79,6 +79,8 @@ import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type Conv
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '../memory/claims';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
+import { signupName } from '../identity/console-signup';
+import { recordSignupName } from '../onboarding/first-run';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { checkBackReply, loopCheckBackText, LOOP_CHECK_BACK_TOOLS } from './check-back';
@@ -797,6 +799,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Hides retained copies of forgotten texts in every store a memory forget reaches, and throws when one still holds a copy.
   // The memory forget tool and the look-up's forget and withdrawal share it, so a store added here is covered for both.
+  // The name the owner gave at sign-up, kept as their own first-run answer; the first answer stands.
+  private signupProfile(body: string): Response {
+    let raw: unknown;
+    try { raw = (JSON.parse(body) as { name?: unknown } | null)?.name; } catch { raw = undefined; }
+    const name = typeof raw === 'string' ? signupName(raw) : null;
+    if (!name) return new Response(null, { status: 400 });
+    recordSignupName(claimStore(this.ctx.storage.sql, work => this.ctx.storage.transactionSync(work)), name, Date.now());
+    return new Response(null, { status: 204 });
+  }
+
   private async hideRetainedText(texts: readonly string[], scope?: RunEffectScope): Promise<void> {
     const storage = this.ctx.storage;
     scope?.admit();
@@ -1257,7 +1269,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const current=async()=>{await this.appAuthority(name,hash);};
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
-            agreementsOffered:this.env.APP_AGREEMENTS==='1',lookupOffered:this.env.OWNER_LOOKUP==='1',hideText:texts=>this.hideRetainedText(texts),
+            ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{
@@ -1388,6 +1400,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant(sessionCookie(request)));
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
+    if (new URL(request.url).pathname === '/signup-profile' && request.method === 'POST') return this.signupProfile(body);
     if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
       const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
       return Response.json(reply);
@@ -2036,7 +2049,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 return {state:'recorded' as const,message:'Signed out. Sign in again to open your console.',signed_out:true};
               }
               if(action.action.startsWith('approval.')){
-                const decision=action.action==='approval.approve'?'a':action.action==='approval.skip'?'s':'u';
+                const decision=action.action==='approval.approve'||action.action==='approval.send'?'a':action.action==='approval.edit'?'e':action.action==='approval.skip'?'s':'u';
                 const outcome=await runtime.desk.decide(action.id,decision,'console:approval',{surface:'console'});
                 return approvalControlReceipt(outcome);
               }
@@ -3483,7 +3496,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
         hideHistory: (texts, context) => this.hideRetainedText(texts, context.runScope),
-      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, { agreementsOffered: this.env.APP_AGREEMENTS === '1', lookupOffered: this.env.OWNER_LOOKUP === '1' }), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
@@ -4380,7 +4393,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
           if (!(await google.disconnect(id))) return false;
-        } else {
+        } else if (action === 'card.today' || action === 'card.pin' || action === 'card.unpin') {
           const card = cardFor(id);
           if (card === null) return false;
           // A card whose row this version cannot read is not changed, and the owner is told why.
@@ -4391,7 +4404,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if (action === 'card.pin') plans.pin(card.id, value);
             await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
           }
-        }
+        } else return false;
         // consoleActionTraceDetail strips the free-form form id before it can reach the
         // gated trace sinks; only integer target ids survive next to the enum action.
         log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
