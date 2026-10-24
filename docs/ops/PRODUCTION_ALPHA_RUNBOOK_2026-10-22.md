@@ -334,8 +334,8 @@ Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, *
 - **App sessions last 12 hours** (`app-api.ts:87`), so 50 daily app users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4). Console sessions stay signed in for up to 30 days while used (`identity/console-auth.ts`).
 
 **Cost ceiling.**
-- **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
-- **Not gated: background work.** Heartbeat, the nightly memory pass, briefs, reminders and standing orders never consult the ceiling. `spendPosture`, which would skip background work, is called only from `test/cost-ceiling.test.ts`, although its comment says background work is limited (`cost-ledger.ts:72`).
+- **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:4`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
+- **Not gated: background work.** Heartbeat, the nightly memory pass, briefs, reminders and standing orders never consult the ceiling. (A DO-local `spendPosture` helper that would have skipped background work was never called outside a test and has been deleted with the rest of the unused DO-local `cost_ledger` code.)
 - **Not attributed.** No producer sets `cost_kind`, so every row files as `turn` (`cost-rollup.ts:39,46`).
 - **Not priced.** Browser, sandbox, search, speech-to-text and cache writes count as 0.
 - **No overall limit.** Nothing caps all owners together, and no per-owner daily cap exists.
@@ -515,8 +515,8 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
 - **Tests.** The eval cases pass for India, the US and the UK.
 
 **P12. Make the spend ceiling cover background work and attribute it.**
-- **Change.** Call `spendPosture` at the background entry points: heartbeat, nightly memory, briefs, reminders and standing orders. Past the ceiling, skip or defer the work, and never the owner's own turns. Set `cost_kind` at each producer so the ledger tells turn from background from worker.
-- **Files.** `channels/owner-do.ts` (the background entry points; hot file), `observability/cost-rollup.ts`, `llm/cost-ledger.ts` (fix the comment at `:72` to match), and `docs/ops/OBSERVABILITY.md`.
+- **Change.** Read the month's spend (`costs.monthSpendUsd`) against the ceiling at the background entry points, as owner turns already do: heartbeat, nightly memory, briefs, reminders and standing orders. Past the ceiling, skip or defer the work, and never the owner's own turns. Set `cost_kind` at each producer so the ledger tells turn from background from worker.
+- **Files.** `channels/owner-do.ts` (the background entry points; hot file), `observability/cost-rollup.ts`, `llm/cost-ledger.ts`, and `docs/ops/OBSERVABILITY.md`.
 - **Tests.**
   - A machine turn past the ceiling is skipped, with a `spend_hold` hop.
   - An owner turn past the ceiling still runs on the auxiliary route.
