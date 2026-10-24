@@ -175,6 +175,16 @@ describe('task job book', () => {
     });
   });
 
+  it('a job whose brief the purge left unreadable still cancels, keeping none of it', async () => {
+    await withBook((book, _clock, sql) => {
+      const { job: row } = book.create(job());
+      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Monday\",\"goal', '[forgotten]') WHERE id = ?", row.id);
+      expect(() => JSON.parse(book.get(row.id)!.brief_json)).toThrow();
+      expect(book.forget(['[forgotten]'])).toEqual([row.id]);
+      expect(book.get(row.id)).toMatchObject({ status: 'cancelled', brief_json: '{}' });
+    });
+  });
+
   it('owner forget mid-job: open jobs carrying the text are cancelled, others keep running, settled rows wait for the purge', async () => {
     await withBook((book) => {
       const carrying = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } })).job;

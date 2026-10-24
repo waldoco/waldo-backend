@@ -71,6 +71,21 @@ export type CreateJob = Readonly<{
 export type Fenced = 'fenced';
 
 const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
+// What a settled row keeps of its brief: a task's title (cancel_task names it) and start time, a retry's references and
+// times. The goal, the context and the owner's message are dropped with the job's progress; the digest stays as the record
+// of what the job was given.
+const TITLE_KEPT = 80;
+// A brief the memory purge rewrote can be unreadable (its literal replace may span the JSON's own quotes); it keeps nothing,
+// so a cancel from forget never fails on it.
+const settledBrief = (row: Pick<JobRow, 'kind' | 'brief_json'>): string => {
+  try {
+    if (row.kind === 'retry_turn') return JSON.stringify({ ...(JSON.parse(row.brief_json) as RetryBrief), text: '' });
+    const { title, started_at, outside_text } = JSON.parse(row.brief_json) as TaskBrief;
+    return JSON.stringify({ title: title.slice(0, TITLE_KEPT), started_at, ...(outside_text ? { outside_text } : {}) });
+  } catch {
+    return '{}';
+  }
+};
 type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>;
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
@@ -250,19 +265,24 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // worker is fenced and a result that arrives late is discarded.
     cancel(id: string, reason: CancelReason): boolean {
       const now = deps.now();
+      const row = get(id);
+      if (!row || !OPEN.includes(row.status)) return false;
       return sql.exec(
-        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
-         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, now, now, id, ...OPEN,
+        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, brief_json = ?, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
+         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, settledBrief(row), now, now, id, ...OPEN,
       ).rowsWritten > 0;
     },
     // A reported job that the owner heard about. Parked jobs settle as parked; the rest as applied. The checkpoint, which
-    // only a resumed attempt needs, and the result, which only the apply turn reads, are dropped once the job is settled:
-    // they hold what the worker read, and a settled row is kept for the console and audit.
+    // only a resumed attempt needs, the result, which only the apply turn reads, and the brief's text are dropped once the
+    // job is settled: they hold what the owner and the worker wrote and read, and a settled row is kept for the console and
+    // audit.
     settle(id: string): boolean {
       const now = deps.now();
+      const row = get(id);
+      if (row?.status !== 'reported') return false;
       return sql.exec(
-        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
-         WHERE id = ? AND status = 'reported'`, now, now, id,
+        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, brief_json = ?, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'reported'`, settledBrief(row), now, now, id,
       ).rowsWritten > 0;
     },
     // Runs as the commit of a progress note's delivery: a job that stopped running since writes no row, and the throw rolls

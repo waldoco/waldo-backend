@@ -57,9 +57,10 @@ const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.
   ? { status: result.status === 'done' ? 'partial' : result.status, summary: 'The worker\'s result named health readings with their numbers, which a task never stores, so it was not kept.', findings: [], proposals: [], left: ['The findings themselves: the owner can ask again, and Waldo can read their mail or files directly.'] }
   : result;
 
-// A checkpoint persists in the owner object's storage, and the owner's health values are never stored. What an
-// owner-connected MCP server returns is not known to be free of them (a wearable's server, say), so its output is left out,
-// and so is any other call or output that carries a reading (a lab result in a mail, a result that quoted it). A resumed
+// A checkpoint persists in the owner object's storage, where health readings are not stored. What an owner-connected MCP
+// server returns is not known to be free of them (a wearable's server, say), so its output is left out, and so is any other
+// call or output the shared health floor (numericHealthIn) finds a reading in. A reading that check does not recognise (many
+// lab values) stays in the checkpoint until the job settles or is cancelled. A resumed
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
