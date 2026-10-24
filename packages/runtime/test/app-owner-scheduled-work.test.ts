@@ -10,7 +10,8 @@ import { reminderBook } from '../src/channels/reminders';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { claimStore } from '../src/memory/claims';
-import { persistTransportWake } from '../src/scheduler/alarm-slot';
+import { persistTransportWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { jobBook } from '../src/tasks/jobs';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -35,9 +36,9 @@ const ownerHex = OWNER_ID.replaceAll('-', '');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 
 type Authority = 'current' | 'revoked' | 'outage';
-const wire = { authority: 'current' as Authority, asked: [] as string[], other: [] as string[], telegramSent: [] as { chat_id: number; text: string }[] };
+const wire = { authority: 'current' as Authority, presence: 'current' as 'current' | 'revoked', asked: [] as string[], other: [] as string[], telegramSent: [] as { chat_id: number; text: string }[] };
 beforeEach(() => {
-  model.calls = 0; model.requests = []; wire.authority = 'current'; wire.asked = []; wire.other = []; wire.telegramSent = [];
+  model.calls = 0; model.requests = []; wire.authority = 'current'; wire.presence = 'current'; wire.asked = []; wire.other = []; wire.telegramSent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -49,7 +50,7 @@ beforeEach(() => {
       return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     }
     if (fn === 'assert_channel_presence') { wire.asked.push(fn); return Response.json(true); }
-    if (fn === 'common_owner_authority') { wire.asked.push(fn); return presenceAuthority(OWNER_ID, init?.body); }
+    if (fn === 'common_owner_authority') { wire.asked.push(fn); return wire.presence === 'revoked' ? Response.json(null) : presenceAuthority(OWNER_ID, init?.body); }
     if (fn === 'app_session_authority') {
       wire.asked.push(fn);
       const asked = JSON.parse(String(init?.body)) as { p_do_name: string; p_session_hash: string };
@@ -146,6 +147,35 @@ describe('scheduled work for an owner with no Telegram link', () => {
     expect(wire.other).toEqual([]);
     if (asksAgain) expect(outcome.retriesAt).toBeGreaterThan(30_000);
     else expect(outcome.retriesAt).toBeNull();
+  });
+
+  // A worker's attempt keeps calling the owner object; the lane that starts and restarts attempts does not run for an owner
+  // the directory no longer admits. Its due wake is set for a later look rather than left due, which re-armed the alarm every
+  // 30 seconds, and a running attempt goes back to the queue so it resumes once the owner is admitted again.
+  it.each([['revoked', 'app', 15 * 60_000, 'queued'], ['outage', 'app', 60_000, 'running'], ['revoked', 'telegram', 15 * 60_000, 'queued']] as const)('holds the jobs lane when the directory says %s (%s owner)', async (authority, surface, recheck, status) => {
+    if (surface === 'app') wire.authority = authority; else wire.presence = 'revoked';
+    const name = `${surface}-jobs-${authority}`;
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      state.storage.kv.put('do_name', name);
+      if (surface === 'app') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+      else state.storage.kv.put('telegram_subject', '7');
+      const book = jobBook(state.storage.sql, { now: Date.now, newId: () => '0123456789ab', newToken: () => 'tok' });
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'k', origin: 'app-1', surface: 'app', dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000,
+        brief: { title: 'Inbox', goal: 'Read it.', context: '', done_when: 'A list.', effort: 'standard', timezone: 'UTC', started_at: Date.now() } });
+      expect(book.startAttempt(job.id)).not.toBeNull();
+      await state.storage.put(TASK_JOBS_DUE_KEY, Date.now() - 1_000);
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      try {
+        const before = Date.now();
+        await state.storage.deleteAlarm();
+        await owner.alarm();
+        const due = await state.storage.get<number>(TASK_JOBS_DUE_KEY);
+        expect(due).toBeGreaterThanOrEqual(before + recheck);
+        expect(due).toBeLessThanOrEqual(Date.now() + recheck);
+        expect((await state.storage.getAlarm())! - Date.now()).toBeGreaterThan(30_000);
+        expect(book.get(job.id)).toMatchObject({ status, crashes: 0 });
+      } finally { await state.storage.deleteAlarm(); }
+    });
   });
 
   it.each([['none'], ['foreign']] as const)('asks the directory nothing and runs nothing without this owner\'s app binding (%s)', async app => {

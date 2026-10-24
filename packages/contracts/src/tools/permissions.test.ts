@@ -119,6 +119,8 @@ describe('toolName', () => {
       'search_contacts',
       'send_progress_note',
       'attach_file',
+      'start_task',
+      'cancel_task',
       'record_owner_finding',
       'list_owner_findings',
     ]);
@@ -317,6 +319,8 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'start_task',
+      'cancel_task',
       'record_owner_finding',
       'list_owner_findings',
       ],

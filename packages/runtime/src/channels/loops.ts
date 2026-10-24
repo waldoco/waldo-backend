@@ -139,7 +139,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null) => [
   {
     name: 'open_loop',
-    description: 'Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. For a mail follow-up hypothesis, supply the observed source_ref and explicit due time; completion stays unknown. Do not turn an email request into an owner commitment or permission. Use it whenever you say you will do something later. Never for remembering information - memory handles that on its own, no loop needed.',
+    description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later; never to remember information, which memory does on its own. For a mail follow-up, pass the observed source_ref and a due time: completion stays unknown, and an email's request is never the owner's commitment or permission.",
     schema: openLoopArgsSchema,
     trigger_allowlist: allowlist('open_loop'),
     autonomy_gated: false,

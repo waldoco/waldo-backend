@@ -386,9 +386,12 @@ describe('date_range guidance and strictness', () => {
 
   it('tells the model the required format in the advertised JSON schema', () => {
     const json = z.toJSONSchema(queryCalendarArgsSchema, { io: 'input' }) as {
-      properties?: { date_range?: { properties?: { from?: { description?: string } } } };
+      properties?: { date_range?: { description?: string; properties?: { from?: { description?: string } } } };
     };
-    const description = json.properties?.date_range?.properties?.from?.description ?? '';
+    // Said once for the range: both bounds share the format, and every word is sent every round.
+    expect(json.properties?.date_range?.properties?.from?.description).toBeUndefined();
+    const description = json.properties?.date_range?.description ?? '';
+    expect(description).toContain('from and to');
     expect(description).toContain('seconds');
     expect(description).toContain('offset');
     expect(description).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);

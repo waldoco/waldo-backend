@@ -24,7 +24,7 @@ jobs:
   live:
     name: Nightly eval (live)
     runs-on: ubuntu-latest
-    # The suite runs trials one after another: up to about 1,470 candidate calls at several seconds each, plus the
+    # The suite runs trials one after another: up to about 1,515 candidate calls at several seconds each, plus the
     # judges, whose split calls for one trial run together. 360 minutes is the most a hosted runner allows.
     timeout-minutes: 360
     steps:

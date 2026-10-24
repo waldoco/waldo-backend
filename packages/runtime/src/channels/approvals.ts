@@ -297,6 +297,19 @@ export const forgetWaitingCards = (sql: SqlStorage, texts: readonly string[], no
   return { ended, remaining: waiting().length };
 };
 
+// A cancelled or forgotten background task: an approval card its run raised (a browser submit) asked the owner to finish
+// work they have since stopped, so each one still waiting ends as skipped and its cards are retired. Nothing it carries
+// can then be approved. Answers how many ended.
+export const withdrawRunCards = (sql: SqlStorage, runRef: string, now: number): number => {
+  if (sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'origin_run_ref'").toArray().length === 0) return 0;
+  const ids = sql.exec<{ id: string }>(`SELECT id FROM ledger WHERE origin_run_ref = ? AND ${CARD_WAITING}`, runRef).toArray().map(({ id }) => id);
+  for (const id of ids) {
+    sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ? WHERE id = ? AND ${CARD_WAITING}`, now, id);
+    sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', now, id);
+  }
+  return ids.length;
+};
+
 // The surface was bound to another number, or unbound: a card that waited for the owner's next message there was made for the
 // number that is gone, so it no longer waits. Synchronous, for the transaction that changes the binding.
 export const endCardWaits = (sql: SqlStorage, surface: string): void => {

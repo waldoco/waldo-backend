@@ -18,6 +18,9 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 
+// The jobs lane's next work: a task attempt to start or restart, a report to apply, a retried turn or a progress note.
+export const TASK_JOBS_DUE_KEY = 'task_jobs_due_v1';
+
 // The owner alarm handler's own retry after a failed pass; the pass that is that retry consumes it.
 export const ALARM_RETRY_DUE_KEY = 'owner_alarm_retry_due_v1';
 // The lane whose failure that retry is for. A retry recorded with no lane, as before lanes were kept, is the whole pass's.
@@ -30,7 +33,7 @@ export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
-  'mac_results_due_v1', ALARM_RETRY_DUE_KEY,
+  'mac_results_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
@@ -45,6 +48,7 @@ export const ALARM_LANES = {
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
   whatsapp: [WHATSAPP_PENDING_DUE_KEY],
+  jobs: [TASK_JOBS_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
 export type AlarmLane = keyof typeof ALARM_LANES | 'pass';
 const LANE_OF = new Map<string, AlarmLane>(Object.entries(ALARM_LANES).flatMap(([lane, keys]) => keys.map(key => [key, lane as AlarmLane])));
@@ -72,6 +76,23 @@ export async function runLane(lane: FailingLane, held: AlarmLane | null, work: (
 export async function armWhatsappPendingWake(storage: DurableObjectStorage, due: number): Promise<void> {
   const existing = await storage.getAlarm();
   await armAlarm(storage, existing === null ? due : Math.min(existing, due));
+}
+
+// The jobs wake written in the caller's synchronous commit, beside the job row it is for. The key moves earlier, never later.
+// A wake that commits with its row survives an alarm arm that never runs: every later arbitration arms from the key.
+export function commitTaskJobsWake(kv: Pick<SyncKvStorage, 'get' | 'put'>, due: number): void {
+  const held = kv.get<number | null>(TASK_JOBS_DUE_KEY);
+  kv.put(TASK_JOBS_DUE_KEY, typeof held === 'number' ? Math.min(held, due) : due);
+}
+
+// A jobs wake from outside the alarm pass (a worker's report, a new task): the key moves earlier, never later, and the alarm
+// slot moves earlier only, so no other lane's wake is dropped.
+export async function armTaskJobsWake(storage: DurableObjectStorage, due: number): Promise<void> {
+  const held = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
+  const next = held === undefined || held === null ? due : Math.min(held, due);
+  await storage.put(TASK_JOBS_DUE_KEY, next);
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, Math.max(Date.now() + 250, existing === null ? next : Math.min(existing, next)));
 }
 
 // How long a failed alarm pass waits before the next attempt: the platform's own retry curve (2 s, doubling) plus a fixed

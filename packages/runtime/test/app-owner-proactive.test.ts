@@ -15,6 +15,8 @@ import { productionDeps } from '../src/seams/deps';
 import { readOwnerDemand } from '../src/health/calendar-demand-route';
 import { shiftDay } from '../src/health/scores/time';
 import { ensureSchema } from '../src/tracer/schema';
+import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { jobBook } from '../src/tasks/jobs';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
 const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
@@ -59,7 +61,9 @@ type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<strin
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
-  return runInDurableObject(stub, async (_instance, state) => {
+  return runInDurableObject(stub, async (instance, state) => {
+    // The pool's own OwnerDO has no runtime config; a real alarm it caught would throw and leave a pass hold in this storage.
+    const poolAlarm = vi.spyOn(instance as InstanceType<typeof OwnerDO>, 'alarm').mockResolvedValue(undefined);
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
@@ -67,7 +71,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
-    try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); }
+    try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 };
 
@@ -229,6 +233,26 @@ describe('proactive work for an owner who only uses the app', () => {
         .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
       await owner.alarm();
       expect(await appChat(owner, 'proactive-confirmed-fire')).toContainEqual({ role: 'assistant', text: CARD_TEXT });
+    });
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  it('a background task\'s report reaches the app chat once, as the admitted owner, and nothing goes to Telegram', async () => {
+    const name = 'proactive-task-report';
+    await withAppOwner(name, { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'a1b2c3d4e5f6', newToken: () => 'tok-app' });
+      const brief = { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: 'Clients write from company domains.', done_when: 'A list.', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'app-turn:call-1', origin: 'app-turn', surface: 'app', brief, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+      const ticket = book.startAttempt(job.id)!;
+      expect(book.report(ticket, { status: 'done', summary: 'Two client threads wait on you.', findings: [{ text: 'Asha asked for the quote.' }], proposals: [], left: [] }, { rounds: 2, costUsd: 0.01 })).toBe('accepted');
+      await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+      await owner.alarm(); await owner.alarm(); await owner.alarm();
+      expect(book.get(job.id)!.status).toBe('applied');
+      // The queued record comes due a moment later; the next passes deliver it through the app route.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await owner.alarm(); await owner.alarm();
+      expect((await appChat(owner, name)).filter(message => message.role === 'assistant' && message.text === CARD_TEXT)).toHaveLength(1);
+      expect(model.requests.some(request => request.includes('A background task you started has finished') && request.includes('Asha asked for the quote.'))).toBe(true);
     });
     expect(wire.telegramSent).toBe(0);
   });

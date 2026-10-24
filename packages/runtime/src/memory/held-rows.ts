@@ -10,6 +10,7 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
   run_candidates: ['candidate_json'], held_candidates: ['candidate_json'], outbox: ['payload'], schedule: ['payload_json'],
   claims: ['text', 'evidence', 'aliases', 'source_ref'], thread_topic_index: ['topic'], memory_blocks: ['content', 'decision_log'],
   memory_inbox: ['claim', 'content'], patrol_log: ['summary'], goals: ['description', 'baseline', 'target', 'progress'],
+  task_jobs: ['brief_json', 'checkpoint_json', 'result_json'],
   // Mirrors the collect() list in claims.ts forgetSources (a hand copy; keep in step with it).
   episodes: ['text'], constellation_nodes: ['label', 'summary'], loops: ['title'], background_runs: ['summary'], reminder_notes: ['note'],
 };

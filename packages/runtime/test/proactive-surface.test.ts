@@ -179,13 +179,14 @@ describe('a send on a surface that acknowledges only in its turn', () => {
 describe('a check-back for an owner Waldo cannot message first', () => {
   const handled: string[] = [];
   const handler = (name: string) => ({ name, handle: async (args: never) => { handled.push(`${name}:${JSON.stringify(args)}`); return { ok: true as const, data: {}, source_taint: null }; } });
-  const tools = [handler('set_reminder'), handler('set_standing_order'), handler('open_loop'), handler('read_memory')];
+  const tools = [handler('set_reminder'), handler('set_standing_order'), handler('open_loop'), handler('start_task'), handler('read_memory')];
   const call = (reachable: boolean, name: string, args: object) => refusingUnreachableCheckBacks(tools, () => reachable).find((tool) => tool.name === name)!.handle(args as never);
 
   it.each([
     ['set_reminder', { note: 'call Sam', at: '2026-10-22T09:00', repeat: 'none' }],
     ['set_standing_order', { scope: 'send me a mail digest', trigger: 'daily', at: '08:00' }],
     ['open_loop', { title: 'Check the visa appointment', due: '2026-10-23' }],
+    ['start_task', { profile: 'reader', title: 'Inbox since Monday', goal: 'Who is waiting on me', context: '', done_when: 'A list' }],
   ] as const)('refuses %s with the reason and schedules nothing', async (name, args) => {
     handled.length = 0;
     expect(await call(false, name, args)).toEqual({ ok: false, code: 'rejected', error: UNREACHABLE_CHECK_BACK, source_taint: null });

@@ -229,7 +229,7 @@ describe('taint gate — hostile path (ADR-0049)', () => {
   });
 
   it('sends every standing change from a tainted turn to the owner, and leaves the untainted turn alone', () => {
-    expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory']);
+    expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory', 'start_task', 'cancel_task']);
     for (const tool of STANDING_CHANGE_TOOLS) {
       expect(taintGateNeedsOwnerApproval(tool, 'external', {})).toBe(true);
       expect(taintGateNeedsOwnerApproval(tool, null, {})).toBe(false);

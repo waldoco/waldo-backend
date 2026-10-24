@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS } from '../src/channels/approvals';
+import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS, withdrawRunCards } from '../src/channels/approvals';
 import { APP_REVIEW_MAX_CHARS } from '../src/channels/surfaces/app';
 import { GoogleError, type GoogleClient } from '../src/connectors/google';
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
@@ -26,6 +26,26 @@ describe('approval desk', () => {
         expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe(checked === true ? 'done' : 'unverified');
         expect((await desk.decide(id, 'a', 'test')).toast).toBe('Already handled.');
       }
+    });
+  });
+  it('a cancelled task withdraws the browser card its run raised: it ends skipped, its cards retire, and Do it runs nothing', async () => {
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-withdraw-task-cards'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let next = 0, submitted = 0, run = 'task:job_000000000001';
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => `w-${++next}`, now: () => 1000, timezone: 'UTC', log: () => {},
+        currentRunRef: () => run, browserSubmit: async () => { submitted += 1; return { status: 'verified_with_receipt', message: 'done', receipt: {} } as never; } });
+      const payload = { url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] };
+      const ours = await desk.proposeBrowserSubmit(payload);
+      run = 'task:job_000000000002';
+      const other = await desk.proposeBrowserSubmit(payload);
+      expect(withdrawRunCards(state.storage.sql, 'task:job_000000000001', 2000)).toBe(1);
+      const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
+      expect(status(ours)).toBe('skipped');
+      expect(status(other)).not.toBe('skipped');
+      expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', ours).one().n).toBe(0);
+      expect((await desk.decide(ours, 'a', 'test')).toast).toBe('Already handled.');
+      expect(submitted).toBe(0);
+      expect(withdrawRunCards(state.storage.sql, 'task:job_000000000001', 3000)).toBe(0);
     });
   });
   it('browser outcomes never claim Done without checked durable receipt, and consume replay/concurrent callbacks', async () => {

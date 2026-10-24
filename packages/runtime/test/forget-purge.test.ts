@@ -2,6 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { forgetPurge, forgetPurgeDelay, type ForgetStore } from '../src/memory/forget-purge';
+import { jobBook, taskJobsForgetStore, type TaskBrief } from '../src/tasks/jobs';
 
 const AT = Date.parse('2026-10-22T10:00:00Z');
 const run = <T>(name: string, fn: (sql: SqlStorage, tx: <R>(work: () => R) => R) => T | Promise<T>) =>
@@ -241,5 +242,56 @@ describe('forget purge job', () => {
   it('backs off from 30 seconds, doubling, to at most an hour', () => {
     expect([0, 1, 2, 3].map(forgetPurgeDelay)).toEqual([30_000, 30_000, 60_000, 120_000]);
     expect(forgetPurgeDelay(40)).toBe(60 * 60_000);
+  });
+
+  describe('task jobs as a store', () => {
+    const brief: TaskBrief = { title: 'Quarterly numbers', goal: 'Find mail about the tea order.', context: 'The owner asked about the tea order.', done_when: 'Summarised.', effort: 'standard', timezone: 'UTC', started_at: AT };
+    const tasks = (sql: SqlStorage, tx: <R>(work: () => R) => R, cancelled: (id: string) => void) => {
+      const book = () => jobBook(sql, { now: () => AT, newId: () => 'c0ffee000001', newToken: () => 'token' });
+      return { book, store: taskJobsForgetStore({ sql, transaction: tx, book, cancelled }) };
+    };
+    const columns = (sql: SqlStorage) => JSON.stringify(sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray());
+
+    it('cancels and fences an open job that carries the text, leaves no copy in its row, and settles the text', async () => {
+      await run('forget-purge-tasks', async (sql, tx) => {
+        const fenced: string[] = [];
+        const { book, store } = tasks(sql, tx, (id) => fenced.push(id));
+        const { job } = book().create({ kind: 'task', profile: 'reader', idempotencyKey: 'k1', origin: 'turn', surface: 'app', brief, dueAt: AT, deadlineAt: AT + 3_600_000 });
+        const { purge } = setup(sql, tx, [store]);
+        expect(await purge.track(['tea order'])).toEqual({ settled: 1, pending: 0 });
+        expect(fenced).toEqual([job.id]);
+        expect(book().get(job.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+        expect(columns(sql)).not.toContain('tea order');
+      });
+    });
+
+    it('a fence that throws rolls the cancel and the redaction back, stays pending, and the retry cancels and fences again', async () => {
+      await run('forget-purge-tasks-throws', async (sql, tx) => {
+        const fenced: string[] = [];
+        let broken = true;
+        const { book, store } = tasks(sql, tx, (id) => { if (broken) throw new Error('fence unavailable'); fenced.push(id); });
+        const { job } = book().create({ kind: 'task', profile: 'reader', idempotencyKey: 'k1', origin: 'turn', surface: 'app', brief, dueAt: AT, deadlineAt: AT + 3_600_000 });
+        const { store: claims, purge, advance } = setup(sql, tx, [store]);
+        expect(await purge.track(['tea order'])).toEqual({ settled: 0, pending: 1 });
+        expect(sql.exec<{ last_code: string }>("SELECT last_code FROM forget_purge_steps WHERE store = 'task_jobs'").one().last_code).toBe('failed');
+        expect(book().get(job.id)!.status).toBe('queued');
+        expect(claims.pendingTopics()).toEqual(['tea order']);
+        broken = false;
+        advance(forgetPurgeDelay(1));
+        expect(await purge.run()).toEqual({ settled: 1, pending: 0 });
+        expect(fenced).toEqual([job.id]);
+        expect(book().get(job.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+        expect(columns(sql)).not.toContain('tea order');
+      });
+    });
+
+    it('storage with no job book is clean, and the store makes none', async () => {
+      await run('forget-purge-no-tasks', async (sql, tx) => {
+        const { store } = tasks(sql, tx, () => { throw new Error('nothing to fence'); });
+        const { purge } = setup(sql, tx, [store]);
+        expect(await purge.track(['tea order'])).toEqual({ settled: 1, pending: 0 });
+        expect(sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()).toEqual([]);
+      });
+    });
   });
 });
