@@ -102,20 +102,20 @@ it('a waiting close card is not raised twice, and tapping it after the owner clo
       // The same mail forwarded again, in a later turn: the card already waiting is named, and no second card is raised.
       proof.outputs.push([cardFor('card-again')], []);
       proof.replies.push('', 'The card to take City Power off your list is still waiting for you.');
-      await deliver(forwarded(303, 3));
+      await deliver(forwarded(301, 2));
       expect(toolOutput('card-again')).toContain('already waiting');
       expect(sql.exec("SELECT id FROM ledger WHERE kind = 'tainted_action'").toArray()).toHaveLength(1);
       expect(status()).toBe('open');
 
       proof.outputs.push([call('close-direct', 'close_loop', { id: own.id, outcome: 'done' })], []);
       proof.replies.push('', 'Done, City Power is off your list.');
-      await deliver({ update_id: 301, message: { message_id: 2, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'I paid City Power myself this morning, take it off the list.' } });
+      await deliver({ update_id: 302, message: { message_id: 3, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'I paid City Power myself this morning, take it off the list.' } });
       expect(JSON.parse(toolOutput('close-direct') ?? '{}')).toMatchObject({ ok: true, data: { id: own.id, closed: true } });
       expect(status()).toBe('done');
 
       const before = said().length;
       const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(card!.body.reply_markup))![1]!;
-      await deliver({ update_id: 302, callback_query: { id: 'close-late', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card!) + 1, chat: { id: 7, type: 'private' } } } });
+      await deliver({ update_id: 303, callback_query: { id: 'close-late', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card!) + 1, chat: { id: 7, type: 'private' } } } });
       const answer = said().slice(before).join('\n');
       expect(answer).toContain('Nothing was done');
       expect(answer).toContain('already closed as done');

@@ -137,6 +137,8 @@ export type ApprovalDesk = Readonly<{
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
+  // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
+  waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: DeskAction, trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
@@ -1164,6 +1166,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, originRunRef);
       await present(id);
       return id;
+    },
+    waitingTaintedActions(tool) {
+      expireDue();
+      return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'tainted_action' AND json_extract(payload_json, '$.tool') = ? AND status IN ('open', 'review_only', 'card_unconfirmed') ORDER BY created_at", tool).toArray()
+        .filter(entry => entry.status !== 'card_unconfirmed' || cardWaits(entry))
+        .map(entry => ({ approval_id: entry.id, args: (JSON.parse(entry.payload_json) as TaintedActionProposal).args }));
     },
     async propose(p, turnKey, operationRef) {
       const originRunRef = deps.currentRunRef?.();
