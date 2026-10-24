@@ -333,6 +333,20 @@ describe('taint goes to a card', () => {
     });
   });
 
+  // A loop the owner dropped is as closed as one they finished, so no card asks to close it again.
+  it('a loop already closed as dropped gets no close card', async () => {
+    await runInDurableObject(stub('close-loop-dropped'), async (_instance, state) => {
+      const loops = loopBook(state.storage.sql, { newId: () => 'trip', now: () => Date.UTC(2026, 9, 22, 9) });
+      const trip = loops.open({ title: 'Plan the Goa trip', due: null });
+      loops.close(trip.id, 'dropped');
+      const { desk, rows } = deskIn(state);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const refused = await propose.handle({ tool: 'close_loop', args: { id: trip.id, outcome: 'done' }, reasoning: 'A mail says the trip is booked.' } as never, tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), toolCallId: 'p1' }));
+      expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already closed (dropped)') });
+      expect(rows('tainted_action')).toHaveLength(0);
+    });
+  });
+
   // A close card lasts 12 hours. The owner may close the loop in their own words meanwhile, or two cards for one loop may
   // wait; approving the card that then has nothing to close tells the owner nothing changed and why, never "Done".
   it('approving a close card whose loop already closed says nothing changed, not Done', async () => {
