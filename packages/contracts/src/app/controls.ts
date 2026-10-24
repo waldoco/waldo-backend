@@ -134,7 +134,8 @@ const memoryClaim = z.strictObject({
   evidence: z.strictObject({ kind: z.literal('writer_note'), text }),
   source_reference: z.strictObject({ state: z.enum(['unverified', 'unavailable']), link: z.null(), visibility: z.literal('withheld_unverified_pointer'), retrievable: z.literal(false) }),
   recorded_at: text, writer_seen_count: z.int().positive().nullable(),
-  // Controls revision 2: the block this claim is pinned to, shown on every turn, or null.
+  // Controls revision 2: the block this claim is pinned to, shown on every turn, or null. Revision 2 also reads source
+  // waldo_confirmed for a claim the nightly model confirmed, which stays Waldo's read; revision 1 reads it as confirmed.
   pinned: z.enum(['profile', 'facts']).nullable().optional(),
 });
 const memoryNode = z.strictObject({

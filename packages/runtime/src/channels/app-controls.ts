@@ -22,8 +22,10 @@ const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
 const withoutLocalId=({local_id:_local,...item}:Item)=>item;
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
-// Controls revision 2 adds each claim's pin. Interpretations carry none; revision 1 gets the graph as it was.
-const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>pins&&item.type!=='interpretation'?{...item,pinned:pins.get(item.local_id!)??null}:item;
+// A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
+// revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
+const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
+  :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
 const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins?:ReadonlyMap<number,string>)=>({
   ...rest,memory_view:view,
   ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(pinOf(pins)(item as Item))}:{}),
