@@ -41,6 +41,7 @@ const TABLES: Record<string, Row> = {
   mcp_attempts: exempt('a consent attempt: endpoints, client id and the PKCE verifier until it settles, then only its outcome; no owner text'),
   mcp_questions: gap('a server\'s questions for the owner and the call\'s arguments, which can carry owner text, kept up to 24 hours; a forget does not reach it'),
   calendar_demand: exempt('local day, zone, a sha256 of the selected calendar set and busy-minute counts; no event titles, attendees or ids'),
+  calendar_demand_dropped: exempt('local day and when a calendar change last dropped it from the demand cache; no event data'),
   owner_request_last: exempt('trace id, time, ok flag and step count of the last owner request; no owner text (hop notes stay in trace_log)'),
   owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),
   owner_task_source_scope: exempt('owner/task ids, revision, source-family enums, readiness, bounded nonce/expiry confirmation and host input reference; no owner instruction, fact or forgotten spans'),
