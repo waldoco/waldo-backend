@@ -87,6 +87,20 @@ it('revision 1 reads the same bytes whether or not a claim is pinned, and revisi
   });
 });
 
+it('serves a claim Waldo confirmed as waldo_confirmed only to revision 2, and as confirmed to revision 1', async () => {
+  await appOwner('app-claim-waldo-confirmed', async ctx => {
+    ctx.state.storage.sql.exec("INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, seen_count) VALUES ('routine', 'Walks after lunch', 'waldo_confirmed', 'synthetic note', 'agent', 'active', '2026-10-01', '2026-10-01', 1)");
+    const sources = async (contract?: string) => {
+      const body = appControlProjectionV1Schema.parse(await (await read(ctx, 'memory_view=claims&limit=10', contract)).json());
+      if (body.view !== 'constellation' || body.data.memory_view !== 'claims') throw Error('expected claims');
+      return body.data.items.map(item => item.source);
+    };
+    expect(await sources()).toEqual(['confirmed']);
+    expect(await sources('controls=1')).toEqual(['confirmed']);
+    expect(await sources('controls=2')).toEqual(['waldo_confirmed']);
+  });
+});
+
 it('pins to the block the owner picks and unpins, each on the revision of that claim\'s read', async () => {
   await appOwner('app-claim-pin', async ctx => {
     const id = seed(ctx, 'preference', 'Prefers mornings');
