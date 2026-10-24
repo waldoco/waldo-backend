@@ -343,6 +343,20 @@ describe('claims', () => {
     expect(other).toEqual([]);
   });
 
+  it('the nightly memory input shows claims only, never a stored node or edge', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'stated', evidence: 'day one', origin: 'owner' }, AT);
+      const sleep = store.saveNode({ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [1] }, AT);
+      const days = store.saveNode({ id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [1] }, AT);
+      store.saveEdge({ from_id: days, to_id: sleep, relation: 'tends to precede', strength: 0.5, evidence_count: 3 });
+      for (const prompt of [memoryPrompt(store), nightlyInput(store, '[2026-09-24 08:00] owner: morning')]) {
+        expect(prompt).toContain('Short sleep before long meeting days');
+        expect(prompt).not.toMatch(/<node|<edge|Sleeps less before big days|Heavy days|tends to precede/);
+      }
+    });
+  });
+
   it('forgetting a node drops its edges', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
