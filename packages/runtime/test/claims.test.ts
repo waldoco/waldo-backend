@@ -26,8 +26,8 @@ describe('claims', () => {
       applyClaimOps(store, ops({ seen: [gym!.id, 999], confirm: [lunch!.id, gym!.id] }), '2026-09-24T05:00:00Z', 'owner, tg-9');
       const after = new Map(store.claims().map((claim) => [claim.id, claim]));
       expect(after.get(gym!.id)).toMatchObject({ seen_count: 2, source: 'stated' });
-      expect(after.get(lunch!.id)).toMatchObject({ source: 'confirmed' });
-      expect(after.get(lunch!.id)!.evidence).toContain('confirmed: owner, tg-9');
+      expect(after.get(lunch!.id)).toMatchObject({ source: 'waldo_confirmed' });
+      expect(after.get(lunch!.id)!.evidence).toContain('Waldo confirmed: owner, tg-9');
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT, 'owner agreed', undefined, undefined, true);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);

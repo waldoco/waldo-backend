@@ -6,7 +6,11 @@ import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget
 import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
-export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
+// confirmed: the owner said it is right. waldo_confirmed: the nightly model read the owner's day as confirming it, which
+// stays Waldo's read until the owner confirms it.
+export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferred'] as const;
+// What the owner may still confirm as theirs.
+export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null }>;
@@ -18,9 +22,10 @@ export type PinBlock = (typeof PIN_BLOCKS)[number];
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
 export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
+// A claim Waldo inferred or confirmed waits for the owner's own confirm.
 const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
 const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
-  PROFILE_KINDS.includes(claim.kind) && claim.source !== 'inferred' && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
+  PROFILE_KINDS.includes(claim.kind) && !awaitsOwnerConfirm(claim) && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
 // Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
@@ -453,8 +458,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     seen(id: number, at: string): void {
       sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
+    // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
-      sql.exec(`UPDATE claims SET source = 'confirmed', evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+      sql.exec(`UPDATE claims SET source = 'waldo_confirmed', evidence = evidence || ' | Waldo confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+    },
+    // The one place a live claim becomes the owner's: their own act (the console's "That's right"), named by `how` in its
+    // evidence and, when it had no owner source, as its source.
+    ownerGround(id: number, at: string, how: string): boolean {
+      return sql.exec(`UPDATE claims SET origin = 'owner', verification_status = 'owner-grounded',
+        source = CASE WHEN source IN ('inferred', 'waldo_confirmed') THEN 'confirmed' ELSE source END,
+        source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
+        WHERE id = ? AND status IN ('active', 'promoted')`, how, how, at, id).rowsWritten === 1;
     },
     correct(id: number, claim: NewClaim, at: string): boolean {
       // Two writes must never leave contradictory active claims. A caller without a DO
@@ -957,7 +971,7 @@ const PROFILE_SECTIONS: readonly (readonly [string, readonly string[]])[] = [
 ];
 
 export const profile = (claims: readonly Claim[]): readonly Readonly<{ title: string; lines: readonly string[] }>[] => {
-  const owned = claims.filter((claim) => claim.source !== 'inferred');
+  const owned = claims.filter((claim) => !awaitsOwnerConfirm(claim));
   return PROFILE_SECTIONS.map(([title, kinds]) => ({ title, lines: owned.filter((claim) => kinds.includes(claim.kind)).map((claim) => claim.text) }))
     .filter((section) => section.lines.length > 0);
 };
