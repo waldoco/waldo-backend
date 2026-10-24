@@ -259,11 +259,12 @@ describe('owner console', () => {
     expect(none).not.toContain('Held at the gate');
   });
 
-  it('distinguishes stored evidence notes from original-source links and does not fake a correction action', () => {
+  it('distinguishes stored evidence notes from original-source links, and corrects only through the owner\'s edit', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Evidence note:');
     expect(html).toContain('not a link to the original message');
-    expect(html).toContain('tell Waldo the correction in chat');
+    expect(html).toContain('edit it here or tell Waldo in chat');
+    expect(html).toContain('name="action" value="spot.edit"');
     expect(html).not.toContain('name="action" value="spot.correct"');
     const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] }, 'spots');
     expect(unknown).toContain('Source unverified');

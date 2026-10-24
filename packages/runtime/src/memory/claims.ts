@@ -18,7 +18,7 @@ export type PinBlock = (typeof PIN_BLOCKS)[number];
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
 export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
-const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
+export const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
 const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
   PROFILE_KINDS.includes(claim.kind) && claim.source !== 'inferred' && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;

@@ -39,7 +39,7 @@ const owner = async (name: string) => {
     expect(response.status).toBe(200);
     return response.json();
   };
-  const act = async (id: string, action: string, value?: string, request = `${action}-${crypto.randomUUID()}`) => {
+  const act = async (id: string, action: string, value?: string, request = `${action.replace(".", "-")}-${crypto.randomUUID()}`) => {
     const current = await read(id);
     return stub.fetch(root + CONTROL_ACTION_PATH, { method: 'POST', headers: headers({ 'content-type': 'application/x-www-form-urlencoded' }),
       body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'memory', action, id, request_id: request.slice(0, 80), ...(value === undefined ? {} : { value }) }) });
