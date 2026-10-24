@@ -72,3 +72,48 @@ it('a forwarded "paid" mail closes the owner\'s loop only from the card; the mai
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 }, 30_000);
+
+// A close card waits up to 12 hours. The owner closes that loop in their own words first, then taps the old card: the card
+// has nothing left to close, and the owner is told so rather than "Done".
+it('tapping a close card after the owner closed that loop in their own words says nothing changed', async () => {
+  const name = `close-loop-noop-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub, async (_unused, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-13T05:00:00Z');
+    Date.now = () => now;
+    const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', COMMON_OWNER_TASKS: '0', BROWSER: undefined } as never);
+    state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7'); state.storage.kv.put('origin', 'https://owner.fixture.invalid');
+    const sql = state.storage.sql;
+    const own = loopBook(sql, { now: () => now, newId: () => crypto.randomUUID().slice(0, 8) }).open({ title: 'Pay City Power', due: '2026-10-16T18:00' });
+    const status = () => sql.exec<{ status: string }>('SELECT status FROM loops WHERE id = ?', own.id).one().status;
+    const deliver = async (update: unknown) => {
+      expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
+      for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
+    };
+    const said = () => proof.telegram.filter(entry => entry.method === 'sendMessage').map(entry => String(entry.body.text));
+    try {
+      proof.outputs.push([call('card-own', 'propose_action', { tool: 'close_loop', args: { id: own.id, outcome: 'done' }, reasoning: 'A forwarded mail says the City Power invoice is paid.' })], []);
+      proof.replies.push('', 'Tap the card if I should take City Power off your list.');
+      await deliver({ update_id: 300, message: { message_id: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: SPOOF, forward_origin: { type: 'hidden_user', sender_user_name: 'City Power Billing', date: 1760331000 }, forward_date: 1760331000 } });
+      const card = proof.telegram.find(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
+      expect(card).toBeDefined();
+      expect(status()).toBe('open');
+
+      proof.outputs.push([call('close-direct', 'close_loop', { id: own.id, outcome: 'done' })], []);
+      proof.replies.push('', 'Done, City Power is off your list.');
+      await deliver({ update_id: 301, message: { message_id: 2, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'I paid City Power myself this morning, take it off the list.' } });
+      expect(JSON.parse(toolOutput('close-direct') ?? '{}')).toMatchObject({ ok: true, data: { id: own.id, closed: true } });
+      expect(status()).toBe('done');
+
+      const before = said().length;
+      const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(card!.body.reply_markup))![1]!;
+      await deliver({ update_id: 302, callback_query: { id: 'close-late', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card!) + 1, chat: { id: 7, type: 'private' } } } });
+      const answer = said().slice(before).join('\n');
+      expect(answer).toContain('Nothing was done');
+      expect(answer).toContain('already closed as done');
+      expect(answer).not.toContain('Done:');
+      expect(proof.telegram.find(entry => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'close-late')?.body.text).not.toBe('Done');
+      expect(status()).toBe('done');
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+}, 30_000);

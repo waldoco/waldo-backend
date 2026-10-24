@@ -333,6 +333,43 @@ describe('taint goes to a card', () => {
     });
   });
 
+  // A close card lasts 12 hours. The owner may close the loop in their own words meanwhile, or two cards for one loop may
+  // wait; approving the card that then has nothing to close tells the owner nothing changed and why, never "Done".
+  it('approving a close card whose loop already closed says nothing changed, not Done', async () => {
+    await runInDurableObject(stub('close-loop-noop'), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let n = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const status = (id: string) => sql.exec<{ status: string }>('SELECT status FROM loops WHERE id = ?', id).one().status;
+      const handlers = loopHandlers(loops);
+      const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+
+      expect(await propose.handle({ tool: 'close_loop', args: { id: power.id, outcome: 'done' }, reasoning: 'A mail says the City Power invoice is paid.' } as never, read({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      expect(await dispatchTool({ id: 'c1', name: 'close_loop', args: { id: power.id, outcome: 'done' } }, context(), { handlers })).toMatchObject({ ok: true, data: { closed: true } });
+      const late = await desk.decide(rows('tainted_action')[0]!.id, 'a', 't');
+      expect(late.toast).not.toBe('Done');
+      expect(late.message).toContain('Nothing was done');
+      expect(late.message).toContain('already closed as done');
+      expect(rows('tainted_action')[0]!.status).toBe('failed');
+      expect(status(power.id)).toBe('done');
+
+      // Two cards for one loop, as a desk may hold from before propose refused the second: the first closes it, the
+      // second has nothing left to close.
+      const args = { id: passport.id, outcome: 'dropped' };
+      const card = { tool: 'close_loop', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'r', source: 'external' as const };
+      const first = await desk.proposeTaintedAction(card), second = await desk.proposeTaintedAction(card);
+      expect((await desk.decide(first, 'a', 't')).toast).toBe('Done');
+      const again = await desk.decide(second, 'a', 't');
+      expect(again.toast).not.toBe('Done');
+      expect(again.message).toContain('already closed as dropped');
+      expect(status(passport.id)).toBe('dropped');
+    });
+  });
+
   it('a forget by ids from a tainted turn goes to the card and forgets on approval', async () => {
     await runInDurableObject(stub('forget'), async (_instance, state) => {
       const store = claimStore(state.storage.sql);
