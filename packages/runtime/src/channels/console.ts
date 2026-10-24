@@ -323,6 +323,7 @@ const APPROVAL_LABELS: Readonly<Record<string, string>> = {
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if (review.kind === 'mcp_call' || review.kind === 'tainted_action' || review.kind === 'browser_submit') return `<div class="approval-review"><pre>${esc(review.text)}</pre></div>`;
   if (review.kind === 'google_task_change') {
     const { args, list, before } = review.proposal;
     const task = args.changes?.title ?? before?.title;

@@ -44,6 +44,7 @@ function Review({ review, timezone }: { review: ProposalReview; timezone: string
     return <div className="proposal-full-review letter">{review.account && <div className="letter-row"><span className="label">From</span><span className="person">{review.account}</span></div>}{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   }
   if (review.kind === 'message_send') return <div className="proposal-full-review chat-preview"><span className="channel">{review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/> : <Icon name="paperplane"/>}To your {review.channel} chat</span><p className="bubble">{review.content}</p><CopyText text={review.content}/></div>;
+  if (review.kind === 'mcp_call' || review.kind === 'tainted_action' || review.kind === 'browser_submit') return <div className="proposal-full-review"><pre className="owner-record-text">{review.text}</pre></div>;
   return <CalendarReview review={review} timezone={timezone}/>;
 }
 
@@ -65,7 +66,8 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'
           : sendApprove ? 'Sending can’t be undone, so check the sender, recipients and words above. Change it asks Waldo for a new draft; this one stays as it is.'
             : send && item.state === 'open' ? 'Approve on its review card in chat, after checking sender, recipient and words. Dismissing here only stops the send.'
-            : item.state === 'open' && item.kind === 'calendar_change' ? 'Want it changed? Ask Waldo for a new proposal before approving.' : null;
+            : item.state === 'open' && item.kind === 'calendar_change' ? 'Want it changed? Ask Waldo for a new proposal before approving.'
+              : item.state === 'open' && (item.review?.kind === 'mcp_call' || item.review?.kind === 'tainted_action' || item.review?.kind === 'browser_submit') ? 'Approve or skip it on its card in chat or the Waldo app.' : null;
       return <details name="proposals" open={index === first} className="tile disclosure proposal-detail reveal" style={{ '--i': index } as React.CSSProperties} key={item.id}>
         <summary><span className="kind"><KindMark item={item}/></span><span className="value proposal-summary">{item.summary}</span><span className={`access-label${item.state === 'open' ? ' needs' : ''}`}>{item.state === 'open' ? 'Needs you' : item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : 'Decision recorded'}</span></summary>
         <div className="disclosure-body">
