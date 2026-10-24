@@ -896,8 +896,8 @@ it('keeps a reading or goal the owner stated, and holds a reading from any other
   });
 });
 
-// The hold keys on where each number of a reading came from, not on what the evidence quotes: every number in a reading
-// must be one the owner wrote in their own words of this exchange. Probes from the gate; synthetic values only.
+// The hold keys on where each number of a reading came from: every number in a reading must be in the owner's words the
+// claim's evidence quotes, not merely somewhere the owner typed that day. Probes from the gate; synthetic values only.
 const reading = (text: string, evidence: string, aliases: string[] = []) => ({ kind: 'health', text, source: 'stated', evidence, aliases, touches_forgotten: false });
 it.each([
   ['N1: the reading only in forwarded text, evidence the owner\'s request', { owner: 'Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],

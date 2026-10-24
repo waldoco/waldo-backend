@@ -30,7 +30,7 @@ import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveR
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
-import { readingBeyondOwner } from '../scribe/sanitiser';
+import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
@@ -872,8 +872,9 @@ export const createOwnerResponder = (
       if (!summary) { hop(false, 'empty'); return; }
       // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here, by
       // source: a reading the owner wrote in the span is ordinary chat, while one whose number came from Waldo's reply (a
-      // relayed device reading), shared content or nowhere is refused. Without the owner's words, every reading is refused.
-      if (readingBeyondOwner(summary, ownerWords)) { hop(false, 'numeric_health'); return; }
+      // relayed device reading), shared content, an owner number about something else or nowhere is refused. Without the
+      // owner's words, every reading is refused.
+      if (readingBeyondOwner(summary, ownerReadings(ownerWords))) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
       await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);

@@ -176,14 +176,18 @@ const numericHealthReadings = (text: string): string[] => [
 // carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean => numericHealthReadings(text).length > 0;
 
-// Whether text carries a reading with a number the owner did not write in `owner`, their own words: a reading that came
+// Whether text carries a reading with a number not in `owner`, the owner's words that vouch for it: a reading that came
 // from shared content, Waldo's reply or a device. It keys on where a reading's numbers came from, never on its wording; a
-// date beside a reading is not part of it. With no owner words, every reading is one.
+// date beside a reading is not part of it. With no owner words, every reading is one. The caller keeps `owner` narrow (a
+// claim's own quote, or the owner's own readings), since a number the owner typed about anything else vouches for nothing.
 const NUMBER = /\d+(?:[.,]\d+)*/g;
 export const readingBeyondOwner = (text: string, owner: string | undefined): boolean => {
   const said = new Set(owner?.match(NUMBER) ?? []);
   return numericHealthReadings(text).some((reading) => (reading.match(NUMBER) ?? []).some((number) => !said.has(number)));
 };
+
+// The readings in the owner's words, as text: what vouches for a summary, which quotes no evidence of its own.
+export const ownerReadings = (owner: string | undefined): string | undefined => owner === undefined ? undefined : numericHealthReadings(owner).join('\n');
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,

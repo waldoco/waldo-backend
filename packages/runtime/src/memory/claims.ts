@@ -1162,6 +1162,12 @@ export const normalizeForGrounding = (text: string): string => text.toLowerCase(
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
 // The quoted spans of an evidence string, raw: straight or curly double quotes.
 const quotedSpans = (evidence: string): readonly string[] => [...evidence.matchAll(/"([^"]+)"|“([^”]+)”/g)].map((match) => match[1] ?? match[2] ?? '');
+// The owner's words an evidence string quotes: its quoted spans, or all of it when it quotes none. A number in the citation
+// around a quote ("owner, tg-16") is not one the owner said.
+const quotedWords = (evidence: string): string => {
+  const spans = quotedSpans(evidence);
+  return spans.length > 0 ? spans.join('\n') : evidence;
+};
 const groundingTargets = (evidence: string): readonly string[] => {
   const spans = quotedSpans(evidence).map(normalizeForGrounding).filter(Boolean);
   const whole = normalizeForGrounding(evidence);
@@ -1223,11 +1229,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
-    const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
+    const owned = grounding !== undefined && ground(correction.evidence, grounding) === 'owner';
+    const ref = owned ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
     // closed reason, so the reply can say the memory was not updated instead of the skip being silent. A replacement
-    // carrying a reading the owner did not write is held as one, as an add would be.
-    const reason = [correction.text, correction.evidence].some((text) => readingBeyondOwner(text, grounding?.owner)) ? 'numeric-health'
+    // carrying a reading whose numbers its owner-grounded quote does not carry is held as one, as an add would be.
+    const reason = [correction.text, correction.evidence].some((text) => readingBeyondOwner(text, owned ? quotedWords(correction.evidence) : undefined)) ? 'numeric-health'
       : ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim())) ? 'correction-not-applied' : undefined;
     if (reason) {
       store.recordHold(correction.kind, reason, correction.text, at);
@@ -1255,11 +1262,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
     if (replacement === 'held' && verdict !== 'owner') continue;
     // A health reading is kept only as something the owner said: stated, on evidence in their own words, with every number
-    // of the reading one they wrote. A number only in shared content (forwarded mail, a file) or Waldo's reply (a relayed
-    // device reading), or in nothing they said, is held, keyed on that source, never on wording; so is a reading from an
-    // ungrounded paraphrase or an inference. One whose evidence grounds only in Waldo's reply is held below as a self-report.
+    // of the reading in the words that evidence quotes. A number only in shared content (forwarded mail, a file), Waldo's
+    // reply (a relayed device reading) or something else the owner typed is held, keyed on that source, never on wording;
+    // so is a reading from an ungrounded paraphrase or an inference. One whose evidence grounds only in Waldo's reply is
+    // held below as a self-report.
     const texts = [claim.text, claim.evidence, ...(claim.aliases ?? [])];
-    if (verdict !== 'waldo' && texts.some(numericHealthIn) && (verdict !== 'owner' || claim.source === 'inferred' || texts.some((text) => readingBeyondOwner(text, grounding?.owner)))) {
+    if (verdict !== 'waldo' && texts.some(numericHealthIn) && (verdict !== 'owner' || claim.source === 'inferred' || texts.some((text) => readingBeyondOwner(text, quotedWords(claim.evidence))))) {
       store.recordHold(claim.kind, 'numeric-health', claim.text, at);
       held.push(claim);
       holdReasons.add('numeric-health');
