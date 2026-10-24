@@ -9,7 +9,7 @@ import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
 import { loopBook, loopHandlers } from '../../src/channels/loops';
-import { episodeIndex, indexedConversationStore } from '../../src/channels/episodes';
+import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
@@ -18,7 +18,7 @@ import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN } from '../../src/memory/claims';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
 import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
 import { webSearchHandler } from '../../src/tools/live/web-search';
@@ -292,7 +292,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   })();
   const handlers = [
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };

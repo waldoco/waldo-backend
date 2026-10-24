@@ -2,6 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
+import { forgetPurge } from '../src/memory/forget-purge';
 
 const seen = vi.hoisted(() => ({ inputs: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -15,7 +16,7 @@ beforeEach(() => { seen.inputs.length = 0; });
 
 // An older build kept a topic the owner asked to forget as "coverage incomplete" until a span selector had proved its
 // sources. The selector is gone, so such a row could never clear, and it deferred every nightly pass and promotion.
-it('a stale coverage-incomplete row becomes an ordinary pending forget with a barrier, and the nightly pass runs and purges it', async () => {
+it('a stale coverage-incomplete row becomes an ordinary pending forget with a barrier: the nightly pass runs, and the purge job finishes it', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-stale-coverage')), async (_i, state) => {
     const sql = state.storage.sql;
     // The table as the older build left it: one unproved topic, one ordinary pending literal.
@@ -38,15 +39,16 @@ it('a stale coverage-incomplete row becomes an ordinary pending forget with a ba
     expect(night.detail).not.toContain('deferred');
     expect(seen.inputs).toHaveLength(1);
     expect(seen.inputs[0]).not.toContain('oolong');
-    // The nightly pass retries pending topics through the literal purge, so the old forget finally lands and settles.
-    expect(memory.allClaims().map(claim => claim.text)).toEqual([`Prefers ${FORGOTTEN} tea`]);
+    // The purge job is the one retry owner: it deletes the derived claim that carries the old topic and settles both.
+    expect(await forgetPurge({ sql, store: memory, stores: [], now: Date.now, arm: async () => undefined }).run()).toEqual({ settled: 2, pending: 0 });
+    expect(memory.allClaims()).toEqual([]);
     expect(memory.pendingTopics()).toEqual([]);
     memory.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'Pune', origin: 'owner', source_ref: 'owner, tg-2' }, '2026-10-19T08:00:00Z');
     expect(await responder.promote('promote-1')).not.toContain('deferred');
   });
 });
 
-it('a forget on a topic still purges and settles through the literal path', async () => {
+it('a forget on a topic deletes the claims that carry it and settles through the literal path', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-stale-coverage-forget')), (_i, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: '"oolong tea please"', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-19T08:00:00Z');
@@ -55,6 +57,6 @@ it('a forget on a topic still purges and settles through the literal path', asyn
     expect(store.pendingTopics()).toEqual(['oolong']);
     store.settle([], ['oolong']);
     expect(store.pendingTopics()).toEqual([]);
-    expect(store.allClaims().map(claim => claim.text)).toEqual([`Prefers ${FORGOTTEN} tea`]);
+    expect(store.allClaims()).toEqual([]);
   });
 });
