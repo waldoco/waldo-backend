@@ -948,6 +948,21 @@ it('N3c: holds a correction to a forwarded lab value whose number the owner type
   });
 });
 
+// A correction whose evidence is not the owner's words vouches for no number, even one its own quote carries: it is held as a
+// reading, so no fingerprint of the reading's words is kept, rather than as a correction that did not apply.
+it('holds a correction quoting shared content as a reading, keeping no fingerprint of it', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'Update my goal with the lab result';
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 97 mg/dL', evidence: 'Fasting glucose 97 mg/dL' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: Lab report. Fasting glucose 97 mg/dL', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
 // A reading the owner wrote is kept when its evidence quotes it, citation and all.
 it('keeps a reading whose quoted evidence carries its numbers', async () => {
   await withSql((sql) => {
