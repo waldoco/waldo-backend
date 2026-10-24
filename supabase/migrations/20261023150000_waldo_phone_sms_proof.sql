@@ -64,8 +64,8 @@ create table waldo.phone_sms_challenges (
 create index phone_sms_challenges_phone on waldo.phone_sms_challenges (phone);
 
 -- Sends in a UTC day, per owner and the number texted. The rows belong to the owner and go with the account; the number
--- is keyed by an HMAC under a key derived from the router's Vault secret, so the key cannot be reversed by hashing
--- candidate numbers. Summed by owner and by number key, they give the per-owner and per-number caps across owners.
+-- is keyed by an HMAC under the router's Vault secret, set apart from router signatures by its 'phonecap.' prefix (a
+-- signed message starts with digits), so the key cannot be reversed by hashing candidate numbers. Summed by owner and by number key, they give the per-owner and per-number caps across owners.
 -- Rotating the router secret starts the day's per-number counts afresh.
 create table waldo.phone_sms_daily (
   owner_id uuid not null references waldo.owners (id) on delete cascade,
