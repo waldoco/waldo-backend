@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const base = { owner: 42, call: async () => ({}), google: async () => null, timezone: 'UTC', log: () => {} };
 const stubFor = (n: string) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(n));
@@ -29,8 +30,7 @@ it('BREAK-2 two concurrent approves while google() client is still resolving: ex
     const effects = ownerEffectLedger(state.storage, () => 1000);
     const client = { sendRaw: async () => { sends++; await new Promise(r => setTimeout(r, 5)); return { message_id: 'm' }; }, findSentByMessageId: async (messageId: string) => { expect(messageId).toBe('<x@waldo-send>'); return { message_id: 'm', thread_id: 'sent-thread', rfc822_message_id: '<x@waldo-send>', label_ids: ['SENT'] }; } } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { ...base, newId: () => 'one', now: () => 1000, effects, google: async () => { await new Promise(r => setTimeout(r, 2)); return client; } });
-    const raw = 'bytes';
-    const id = await desk.proposeSendEmail({ to: ['a@example.test'], subject: 's', body: 'b', raw, digest: await sha256Hex(raw), message_id: '<x@waldo-send>' });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@example.test'], subject: 's', body: 'b', message_id: '<x@waldo-send>' }));
     const r = await Promise.all([desk.decide(id, 'a', 't'), desk.decide(id, 'a', 't'), desk.decide(id, 'a', 't')]);
     expect(sends).toBe(1);
     expect(status(state, id)).toBe('done');
@@ -82,8 +82,7 @@ it('BREAK-6 review_only card cannot be approved, edited, or undone', async () =>
     let sends = 0;
     const effects = ownerEffectLedger(state.storage, () => 1000);
     const desk = approvalDesk(state.storage.sql, { ...base, newId: () => 'one', now: () => 1000, effects, google: async () => ({ sendRaw: async () => { sends++; return { message_id: 'm' }; } }) as unknown as GoogleClient });
-    const raw = 'bytes';
-    const id = await desk.proposeSendEmail({ to: ['a@example.test'], subject: 's', body: 'x'.repeat(20000), raw, digest: await sha256Hex(raw), message_id: '<y@waldo-send>' });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@example.test'], subject: 's', body: 'x'.repeat(20000), message_id: '<y@waldo-send>' }));
     const st = status(state, id);
     for (const a of ['a', 'e', 'u'] as const) await desk.decide(id, a, 't');
     expect(sends).toBe(0);
