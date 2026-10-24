@@ -31,7 +31,7 @@ import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, shapeFault, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
-import {MAC_FOLLOWUP_RETRY_MS,MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS,macDelivery,macInbox,macResultNotice,type MacDelivery} from '../devices/mac-delivery';
+import {MAC_FOLLOWUP_RECORD_PREFIX,MAC_FOLLOWUP_RETRY_MS,MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS,macDelivery,macInbox,macResultNotice,type MacDelivery} from '../devices/mac-delivery';
 import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
@@ -1129,7 +1129,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
-      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup) || record.payload.chat_id !== app.owner) return;
+      if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
         try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
@@ -2333,12 +2333,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
+      // An owner linked on Telegram who also uses the app has their proactive work delivered in the app with a plain Telegram
+      // copy: scheduled jobs, the delivery outbox's app route and Mac reports all follow this one decision.
+      const appWithTelegramCopy = channel === 'telegram' && consoleAuth(this.env) !== null && this.appBound();
       const { scheduler, fire, beat, nightly, briefs, healthTrigger, watches, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
-      await lane('mac', () => this.drainMacDeliveries());
+      await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
       // Results the iMessage outbox already holds, including hand-offs that aged out there, reach the records waiting on them.
       observeIMessageReports(this.ctx.storage, this.ctx.storage.kv.get<string>('imessage_subject'), Date.now());
       await lane('transport', () => finalOutbox.maintain());
@@ -2377,7 +2380,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const routeFor = (surface: ChannelKind): OutboxRoute => this.outboxRoute(surface);
         // An owner the directory admits on the app has the app's route and, while WhatsApp takes proactive work, WhatsApp's.
         const routes = whatsappTarget === null ? [routeFor(channel)] : [routeFor('app'), ...(whatsappTarget ? [routeFor('whatsapp')] : [])];
-        if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
+        if (appWithTelegramCopy) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
           return found.kind;
@@ -2406,7 +2409,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : NO_SCHEDULE_WAKE, Date.now(), 30_000);
             return;
           }
-          if (channel === 'telegram' && owner.authority) {
+          if (appWithTelegramCopy && owner.authority) {
             this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
             const app = this.setup('app');
             await app.ready;
@@ -2500,26 +2503,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async admitMacDelivery(value: unknown): Promise<boolean> {
     if(!macDelivery(value) || !this.env.OWNER_DO)return false;
     const auth=await deviceDirectory(this.env).deviceForAuth(value.device_id);
-    if(!auth || auth.owner_id!==value.owner_id || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString() || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name || this.ctx.storage.kv.get<boolean>('telegram_unlinked')===true)return false;
+    if(!auth || auth.owner_id!==value.owner_id || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString() || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name)return false;
+    // The next alarm pass reports it, on the surface that pass picks for the owner's proactive work.
     const admitted=await macInbox(this.ctx.storage).admit(value);
-    if(admitted){await this.rearmEveryWake();this.ctx.waitUntil(this.serial(()=>this.drainMacDeliveries()).catch(()=>console.warn(JSON.stringify({module:'device_bridge',code:'followup_pending'}))));}
+    if(admitted)await this.rearmEveryWake();
     return admitted;
   }
-  private async drainMacDeliveries(): Promise<void> {
+  // `channel` is the surface the alarm pass picked for the owner's proactive work (proactiveTargets): the report goes there
+  // through the delivery outbox, and each surface the owner chose as a copy gets one once it is delivered (copiedFollowups).
+  private async drainMacDeliveries(channel: ChannelKind = 'telegram'): Promise<void> {
     const inbox=macInbox(this.ctx.storage);
     // The alarm calls this for every owner: with nothing pending it must not touch any runtime.
     if(!inbox.pending().length)return;
-    // Follow-ups are delivered through Telegram. An owner without a Telegram runtime keeps the rows
-    // pending and backs off, instead of throwing out of the alarm or spinning on it.
-    if(!this.env.TELEGRAM_BOT_TOKEN || !this.ctx.storage.kv.get<string>('telegram_subject')){inbox.retryLater(MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS);console.warn(JSON.stringify({module:'device_bridge',code:'followup_no_surface'}));return;}
-    const runtime=this.setup('telegram');await runtime.ready;
+    // A surface this deploy cannot run, or one with no owner bound, keeps the rows pending and backs off, instead of throwing
+    // out of the alarm or spinning on it.
+    let runtime:OwnerRuntime|null=null;
+    try{runtime=this.setup(channel);}catch{runtime=null;}
+    if(!runtime || !this.macSurfaceBound(channel,runtime)){inbox.retryLater(MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS);console.warn(JSON.stringify({module:'device_bridge',code:'followup_no_surface'}));return;}
+    await runtime.ready;
     for(const row of inbox.pending()) {
       const delivery=JSON.parse(row.body) as MacDelivery;
       const current=async()=>{
         const auth=await deviceDirectory(this.env).deviceForAuth(delivery.device_id);
-        if(!auth || auth.owner_id!==delivery.owner_id || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name || this.ctx.storage.kv.get<boolean>('telegram_unlinked')===true || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString())throw new Error('owner_binding_closed');
+        if(!auth || auth.owner_id!==delivery.owner_id || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString())throw new Error('owner_binding_closed');
       };
-      try { await this.asOwnerJob('device_followup', `mac:${row.id}`, () => this.deliverMacRow(row.id, delivery, current, runtime, inbox)); }
+      try { await this.asOwnerJob('device_followup', `mac:${row.id}`, () => this.deliverMacRow(row.id, delivery, current, runtime, inbox, channel)); }
       catch (error) {
         // Custody that no longer resolves to this owner's live device (revoked, unknown, or
         // rebound) is permanent: set the row aside so the rest of the owner alarm runs. Any
@@ -2534,7 +2542,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     await this.rearmEveryWake();
   }
-  private async deliverMacRow(rowId: string, delivery: MacDelivery, current: () => Promise<void>, runtime: OwnerRuntime, inbox: ReturnType<typeof macInbox>): Promise<void> {
+  private async deliverMacRow(rowId: string, delivery: MacDelivery, current: () => Promise<void>, runtime: OwnerRuntime, inbox: ReturnType<typeof macInbox>, channel: ChannelKind): Promise<void> {
     await current();
     const notice=macResultNotice(delivery),trace=`mac:${rowId}`;
     let text=notice;
@@ -2545,9 +2553,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       text=`${notice}\n${summary}`;
     }
     await current();
-    const subject=this.ctx.storage.kv.get<string>('telegram_subject'),doName=this.ctx.storage.kv.get<string>('do_name');
-    if(!subject || !doName || Number(subject)!==runtime.owner)throw new Error('owner_binding_closed');
-    await runtime.finalOutbox.enqueueFenced({id:`device-${rowId}`,trace,payload:{chat_id:runtime.owner,text},ownerSubject:subject,doName,bot:this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]},work=>this.ctx.storage.transactionSync(()=>{work();inbox.finish(rowId);}));
+    // A surface unlinked or rebound during the summary leaves the row for a later pass, which picks the surface again.
+    const doName=this.ctx.storage.kv.get<string>('do_name');
+    if(!doName || !this.macSurfaceBound(channel,runtime))throw new Error('followup_surface_unbound');
+    await runtime.finalOutbox.enqueueFenced({id:`${MAC_FOLLOWUP_RECORD_PREFIX}${rowId}`,trace,payload:{chat_id:runtime.owner,text},ownerSubject:String(runtime.owner),doName,bot:this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]},work=>this.ctx.storage.transactionSync(()=>{work();inbox.finish(rowId);}));
+  }
+  // The surface's runtime still names the subject bound on that surface, and the surface is not unlinked.
+  private macSurfaceBound(channel: ChannelKind, runtime: OwnerRuntime): boolean {
+    const kv=this.ctx.storage.kv;
+    return runtime.owner>0 && kv.get<string>(`${channel}_subject`)===String(runtime.owner) && kv.get<boolean>(`${channel}_unlinked`)!==true;
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
