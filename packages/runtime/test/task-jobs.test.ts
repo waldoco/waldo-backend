@@ -175,12 +175,26 @@ describe('task job book', () => {
     });
   });
 
-  it('a job whose brief the purge left unreadable still cancels, keeping none of it', async () => {
+  it('a forget\'s cancel leaves the brief for the memory purge to redact in the same call; the next trim drops its text', async () => {
+    await withBook((book, _clock, sql) => {
+      const { job: row } = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } }));
+      expect(book.forget(['Lisbon trip'])).toEqual([row.id]);
+      expect(book.get(row.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(book.get(row.id)!.brief_json).toContain('Lisbon trip');
+      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Lisbon trip', '[forgotten]') WHERE id = ?", row.id);
+      book.trim();
+      expect(JSON.parse(book.get(row.id)!.brief_json)).toEqual({ title: brief.title, started_at: brief.started_at });
+      expect(book.get(row.id)!.brief_digest).toBe(row.brief_digest);
+    });
+  });
+
+  it('a settled brief the purge left unreadable keeps none of it after the trim', async () => {
     await withBook((book, _clock, sql) => {
       const { job: row } = book.create(job());
       sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Monday\",\"goal', '[forgotten]') WHERE id = ?", row.id);
       expect(() => JSON.parse(book.get(row.id)!.brief_json)).toThrow();
       expect(book.forget(['[forgotten]'])).toEqual([row.id]);
+      book.trim();
       expect(book.get(row.id)).toMatchObject({ status: 'cancelled', brief_json: '{}' });
     });
   });
