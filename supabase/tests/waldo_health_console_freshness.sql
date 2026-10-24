@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(56);
+select plan(57);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -147,7 +147,11 @@ select is((select count(*)::int from waldo.health_ingest_refusals where owner_id
 
 -- Withdrawing storage purges the owner's counts. They are not kept by source, so all of them go; a model-processing
 -- withdrawal keeps them.
-select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3')>0,true,'the earlier model-processing withdrawal kept the counts');
+create temp table hf_before as select count(*)::int as n from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3';
+select pg_temp.h('consent_grant','hf-owner-b',jsonb_build_object('request_id','hf-grant-samsung-s','source','samsung','purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true)::text);
+select pg_temp.h('consent_grant','hf-owner-b',jsonb_build_object('request_id','hf-grant-samsung-m','source','samsung','purpose','model_processing','version',2,'expected_epoch',0,'age_attested_18_plus',true)::text);
+select is(pg_temp.h('consent_withdraw','hf-owner-b',jsonb_build_object('request_id','hf-withdraw-samsung-m','source','samsung','purpose','model_processing','expected_epoch',1)::text)->'consent'->>'status','withdrawn','the model-processing withdrawal itself went through');
+select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3'),(select n from hf_before where n > 0),'a model-processing withdrawal keeps the counts');
 select pg_temp.h('consent_withdraw','hf-owner-b',jsonb_build_object('request_id','hf-withdraw-apple-s','source','apple','purpose','storage_compute','expected_epoch',1)::text);
 select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='b3000000-0000-0000-0000-0000000000f3'),0,'withdrawing storage purges the owner''s refusal counts');
 select is((select count(*)::int from waldo.health_ingest_refusals where owner_id='a3000000-0000-0000-0000-0000000000f3'),2,'and no other owner''s');
