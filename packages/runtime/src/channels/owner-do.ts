@@ -90,6 +90,7 @@ import { consoleAuth, fromAnotherSite, OWNER_COOKIE, presenceRecheck, type Owner
 import { consoleStepUpRefusal } from './console-step-up';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
+import { adminSpendFor } from './admin-spend';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, clearConsoleCookie, consoleAccess, consoleCookie, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_START_PATH, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
@@ -1983,10 +1984,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const work=async():Promise<Response>=>{
           const session=await access.session(sessionCookie(request), renews);
           if(!session)return Response.json({error:'sign_in_required'},{status:401,headers:DASHBOARD_OVERVIEW_HEADERS});
-          const counterKey=`console:controls-rate:${actionsRoute?'action':'read'}`,now=Date.now(),counter=this.ctx.storage.kv.get<{start:number;count:number}>(counterKey);
-          const current=counter&&now-counter.start<60000?counter:{start:now,count:0};
-          if(current.count>=(actionsRoute?20:90))return Response.json({error:'rate_limited'},{status:429,headers:{...DASHBOARD_OVERVIEW_HEADERS,'retry-after':'60'}});
-          this.ctx.storage.kv.put(counterKey,{...current,count:current.count+1});
+          const limited=this.consoleRateLimited(actionsRoute?'action':'read');
+          if(limited)return limited;
           if(ownerControlsRoute||ownerActionsRoute){
             const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())};
             let response:Response;
@@ -2078,8 +2077,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     }
     const jsonAdmin = request.headers.get('accept') === 'application/json';
+    // The admin read, JSON or page, asks the directory for every owner's records and spend: it is GET only, and spends the
+    // console read budget.
+    if (url.pathname === CONSOLE_ADMIN_PATH) {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: { ...DASHBOARD_OVERVIEW_HEADERS, allow: 'GET' } });
+      const limited = this.consoleRateLimited('read');
+      if (limited) return limited;
+    }
     if (url.pathname === CONSOLE_ADMIN_PATH && jsonAdmin) {
-      if (request.method !== 'GET') return new Response('method not allowed', {status:405, headers:DASHBOARD_OVERVIEW_HEADERS});
       return adminRead(consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'), session.csrf);
     }
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST' && jsonAdmin) {
@@ -2109,7 +2114,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (url.pathname === CONSOLE_ADMIN_PATH) {
       const overview = admin && doName ? await admin.adminOverview(doName) : null;
-      return overview ? new Response(renderAdmin(overview, session.csrf), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } }) : new Response('not found', { status: 404 });
+      return admin && doName && overview ? new Response(renderAdmin(overview, session.csrf, await adminSpendFor(admin, doName, overview)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } }) : new Response('not found', { status: 404 });
     }
     if (url.pathname === CONSOLE_FILE_PATH) return (await openFile(Number(url.searchParams.get('id')))) ?? new Response(NOTICES['file.unavailable'], { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
@@ -2523,6 +2528,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const subject=this.ctx.storage.kv.get<string>('telegram_subject'),doName=this.ctx.storage.kv.get<string>('do_name');
     if(!subject || !doName || Number(subject)!==runtime.owner)throw new Error('owner_binding_closed');
     await runtime.finalOutbox.enqueueFenced({id:`device-${rowId}`,trace,payload:{chat_id:runtime.owner,text},ownerSubject:subject,doName,bot:this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]},work=>this.ctx.storage.transactionSync(()=>{work();inbox.finish(rowId);}));
+  }
+
+  // A fixed one-minute window per owner DO: 90 console reads, 20 console actions.
+  private consoleRateLimited(kind: 'read' | 'action'): Response | null {
+    const key = `console:controls-rate:${kind}`, now = Date.now(), counter = this.ctx.storage.kv.get<{ start: number; count: number }>(key);
+    const current = counter && now - counter.start < 60000 ? counter : { start: now, count: 0 };
+    if (current.count >= (kind === 'action' ? 20 : 90)) return Response.json({ error: 'rate_limited' }, { status: 429, headers: { ...DASHBOARD_OVERVIEW_HEADERS, 'retry-after': '60' } });
+    this.ctx.storage.kv.put(key, { ...current, count: current.count + 1 });
+    return null;
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
