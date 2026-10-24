@@ -3,6 +3,9 @@ project_id = "oqcjjcytjvrckvylagsl"
 [api]
 schemas = ["public", "graphql_public", "waldo"]
 
+[auth.email]
+otp_length = 6
+
 [auth.email.template.magic_link]
 subject = "Your Waldo sign-in code"
 content_path = "./supabase/templates/magic_link.html"
