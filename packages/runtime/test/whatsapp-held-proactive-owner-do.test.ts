@@ -100,7 +100,7 @@ const owned = async (name: string, script: (steps: Readonly<{
   // The Midday card falls due now, as a card that is queued and then armed again later does.
   midday(): Promise<void>;
   expiryOf(card: string): number | undefined;
-  forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  forget(kind: 'spot', text: string): Promise<boolean | string>;
   planned(): { sent: boolean; state?: string } | undefined;
   // Marks the Brief held for quiet hours, as a crash between queuing it and recording it waiting leaves it.
   markHeld(): void;
@@ -183,10 +183,9 @@ const owned = async (name: string, script: (steps: Readonly<{
         folded: () => state.storage.sql.exec<{ folded: number }>('SELECT folded FROM update_cards ORDER BY id').toArray().map(row => row.folded),
         forget: async (kind, text) => {
           const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
-          if (kind === 'node') state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work',?,'synthetic',0.5,'active','now','now','[]')", text);
-          else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
-          const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims()[0]!.id;
-          const runtime = (owner as unknown as { setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } }).setup('whatsapp');
+          memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          const id = memory.claims()[0]!.id;
+          const runtime = (owner as unknown as { setup(channel: string): { act(input: { action: 'spot.forget'; id: string; value: string }): Promise<boolean | string> } }).setup('whatsapp');
           return runtime.act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
         arrived: async () => {
@@ -299,7 +298,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
-  it.each(['node', 'spot'] as const)('never sends a waiting day card that carries something the owner then forgot (%s)', async kind => {
+  it.each(['spot'] as const)('never sends a waiting day card that carries something the owner then forgot (%s)', async kind => {
     await owned(`wa-held-day-card-forget-${kind}`, async ({ alarms, reply, card, planned, outbox, forget }) => {
       await card();
       await alarms(3);

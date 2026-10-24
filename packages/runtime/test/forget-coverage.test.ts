@@ -25,7 +25,6 @@ const survivors = (sql: SqlStorage): Record<string, number> => {
     memory_backups: count('memory_backups', 'payload'),
     legacy_spots: count('spots', "text || ' ' || evidence"),
     legacy_core_files: count('core_file_revisions', 'content'),
-    constellation_nodes: count('constellation_nodes', "label || ' ' || summary || ' ' || supporting_spots"),
   };
 };
 
@@ -48,7 +47,6 @@ describe('forget coverage', () => {
       episodes.add('entry-1', 'owner', `remember: ${CLAIM_TEXT}`, Date.parse(AT));
       sql.exec(`INSERT INTO spots (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'legacy spot', ?, ?)`, CLAIM_TEXT, AT, AT);
       sql.exec(`INSERT INTO core_file_revisions (file, revision, content, reason, created_at) VALUES ('NOTES.md', 1, ?, 'owner edit', ?)`, `notes: ${CLAIM_TEXT}`, AT);
-      const nodeId = store.saveNode({ id: null, domain: 'habits', label: 'code words', summary: `echoes: ${CLAIM_TEXT}`, strength: 0.5, status: 'active', supporting_spots: [claimId] }, AT);
       store.backup('test-backup', { note: `payload: ${CLAIM_TEXT}` }, AT);
 
       // The real model-facing forget path.
@@ -57,7 +55,7 @@ describe('forget coverage', () => {
       }), AT, 'owner agreed', undefined, undefined, true);
 
       expect(survivors(sql)).toEqual({
-        claims: 0, episodes_fts: 0, memory_backups: 0, legacy_spots: 0, legacy_core_files: 0, constellation_nodes: 0,
+        claims: 0, episodes_fts: 0, memory_backups: 0, legacy_spots: 0, legacy_core_files: 0,
       });
       // Append-only contract: the episode row was redacted in place, never deleted.
       expect(episodes.count()).toBe(1);
@@ -71,10 +69,6 @@ describe('forget coverage', () => {
       }), AT, 'owner agreed', undefined, undefined, true);
       expect(relearn).toContain('held1');
       expect(store.claims()).toEqual([]);
-      // The node survives (it is not forgotten) but no longer quotes the claim or references its id.
-      const node = store.nodes().find((row) => row.id === nodeId);
-      expect(node).toBeDefined();
-      expect(JSON.parse(node!.supporting_spots)).not.toContain(claimId);
       // The barrier blocks re-admission WITHOUT keeping the text: the topic is the marker and
       // the fingerprint is the exact-match guard. Anything else would leak the text back into
       // every model prompt (barriers ride every memory pass).

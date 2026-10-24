@@ -41,7 +41,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
@@ -358,22 +358,8 @@ export const createOwnerResponder = (
     }
     return out as T;
   };
-  // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
-  const promptNodes = (held: readonly string[]) => {
-    const holds = holdsIn(held);
-    const all = memory!.allClaims();
-    const known = new Set(all.map(claim => claim.id));
-    const withheld = new Set(all
-      .filter(claim => holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
-    // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like unreadable support.
-    const holding = held.length > 0;
-    const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
-    return memory!.nodes().filter(node => !holds(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
-  };
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
-    nodes: () => promptNodes(heldTopics()),
-    edges: () => { const held = heldTopics(); const holds = holdsIn(held); const kept = new Set(promptNodes(held).map(node => node.id)); return memory!.edges().filter(edge => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge))); },
     claims: status => { const holds = holdsIn(heldTopics()); return memory!.claims(status).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
     recall: (query, limit) => { const holds = holdsIn(heldTopics()); return memory!.recall(query, limit).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
   });
@@ -964,20 +950,6 @@ export const createOwnerResponder = (
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
-    },
-    async promote(trace) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace));
-      if (asOwner !== undefined) return asOwner;
-      if (!memory || memory.claims().length === 0) return 'no claims';
-      // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
-      const visible = promptMemory()!;
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(visible), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
-      await assertFresh();
-      return applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
-        trace, hop: 'constellation_evidence', ms: 0, ok: true,
-        code: receipt.reason ?? receipt.outcome,
-        detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
-      }));
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))

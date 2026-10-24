@@ -31,7 +31,6 @@ vi.mock('../src/channels/telegram-turn', async load => {
         .filter(([, quote]) => conversation.includes(quote!)).map(([text, quote]) => ({ kind: 'fact', text, source: 'stated', evidence: `"${quote}"`, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }));
       return done(JSON.stringify({ add, corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null }));
     }
-    if (format === 'promotion') return done('{"nodes":[],"edges":[],"promoted":[]}');
     return done('{}');
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };

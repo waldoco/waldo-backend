@@ -84,7 +84,7 @@ describe('owner harness', () => {
       const checklist = book.checklist('Asia/Kolkata');
       expect(checklist).toContain('[x] Chat reply: ok at 2026-09-23 10:00');
       expect(checklist).toContain('[!] Memory update: failed at 2026-09-23 10:00 - bad json');
-      expect(checklist).toContain('[ ] Constellation promotion: not seen');
+      expect(checklist).toContain('[ ] Nightly memory: not seen');
     });
   });
 

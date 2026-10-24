@@ -281,16 +281,6 @@ describe('owner console', () => {
     expect(html).not.toContain('href="https://evil.example');
   });
 
-  it('labels constellation links tentative and lists supporting claim ids', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'constellation');
-    if (SAMPLE_CONSOLE_VIEW.nodes.length) {
-      expect(html).toContain('Tentative association');
-      expect(html).toContain('supporting spots');
-      expect(html).toContain('uncalibrated estimate');
-      expect(html).toContain('Tentative link');
-    }
-  });
-
   it('marks spots grounded only in shared content', () => {
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots');
@@ -303,7 +293,7 @@ describe('owner console', () => {
     // danger: a failed removal must stand out, not render as a default sand chip
     expect(html).toContain('chip danger">Removal incomplete');
     // good: settled positive states only (a promoted spot, a sent card)
-    expect(html).toContain('chip good">In constellation');
+    expect(html).toContain('chip good">Promoted');
     // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
     expect(html).toContain('chip provisional">Waldo&#39;s inference');
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
@@ -393,7 +383,7 @@ describe('owner console', () => {
 
   it('renders every page with working controls and escapes stored text', () => {
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
-    const byPage: Readonly<Record<string, string>> = { setup: 'checklist', waiting: 'approvals', connections: 'connections', spots: 'spots', constellation: 'constellation', day: 'day', memory: 'memory', usage: 'usage', activity: 'activity', account: 'account' };
+    const byPage: Readonly<Record<string, string>> = { setup: 'checklist', waiting: 'approvals', connections: 'connections', spots: 'spots', day: 'day', memory: 'memory', usage: 'usage', activity: 'activity', account: 'account' };
     for (const [slug, id] of Object.entries(byPage)) expect(renderConsole(view, slug)).toContain(`id="${id}"`);
     const spots = renderConsole(view, 'spots');
     expect(spots).toContain('&#60;script&#62;x&#60;/script&#62;');

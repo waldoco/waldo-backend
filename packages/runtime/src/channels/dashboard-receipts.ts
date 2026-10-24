@@ -8,7 +8,6 @@ export const DASHBOARD_RECEIPT_KEYS = Object.keys(NOTICES);
 type Outcome = 'applied' | 'incomplete' | 'failed';
 const OUTCOME: Readonly<Record<string, Outcome>> = {
   'spot.forget.incomplete': 'incomplete',
-  'node.forget.incomplete': 'incomplete',
   'google.connect.failed': 'failed', 'card.unreadable.failed': 'failed', 'file.unavailable': 'failed', invalid: 'failed',
 };
 

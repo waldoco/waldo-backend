@@ -5,7 +5,7 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 // KNOWN GAP (docs/planning/FORGET_COVERAGE_AUDIT_2026-10-02.md): claimStore.purge verifies and
-// redacts claims, episodes, backups, spots, core files, cards, day plan and constellation nodes.
+// redacts claims, episodes, backups, spots, core files, cards and day plan.
 // It does not look at the tracer/scheduler tables below, which store free text (candidate_json,
 // outbox payload, schedule payload_json). `it.fails` records the gap without weakening anything:
 // when purge covers these stores this test starts passing, `it.fails` turns red, and the owner of

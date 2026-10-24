@@ -96,7 +96,7 @@ const owned = async (name: string, script: (steps: Readonly<{
   shown(id: string): Shown[];
   held(): string[];
   // A console forget of a memory that names the text, as a stated fact (spot) or a pattern (node).
-  forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  forget(kind: 'spot', text: string): Promise<boolean | string>;
   // A forget the purge has not finished: a fact naming the text, still waiting to be cleaned from every store.
   purging(text: string): void;
   // A reminder due now: its turn is the next owner turn that finishes an unfinished forget, with the card still waiting.
@@ -122,7 +122,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     let seq = 0;
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>; whatsappInflight: Set<Promise<void>>;
-      setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
+      setup(channel: string): { act(input: { action: 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const replyFrom = async (subject: string, text: string) => {
       seq += 1;
       const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
@@ -145,9 +145,8 @@ const owned = async (name: string, script: (steps: Readonly<{
         reply: text => replyFrom(SUBJECT, text),
         replyFrom: (subject, text) => replyFrom(subject, text),
         forget: async (kind, text) => {
-          if (kind === 'node') state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work',?,'synthetic',0.5,'active','now','now','[]')", text);
-          else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
-          const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims().find(row => row.text === text)!.id;
+          memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          const id = memory.claims().find(row => row.text === text)!.id;
           return internals.setup('whatsapp').act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
         purging: text => {
@@ -245,7 +244,7 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
 });
 
 describe('a waiting approval card the owner may no longer be shown', { timeout: 30_000 }, () => {
-  it.each(['spot', 'node'] as const)('is never sent after a console forget (%s) that names it', async kind => {
+  it.each(['spot'] as const)('is never sent after a console forget (%s) that names it', async kind => {
     await owned(`wa-held-approval-forget-${kind}`, async ({ alarms, order, reply, forget, approvals }) => {
       await order();
       await alarms(4);

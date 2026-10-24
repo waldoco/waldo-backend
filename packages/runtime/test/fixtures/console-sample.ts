@@ -26,12 +26,6 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   retiredSpots: [spot(2, 'preference', 'Gym at 7am', 'inferred', 'one turn', 1, '21', 'dismissed'), spot(1, 'pattern', 'Late calls most weeks', 'stated', 'calendar', 4, '22', 'promoted')],
   forgettingSpots: [spot(7, 'fact', 'Old phone number ending 4123', 'stated', 'you said on 19 Sep', 1, '19', 'purging')],
   holds: [{ id: 1, kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }],
-  nodes: [
-    { id: 1, domain: 'work rhythm', label: 'Late calls', summary: 'Calls after 10pm, 2-3 times a week', strength: 0.7, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[1]' },
-    { id: 2, domain: 'sleep', label: 'Short sleep', summary: 'Under 6 hours on those nights', strength: 0.6, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[4]' },
-    { id: 3, domain: 'energy', label: 'Slow mornings', summary: 'Low energy before noon', strength: 0.35, status: 'stale', first_seen: iso('20'), last_confirmed: iso('20'), supporting_spots: '[]' },
-  ],
-  edges: [{ from_id: 1, to_id: 2, relation: 'tends to precede', strength: 0.55, evidence_count: 3 }, { from_id: 2, to_id: 3, relation: 'worsens', strength: 0.4, evidence_count: 2 }],
   cards: [
     { id: 'card:brief', name: 'The Brief', defaultTime: '08:00', time: '08:30', reason: 'gym at 11, first call at 10', sent: true, pin: null },
     { id: 'card:midday', name: 'Check-in', defaultTime: '14:00', time: '14:00', reason: 'default time', sent: true, pin: null },
@@ -48,7 +42,6 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     step('Chat reply', '2026-09-23 22:40'), step('Memory update', '2026-09-23 22:40', '+1 held0 seen1 confirmed0 dismissed0 forgot0'),
     step('Reminder fired', '2026-09-23 22:45'), step('Day plan', '2026-09-23 03:00'), step('Brief / midday / close card', '2026-09-23 14:00', 'card:midday'),
     step('Fetch update card', null), step('Pre-event brief', '2026-09-23 09:50', 'google not connected', 'failed'), step('Nightly memory', '2026-09-23 03:00', '12 turns; MEMORY_CORE'),
-    step('Constellation promotion', '2026-09-23 03:00', 'nodes2 edges1 promoted1'),
   ],
   lastRequest: null,
   trace: [

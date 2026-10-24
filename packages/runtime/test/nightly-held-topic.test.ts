@@ -1,5 +1,5 @@
 // A forget that has not finished withholds only what carries its topic: the nightly pass still runs and learns from every
-// other turn, and neither the consolidation model nor the promotion model ever reads the held topic. A pending topic whose
+// other turn, and the consolidation model never reads the held topic. A pending topic whose
 // stores now verify clean finishes on the next turn with no new forget, and unrelated words survive. Synthetic topics only.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -21,7 +21,7 @@ const HELD = 'Green tea after lunch settles me';
 const UNRELATED = 'The team holds steady instead of rushing';
 // The topic spelled with a JSON escape: the literal purge cannot reach this copy, so the forget genuinely stays pending.
 const ESCAPED_COPY = `{"note":"green ${String.fromCharCode(92)}u0074ea"}`;
-const model = vi.hoisted(() => ({ nights: [] as string[], promotions: [] as string[] }));
+const model = vi.hoisted(() => ({ nights: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -34,17 +34,15 @@ vi.mock('../src/channels/telegram-turn', async load => {
       const add = (said.split('<conversation>')[1]?.split('</conversation>')[0] ?? '').includes('I swim every Friday before work') ? [{ kind: 'fact', text: 'Swims every Friday before work', source: 'stated', evidence: '"I swim every Friday before work"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] : [];
       return done(JSON.stringify({ add, corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null }));
     }
-    if (format === 'promotion') { model.promotions.push(said); return done('{"nodes":[],"edges":[],"promoted":[]}'); }
     return done('{}');
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const openai = vi.hoisted(() => ({ inputs: [] as string[], promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
+const openai = vi.hoisted(() => ({ inputs: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const input = JSON.stringify(body);
   openai.inputs.push(input);
-  const output_text = input.includes('"name":"promotion"') ? openai.promotion : 'Done';
-  return { id: 'fixture', output_text, output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+  return { id: 'fixture', output_text: 'Done', output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
@@ -53,7 +51,7 @@ const OWNER_ID = '5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d';
 const NOW = Date.parse('2026-10-22T21:46:00Z');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.nights = []; model.promotions = []; openai.inputs = []; openai.promotion = '{"nodes":[],"edges":[],"promoted":[]}';
+  model.nights = []; openai.inputs = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -123,7 +121,6 @@ describe('the nightly pass with a forget still pending', () => {
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 3 * HOUR);
       // A copy the purge cannot reach keeps the forget pending.
       expect(memory.pendingTopics()).toEqual(['tea']);
-      expect(model.promotions.join('\n')).not.toMatch(/green tea/i);
     });
   });
 
@@ -197,30 +194,6 @@ describe('a withheld turn after its forget finishes', () => {
 
 describe('the owner turn with a forget still pending', () => {
   const timer = <T>(_name: string, work: () => Promise<T>) => work();
-  it('promotion never reads a claim or node that carries the held topic', async () => {
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('promote-held-topic')), async (_i, state) => {
-      const memory = claimStore(state.storage.sql);
-      memory.add({ kind: 'observation', text: 'Has green tea after lunch', source: 'stated', evidence: 'green tea after lunch', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-19T08:00:00Z');
-      memory.add({ kind: 'observation', text: 'The team holds steady', source: 'stated', evidence: 'The team holds steady', origin: 'owner', source_ref: 'owner, app-2' }, '2026-10-20T08:00:00Z');
-      memory.saveNode({ id: null, domain: 'food', label: 'Afternoon tea', summary: 'Tea after lunch', strength: 0.5, status: 'active', supporting_spots: [1] }, '2026-10-20T08:00:00Z');
-      holdTopic(state.storage.sql, 'tea', '2026-10-18T08:00:00Z');
-      await createOwnerResponder('fixture', undefined, memory).promote('promote-1');
-      const promotion = openai.inputs.find(input => input.includes('"name":"promotion"'))!;
-      expect(promotion).toContain('The team holds steady');
-      expect(promotion).not.toMatch(/\btea\b/i);
-    });
-  });
-  it('promotion cannot build a node on held claims even when it names them', async () => {
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('promote-held-cited')), async (_i, state) => {
-      const memory = claimStore(state.storage.sql);
-      memory.add({ kind: 'observation', text: 'Has green tea after lunch', source: 'stated', evidence: 'green tea after lunch', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-19T08:00:00Z');
-      memory.add({ kind: 'observation', text: 'Tea again after dinner', source: 'stated', evidence: 'tea again after dinner', origin: 'owner', source_ref: 'owner, app-2' }, '2026-10-20T08:00:00Z');
-      holdTopic(state.storage.sql, 'tea', '2026-10-18T08:00:00Z');
-      openai.promotion = JSON.stringify({ nodes: [{ id: null, domain: 'food', label: 'Evening ritual', summary: 'A warm drink after meals', strength: 0.7, status: 'active', supporting_spots: [1, 2], durable: true, reason: 'two days' }], edges: [], promoted: [] });
-      expect(await createOwnerResponder('fixture', undefined, memory).promote('promote-2')).toContain('nodes0');
-      expect(memory.nodes()).toEqual([]);
-    });
-  });
   it('a pending short topic whose stores now verify clean finishes on the next turn, and unrelated words survive', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('recover-held-topic')), async (_i, state) => {
       const sql = state.storage.sql;

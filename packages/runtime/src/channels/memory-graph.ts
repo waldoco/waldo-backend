@@ -31,11 +31,11 @@ export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Ro
  return{version:1 as const,state:input.unavailable?'unavailable' as const:partial?'partial' as const:'available' as const,complete:!partial&&!input.unavailable,claims,nodes,associations,unavailable_claim_count:suppressed.length,actions:[] as string[]};
 };
 export const readMemoryGraph=(sql:Pick<SqlStorage,'exec'>,scope:string)=>{
- const tables=new Set(sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('claims','constellation_nodes','constellation_edges','purge_pending')").toArray().map(r=>r.name));
+ const tables=new Set(sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('claims','purge_pending')").toArray().map(r=>r.name));
  const read=(name:string):Row[]=>tables.has(name)?sql.exec<Record<string,SqlStorageValue>>(`SELECT * FROM ${name}`).toArray():[];
  if(!tables.has('purge_pending'))return projectMemoryGraph({scope,claims:[],nodes:[],edges:[],complete:false,unavailable:!tables.has('claims')});
  const claims=read('claims');const pending=new Set(read('purge_pending').map(r=>r.claim_id));
  const safe=claims.map(c=>pending.has(c.id)?{...c,status:'purging'}:c);
- const purgeKnown=tables.has('purge_pending');
- return projectMemoryGraph({scope,claims:safe,nodes:purgeKnown?read('constellation_nodes'):[],edges:purgeKnown?read('constellation_edges'):[],purgePending:pending.size>0,complete:['claims','constellation_nodes','constellation_edges','purge_pending'].every(t=>tables.has(t)),unavailable:!tables.has('claims')});
+ // The graph is retired: claims stay, and interpretations and associations are always empty.
+ return projectMemoryGraph({scope,claims:safe,nodes:[],edges:[],purgePending:pending.size>0,complete:tables.has('claims'),unavailable:!tables.has('claims')});
 };

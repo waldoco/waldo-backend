@@ -63,7 +63,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Call = (method: string, path: string, body?: unknown) => Promise<Readonly<{ status: number; body: any }>>;
-type ConsoleAction = Readonly<{ action: 'spot.forget' | 'node.forget'; id: string; value: string }>;
+type ConsoleAction = Readonly<{ action: 'spot.forget'; id: string; value: string }>;
 type Owner = Readonly<{
   call: Call; state: DurableObjectState; thread(title?: string): Promise<string>; say(path: string, client: string, text: string, revision?: number): Promise<void>; op(): string;
   act(input: ConsoleAction): Promise<boolean | string>;
@@ -248,15 +248,13 @@ describe('titles and erasure', () => {
     });
   });
 
-  it('the console\'s forgets, of a spot and of a pattern, reach thread titles too', async () => {
+  it('the console\'s spot forget reaches thread titles too', async () => {
     await withOwner('titles-console-forget', async ({ call, state, thread, act }) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
       memory.add({ kind: 'fact', text: 'Keeps a copper lantern in the shed', source: 'stated', evidence: '"copper lantern"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');
-      state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work','harbor fund','synthetic',0.5,'active','now','now','[]')");
-      const lantern = await thread('Keeps a copper lantern in the shed'), fund = await thread('Harbor fund paperwork');
+      const lantern = await thread('Keeps a copper lantern in the shed');
       expect(await act({ action: 'spot.forget', id: String(memory.claims()[0]!.id), value: '' })).toBe(true);
-      expect(await act({ action: 'node.forget', id: String(memory.nodes()[0]!.id), value: '' })).toBe(true);
-      expect([(await listed(call, lantern))!.title, (await listed(call, fund))!.title]).toEqual([FORGOTTEN, `${FORGOTTEN} paperwork`]);
+      expect((await listed(call, lantern))!.title).toBe(FORGOTTEN);
     });
   });
 
