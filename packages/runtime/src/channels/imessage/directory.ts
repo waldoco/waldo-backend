@@ -23,7 +23,7 @@ export type BridgeListing = Readonly<{
 }>;
 
 /** What enrolling an owner with Photon needs, and their current enrollment. */
-export type EnrollmentContext = Readonly<{ email: string; phone: string | null; enrollment: Readonly<{ phone: string; assignedNumber: string; photonUserId: string }> | null }>;
+export type EnrollmentContext = Readonly<{ email: string; phone: string | null; phoneVerified: boolean; enrollment: Readonly<{ phone: string; assignedNumber: string; photonUserId: string }> | null }>;
 
 export class IMessageDirectoryUnavailable extends Error { constructor() { super('imessage_directory_unavailable'); } }
 
@@ -100,7 +100,7 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
       if (r === null) return null;
       const row = r as Record<string, unknown> | null, e = row?.enrollment as Record<string, unknown> | null | undefined;
       if (!row || typeof row !== 'object' || !str(row.email)) throw new IMessageDirectoryUnavailable();
-      return { email: row.email, phone: nullable(row.phone),
+      return { email: row.email, phone: nullable(row.phone), phoneVerified: row.phone_verified === true,
         enrollment: e && str(e.phone) && str(e.assigned_number) && str(e.photon_user_id) ? { phone: e.phone, assignedNumber: e.assigned_number, photonUserId: e.photon_user_id } : null };
     },
     async enrollmentRecord(doName: string, environment: string, phone: string, photonUserId: string, assignedNumber: string, photonCreated: boolean)
