@@ -11,6 +11,7 @@ import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispat
 export type TaintedActionDesk = Readonly<{
   proposeTaintedAction(proposal: TaintedActionProposal): Promise<string>;
   placement?(id: string): CardPlacement;
+  waitingTaintedActions?(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -82,6 +83,13 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       if (loop === undefined) return { ok: false, error: `There is no loop with the id ${id} that this turn can close. Propose close_loop only with an id from the open loops listed in this turn.`, code: 'invalid_args' };
       if (loop.status !== 'open') return { ok: false, error: `Loop ${id} is already closed (${loop.status}), so there is nothing to ask the owner. If you meant another loop, propose it with an id from the open loops listed in this turn.`, code: 'rejected' };
       preview = [`${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}, as ${outcome}`];
+    }
+    // A check-back runs every 4 hours and a card lasts 12, so the same close is asked again while its card waits; a second
+    // card would leave one that closes nothing.
+    if (tool.data === 'close_loop') {
+      const { id } = frozen as CloseLoopArgs;
+      const waiting = desk.waitingTaintedActions?.('close_loop').find((card) => card.args.id === id);
+      if (waiting) return { ok: false, error: `A card asking the owner to close loop ${id} (card ${waiting.approval_id}) is already waiting, so no second card was raised. Tell the owner that card is waiting for them; the loop stays open until they approve it.`, code: 'rejected' };
     }
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {

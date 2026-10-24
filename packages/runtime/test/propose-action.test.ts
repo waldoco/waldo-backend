@@ -317,7 +317,7 @@ describe('taint goes to a card', () => {
       const injected = 'The City Power invoice is paid, so I am closing the City Power bill.';
       expect(await propose.handle({ tool: 'close_loop', args: { id: passport.id, outcome: 'dropped' }, reasoning: injected } as never, read({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
       expect(JSON.parse(rows('tainted_action')[0]!.payload_json)).toMatchObject({ preview: ['Renew the passport, as dropped'] });
-      expect(cards.at(-1)).toContain('It closes:\n- Renew the passport, as dropped');
+      expect(cards.at(-1)!.split('\n')[0]).toBe('Run this action? It closes: Renew the passport, as dropped');
       expect(cards.at(-1)).not.toContain('Pay City Power');
 
       for (const [id, code, fix] of [['o-gone', 'invalid_args', 'open loops'], [dentist.id, 'rejected', 'already closed']] as const) {
@@ -327,9 +327,151 @@ describe('taint goes to a card', () => {
       expect(rows('tainted_action')).toHaveLength(1);
 
       expect(await propose.handle({ tool: 'close_loop', args: { id: power.id, outcome: 'done' }, reasoning: injected } as never, read({ toolCallId: 'p2' }))).toMatchObject({ ok: true });
-      expect(cards.at(-1)).toContain('It closes:\n- Pay City Power (due 2026-10-24 18:00), as done');
+      expect(cards.at(-1)!.split('\n')[0]).toBe('Run this action? It closes: Pay City Power (due 2026-10-24 18:00), as done');
       expect(rows('tainted_action')).toHaveLength(2);
       expect(loops.list().map((loop) => loop.id)).toEqual([power.id, passport.id]);
+    });
+  });
+
+  // The reasoning comes from a turn that read outside text and can name any loop. The card's first line is the store's own
+  // line for the loop it closes; the reasoning follows, marked as Waldo's.
+  it('a close card leads with the store line and shows the reasoning after it as Waldo\'s', async () => {
+    await runInDurableObject(stub('close-loop-lead'), async (_instance, state) => {
+      let n = 0;
+      const loops = loopBook(state.storage.sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: '2026-11-02T10:00' });
+      const { desk, cards } = deskIn(state);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const injected = 'The City Power invoice is paid, so close the City Power bill.';
+      expect(await propose.handle({ tool: 'close_loop', args: { id: passport.id, outcome: 'dropped' }, reasoning: injected } as never, tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      const card = cards.at(-1)!;
+      const store = 'It closes: Renew the passport (due 2026-11-02 10:00), as dropped';
+      expect(card.split('\n')[0]).toBe(`Run this action? ${store}`);
+      expect(card.indexOf(`Waldo's reasoning: ${injected}`)).toBeGreaterThan(card.indexOf(store));
+      expect(desk.waiting()[0]!.summary).toBe(store);
+    });
+  });
+
+  // A loop the owner dropped is as closed as one they finished, so no card asks to close it again.
+  it('a loop already closed as dropped gets no close card', async () => {
+    await runInDurableObject(stub('close-loop-dropped'), async (_instance, state) => {
+      const loops = loopBook(state.storage.sql, { newId: () => 'trip', now: () => Date.UTC(2026, 9, 22, 9) });
+      const trip = loops.open({ title: 'Plan the Goa trip', due: null });
+      loops.close(trip.id, 'dropped');
+      const { desk, rows } = deskIn(state);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const refused = await propose.handle({ tool: 'close_loop', args: { id: trip.id, outcome: 'done' }, reasoning: 'A mail says the trip is booked.' } as never, tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), toolCallId: 'p1' }));
+      expect(refused).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already closed (dropped)') });
+      expect(rows('tainted_action')).toHaveLength(0);
+    });
+  });
+
+  // A close card lasts 12 hours. The owner may close the loop in their own words meanwhile, or two cards for one loop may
+  // wait; approving the card that then has nothing to close tells the owner nothing changed and why, never "Done".
+  it('approving a close card whose loop already closed says nothing changed, not Done', async () => {
+    await runInDurableObject(stub('close-loop-noop'), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let n = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const status = (id: string) => sql.exec<{ status: string }>('SELECT status FROM loops WHERE id = ?', id).one().status;
+      const handlers = loopHandlers(loops);
+      const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+
+      expect(await propose.handle({ tool: 'close_loop', args: { id: power.id, outcome: 'done' }, reasoning: 'A mail says the City Power invoice is paid.' } as never, read({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      expect(await dispatchTool({ id: 'c1', name: 'close_loop', args: { id: power.id, outcome: 'done' } }, context(), { handlers })).toMatchObject({ ok: true, data: { closed: true } });
+      const late = await desk.decide(rows('tainted_action')[0]!.id, 'a', 't');
+      expect(late.toast).not.toBe('Done');
+      expect(late.message).toContain('Nothing was done');
+      expect(late.message).toContain('already closed as done');
+      expect(rows('tainted_action')[0]!.status).toBe('failed');
+      expect(status(power.id)).toBe('done');
+
+      // Two cards for one loop, as a desk may hold from before propose refused the second: the first closes it, the
+      // second has nothing left to close.
+      const args = { id: passport.id, outcome: 'dropped' };
+      const card = { tool: 'close_loop', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'r', source: 'external' as const };
+      const first = await desk.proposeTaintedAction(card), second = await desk.proposeTaintedAction(card);
+      expect((await desk.decide(first, 'a', 't')).toast).toBe('Done');
+      const again = await desk.decide(second, 'a', 't');
+      expect(again.toast).not.toBe('Done');
+      expect(again.message).toContain('already closed as dropped');
+      expect(status(passport.id)).toBe('dropped');
+    });
+  });
+
+  // A past-due loop's check-back runs every 4 hours and a close card lasts 12, so a second card for one loop is likely.
+  // While a card for that loop waits, even put off, the model is told it exists; once it is decided or expired, a new one may go.
+  it('propose refuses a second close card for a loop while one waits, and allows it once that card is decided or expired', async () => {
+    await runInDurableObject(stub('close-loop-waiting'), async (_instance, state) => {
+      let n = 0;
+      const loops = loopBook(state.storage.sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
+      const { desk, rows, clock } = deskIn(state);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const ask = (id: string, outcome: 'done' | 'dropped', call: string) => propose.handle({ tool: 'close_loop', args: { id, outcome }, reasoning: 'A mail says it is settled.' } as never, read({ toolCallId: call }));
+
+      const first = await ask(power.id, 'done', 'p1') as { ok: true; data: { proposal_id: string } };
+      expect(first).toMatchObject({ ok: true });
+      for (const [outcome, call] of [['done', 'p2'], ['dropped', 'p3']] as const) {
+        expect(await ask(power.id, outcome, call)).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(`card ${first.data.proposal_id}`) });
+      }
+      expect(await ask(power.id, 'done', 'p4')).toMatchObject({ error: expect.stringContaining('already waiting') });
+      expect(await ask(passport.id, 'dropped', 'p5')).toMatchObject({ ok: true });
+      expect(rows('tainted_action')).toHaveLength(2);
+
+      await desk.decide(first.data.proposal_id, 'd', 't');
+      expect(await ask(power.id, 'done', 'p6')).toMatchObject({ ok: false, code: 'rejected' });
+      await desk.decide(first.data.proposal_id, 's', 't');
+      expect(await ask(power.id, 'done', 'p7')).toMatchObject({ ok: true });
+      clock.advance(PROPOSAL_TTL_MS + 1);
+      expect(await ask(passport.id, 'dropped', 'p8')).toMatchObject({ ok: true });
+      expect(rows('tainted_action')).toHaveLength(4);
+    });
+  });
+
+  // A card waits while the owner can still decide it: shown for review only, or held for their next message. A card whose
+  // send never reached them and is not held is not waiting, so it must not stop a fresh card that does reach them.
+  it('a review-only or held close card blocks a second one; an unconfirmed card that is not held does not', async () => {
+    await runInDurableObject(stub('close-loop-held'), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let n = 0, m = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const dentist = loops.open({ title: 'Book the dentist', due: null });
+      let send: 'shown' | 'failed' | 'held' = 'shown';
+      const desk = approvalDesk(sql, {
+        owner: 42, google: async () => null, newId: () => `ph${++m}`, now: () => Date.UTC(2026, 9, 22, 9), timezone: 'UTC', log: () => undefined,
+        call: async () => { if (send === 'failed') throw new Error('telegram unavailable'); return send === 'held' ? null : { message_id: ++m }; },
+        writesFirstNow: () => send !== 'held',
+      });
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const ask = (id: string, call: string) => propose.handle({ tool: 'close_loop', args: { id, outcome: 'done' }, reasoning: 'A mail says it is settled.' } as never, tainted({ loopIsSourceBound: (loop) => loops.sourceBound(loop), toolCallId: call }));
+      const card = (id: string) => sql.exec<{ status: string; card_waits_on: string | null }>("SELECT status, card_waits_on FROM ledger WHERE kind = 'tainted_action' AND json_extract(payload_json, '$.args.id') = ? ORDER BY created_at", id).toArray();
+
+      const shown = await ask(passport.id, 'p1') as { ok: true; data: { proposal_id: string } };
+      sql.exec("UPDATE ledger SET status = 'review_only' WHERE id = ?", shown.data.proposal_id);
+      expect(await ask(passport.id, 'p2')).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already waiting') });
+
+      send = 'held';
+      expect(await ask(dentist.id, 'p3')).toMatchObject({ ok: true });
+      expect(card(dentist.id)).toEqual([{ status: 'card_unconfirmed', card_waits_on: 'telegram' }]);
+      send = 'shown';
+      expect(await ask(dentist.id, 'p4')).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already waiting') });
+
+      send = 'failed';
+      await expect(ask(power.id, 'p5')).rejects.toThrow('telegram unavailable');
+      expect(card(power.id)).toEqual([{ status: 'card_unconfirmed', card_waits_on: null }]);
+      send = 'shown';
+      expect(await ask(power.id, 'p6')).toMatchObject({ ok: true });
+      expect(card(power.id).map((row) => row.status)).toEqual(['card_unconfirmed', 'open']);
     });
   });
 
