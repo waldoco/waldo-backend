@@ -79,6 +79,14 @@ describe('app sign-in requests', () => {
     }
   });
 
+  it('verify accepts an optional phone in E.164, the number a new member joins with; nothing else is a phone', () => {
+    const body = { email: 'new@example.test', code: '123456', invite: 'ABCDEFGHJKMNPQRSTUVW' };
+    expect(appVerifyRequestV1Schema.safeParse({ ...body, phone: '+919876543210' }).success).toBe(true);
+    for (const phone of ['919876543210', '+91 98765 43210', '+0123456789', '+123456', '+1234567890123456', '', null, 9198765432])
+      expect({ phone, ok: appVerifyRequestV1Schema.safeParse({ ...body, phone }).success }).toEqual({ phone, ok: false });
+    expect(appCodeRequestSchema.safeParse({ email: 'new@example.test', phone: '+919876543210' }).success).toBe(false);
+  });
+
   it('refuse an invite code outside that alphabet or length; the app upper-cases and trims before sending', () => {
     for (const [schema, body] of requests)
       for (const invite of ['abcdefghjkmnpqrstuvw', 'ABCDEFGHJKMNPQRSTUV', 'ABCDEFGHJKMNPQRSTUVWX', 'IBCDEFGHJKMNPQRSTUVW', 'OBCDEFGHJKMNPQRSTUVW', '0BCDEFGHJKMNPQRSTUVW', '1BCDEFGHJKMNPQRSTUVW', ' ABCDEFGHJKMNPQRSTUVW', '', null])

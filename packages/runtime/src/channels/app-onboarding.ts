@@ -114,7 +114,11 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   }
   if (path === '/app/v1/consents') {
     const grant = appConsentGrantV1Schema.parse(body);
-    const result = host.transaction(() => { const outcome = host.consent.grant(grant.purpose, grant.version, host.now()); if (typeof outcome === 'object') host.consent.attestAge(host.now()); return outcome; });
+    const result = host.transaction(() => {
+      const outcome = host.consent.grant(grant.purpose, grant.version, host.now());
+      if (typeof outcome === 'object') { host.consent.attestAge(host.now()); host.firstRun.agreementsAccepted(); }
+      return outcome;
+    });
     if (result === 'stale_version' || result === 'not_offered') return problem(result);
     // The look-up is disclosed in the privacy notice, so it waits for the notice.
     if (result === 'notice_required') return problem('agreements_required');

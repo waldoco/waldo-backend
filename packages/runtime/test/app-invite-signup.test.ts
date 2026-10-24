@@ -12,7 +12,7 @@ const AUTH = '30000000-0000-0000-0000-000000000003', INVITE = 'ABCDEFGHJKLMNPQRS
 const directory = async (options: { inviteLive?: boolean; member?: string } = {}) => {
   const inviteHash = await linkCodeHash(INVITE);
   const invited = 'new.member@example.test', joined = `owner-${crypto.randomUUID()}`;
-  const state = { inviteLive: options.inviteLive ?? true, owners: new Map<string, string>(options.member ? [[options.member, `owner-${crypto.randomUUID()}`]] : []), otp: [] as string[], signups: [] as Record<string, unknown>[], live: new Set<string>(), codes: new Set<string>([invited, options.member].filter(Boolean).map(email => `${email}:123456`)) };
+  const state = { inviteLive: options.inviteLive ?? true, owners: new Map<string, string>(options.member ? [[options.member, `owner-${crypto.randomUUID()}`]] : []), otp: [] as string[], signups: [] as Record<string, unknown>[], lookups: [] as Record<string, unknown>[], live: new Set<string>(), codes: new Set<string>([invited, options.member].filter(Boolean).map(email => `${email}:123456`)) };
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)), a = JSON.parse(String(init?.body));
     expect(url.origin).toBe(DIRECTORY);
@@ -30,10 +30,10 @@ const directory = async (options: { inviteLive?: boolean; member?: string } = {}
     const inviteMatches = state.inviteLive && a.p_email === invited && a.p_code_hash === inviteHash;
     if (fn === 'console_auth_throttle') return Response.json(true);
     if (fn === 'signin_allowed') return Response.json(state.owners.has(a.p_email) || inviteMatches);
-    if (fn === 'owner_for_auth') return Response.json(state.owners.get(a.p_email) ?? null);
+    if (fn === 'owner_for_auth') { state.lookups.push(a); return Response.json(state.owners.get(a.p_email) ?? null); }
     if (fn === 'signup_owner_for_auth') {
       state.signups.push(a);
-      if (!inviteMatches || a.p_phone !== '') return Response.json(null);
+      if (!inviteMatches || !(a.p_phone === '' || /^\+[1-9]\d{6,14}$/.test(a.p_phone))) return Response.json(null);
       state.inviteLive = false; state.owners.set(a.p_email, joined);
       return Response.json(joined);
     }
@@ -96,6 +96,53 @@ describe('an invited person joins from the app', () => {
   it('with a wrong email code creates nothing', async () => {
     const { app, state, invited } = await directory();
     expect(await app('/auth/verify', { email: invited, code: '654321', invite: INVITE })).toEqual({ status: 200, body: { state: 'needs_invite' } });
+    expect(state.signups).toEqual([]);
+  });
+});
+
+describe('an invited person joins from the app with their phone', () => {
+  it('keeps the phone on the new owner, unverified, through the signed join', async () => {
+    const { app, state, invited, joined } = await directory();
+    const verified = await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone: '+919876543210' });
+    expect(verified.body).toMatchObject({ state: 'active', account_ref: `acct_${await linkCodeHash(joined)}` });
+    expect(state.signups).toEqual([expect.objectContaining({ p_email: invited, p_phone: '+919876543210' })]);
+    expect(state.lookups).toEqual([expect.objectContaining({ p_email: invited, p_phone: '' })]);
+  });
+
+  it('never hands an existing member\'s sign-in the phone, so signing in cannot change the number on file', async () => {
+    const { app, state } = await directory({ member: 'member@example.test' });
+    const verified = await app('/auth/verify', { email: 'member@example.test', code: '123456', invite: INVITE, phone: '+15550001111' });
+    expect(verified.body).toMatchObject({ state: 'active' });
+    expect(state.lookups).toEqual([expect.objectContaining({ p_email: 'member@example.test', p_phone: '' })]);
+    expect(state.signups).toEqual([]);
+  });
+
+  it('sends nothing to the phone: the join reaches only the owner directory', async () => {
+    const { app, state, invited } = await directory(), outside = vi.fn(async () => new Response(null, { status: 599 }));
+    vi.stubGlobal('fetch', outside);
+    try {
+      expect((await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone: '+15550001111' })).status).toBe(200);
+      expect(state.signups).toEqual([expect.objectContaining({ p_phone: '+15550001111' })]);
+      expect(outside).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('logs nothing carrying the phone on a join', async () => {
+    const { app, invited } = await directory(), lines: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(level =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ')); }));
+    try {
+      expect((await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone: '+919876543210' })).status).toBe(200);
+      expect(lines.filter(line => line.includes('9876543210'))).toEqual([]);
+    } finally { spies.forEach(spy => spy.mockRestore()); }
+  });
+
+  it('refuses a phone that is not E.164 before any code is checked', async () => {
+    const { app, state, invited } = await directory();
+    for (const phone of ['98765 43210', '+0123456789', '+91 98765 43210', 12345]) {
+      expect((await app('/auth/verify', { email: invited, code: '123456', invite: INVITE, phone })).status).toBe(403);
+    }
+    expect(state.lookups).toEqual([]);
     expect(state.signups).toEqual([]);
   });
 });
