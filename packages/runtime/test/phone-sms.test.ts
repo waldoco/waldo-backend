@@ -8,7 +8,8 @@ const phone = '+919800000001';
 const token = 'synthetic-twilio-token-for-tests';
 const env = {
   SUPABASE_PROJECT_URL: 'https://directory.test', SUPABASE_PUBLISHABLE_KEY: 'publishable', WALDO_ROUTER_HMAC_SECRET: 'router-secret',
-  PHONE_SMS_VERIFY: '1', TWILIO_ACCOUNT_SID: `AC${'c'.repeat(32)}`, TWILIO_AUTH_TOKEN: token, TWILIO_VERIFY_SERVICE_SID: service,
+  PHONE_SMS_VERIFY: '1', PHONE_SMS_COUNTRIES: '+91', PHONE_SMS_DAILY_LIMIT: '20',
+  TWILIO_ACCOUNT_SID: `AC${'c'.repeat(32)}`, TWILIO_AUTH_TOKEN: token, TWILIO_VERIFY_SERVICE_SID: service,
 };
 const NOW = 1_800_000_000_000;
 
@@ -46,6 +47,11 @@ describe('the switch and the credentials', () => {
   it.each([
     ['account', { TWILIO_ACCOUNT_SID: 'ACshort' }], ['service', { TWILIO_VERIFY_SERVICE_SID: 'https://attacker.invalid' }],
     ['token', { TWILIO_AUTH_TOKEN: '' }], ['router secret', { WALDO_ROUTER_HMAC_SECRET: undefined }],
+    ['country list', { PHONE_SMS_COUNTRIES: undefined }], ['country list', { PHONE_SMS_COUNTRIES: '' }], ['country code', { PHONE_SMS_COUNTRIES: '91' }],
+    ['country code', { PHONE_SMS_COUNTRIES: '+91,+0' }], ['country code', { PHONE_SMS_COUNTRIES: '+9100' }],
+    ['daily cap', { PHONE_SMS_DAILY_LIMIT: undefined }], ['daily cap', { PHONE_SMS_DAILY_LIMIT: '0' }], ['daily cap', { PHONE_SMS_DAILY_LIMIT: '20 a day' }],
+    ['API key, with no fallback to the account token', { TWILIO_API_KEY_SID: 'SKshort', TWILIO_API_KEY_SECRET: 'synthetic-key-secret' }],
+    ['API key secret', { TWILIO_API_KEY_SID: `SK${'e'.repeat(32)}`, TWILIO_API_KEY_SECRET: '' }],
   ])('with a bad or missing %s nothing is offered', async (_label, override) => {
     const f = fake(() => ({ kind: 'reserved', phone }));
     const sms = phoneSms({ ...env, ...override }, f.fetcher, () => NOW);
@@ -65,14 +71,31 @@ describe('sending a code', () => {
     const [reserve, , finish] = f.calls;
     const reservePayload = JSON.parse(String(reserve!.body.p_payload)) as Record<string, unknown>;
     expect(reserve!.body.p_action).toBe('reserve_send');
-    expect(Object.keys(reservePayload).sort()).toEqual(['do_name', 'operation', 'service']);
-    expect(reservePayload).toMatchObject({ do_name: 'owner-a', service });
+    expect(Object.keys(reservePayload).sort()).toEqual(['countries', 'daily_limit', 'do_name', 'operation', 'service']);
+    expect(reservePayload).toMatchObject({ do_name: 'owner-a', service, countries: ['+91'], daily_limit: 20 });
     expect(reserve!.body.p_sig).toBe(await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, NOW / 1000, `phonesms.reserve_send.${String(reserve!.body.p_payload)}`));
     expect(f.twilioCalls()[0]!.body).toEqual({ To: phone, Channel: 'sms' });
-    expect(JSON.parse(String(finish!.body.p_payload))).toEqual({ ...reservePayload, outcome: 'pending', sid });
+    expect(JSON.parse(String(finish!.body.p_payload))).toEqual({ do_name: 'owner-a', service, operation: reservePayload.operation, outcome: 'pending', sid });
   });
 
-  it.each(['no_number', 'verified', 'number_taken', 'held', 'busy', 'throttled', 'denied'])('a %s refusal from the ledger texts nothing', async (kind) => {
+  it('signs every listed country code into the reservation', async () => {
+    const f = fake(() => ({ kind: 'unsupported' }));
+    expect(await phoneSms({ ...env, PHONE_SMS_COUNTRIES: '+91, +44,+1', PHONE_SMS_DAILY_LIMIT: '35' }, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'unsupported' });
+    expect(JSON.parse(String(f.ledgerCalls()[0]!.body.p_payload))).toMatchObject({ countries: ['+91', '+44', '+1'], daily_limit: 35 });
+    expect(f.twilioCalls()).toEqual([]);
+  });
+
+  it.each([[400, 60200], [401, 20003], [403, 20403], [404, 20404]])('a send Twilio refuses with HTTP %s is finished refused and logged by its numeric code alone', async (status, code) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const f = fake((action) => action === 'reserve_send' ? { kind: 'reserved', phone } : { kind: 'refused' },
+      () => Response.json({ code, message: `Invalid parameter To: ${phone}`, status }, { status }));
+    expect(await phoneSms(env, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'refused' });
+    expect(JSON.parse(String(f.ledgerCalls()[1]!.body.p_payload))).toMatchObject({ outcome: 'refused', sid: '' });
+    expect(error.mock.calls).toEqual([[JSON.stringify({ hop: 'phone_sms', ok: false, code: 'provider_refused', resource: 'Verifications', status, twilio_code: code })]]);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(phone.slice(1));
+  });
+
+  it.each(['no_number', 'verified', 'unsupported', 'number_taken', 'held', 'busy', 'throttled', 'denied'])('a %s refusal from the ledger texts nothing', async (kind) => {
     const f = fake(() => ({ kind }));
     expect(await phoneSms(env, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind });
     expect(f.twilioCalls()).toEqual([]);
@@ -151,6 +174,14 @@ describe('checking a code', () => {
     expect(await phoneSms(env, f.fetcher, () => NOW).check('owner-a', '123456')).toEqual({ kind });
     expect(f.twilioCalls()).toEqual([]);
   });
+
+  it('a check Twilio refuses is finished refused, so the ledger gives the try back, and is logged without the code', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const f = fake((action) => action === 'reserve_check' ? { kind: 'reserved', reference } : { kind: 'refused' }, () => Response.json({ code: 20003 }, { status: 401 }));
+    expect(await phoneSms(env, f.fetcher, () => NOW).check('owner-a', '424242')).toEqual({ kind: 'refused' });
+    expect(JSON.parse(String(f.ledgerCalls()[1]!.body.p_payload))).toMatchObject({ outcome: 'refused', sid: '' });
+    expect(error.mock.calls).toEqual([[JSON.stringify({ hop: 'phone_sms', ok: false, code: 'provider_refused', resource: 'VerificationCheck', status: 401, twilio_code: 20003 })]]);
+  });
 });
 
 describe('what never leaves its place', () => {
@@ -170,6 +201,16 @@ describe('what never leaves its place', () => {
     expect(f.twilioCalls().map((c) => c.body.Code ?? null)).toEqual([null, '424242']);
     for (const spy of log) expect(spy).not.toHaveBeenCalled();
   });
+
+  it('an API key, restricted to Verify or not, is used in place of the account token whenever it is set', async () => {
+    const key = `SK${'e'.repeat(32)}`, secret = 'synthetic-key-secret';
+    for (const account of [{}, { TWILIO_ACCOUNT_SID: undefined, TWILIO_AUTH_TOKEN: undefined }]) {
+      const f = fake((action) => action === 'reserve_send' ? { kind: 'reserved', phone } : { kind: 'pending' }, () => pendingFrom());
+      expect(await phoneSms({ ...env, ...account, TWILIO_API_KEY_SID: key, TWILIO_API_KEY_SECRET: secret }, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'pending' });
+      expect(f.twilioCalls()[0]!.headers.get('authorization')).toBe(`Basic ${btoa(`${key}:${secret}`)}`);
+      for (const call of f.ledgerCalls()) expect(JSON.stringify(call.body)).not.toContain(secret);
+    }
+  });
 });
 
 describe('reading the state', () => {
@@ -179,6 +220,15 @@ describe('reading the state', () => {
     expect(await phoneSms(env, f.fetcher, () => NOW).state('owner-a')).toEqual({ phone, verified: false, sms: true, challenge });
     expect(f.calls[0]!.body).toMatchObject({ p_do_name: 'owner-a' });
     expect(f.calls[0]!.body.p_sig).toBe(await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, NOW / 1000, 'phonestate.owner-a'));
+  });
+
+  it('says texting is not offered for a number outside the listed country codes, or no number', async () => {
+    const challenge = null;
+    expect(await phoneSms(env, fake(() => ({ phone: '+447700900001', verified: false, challenge })).fetcher, () => NOW).state('owner-a'))
+      .toEqual({ phone: '+447700900001', verified: false, sms: false, challenge });
+    expect(await phoneSms({ ...env, PHONE_SMS_COUNTRIES: '+44' }, fake(() => ({ phone: '+447700900001', verified: false, challenge })).fetcher, () => NOW).state('owner-a'))
+      .toMatchObject({ sms: true });
+    expect(await phoneSms(env, fake(() => ({ phone: null, verified: false, challenge })).fetcher, () => NOW).state('owner-a')).toMatchObject({ sms: false });
   });
 
   it('reads with the switch off, and says texting is not offered', async () => {

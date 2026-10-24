@@ -4,8 +4,15 @@ import { twilioPhoneVerification, type PhoneProviderOutcome, type PhoneReference
 export type PhoneSmsEnv = OwnerDirectoryEnv & Readonly<{
   // "1" offers a code texted by Twilio Verify; anything else keeps it off, until the owner has set up Twilio.
   PHONE_SMS_VERIFY?: string;
+  // The country codes Waldo may text, comma-separated ("+91,+44"), and the server's cap on texts a UTC day. Both are
+  // signed into every reservation; a missing or malformed value keeps texting off.
+  PHONE_SMS_COUNTRIES?: string;
+  PHONE_SMS_DAILY_LIMIT?: string;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
+  // An API key, standard or restricted to Verify, used in place of the account token whenever its SID is set.
+  TWILIO_API_KEY_SID?: string;
+  TWILIO_API_KEY_SECRET?: string;
   TWILIO_VERIFY_SERVICE_SID?: string;
 }>;
 const CHALLENGE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
@@ -13,7 +20,7 @@ export type PhoneChallengeState = (typeof CHALLENGE_STATES)[number];
 /** Times are epoch seconds. retry_at: when the owner may next ask for a code, null meaning now. */
 export type PhoneChallenge = Readonly<{ state: PhoneChallengeState; expires_at: number; retry_at: number | null; checks_left: number }>;
 export type OwnerPhoneState = Readonly<{ phone: string | null; verified: boolean; sms: boolean; challenge: PhoneChallenge | null }>;
-const OUTCOMES = ['denied', 'no_number', 'verified', 'number_taken', 'held', 'busy', 'throttled', 'expired', 'unknown', 'pending', 'approved'] as const;
+const OUTCOMES = ['denied', 'no_number', 'verified', 'unsupported', 'number_taken', 'held', 'busy', 'throttled', 'expired', 'unknown', 'refused', 'pending', 'approved'] as const;
 export type PhoneSmsOutcome = Readonly<{ kind: 'disabled' | (typeof OUTCOMES)[number] }>;
 export type PhoneSms = Readonly<{
   offered: boolean;
@@ -24,7 +31,7 @@ export type PhoneSms = Readonly<{
 
 const E164 = /^\+[1-9]\d{6,14}$/;
 const shapeError = () => new Error('phone state shape');
-const readState = (row: unknown, sms: boolean): OwnerPhoneState | null => {
+const readState = (row: unknown, texts: (phone: string) => boolean): OwnerPhoneState | null => {
   if (row === null) return null;
   const value = row as Record<string, unknown>, challenge = value?.challenge as Record<string, unknown> | null | undefined;
   if (typeof row !== 'object' || Array.isArray(row) || !(value.phone === null || (typeof value.phone === 'string' && E164.test(value.phone)))
@@ -32,7 +39,7 @@ const readState = (row: unknown, sms: boolean): OwnerPhoneState | null => {
     || (challenge !== null && (!CHALLENGE_STATES.includes(challenge.state as PhoneChallengeState) || !Number.isSafeInteger(challenge.expires_at)
       || !(challenge.retry_at === null || Number.isSafeInteger(challenge.retry_at))
       || !Number.isInteger(challenge.checks_left) || (challenge.checks_left as number) < 0 || (challenge.checks_left as number) > 5))) throw shapeError();
-  return { phone: value.phone, verified: value.verified, sms, challenge: challenge === null ? null : {
+  return { phone: value.phone, verified: value.verified, sms: value.phone !== null && texts(value.phone), challenge: challenge === null ? null : {
     state: challenge.state as PhoneChallengeState, expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } };
 };
 
@@ -41,11 +48,16 @@ const readState = (row: unknown, sms: boolean): OwnerPhoneState | null => {
 // An answer that cannot be matched to the reservation is recorded as unknown and never retried by itself.
 export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): PhoneSms => {
   const rpc = signedRpc(env, fetcher, now);
-  const provider = env.PHONE_SMS_VERIFY === '1'
-    ? twilioPhoneVerification(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_VERIFY_SERVICE_SID
-      ? { account: env.TWILIO_ACCOUNT_SID, token: env.TWILIO_AUTH_TOKEN, service: env.TWILIO_VERIFY_SERVICE_SID } : null, fetcher) : null;
+  const countries = (env.PHONE_SMS_COUNTRIES ?? '').split(',').map((code) => code.trim());
+  const dailyLimit = /^[1-9]\d{0,5}$/.test(env.PHONE_SMS_DAILY_LIMIT ?? '') ? Number(env.PHONE_SMS_DAILY_LIMIT) : null;
+  const keyed = env.TWILIO_API_KEY_SID !== undefined && env.TWILIO_API_KEY_SID !== '';
+  const provider = env.PHONE_SMS_VERIFY === '1' && countries.every((code) => /^\+[1-9]\d{0,2}$/.test(code)) && dailyLimit !== null
+    ? twilioPhoneVerification({ user: (keyed ? env.TWILIO_API_KEY_SID : env.TWILIO_ACCOUNT_SID) ?? '',
+      secret: (keyed ? env.TWILIO_API_KEY_SECRET : env.TWILIO_AUTH_TOKEN) ?? '', service: env.TWILIO_VERIFY_SERVICE_SID ?? '' }, fetcher) : null;
   const offered = rpc !== null && provider !== null;
-  const transition = async (doName: string, action: string, fields: Record<string, string>): Promise<Record<string, unknown>> => {
+  // The ledger refuses a number outside these codes; the views use the same list so they offer only what it accepts.
+  const texts = (phone: string) => offered && countries.some((code) => phone.startsWith(code));
+  const transition = async (doName: string, action: string, fields: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const payload = JSON.stringify({ do_name: doName, service: provider!.service, ...fields });
     const result = await rpc!('phone_sms_transition', `phonesms.${action}.${payload}`, { p_action: action, p_payload: payload });
     return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : {};
@@ -56,9 +68,9 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     if (action === 'check' && !/^\d{6}$/.test(code)) return { kind: 'denied' };
     const operation = crypto.randomUUID();
     let reserved: Record<string, unknown>;
-    try { reserved = await transition(doName, `reserve_${action}`, { operation }); }
+    try { reserved = await transition(doName, `reserve_${action}`, action === 'send' ? { operation, countries, daily_limit: dailyLimit } : { operation }); }
     catch { return { kind: 'unknown' }; }
-    if (reserved.kind !== 'reserved') return known(reserved.kind, OUTCOMES.filter((kind) => kind !== 'approved' && kind !== 'pending'));
+    if (reserved.kind !== 'reserved') return known(reserved.kind, OUTCOMES.filter((kind) => kind !== 'approved' && kind !== 'pending' && kind !== 'refused'));
     // The provider texts or checks only a well-formed number and verification, and answers pending or approved only for
     // the number, service and verification it was asked about; anything else comes back unknown.
     const ref = reserved.reference;
@@ -67,6 +79,10 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
       if (action === 'send' && typeof reserved.phone === 'string') response = await provider!.start(reserved.phone);
       if (action === 'check' && ref && typeof ref === 'object') response = await provider!.check(ref as PhoneReference, code);
     } catch { response = { kind: 'unknown' }; }
+    if (response.kind === 'refused') {
+      console.error(JSON.stringify({ hop: 'phone_sms', ok: false, code: 'provider_refused', resource: action === 'send' ? 'Verifications' : 'VerificationCheck',
+        status: response.status, twilio_code: response.code }));
+    }
     const sid = 'reference' in response ? response.reference.sid : '';
     try {
       const finished = await transition(doName, `finish_${action}`, { operation, outcome: response.kind, sid });
@@ -77,7 +93,7 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     offered,
     async state(doName) {
       if (!rpc) return null;
-      return readState(await rpc('owner_phone_state', `phonestate.${doName}`, { p_do_name: doName }), offered);
+      return readState(await rpc('owner_phone_state', `phonestate.${doName}`, { p_do_name: doName }), texts);
     },
     send: (doName) => run(doName, 'send'),
     check: (doName, code) => run(doName, 'check', code),

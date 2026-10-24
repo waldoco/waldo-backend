@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(99);
+select plan(147);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -11,8 +11,26 @@ create function pg_temp.sid(c text) returns text language sql as $$ select 'VE' 
 create function pg_temp.op(c text) returns text language sql as $$ select repeat(c, 8) || '-' || repeat(c, 4) || '-4' || repeat(c, 3) || '-8' || repeat(c, 3) || '-' || repeat(c, 12) $$;
 create function pg_temp.step(action text, payload jsonb) returns jsonb language sql as $$
   select waldo.phone_sms_transition(action, payload::text, pg_temp.at(), pg_temp.rsig('phonesms.' || action || '.' || payload::text)) $$;
+-- The router signs in the country codes it may text and the server's daily cap; the tests default to India and a cap
+-- high enough to stay out of the way.
+create function pg_temp.send_as(o text, op text, countries jsonb, daily_limit jsonb) returns text language sql as $$
+  select pg_temp.step('reserve_send', jsonb_build_object('do_name', o, 'service', pg_temp.svc(), 'operation', op,
+    'countries', countries, 'daily_limit', daily_limit))->>'kind' $$;
 create function pg_temp.send(o text, op text) returns text language sql as $$
-  select pg_temp.step('reserve_send', jsonb_build_object('do_name', o, 'service', pg_temp.svc(), 'operation', op))->>'kind' $$;
+  select pg_temp.send_as(o, op, '["+91"]', '200') $$;
+create function pg_temp.nkey(n text) returns text language sql as $$
+  select encode(extensions.hmac('phonecap.' || n, 'test-router-secret', 'sha256'), 'hex') $$;
+create function pg_temp.today() returns date language sql as $$ select (now() at time zone 'utc')::date $$;
+create function pg_temp.owner_sends(o text, d date default null) returns int language sql as $$
+  select coalesce(sum(sends), 0)::int from waldo.phone_sms_daily
+    where owner_id = (select id from waldo.owners where do_name = o) and day = coalesce(d, pg_temp.today()) $$;
+create function pg_temp.number_sends(n text) returns int language sql as $$
+  select coalesce(sum(sends), 0)::int from waldo.phone_sms_daily where number_key = pg_temp.nkey(n) and day = pg_temp.today() $$;
+create function pg_temp.global(d date default null) returns int language sql as $$
+  select coalesce((select sends from waldo.phone_sms_sends where day = coalesce(d, pg_temp.today())), 0) $$;
+create function pg_temp.locks(n text) returns int language sql as $$
+  select count(*)::int from pg_locks where locktype = 'advisory' and objsubid = 1
+    and ((classid::bigint << 32) | objid::bigint) = hashtextextended('waldophone.' || n, 0) $$;
 create function pg_temp.sent(o text, op text, outcome text, sid text) returns text language sql as $$
   select pg_temp.step('finish_send', jsonb_build_object('do_name', o, 'service', pg_temp.svc(), 'operation', op, 'outcome', outcome, 'sid', sid))->>'kind' $$;
 create function pg_temp.check(o text, op text) returns jsonb language sql as $$
@@ -56,7 +74,7 @@ select is(pg_temp.state('sms-old'), '{"phone":null,"verified":false,"challenge":
 select is(pg_temp.send('sms-old', pg_temp.op('c')), 'no_number', 'and is sent nothing');
 
 -- Asha asks for a code: the send is reserved before Twilio is called, then finished with the verification it returned.
-select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', pg_temp.svc(), 'operation', pg_temp.op('1'))),
+select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', pg_temp.svc(), 'operation', pg_temp.op('1'), 'countries', '["+91"]'::jsonb, 'daily_limit', 200)),
   '{"kind":"reserved","phone":"+919800000001"}'::jsonb, 'asha''s first send is reserved for the number on file, which the router texts');
 select is(pg_temp.challenge('sms-asha'), 'sending', 'the challenge is in flight before the provider answers');
 select is(pg_temp.send('sms-asha', pg_temp.op('2')), 'busy', 'a second send while the first is in flight is refused');
@@ -88,7 +106,8 @@ select is(pg_temp.check('sms-asha', pg_temp.op('5'))->>'kind', 'busy', 'a second
 select is(pg_temp.checked('sms-asha', pg_temp.op('6'), 'pending', pg_temp.sid('1')), 'pending', 'a wrong code leaves it pending');
 select ok(not pg_temp.verified('sms-asha'), 'and verifies nothing');
 select is((select count(*)::int from information_schema.columns where table_schema = 'waldo' and table_name = 'phone_sms_challenges' and column_name ilike '%code%'), 0, 'the ledger has no column for the code');
-select is((select count(*)::int from waldo.phone_sms_daily where key like '+%'), 0, 'and the daily counters keep no number');
+select is((select array_agg(number_key || ':' || sends) from waldo.phone_sms_daily d join waldo.owners o on o.id = d.owner_id where o.do_name = 'sms-asha'),
+  array[pg_temp.nkey('+919800000001') || ':3'], 'her three sends are counted against her, the number keyed by a hash under the server''s key');
 
 -- The right code proves the number on file, in the same transaction.
 select is(pg_temp.check('sms-asha', pg_temp.op('7'))->>'kind', 'reserved', 'another check is reserved');
@@ -178,12 +197,94 @@ select is(pg_temp.check('sms-nia', pg_temp.op('c'))->'reference'->>'sid', pg_tem
 select is((select expires_at > now() + interval '8 minutes' and expires_at < now() + interval '9 minutes' from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-nia'), true, 'with the ten minutes still counted from the first send');
 
 -- Daily caps per owner and per number bound what a typed number can receive, across every owner.
-insert into waldo.owners (do_name, email, phone) values ('sms-fay', 'fay@test.invalid', '+919800000007');
-insert into waldo.phone_sms_daily (scope, key, day, sends) values ('number', encode(sha256(convert_to('+919800000007', 'UTF8')), 'hex'), (now() at time zone 'utc')::date, 5);
-select is(pg_temp.send('sms-fay', pg_temp.op('a')), 'throttled', 'a number already sent five codes today is sent no more');
-insert into waldo.owners (do_name, email, phone) values ('sms-gus', 'gus@test.invalid', '+919800000008');
-insert into waldo.phone_sms_daily (scope, key, day, sends) select 'owner', id::text, (now() at time zone 'utc')::date, 5 from waldo.owners where do_name = 'sms-gus';
+-- Gus had five codes texted today to the number fay has now typed.
+insert into waldo.owners (do_name, email, phone) values ('sms-fay', 'fay@test.invalid', '+919800000007'), ('sms-gus', 'gus@test.invalid', '+919800000008');
+insert into waldo.phone_sms_daily (owner_id, number_key, day, sends) select id, pg_temp.nkey('+919800000007'), pg_temp.today(), 5 from waldo.owners where do_name = 'sms-gus';
+select is(pg_temp.send('sms-fay', pg_temp.op('a')), 'throttled', 'a number already sent five codes today, for any owner, is sent no more');
 select is(pg_temp.send('sms-gus', pg_temp.op('a')), 'throttled', 'an owner who asked five times today is sent no more');
+
+-- The server's daily cap bounds every send, and a send refused at the cap charges and records nothing else.
+insert into waldo.owners (do_name, email, phone) values ('sms-oak', 'oak@test.invalid', '+919800000014'), ('sms-pia', 'pia@test.invalid', '+919800000015');
+select is(pg_temp.send_as('sms-oak', pg_temp.op('a'), '["+91"]', to_jsonb(pg_temp.global() + 1)), 'reserved', 'a send under the server''s daily cap is reserved');
+select is(pg_temp.sent('sms-oak', pg_temp.op('a'), 'pending', pg_temp.sid('4')), 'pending', 'and goes out');
+select is(pg_temp.send_as('sms-pia', pg_temp.op('a'), '["+91"]', to_jsonb(pg_temp.global())), 'throttled', 'a send at the cap is throttled');
+select is(pg_temp.owner_sends('sms-pia') + (select count(*)::int from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-pia'), 0,
+  'and charges and records nothing for that owner');
+create temp table held_global as select pg_temp.global() as sends;
+update waldo.phone_sms_sends set sends = 200 where day = pg_temp.today();
+select is(pg_temp.send_as('sms-pia', pg_temp.op('b'), '["+91"]', '5000'), 'throttled', 'a cap the router signs above 200 is held to 200');
+select is(pg_temp.send_as('sms-pia', pg_temp.op('b'), '["+91"]', '0'), 'denied', 'a cap below one is denied');
+select is(pg_temp.send_as('sms-pia', pg_temp.op('b'), '["+91"]', 'null'), 'denied', 'and so is a reservation without one');
+update waldo.phone_sms_sends set sends = (select sends from held_global) where day = pg_temp.today();
+select is((select array_agg(column_name::text order by column_name) from information_schema.columns where table_schema = 'waldo' and table_name = 'phone_sms_sends'),
+  array['day', 'sends'], 'the server''s count holds no owner and no number');
+
+-- Only numbers under a country code the router lists are texted, and an empty list texts none.
+insert into waldo.owners (do_name, email, phone) values ('sms-uma', 'uma@test.invalid', '+447700900001');
+select is(pg_temp.send('sms-uma', pg_temp.op('a')), 'unsupported', 'a number outside the listed country codes is sent nothing');
+select is(pg_temp.send_as('sms-uma', pg_temp.op('a'), '[]', '200'), 'unsupported', 'an empty list texts no country');
+select is(pg_temp.send_as('sms-uma', pg_temp.op('a'), 'null', '200'), 'denied', 'a reservation without the list is denied');
+select is(pg_temp.send_as('sms-uma', pg_temp.op('a'), '["44"]', '200'), 'denied', 'and so is an entry that is not a country code');
+select is(pg_temp.owner_sends('sms-uma'), 0, 'none of these is charged');
+select is(pg_temp.send_as('sms-uma', pg_temp.op('a'), '["+91", "+44"]', '200'), 'reserved', 'a number under a listed code is reserved');
+select is(pg_temp.owner_sends('sms-uma'), 1, 'and charged once');
+
+-- Twilio refusing the request means no text went out: nothing is charged and nothing is held, but sends stay paced.
+insert into waldo.owners (do_name, email, phone) values ('sms-quin', 'quin@test.invalid', '+919800000016'), ('sms-ray', 'ray@test.invalid', '+919800000016');
+create temp table before_refusal as select pg_temp.global() as sends;
+select is(pg_temp.send('sms-quin', pg_temp.op('a')), 'reserved', 'quin''s send is reserved');
+select is(pg_temp.sent('sms-quin', pg_temp.op('a'), 'refused', ''), 'refused', 'and Twilio refuses it');
+select is(pg_temp.owner_sends('sms-quin') + pg_temp.number_sends('+919800000016'), 0, 'neither quin nor the number is charged');
+select is(pg_temp.global(), (select sends from before_refusal), 'nor the server''s cap');
+select is(pg_temp.state('sms-quin')->'challenge'->>'state', 'expired', 'no code is waiting');
+select is((pg_temp.state('sms-quin')->'challenge'->>'retry_at')::bigint, (select extract(epoch from next_send)::bigint from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-quin'),
+  'and the next send waits the usual 60 seconds');
+select is(pg_temp.send('sms-quin', pg_temp.op('b')), 'throttled', 'so an immediate retry is throttled');
+select is(pg_temp.send('sms-ray', pg_temp.op('a')), 'reserved', 'and the number is not held from another owner');
+select is(pg_temp.sent('sms-ray', pg_temp.op('a'), 'pending', pg_temp.sid('5')), 'pending', 'whose code goes out');
+
+-- A refused resend leaves the code already sent working, and charges only the send that went out.
+insert into waldo.owners (do_name, email, phone) values ('sms-sol', 'sol@test.invalid', '+919800000017');
+select is(pg_temp.send('sms-sol', pg_temp.op('a')), 'reserved', 'sol''s send is reserved');
+select is(pg_temp.sent('sms-sol', pg_temp.op('a'), 'pending', pg_temp.sid('3')), 'pending', 'and goes out');
+select pg_temp.age('sms-sol', interval '61 seconds');
+select is(pg_temp.send('sms-sol', pg_temp.op('b')), 'reserved', 'her resend is reserved');
+select is(pg_temp.sent('sms-sol', pg_temp.op('b'), 'refused', ''), 'refused', 'and Twilio refuses it');
+select is(pg_temp.state('sms-sol')->'challenge'->>'state', 'pending', 'the first code still works');
+select is(pg_temp.owner_sends('sms-sol'), 1, 'and only the first send is charged');
+select is((pg_temp.state('sms-sol')->'challenge'->>'retry_at')::bigint, (select extract(epoch from next_send)::bigint from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-sol'),
+  'with the next resend paced from the refused one');
+
+-- A check Twilio refused checked nothing: the try is given back.
+select is(pg_temp.check('sms-sol', pg_temp.op('c'))->'reference'->>'sid', pg_temp.sid('3'), 'sol''s check asks about the first code');
+select is(pg_temp.checked('sms-sol', pg_temp.op('c'), 'refused', ''), 'refused', 'and Twilio refuses it');
+select is(pg_temp.state('sms-sol')->'challenge', jsonb_build_object('state', 'pending', 'expires_at', pg_temp.state('sms-sol')->'challenge'->'expires_at',
+  'retry_at', pg_temp.state('sms-sol')->'challenge'->'retry_at', 'checks_left', 5), 'the code still waits with all five checks');
+
+-- Reserved before UTC midnight and refused after it: the refund goes to the day the send was charged.
+insert into waldo.owners (do_name, email, phone) values ('sms-tao', 'tao@test.invalid', '+919800000018');
+select is(pg_temp.send('sms-tao', pg_temp.op('a')), 'reserved', 'tao''s send is reserved');
+update waldo.phone_sms_daily set day = day - 1 where owner_id = (select id from waldo.owners where do_name = 'sms-tao');
+update waldo.phone_sms_challenges set send_day = send_day - 1 where owner_id = (select id from waldo.owners where do_name = 'sms-tao');
+update waldo.phone_sms_sends set sends = sends - 1 where day = pg_temp.today();
+insert into waldo.phone_sms_sends (day, sends) values (pg_temp.today() - 1, 1);
+create temp table before_midnight as select pg_temp.global() as sends;
+select is(pg_temp.sent('sms-tao', pg_temp.op('a'), 'refused', ''), 'refused', 'Twilio refuses it after midnight');
+select is(pg_temp.owner_sends('sms-tao', pg_temp.today() - 1) || '/' || pg_temp.global(pg_temp.today() - 1), '0/0', 'yesterday''s charge is refunded');
+select is(pg_temp.global(), (select sends from before_midnight), 'and today''s count is untouched');
+
+-- Every path that texts or proves a number takes one lock on it, so two owners proving a number take turns. CI and the
+-- local runner execute this file in one transaction on one connection, so a second session cannot wait on the lock
+-- here; the test shows that both paths hold the same lock, and Postgres makes the second holder wait.
+insert into waldo.owners (do_name, email, phone) values ('sms-vik', 'vik@test.invalid', '+919800000019'), ('sms-wen', 'wen@test.invalid', '+919800000021');
+select is(pg_temp.locks('+919800000019'), 0, 'nothing holds a lock on a number nobody has touched');
+select is(pg_temp.send('sms-vik', pg_temp.op('a')), 'reserved', 'vik''s send is reserved');
+select is(pg_temp.locks('+919800000019'), 1, 'and holds the number''s lock until its transaction ends');
+insert into waldo.link_codes (code_hash, owner_id, provider, expires_at) select 'sms-wen-code', id, 'whatsapp', now() + interval '10 minutes' from waldo.owners where do_name = 'sms-wen';
+select is(pg_temp.locks('+919800000021'), 0, 'wen''s number is not locked yet');
+select is(waldo.redeem_link_code('sms-wen-code', 'whatsapp', '919800000021'), (select id from waldo.owners where do_name = 'sms-wen'), 'wen redeems a link code from her number');
+select ok(pg_temp.verified('sms-wen'), 'which proves it');
+select is(pg_temp.locks('+919800000021'), 1, 'under the same lock');
 
 -- The link-code path shares the same rule.
 insert into waldo.owners (do_name, email, phone) values ('sms-hal', 'hal@test.invalid', '+919800000001');
@@ -196,9 +297,15 @@ set local role anon;
 select throws_ok($$ select waldo.verify_owner_phone(gen_random_uuid(), '+919800000001') $$, '42501', null, 'the shared rule is not callable from outside');
 reset role;
 
--- Deleting the owner deletes the challenge, the only row here that holds the number.
-delete from waldo.owners where do_name = 'sms-asha';
-select is((select count(*)::int from waldo.phone_sms_challenges where phone = '+919800000001' and owner_id not in (select id from waldo.owners)), 0, 'deleting an owner deletes their challenge');
+-- Deleting the account deletes every row that holds or keys the number: the challenge and the daily counts.
+create temp table gone as select id from waldo.owners where do_name = 'sms-asha';
+select is(waldo.delete_owner('sms-asha', pg_temp.at(), pg_temp.rsig('delown.sms-asha')), true, 'asha deletes her account');
+select is((select count(*)::int from waldo.phone_sms_challenges where owner_id in (select id from gone) or phone = '+919800000001'), 0, 'her challenge is gone');
+select is((select count(*)::int from waldo.phone_sms_daily where owner_id in (select id from gone) or number_key = pg_temp.nkey('+919800000001')), 0,
+  'and so are her daily counts, by owner and by number');
+select is((select count(*)::int from waldo.phone_sms_daily where number_key in (select encode(sha256(convert_to(n, 'UTF8')), 'hex')
+    from (select phone from waldo.owners where phone is not null union select '+919800000001') numbers (n))), 0,
+  'no count is keyed by a bare hash of a number, which anyone could reverse');
 
 select * from finish();
 rollback;

@@ -163,7 +163,7 @@ export function PhoneControls({ record, busy, onAction }: { record: PhoneRecord 
       <p>To verify it, <a href="#/connections/imessage">link iMessage</a> and text your link code to Waldo from that number.{data.sms && ' Or have a six-digit code texted to it: Twilio sends the text.'}</p>
       {challenge?.state === 'pending' && <p>A code was texted to this number. It works until {clockTime(challenge.expires_at)}.</p>}
       {challenge?.state === 'unknown' && <p>Twilio did not confirm the last text.</p>}
-      {challenge?.state === 'expired' && <p>The last code expired.</p>}
+      {challenge?.state === 'expired' && <p>No code is waiting for this number.</p>}
       {data.sms && !offered('phone.sms_send') && challenge?.retry_at && <p className="meta">You can ask for another code after {clockTime(challenge.retry_at)}. Refresh then.</p>}
       {offered('phone.sms_send') && <div className="control-actions"><button disabled={busy} onClick={() => onAction('phone.sms_send')}>{challenge?.state === 'pending' ? 'Text the code again' : 'Text me a code'}</button></div>}
       {offered('phone.sms_check') && <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('phone.sms_check', { code: digits }); }}>

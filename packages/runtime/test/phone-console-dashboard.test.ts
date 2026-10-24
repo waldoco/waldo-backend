@@ -15,7 +15,7 @@ type Read = { csrf: string; revision: string; data: { phone: string | null; veri
 type Acted = { status: number; body: { receipt?: { state: string; message: string }; error?: string; duplicate?: boolean } };
 
 // A ledger that keeps one owner's number and challenge, and a Twilio that approves only CODE.
-function world(phone: string | null) {
+function world(phone: string | null, twilioStatus = 200) {
   const open = { expires_at: 1, retry_at: null as number | null, checks_left: 5 };
   const ledger = { phone, verified: false, challenge: null as null | { state: string; expires_at: number; retry_at: number | null; checks_left: number } };
   const twilio: URLSearchParams[] = [];
@@ -24,6 +24,7 @@ function world(phone: string | null) {
     if (url.startsWith('https://verify.twilio.com/')) {
       const form = new URLSearchParams(String(init?.body));
       twilio.push(form);
+      if (twilioStatus !== 200) return Response.json({ code: 20003, message: 'Authenticate', status: twilioStatus }, { status: twilioStatus });
       const status = url.endsWith('/Verifications') || form.get('Code') !== CODE ? 'pending' : 'approved';
       return Response.json({ service_sid: SERVICE, sid: SID, to: ledger.phone, channel: 'sms', status });
     }
@@ -33,7 +34,10 @@ function world(phone: string | null) {
     const payload = JSON.parse(args.p_payload!) as Record<string, string>;
     const step = ({
       reserve_send: () => { ledger.challenge = { ...open, state: 'sending' }; return { kind: 'reserved', phone: ledger.phone }; },
-      finish_send: () => { ledger.challenge = { ...open, state: 'pending' }; return { kind: 'pending' }; },
+      finish_send: () => {
+        if (payload.outcome === 'refused') { ledger.challenge = { ...open, state: 'expired' }; return { kind: 'refused' }; }
+        ledger.challenge = { ...open, state: 'pending' }; return { kind: 'pending' };
+      },
       reserve_check: () => { ledger.challenge = { ...open, state: 'checking' }; return { kind: 'reserved', reference: { service: SERVICE, sid: SID, phone: ledger.phone } }; },
       finish_check: () => {
         if (payload.outcome === 'approved') { ledger.verified = true; ledger.challenge = { ...open, state: 'approved' }; return { kind: 'approved' }; }
@@ -44,7 +48,7 @@ function world(phone: string | null) {
   });
   return { ledger, twilio };
 }
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 let n = 0;
 const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; state: DurableObjectState }) => Promise<void>) => {
@@ -135,6 +139,24 @@ describe('the console phone view', () => {
       w.ledger.challenge = { state, expires_at: 1, retry_at: null, checks_left: 5 };
       await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
     }
+  });
+
+  it('says plainly when Twilio refuses the text, and logs only the numeric code', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    world('+919800000001', 401);
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act }) => {
+      expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { receipt: { state: 'rejected', message: 'No code was sent: Twilio turned the request down. Try again later.' } } });
+      expect(error.mock.calls.map(([line]) => line)).toEqual([JSON.stringify({ hop: 'phone_sms', ok: false, code: 'provider_refused', resource: 'Verifications', status: 401, twilio_code: 20003 })]);
+    });
+  });
+
+  it('offers no text to a number outside the listed country codes', async () => {
+    const w = world('+447700900001');
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act }) => {
+      expect((await read()).data).toEqual({ phone: '+447700900001', verified: false, sms: false, challenge: null, actions: [] });
+      expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { error: 'no_longer_eligible' } });
+      expect(w.twilio).toEqual([]);
+    });
   });
 
   it('asks for six digits before asking Twilio', async () => {

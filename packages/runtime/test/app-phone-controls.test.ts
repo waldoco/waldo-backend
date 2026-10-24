@@ -8,7 +8,7 @@ import { appControlsRequest, type AppControlsHost } from '../src/channels/app-co
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-app', CODE = '424242', PHONE = '+919800000001';
 const phoneEnv = (on: string) => ({
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret',
-  PHONE_SMS_VERIFY: on, TWILIO_ACCOUNT_SID: `AC${'c'.repeat(32)}`, TWILIO_AUTH_TOKEN: TOKEN, TWILIO_VERIFY_SERVICE_SID: SERVICE,
+  PHONE_SMS_VERIFY: on, PHONE_SMS_COUNTRIES: '+91', PHONE_SMS_DAILY_LIMIT: '20', TWILIO_ACCOUNT_SID: `AC${'c'.repeat(32)}`, TWILIO_AUTH_TOKEN: TOKEN, TWILIO_VERIFY_SERVICE_SID: SERVICE,
 });
 const unused = () => { throw Error('The phone view reads the signed ledger only'); };
 afterEach(() => { vi.unstubAllGlobals(); });

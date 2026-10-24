@@ -3,7 +3,7 @@ import { twilioPhoneVerification } from '../src/identity/phone-verification';
 const service = `VA${'a'.repeat(32)}`;
 const sid = `VE${'b'.repeat(32)}`;
 const phone = '+919876543210';
-const credentials = { account: `AC${'c'.repeat(32)}`, token: 'synthetic-provider-token', service };
+const credentials = { user: `AC${'c'.repeat(32)}`, secret: 'synthetic-provider-token', service };
 it('starts a provider-owned code with SMS only and without a local code', async () => {
   const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({service_sid:service,sid,to:phone,channel:'sms',status:'pending'}));
   const provider = twilioPhoneVerification(credentials, fetcher)!;
@@ -51,4 +51,27 @@ it('fences stalled decoder/fetch and malformed JSON with an unknown result', asy
 it('never reads a send as approved: only a pending verification counts as sent', async () => {
   const fetcher = vi.fn(async () => Response.json({service_sid:service,sid,to:phone,channel:'sms',status:'approved'}));
   expect(await twilioPhoneVerification(credentials,fetcher)!.start(phone)).toEqual({kind:'unknown'});
+});
+it.each([[400, 60200], [401, 20003], [403, 20403], [404, 20404]])('a send Twilio refuses with HTTP %s created nothing, and keeps only its numeric code', async (status, code) => {
+  const fetcher = vi.fn(async () => Response.json({ code, message: `Invalid parameter To: ${phone}`, more_info: 'https://www.twilio.com/docs/errors', status }, { status }));
+  expect(await twilioPhoneVerification(credentials, fetcher)!.start(phone)).toEqual({ kind: 'refused', status, code });
+});
+it('a refusal without a numeric code keeps the status alone', async () => {
+  for (const body of ['not json', JSON.stringify({ code: '20003' }), JSON.stringify({ code: 1.5 })]) {
+    const fetcher = vi.fn(async () => new Response(body, { status: 401 }));
+    expect(await twilioPhoneVerification(credentials, fetcher)!.start(phone)).toEqual({ kind: 'refused', status: 401, code: null });
+  }
+});
+it('a check Twilio refuses checked nothing; a missing verification still reads as expired', async () => {
+  const refused = vi.fn(async () => Response.json({ code: 20003 }, { status: 401 }));
+  expect(await twilioPhoneVerification(credentials, refused)!.check({ service, sid, phone }, '123456')).toEqual({ kind: 'refused', status: 401, code: 20003 });
+  const missing = vi.fn(async () => Response.json({ code: 20404 }, { status: 404 }));
+  expect(await twilioPhoneVerification(credentials, missing)!.check({ service, sid, phone }, '123456')).toEqual({ kind: 'expired' });
+});
+it('authenticates with an API key, restricted or standard, as well as the account token', async () => {
+  const key = `SK${'e'.repeat(32)}`;
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({service_sid:service,sid,to:phone,channel:'sms',status:'pending'}));
+  await twilioPhoneVerification({ user: key, secret: 'synthetic-key-secret', service }, fetcher)!.start(phone);
+  expect(new Headers(fetcher.mock.calls[0]![1]!.headers).get('authorization')).toBe(`Basic ${btoa(`${key}:synthetic-key-secret`)}`);
+  for (const user of ['SKshort', `XX${'e'.repeat(32)}`, `sk${'e'.repeat(32)}`]) expect(twilioPhoneVerification({ user, secret: 'synthetic-key-secret', service }, fetcher)).toBeNull();
 });

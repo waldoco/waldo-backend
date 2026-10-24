@@ -99,5 +99,7 @@ describe('your phone', () => {
     const resend = renderToStaticMarkup(<PhoneControls record={phone({ challenge: pending, actions: ['phone.sms_send', 'phone.sms_check'] })} busy={false} onAction={noop}/>);
     expect(resend).toContain('Text the code again'); expect(resend).not.toContain('You can ask for another code after');
     expect(renderToStaticMarkup(<PhoneControls record={phone({ challenge: { ...pending, state: 'unknown', retry_at: 1_800_003_600 }, actions: [] })} busy={false} onAction={noop}/>)).toContain('Twilio did not confirm the last text.');
+    // A code that ran out and a text Twilio turned down both leave no code waiting.
+    expect(renderToStaticMarkup(<PhoneControls record={phone({ challenge: { ...pending, state: 'expired', retry_at: 1_800_000_060 }, actions: [] })} busy={false} onAction={noop}/>)).toContain('No code is waiting for this number.');
   });
 });
