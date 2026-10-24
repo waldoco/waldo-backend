@@ -274,7 +274,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['quote a score, a number or a reading', 'put a health word (recovery, sleep, zone, health) in the title or description of an event', 'raise more than one card', 'say the change was already made', 'diagnose or mention medicine'],
     },
     receipts: [
-      effects('calendar.change.proposed', { max: 1 }, 'at most one card, since the trigger raises one health card a day'),
+      effects('calendar.change.proposed', { max: 1 }, 'at most one card, since one zone change is one evaluation and one evaluation raises at most one card'),
       effects('calendar.change.proposed', {}, "a card's guest-visible fields carry no health word", (payload) => {
         const card = payload as { title?: unknown; description?: unknown; location?: unknown };
         return ![card.title, card.description, card.location].some((field) => typeof field === 'string' && /\b(recovery|sleep|health|zone|hrv|readiness|strain|form|load)\b/i.test(field));

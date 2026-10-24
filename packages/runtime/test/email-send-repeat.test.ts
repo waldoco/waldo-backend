@@ -2,15 +2,14 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { approvalDesk, type EmailSendProposal } from '../src/channels/approvals';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 // Synthetic mail only. Asking for the same email again on a later turn is the owner's call: the desk raises a new
 // card, and when an identical earlier send's outcome is still unknown, the card says so.
 const SENT_AT = Date.UTC(2026, 9, 13, 1, 0);
-const email = async (subject: string, turn: string, messageId: string, body = 'QA'): Promise<EmailSendProposal> => {
-  const raw = `${subject} ${body} bytes for ${turn}`;
-  return { to: ['owner@example.test'], subject, body, raw, digest: await sha256Hex(raw), message_id: messageId, dedupe_key: turn };
-};
+const email = async (subject: string, turn: string, messageId: string, body = 'QA'): Promise<EmailSendProposal> =>
+  ({ ...await emailProposal({ to: ['owner@example.test'], subject, body, message_id: messageId }), dedupe_key: turn });
 
 const repeat = async (name: string, second: (first: EmailSendProposal) => Promise<EmailSendProposal>, firstOutcome: 'unknown' | 'sent') => {
   const cards: string[] = [];

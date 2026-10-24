@@ -10,7 +10,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import {
   calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
-  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
+  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
 // Distinctive synthetic values: if any of them shows up in a prompt, a ledger row, a log line or a proposal, a reading leaked.
@@ -34,7 +34,7 @@ const move = (start = '2026-10-21T13:00', end = '2026-10-21T14:30') => JSON.stri
 const noOp = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, notify_guests: null, reason: '' });
 
 let sequence = 0;
-type Harness = Readonly<{ sql: SqlStorage; deps: (over?: Partial<HealthTriggerDeps>) => HealthTriggerDeps; prompts: string[]; proposals: ProposeCalendarChangeArgs[]; logs: string[]; reschedules: number[]; charged: string[] }>;
+type Harness = Readonly<{ sql: SqlStorage; storage: DurableObjectStorage; deps: (over?: Partial<HealthTriggerDeps>) => HealthTriggerDeps; prompts: string[]; proposals: ProposeCalendarChangeArgs[]; logs: string[]; reschedules: number[]; charged: string[] }>;
 const withTrigger = <T>(work: (h: Harness) => Promise<T>) => runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`health-trigger-${sequence++}`)), async (_instance, state) => {
   const sql = state.storage.sql;
   const book = healthTriggerBook(sql);
@@ -43,14 +43,14 @@ const withTrigger = <T>(work: (h: Harness) => Promise<T>) => runInDurableObject(
   const deps = (over: Partial<HealthTriggerDeps> = {}): HealthTriggerDeps => ({
     book, now: () => NOW, newId: () => `r${++ids}`, timezone: TZ, enabled: () => true, proactivity: () => NO_QUIET, modeSetting: () => 'auto',
     readHealth: async () => ROW, comingItems: async () => [REVIEW, DRIVE, TAX],
-    admit: () => true, charge: key => { charged.push(key); },
+    admit: () => ({ verdict: 'send' }), charge: key => { charged.push(key); },
     decide: async (_id, prompt) => { prompts.push(prompt); return move(); },
     propose: async args => { proposals.push(args); return `p${proposals.length}`; },
     reschedule: async at => { reschedules.push(at); },
     log: line => { logs.push(JSON.stringify(line)); },
     ...over,
   });
-  return work({ sql, deps, prompts, proposals, logs, reschedules, charged });
+  return work({ sql, storage: state.storage, deps, prompts, proposals, logs, reschedules, charged });
 });
 const everything = (sql: SqlStorage) => JSON.stringify([
   sql.exec('SELECT * FROM health_trigger_runs').toArray(), sql.exec('SELECT * FROM health_trigger_pending').toArray(),
@@ -130,30 +130,62 @@ describe('the health trigger', () => {
     });
   });
 
-  it('keeps one health card per owner-local day, counted in the zone the owner is in now', async () => {
-    await withTrigger(async ({ deps, prompts, proposals }) => {
-      const book = deps().book;
-      book.mark('2026-10-21', NOW - 60_000);
-      expect(await runHealthTrigger(deps())).toBe('proposed');
-      // The owner flies to New York: 16:00 UTC is still 21 October there, so the day's card is spent.
-      const later = Date.parse('2026-10-21T16:00:00Z');
-      book.mark('2026-10-21', later - 60_000);
-      expect(await runHealthTrigger(deps({ now: () => later, timezone: 'America/New_York' }))).toBe('budget_day');
-      // Back in Kolkata, 19:00 UTC is already 22 October: a new day.
-      const nextDay = Date.parse('2026-10-21T19:00:00Z');
-      book.mark('2026-10-22', nextDay - 60_000);
-      const tomorrow: ComingItem = { ...REVIEW, start: '2026-10-22T05:30:00Z', end: '2026-10-22T07:00:00Z' };
-      expect(await runHealthTrigger(deps({ now: () => nextDay, comingItems: async () => [tomorrow], readHealth: async () => ({ ...ROW, context: { ...ROW.context, day: '2026-10-22', compiled_at: '2026-10-21T18:30:00Z' } }),
-        decide: async (_id, prompt) => { prompts.push(prompt); return move('2026-10-22T13:00', '2026-10-22T14:30'); } }))).toBe('proposed');
-      expect(proposals).toHaveLength(2);
+  // One evaluation over the delivery gate's real budget, at a time and in a zone the test names: the marked day is the
+  // owner-local day there, the meeting two hours out, and the model moves it two hours later.
+  const gatedRun = (h: Harness, at: number, timezone: string, over: Partial<HealthTriggerDeps> = {}) => {
+    const day = localIso(at, timezone).slice(0, 10);
+    h.deps().book.mark(day, at - 60_000);
+    let clock = at;
+    const budget = healthCardBudget(new DeliveryGateStore(h.sql), 'owner-1', timezone, () => clock);
+    return runHealthTrigger(h.deps({ now: () => clock, timezone, admit: budget.admit, charge: budget.charge,
+      readHealth: async () => ({ ...ROW, context: { ...ROW.context, day, compiled_at: new Date(at - 600_000).toISOString() } }),
+      comingItems: async () => [{ ...REVIEW, start: new Date(at + 7_200_000).toISOString(), end: new Date(at + 9_000_000).toISOString() }],
+      decide: async (_id, prompt) => {
+        h.prompts.push(prompt);
+        // The model takes a few seconds, so the card is booked after the run started.
+        clock += 5_000;
+        return JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: localIso(at + 14_400_000, timezone), end: localIso(at + 18_000_000, timezone), title: null, notify_guests: false, reason: 'A later slot.' });
+      }, ...over }));
+  };
+
+  it('lets the delivery gate\'s budget govern: three proposed changes a day, then none until the owner\'s next day, counted in the zone they are in now', async () => {
+    await withTrigger(async h => {
+      ensureSchema(h.storage);
+      const hour = HEALTH_TRIGGER_FLOOR_MS;
+      for (const at of [NOW, NOW + hour + 5_000, NOW + 2 * hour + 10_000]) expect(await gatedRun(h, at, TZ)).toBe('proposed');
+      expect(h.proposals).toHaveLength(3);
+      expect(await gatedRun(h, NOW + 3 * hour + 15_000, TZ)).toBe('budget_gate');
+      expect(h.deps().book.pending(NOW + 3 * hour + 15_000)).toBeNull();
+      // The owner flies to New York: 16:00 UTC is still 21 October there, so the day's budget is spent.
+      expect(await gatedRun(h, Date.parse('2026-10-21T16:00:00Z'), 'America/New_York')).toBe('budget_gate');
+      // 05:00 UTC on the 22nd is 01:00 on the 22nd in New York: a new day.
+      expect(await gatedRun(h, Date.parse('2026-10-22T05:00:00Z'), 'America/New_York')).toBe('proposed');
+      expect(h.proposals).toHaveLength(4);
+      expect(h.prompts).toHaveLength(4);
+    });
+  });
+
+  it('holds a card the gate\'s cooldown still covers and keeps the change for when it ends, though the hourly floor came first', async () => {
+    await withTrigger(async h => {
+      ensureSchema(h.storage);
+      expect(await gatedRun(h, NOW, TZ)).toBe('proposed');
+      // The next evaluation is armed an hour after the last one started; the card was booked five seconds later.
+      const next = healthTriggerDueAt(NOW + 30 * 60_000, h.deps().book.lastRunAt());
+      expect(next).toBe(NOW + HEALTH_TRIGGER_FLOOR_MS);
+      expect(await gatedRun(h, next, TZ)).toBe('held_cooldown');
+      expect(h.prompts).toHaveLength(1);
+      expect(h.reschedules).toEqual([NOW + 5_000 + HEALTH_TRIGGER_FLOOR_MS]);
+      expect(h.deps().book.pending(next)).not.toBeNull();
+      expect(await gatedRun(h, h.reschedules[0]!, TZ)).toBe('proposed');
+      expect(h.proposals).toHaveLength(2);
     });
   });
 
   it('respects the per-owner interrupt budget of the delivery gate', async () => {
     await withTrigger(async ({ deps, prompts }) => {
       deps().book.mark('2026-10-21', NOW - 60_000);
-      expect(await runHealthTrigger(deps({ admit: () => false }))).toBe('budget_gate');
-      expect(prompts).toEqual([]);
+      expect(await runHealthTrigger(deps({ admit: () => ({ verdict: 'spent' }) }))).toBe('budget_gate');
+      expect([prompts.length, deps().book.pending(NOW)]).toEqual([0, null]);
     });
   });
 
@@ -168,7 +200,7 @@ describe('the health trigger', () => {
     });
   });
 
-  // A day later each time, so the one-card-a-day budget never decides these tests.
+  // The budget is faked to admit every card, so only the skip accounting decides these tests.
   const proposeOn = async (h: Harness, at: number, day: string, over: Partial<HealthTriggerDeps> = {}) => {
     h.deps().book.mark(day, at - 60_000);
     return runHealthTrigger(h.deps({ now: () => at, readHealth: async () => ({ ...ROW, context: { ...ROW.context, day, compiled_at: new Date(at - 600_000).toISOString() } }),
@@ -215,6 +247,68 @@ describe('the health trigger', () => {
     });
   });
 
+  it('asks the same day when the owner skips three cards in one day, now that a day can carry several', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      let at = NOW;
+      for (let i = 0; i < HEALTH_ASK_AFTER_SKIPS; i += 1) {
+        expect(await proposeOn(h, at, '2026-10-21')).toBe('proposed');
+        skip(h.sql, `p${i + 1}`, at);
+        at += HEALTH_TRIGGER_FLOOR_MS;
+      }
+      expect(await proposeOn(h, at, '2026-10-21')).toBe('proposed');
+      expect(h.proposals[3]!.reason).toBe(`A later slot. ${HEALTH_KEEP_ASKING}`);
+    });
+  });
+
+  it('shows the model what it proposed earlier today and how the owner answered, so a later run does not put the same change up again', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      const card = (id: string, args: ProposeCalendarChangeArgs) => h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES (?, 'calendar_change', 'open', 's', ?, ?)", id, JSON.stringify(args), NOW);
+      const later = NOW + HEALTH_TRIGGER_FLOOR_MS;
+      const first = move(localIso(NOW + 14_400_000, TZ), localIso(NOW + 18_000_000, TZ));
+      expect(await proposeOn(h, NOW, '2026-10-21', { decide: async (_id, prompt) => { h.prompts.push(prompt); return first; }, propose: async args => { h.proposals.push(args); card('p1', args); return 'p1'; } })).toBe('proposed');
+      expect(await proposeOn(h, later, '2026-10-21', { decide: async (_id, prompt) => { h.prompts.push(prompt); return noOp; } })).toBe('no_op');
+      expect(h.prompts[0]).toContain('Nothing proposed earlier on 2026-10-21.');
+      expect(h.prompts[1]).toContain(`Earlier on 2026-10-21 you proposed: [{"action":"move","item":"e1","start":"${localIso(NOW + 14_400_000, TZ)}","end":"${localIso(NOW + 18_000_000, TZ)}","answer":"waiting for the owner"}]`);
+      h.sql.exec("UPDATE ledger SET status = 'skipped', decided_at = ? WHERE id = 'p1'", later);
+      expect(await proposeOn(h, later + HEALTH_TRIGGER_FLOOR_MS, '2026-10-21', { decide: async (_id, prompt) => { h.prompts.push(prompt); return noOp; } })).toBe('no_op');
+      expect(h.prompts[2]).toContain('"answer":"skipped"');
+      for (const leak of LEAKS) for (const text of h.prompts) expect(text).not.toContain(leak);
+    });
+  });
+
+  it('refuses, uncharged, a change it already put up that day while the owner is still deciding on it, put it off or skipped it', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      const same = move('2026-10-21T15:00', '2026-10-21T16:00');
+      let cards = 0;
+      const propose = async (args: ProposeCalendarChangeArgs) => {
+        h.proposals.push(args);
+        const id = `p${++cards}`;
+        h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES (?, 'calendar_change', 'card_unconfirmed', 's', ?, ?)", id, JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+        return id;
+      };
+      const run = (at: number, day: string, answer = same) => proposeOn(h, at, day, { decide: async () => answer, propose });
+      const hour = HEALTH_TRIGGER_FLOOR_MS;
+      expect(await run(NOW, '2026-10-21')).toBe('proposed');
+      // The model words its reason anew; the change is the same one, still waiting on its card.
+      const reworded = JSON.stringify({ ...JSON.parse(same), reason: 'Still compromised; the later slot still helps.' });
+      expect(await run(NOW + hour, '2026-10-21', reworded)).toBe('duplicate');
+      h.sql.exec("UPDATE ledger SET status = 'open', deferred_at = ? WHERE id = 'p1'", NOW + hour);
+      expect(await run(NOW + 2 * hour, '2026-10-21')).toBe('duplicate');
+      h.sql.exec("UPDATE ledger SET status = 'skipped', decided_at = ? WHERE id = 'p1'", NOW + 2 * hour);
+      expect(await run(NOW + 3 * hour, '2026-10-21')).toBe('duplicate');
+      expect([h.proposals.length, h.charged.length]).toEqual([1, 1]);
+      expect(h.sql.exec('SELECT outcome FROM health_trigger_runs ORDER BY at').toArray().map(row => row.outcome)).toEqual(['proposed', 'duplicate', 'duplicate', 'duplicate']);
+      // Another time for the same event is another change, and a new owner-local day starts afresh.
+      expect(await run(NOW + 4 * hour, '2026-10-21', move('2026-10-21T17:00', '2026-10-21T18:00'))).toBe('proposed');
+      const nextDay = Date.parse('2026-10-21T19:00:00Z'); // 00:30 on the 22nd in Kolkata
+      expect(await run(nextDay, '2026-10-22', move('2026-10-22T15:00', '2026-10-22T16:00'))).toBe('proposed');
+      expect([h.proposals.length, h.charged.length]).toEqual([3, 3]);
+    });
+  });
+
   it('leaves room for the question: a reason too long to carry it is refused, not trimmed', async () => {
     await withTrigger(async h => {
       ledgerTable(h.sql);
@@ -233,16 +327,19 @@ describe('the health trigger', () => {
     expect(held.before?.zones.form).toBe('flagging');
   });
 
-  it('under auto, only watches until the owner\'s own baseline exists for the source, then proposes', () => {
-    const view = (over: Record<string, unknown> = {}, previous: unknown = ROW.previous) => healthTriggerView({ context: { ...ROW.context, ...over }, previous }, NOW, TZ)!;
-    expect(resolveHealthMode('auto', view())).toBe('live');
-    // No Recovery zone yet: its baseline for this wearable and HRV method has not matured.
-    expect(resolveHealthMode('auto', view({ recovery: { reason: 'baseline_immature' } }))).toBe('shadow');
-    // A new wearable has no earlier day of its own to compare with.
-    expect(resolveHealthMode('auto', view({}, { ...ROW.previous, basis: [{ source: 'health_connect', consent_epoch: 1 }] }))).toBe('shadow');
-    // The owner's choice wins either way.
-    expect(resolveHealthMode('live', view({ recovery: { reason: 'baseline_immature' } }))).toBe('live');
-    expect(resolveHealthMode('shadow', view())).toBe('shadow');
+  it('under auto, suggests from the first zone change: the model is told when there is no earlier day to compare with', async () => {
+    expect(resolveHealthMode('auto')).toBe('live');
+    expect(resolveHealthMode('live')).toBe('live');
+    expect(resolveHealthMode('shadow')).toBe('shadow');
+    await withTrigger(async h => {
+      // Day one on a new wearable: no Recovery zone yet (its baseline has not matured) and no earlier day of its own.
+      const firstDay = { context: { ...ROW.context, recovery: { reason: 'baseline_immature' } }, previous: { ...ROW.previous, basis: [{ source: 'health_connect', consent_epoch: 1 }] } };
+      h.deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(h.deps({ readHealth: async () => firstDay }))).toBe('proposed');
+      expect(h.prompts[0]).toContain('recovery unavailable');
+      expect(h.prompts[0]).toContain('still being learned');
+      expect(h.sql.exec('SELECT mode FROM health_trigger_runs').toArray()).toEqual([{ mode: 'live' }]);
+    });
   });
 
   it('records and shows nothing in shadow, and the owner can flip it with one setting', async () => {
@@ -414,6 +511,20 @@ describe('proposal checks', () => {
     expect(cancel(null)).toEqual({ kind: 'propose', args: { action: 'cancel', event_id: 'gcal-review-1', reason: 'Clear the morning.', send_updates: 'none' } });
   });
 
+  it('carries the kind the model gave a new block, and refuses a kind on a move or one it does not know', () => {
+    const answer = (over: Record<string, unknown>) => JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T16:00', title: 'Recharge', notify_guests: null, reason: 'Keep the afternoon light.', ...over });
+    const create = (block: unknown) => parseHealthDecision(answer({ block }), [REVIEW], NOW, TZ);
+    expect(create('rest')).toEqual({ kind: 'propose', args: { action: 'create', title: 'Recharge', start: '2026-10-21T09:30:00.000Z', end: '2026-10-21T10:30:00.000Z', reason: 'Keep the afternoon light.', block: 'rest' } });
+    expect(create('deep_work')).toMatchObject({ args: { block: 'deep_work' } });
+    // Null, and an answer written before the field existed, make an ordinary event.
+    expect([create(null), parseHealthDecision(answer({}), [REVIEW], NOW, TZ)].map(d => d.kind === 'propose' && 'block' in d.args)).toEqual([false, false]);
+    expect(() => create('nap')).toThrow('invalid health decision shape');
+    expect(() => parseHealthDecision(answer({ action: 'move', item: 'e1', title: null, block: 'rest' }), [REVIEW], NOW, TZ)).toThrow('invalid health decision shape');
+    expect(HEALTH_TRIGGER_FORMAT.schema.required).toContain('block');
+    expect(HEALTH_TRIGGER_FORMAT.schema.properties.block).toEqual({ type: ['string', 'null'], enum: ['rest', 'deep_work', null] });
+    expect(healthTriggerPrompt({ view: healthTriggerView(ROW, NOW, TZ)!, items: [REVIEW], now: NOW, timezone: TZ, feedback: {} })).toContain('block (rest or deep_work for a create, else null)');
+  });
+
   it('arms the evaluation no earlier than an hour after the last one', () => {
     expect(healthTriggerDueAt(NOW, null)).toBe(NOW);
     expect(healthTriggerDueAt(NOW, NOW - 600_000)).toBe(NOW - 600_000 + HEALTH_TRIGGER_FLOOR_MS);
@@ -444,15 +555,16 @@ describe('coming decisions', () => {
 });
 
 describe('the health card budget', () => {
-  it('admits a card on a day with interruptions left, charges it once, and holds the next inside the cooldown', async () => {
+  it('admits a card on a day with interruptions left, charges it once, and has the next wait out the cooldown', async () => {
     await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`health-budget-${sequence++}`)), async (_instance, state) => {
       ensureSchema(state.storage);
       let now = NOW;
       const budget = healthCardBudget(new DeliveryGateStore(state.storage.sql), 'owner-1', TZ, () => now);
-      expect(budget.admit('health:2026-10-21')).toBe(true);
+      expect(budget.admit('health:2026-10-21')).toEqual({ verdict: 'send' });
       budget.charge('health:2026-10-21');
+      const booked = now;
       now += 10 * 60_000;
-      expect(budget.admit('health:2026-10-21')).toBe(false);
+      expect(budget.admit('health:2026-10-21')).toEqual({ verdict: 'wait', until: booked + 60 * 60_000 });
     });
   });
 });
