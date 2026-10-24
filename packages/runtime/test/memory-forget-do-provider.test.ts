@@ -184,8 +184,8 @@ it('HELDROWS lists the held rows of a projection hold and a decoded-leaf hold, c
     add('[{"note":"nothing here"}]', 'clean card');
     add(JSON.stringify([{ note: `SECRETVALUE ${topic}` }]), 'a');
     add(JSON.stringify([{ [topic]: 'x' }]), null);
-    sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, decision_log TEXT)');
-    sql.exec('INSERT INTO memory_blocks (content, decision_log) VALUES (?, ?)', JSON.stringify({ note: 'DIFFPROJ\u0054OPIC' }).replace('\u0054', '\\u0054'), null);
+    sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT)');
+    sql.exec('INSERT INTO patrol_log (summary) VALUES (?)', JSON.stringify({ note: 'DIFFPROJ\u0054OPIC' }).replace('\u0054', '\\u0054'));
     const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
     const verdict = real(topic);
     expect(verdict.heldBy?.map(h => `${h.table}:${h.rule}`)).toContain('update_cards:projection');
@@ -194,9 +194,9 @@ it('HELDROWS lists the held rows of a projection hold and a decoded-leaf hold, c
     expect(cards).toMatch(/^#3 t1\[projection changes len=\d+ json=1 raw=1 val=0 key=1/m);
     expect(cards).not.toMatch(/^#1 /m);
     expect(cards).not.toContain('SECRETVALUE');
-    const blocks = heldRowShapes(sql, 'memory_blocks', topics, 25, real);
+    const blocks = heldRowShapes(sql, 'patrol_log', topics, 25, real);
     expect(verdict.heldBy?.map(h => h.rule)).toContain('decoded_leaf_or_unreadable');
-    expect(blocks).toMatch(/^#1 t1\[decoded_leaf_or_unreadable content len=\d+\]/m);
+    expect(blocks).toMatch(/^#1 t1\[decoded_leaf_or_unreadable summary len=\d+\]/m);
     state.storage.deleteAlarm();
   });
 });
@@ -206,17 +206,17 @@ it('HELDROWS continues projection and decoded-leaf listings from the given rowid
 
   await runInDurableObject(stub(label), async (instance, state) => {
     const sql = state.storage.sql;
-    sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, decision_log TEXT)');
-    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 20; index++) sql.exec('INSERT INTO memory_blocks (content) VALUES (?)', JSON.stringify({ n: `plain ${index}` }));
-    sql.exec('INSERT INTO memory_blocks (content) VALUES (?)', '{"note":"LATEHOLD\\u0054OPIC"}');
+    sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT)');
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 20; index++) sql.exec('INSERT INTO patrol_log (summary) VALUES (?)', JSON.stringify({ n: `plain ${index}` }));
+    sql.exec('INSERT INTO patrol_log (summary) VALUES (?)', '{"note":"LATEHOLD\\u0054OPIC"}');
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     for (let index = 0; index < 3; index++) sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', JSON.stringify([{ n: topic }]), null);
     const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
     // (a) the late decoded-leaf hold is announced as partial, then found by continuing.
-    const first = heldRowShapes(sql, 'memory_blocks', topics, 25, real);
-    const next = Number(/decoded-leaf scan of content PARTIAL, continue with \/heldrows memory_blocks (\d+)/.exec(first)![1]);
-    expect(first).not.toContain('decoded_leaf_or_unreadable content len=');
-    expect(heldRowShapes(sql, 'memory_blocks', topics, 25, real, next)).toMatch(/^#\d+ t1\[decoded_leaf_or_unreadable content/m);
+    const first = heldRowShapes(sql, 'patrol_log', topics, 25, real);
+    const next = Number(/decoded-leaf scan of summary PARTIAL, continue with \/heldrows patrol_log (\d+)/.exec(first)![1]);
+    expect(first).not.toContain('decoded_leaf_or_unreadable summary len=');
+    expect(heldRowShapes(sql, 'patrol_log', topics, 25, real, next)).toMatch(/^#\d+ t1\[decoded_leaf_or_unreadable summary/m);
     // (b) projection rows honor fromRowid.
     expect(heldRowShapes(sql, 'update_cards', topics, 25, real)).toMatch(/^#1 t1\[projection/m);
     const later = heldRowShapes(sql, 'update_cards', topics, 25, real, 2);
@@ -840,8 +840,6 @@ positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () =>
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
 positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
-positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
-positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));
 
 // Full-store scan: after a successful forget and a DO eviction, no table or text column in the owner DO SQLite holds the forgotten text.
 // An exemption must name why the table cannot hold owner text; there is no skip.
