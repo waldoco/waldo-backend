@@ -116,6 +116,8 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REDIRECT_URI` | `health/providers/whoop-routes.ts:21` | WHOOP off | not set. WHOOP comes later (owner ruling, 22 Oct). |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
+| `WALDO_PROBE_TELEGRAM_ID` | `channels/probe-turn.ts` | none; without it the staging probe refuses (503) | not set |
+| `WALDO_PROBE_SYNTHETIC_DO_NAMES` | `channels/probe-turn.ts` | none; a probe target outside the list is refused (403) | not set |
 | `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
 
 #1393 (merged 22 Oct as `e228a483`) moved Google and MCP OAuth state onto `WALDO_OAUTH_STATE_SECRET`. Freeze the secret list on the stand-up SHA (S0).

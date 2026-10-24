@@ -148,8 +148,9 @@ it('does not select a legacy DO when probe directory lookup fails', async () => 
  expect((await handleProbeTurn(post('probe-secret'), staging(ns), failed)).status).toBe(503);
  expect(idFromName).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
 });
-it('keeps the no-directory deploy-owner probe route', async () => {
+it('the no-directory deploy owner is a real owner, so it is never a probe target', async () => {
  const { idFromName, ns } = namespace();
- expect((await handleProbeTurn(post('probe-secret'), staging(ns))).status).toBe(200);
- expect(idFromName).toHaveBeenCalledWith('42');
+ expect((await handleProbeTurn(post('probe-secret'), staging(ns))).status).toBe(503);
+ expect((await handleProbeTurn(post('probe-secret'), { ...staging(ns), WALDO_PROBE_TELEGRAM_ID: '42', WALDO_PROBE_SYNTHETIC_DO_NAMES: '42' })).status).toBe(403);
+ expect(idFromName).not.toHaveBeenCalled();
 });
