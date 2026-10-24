@@ -11,7 +11,7 @@ import { productionDeps } from '../src/seams/deps';
 // The owner's health notes setting reaches the nightly pass the owner object runs: off, the model is told and no health
 // note is kept; on, it is. Synthetic words only.
 const SAID = 'I sleep badly after late coffee. Please keep my evenings calm.';
-const asked = vi.hoisted(() => ({ inputs: [] as string[], add: null as unknown[] | null }));
+const asked = vi.hoisted(() => ({ inputs: [] as string[], add: null as unknown[] | null, reply: null as string | null }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number }) => method === 'sendMessage' ? { message_id: 900, chat: { id: payload.chat_id } } : true };
@@ -26,7 +26,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: '"Please keep my evenings calm"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
     ];
     const text = nightly ? JSON.stringify({ add, corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null })
-      : request.response_format ? '{}' : 'Noted.';
+      : request.response_format ? '{}' : asked.reply ?? 'Noted.';
     return { ok: true, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -106,4 +106,37 @@ it('the nightly pass holds a reading that only forwarded text carries', () =>
       expect(memory.claims()).toEqual([]);
       expect(memory.holds().map((hold) => [hold.kind, hold.reason])).toEqual([['health', 'numeric-health']]);
     } finally { Date.now = realNow; asked.add = null; await state.storage.deleteAlarm(); }
+  }));
+
+// Probe E2E-b from the gate: Waldo relays a device reading, and the owner typed the same numbers that day about other
+// things. The claim's evidence quotes neither number, so the live nightly pass holds the reading.
+it('the nightly pass holds a relayed reading whose numbers the owner typed only about other things', () =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-nightly-relayed')), async (_instance, state) => {
+    const realNow = Date.now;
+    let now = Date.parse('2026-10-13T05:00:00Z');
+    Date.now = () => now;
+    asked.inputs.length = 0;
+    asked.add = [{ kind: 'health', text: 'On 13 Oct slept 6 hours, HRV 16', source: 'stated', evidence: '"How did I sleep?"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }];
+    try {
+      const build = () => new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+      const owner = build();
+      state.storage.kv.put('do_name', 'health-nightly-relayed'); state.storage.kv.put('telegram_subject', '7');
+      const turns = [['Laundry at 6, then the 16 bus home.', 'Noted.'], ['How did I sleep?', 'You slept 6 hours and your HRV was 16.']] as const;
+      for (const [index, [text, reply]] of turns.entries()) {
+        asked.reply = reply;
+        const update = { update_id: 320 + index, message: { message_id: 61 + index, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } };
+        expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
+        for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
+      }
+      asked.reply = null;
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, now - 10_800_000);
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: NIGHTLY_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_ID }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
+      state.storage.kv.put('owner_alarm_last_v1', 0);
+      await build().alarm();
+      expect(asked.inputs.some((input) => input.includes('the 16 bus home') && input.includes('How did I sleep?'))).toBe(true);
+      const memory = claimStore(state.storage.sql);
+      expect(memory.claims()).toEqual([]);
+      expect(memory.holds().map((hold) => [hold.kind, hold.reason])).toEqual([['health', 'numeric-health']]);
+    } finally { Date.now = realNow; asked.add = null; asked.reply = null; await state.storage.deleteAlarm(); }
   }));

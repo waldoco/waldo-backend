@@ -907,6 +907,10 @@ it.each([
   ['N4b: a forwarded number in an alias', { owner: 'My resting HR was 52 this morning', shared: 'Fwd: A1c 6.1' }, reading('On 24 Sep said resting HR was 52', 'My resting HR was 52 this morning', ['A1c 6.1'])],
   ['N6: mail Waldo relayed, then "note that"', { owner: 'note that', waldo: 'The clinic wrote that your blood pressure was 130/85.' }, reading('Blood pressure 130/85', 'note that')],
   ['a reading found nowhere', { owner: 'Remember my heart rate' }, reading('Resting HR 61', 'Remember my heart rate')],
+  ['E2E-b: sleep and HRV Waldo relayed, against a 6 and a 16 the owner typed elsewhere that day', { owner: 'Laundry at 6, then the 16 bus home. How did I sleep?', waldo: 'You slept 6 hours and your HRV was 16.' }, reading('On 24 Sep slept 6 hours, HRV 16', 'How did I sleep?')],
+  ['N1c: a forwarded resting HR against "gate 58" the owner typed', { owner: 'Boarding at gate 58. Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],
+  ['N1d: a number only in the evidence\'s citation, outside its quote', { owner: 'How did I sleep?', waldo: 'Your HRV was 16.' }, reading('HRV 16', 'owner, tg-16: "How did I sleep?"')],
+  ['a reading with one number the evidence quotes and one it does not', { owner: 'My blood pressure was 120/80 today', shared: 'Fwd: blood pressure 120/85' }, reading('Blood pressure 120/85', 'My blood pressure was 120/80 today')],
 ] as const)('holds %s', async (_probe, sides, claim) => {
   await withSql((sql) => {
     const store = claimStore(sql);
@@ -926,6 +930,32 @@ it('N3: holds a correction that replaces the owner\'s goal with a forwarded lab 
     expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
     expect(detail).toContain('held1(numeric-health)');
     expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// N3c: the owner typed the lab value's number elsewhere that day ("Room 97"), but not in the words the correction quotes.
+it('N3c: holds a correction to a forwarded lab value whose number the owner typed only elsewhere', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'Room 97 is booked for Friday. Update my goal with the lab result';
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 97 mg/dL', evidence: 'Update my goal with the lab result' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: Lab report. Fasting glucose 97 mg/dL', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// A reading the owner wrote is kept when its evidence quotes it, citation and all.
+it('keeps a reading whose quoted evidence carries its numbers', async () => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    const owner = 'Room 7 is booked. My resting HR was 52 this morning.';
+    applyClaimOps(store, ops({ add: [reading('On 24 Sep said resting HR was 52', 'owner, tg-1: "My resting HR was 52 this morning"')] }), AT, 'owner, day of fixture', undefined,
+      { owner, ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source, claim.source_ref])).toEqual([['On 24 Sep said resting HR was 52', 'owner', 'stated', 'owner, tg-1']]);
+    expect(store.holds()).toEqual([]);
   });
 });
 

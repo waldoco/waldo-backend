@@ -292,6 +292,20 @@ describe('what the flush keeps', () => {
     }, undefined, { transcript: `owner: ${owner}\nquoted: ${shared}\nwaldo: ${waldo}`, sides: { owner, shared, waldo }, ops });
   });
 
+  // Probe C3 through compactIfDue: Waldo relayed a reading, and the owner typed its numbers in the span about other things.
+  // The evidence quotes neither number, so the flush holds the reading.
+  it('C3: holds a relayed reading whose numbers the owner typed in the span only about other things', async () => {
+    const owner = 'Laundry at 6, then the 16 bus home. How did I sleep?';
+    const waldo = 'You slept 6 hours and your HRV was 16.';
+    const ops = JSON.stringify({ add: [
+      { kind: 'health', text: 'On 20 Oct slept 6 hours, HRV 16', source: 'stated', evidence: 'How did I sleep?', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
+    ], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
+    await keepWith('flush-relayed-coincidence', true, ({ memory }) => {
+      expect(memory.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+      expect(memory.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+    }, undefined, { transcript: `owner: ${owner}\nwaldo: ${waldo}`, sides: { owner, waldo }, ops });
+  });
+
   // The owner can start a forget while the flush's model call runs: what it read is checked again before anything is written.
   it('saves nothing when a forget of a topic the span carries starts during its model call', async () => {
     let sql: SqlStorage | undefined;
@@ -385,6 +399,34 @@ describe('the memory notice', () => {
       const next = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'hello again' }), (_name, work) => work());
       expect(next).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
     });
+  });
+});
+
+// Probe C3 on the summary: the owner typed a 6 and a 16 in the span about other things, and Waldo relayed a reading with
+// those numbers. Only numbers inside the owner's own readings count, so a summary carrying the relayed reading is refused.
+it('C3: a summary is refused when a reading\'s numbers are in the owner\'s words only outside any reading', async () => {
+  Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+  fake.flushOps = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
+  const storage = memoryStorage();
+  const logs: TurnLogEntry[] = [];
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('summary-coincidence')), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    const episodes = episodeIndex(state.storage.sql);
+    const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', store, memory];
+    args[3] = entry => logs.push(entry);
+    args[21] = memoryFlushHooks({ kv: state.storage.kv, episodes, claims: () => memory.claims(), timezone: () => 'UTC' });
+    const responder = createOwnerResponder(...args);
+    const said = (n: number) => n === 1 ? `Laundry at 6, then the 16 bus home. ${question(1)}` : question(n);
+    for (let n = 1; n <= 6; n += 1) {
+      await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: said(n), memoryWrites: false }), (_name, work) => work());
+      episodes.add(`app-${n}`, OWNER_SAID, said(n), Date.UTC(2026, 9, 20, 8, n));
+      episodes.add(`app-${n}-reply`, 'waldo', n === 2 ? 'You slept 6 hours and your HRV was 16.' : 'Noted.', Date.UTC(2026, 9, 20, 8, n, 30));
+    }
+    fake.summary = 'The owner does laundry at 6; they slept 6 hours and their HRV was 16.';
+    await responder.compactIfDue!('owner');
+    expect(logs.filter(entry => entry.hop === 'compaction').at(-1)).toMatchObject({ ok: false, code: 'numeric_health' });
+    expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(false);
   });
 });
 
