@@ -67,7 +67,7 @@ export const ablationVerdict = (status: RuleStatus, runs: readonly AblationRun[]
   for (const { baseline, ablated } of runs) {
     if (baseline.trials_per_scenario !== TRIALS || ablated.trials_per_scenario !== TRIALS) return { verdict: 'inconclusive', reason: `runs need ${TRIALS} trials per scenario` };
     const [candidate, ids] = ablated.candidate_model.split('+ablate:');
-    // A run without several rules measures them together; crediting its effect to each one would prune each alone.
+    // A run with several rules taken out measures them together; crediting its effect to each one would prune each alone.
     if (ids !== id && ids?.split(',').includes(id)) return { verdict: 'inconclusive', reason: 'a run pair took out more than this rule, so its effect is not this rule\'s alone' };
     if (ids !== id || baseline.candidate_model !== candidate || baseline.judge_model !== ablated.judge_model) {
       return { verdict: 'inconclusive', reason: 'a run pair is not this rule against an unablated baseline on the same model, modes and judge' };
