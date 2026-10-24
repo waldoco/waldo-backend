@@ -971,7 +971,7 @@ const PROFILE_SECTIONS: readonly (readonly [string, readonly string[]])[] = [
 ];
 
 export const profile = (claims: readonly Claim[]): readonly Readonly<{ title: string; lines: readonly string[] }>[] => {
-  const owned = claims.filter((claim) => claim.source !== 'inferred');
+  const owned = claims.filter((claim) => !awaitsOwnerConfirm(claim));
   return PROFILE_SECTIONS.map(([title, kinds]) => ({ title, lines: owned.filter((claim) => kinds.includes(claim.kind)).map((claim) => claim.text) }))
     .filter((section) => section.lines.length > 0);
 };
