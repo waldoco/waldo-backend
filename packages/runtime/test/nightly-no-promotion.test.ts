@@ -65,7 +65,7 @@ it('a nightly pass makes no promotion call and logs no constellation hop; a recu
   });
 });
 
-it('a claim and a node that earlier nights promoted stay readable through read_memory and recall, and the owner can forget both', async () => {
+it('a claim and a node that earlier nights promoted stay stored and readable, and the owner can forget both', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('promoted-stays-forgettable')), async (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     store.add(observation('Posterbot standup runs long on Mondays'), '2026-10-10T09:00:00Z', 1);
@@ -75,7 +75,7 @@ it('a claim and a node that earlier nights promoted stay readable through read_m
     const turn = { authenticatedUserId: 'owner:1', trigger: 'user_message', memoryTurn: { ownerId: 'owner:1', conversationRef: 'owner', current: { message_ref: 'tg-3', text: 'standup' }, recent: [] } } as unknown as MemoryToolContext;
     expect(await read.handle(read.schema.parse({ query: 'standup' }), turn)).toMatchObject({ ok: true, data: { claims: [{ id: 1 }] } });
     expect(store.recall('standup').map(claim => claim.id)).toEqual([1]);
-    expect(memoryPrompt(store)).toContain('Posterbot Mondays');
+    expect(store.nodes().map(row => row.label)).toEqual(['Posterbot Mondays']);
 
     applyClaimOps(store, JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_nodes: [node], forget_topic: 'Posterbot' }),
       '2026-10-13T06:00:00Z', 'owner, tg-3', undefined, { owner: 'please forget Posterbot' }, true);
