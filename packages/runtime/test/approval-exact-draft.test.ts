@@ -21,6 +21,7 @@ const harness = (state: DurableObjectState) => {
     account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
     sendRaw: async (raw: string) => { sent.push(raw); return { message_id: `g${sent.length}`, thread_id: 't1' }; },
     findSentByMessageId: async (id: string) => sent.length ? { message_id: `g${sent.length}`, thread_id: 't1', rfc822_message_id: id, label_ids: ['SENT'] } : false,
+    threadPage: async () => ({ messages: [{ id: 'parent-1', message_id: '<parent@example.com>', references: ['<root@example.com>'], subject: 'Friday deck' }] }),
   } as unknown as GoogleClient;
   const desk = approvalDesk(state.storage.sql, {
     surface: 'telegram', owner: 42, appIdentity: () => true, appLink: appApprovalLink,
@@ -128,6 +129,29 @@ it('an email whose frozen bytes say other words than its card is refused, even w
     expect((await approvals()).find(item => item.approval_id === headerBreak)!.exact.message).toBeUndefined();
     expect(await desk.decide(headerBreak, 'a', 'trace')).toMatchObject({ toast: 'Email changed' });
     expect(sent).toEqual([]);
+  });
+});
+
+it('a reply with a blind copy goes out with the threading and Bcc the card showed, and a hidden Bcc is refused', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`exact-draft-reply-bcc-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const { desk, sent, approvals, decide, draftEmail, row } = harness(state);
+    const id = await draftEmail({ subject: 'Re: Friday deck', bcc: ['quiet@example.net'], reply_to_thread_id: 't1', in_reply_to_msg_id: 'parent-1' });
+    const shown = (await approvals()).find(item => item.approval_id === id)!;
+    expect(shown.exact.recipients!.bcc).toEqual(['quiet@example.net']);
+    const approved = await decide({ approval_id: id, action: 'approve', expected_digest: shown.payload_digest, request_id: 'exact-reply-0001' });
+    expect(JSON.parse(approved.text)).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
+    expect(sent).toHaveLength(1);
+    const wire = sentMime(sent[0]!);
+    expect(wire.headers).toEqual(expect.arrayContaining(['Subject: Re: Friday deck', 'Bcc: quiet@example.net', 'In-Reply-To: <parent@example.com>', expect.stringMatching(/^References: <root@example\.com>\s+<parent@example\.com>$/)]));
+    expect(wire.body).toBe(shown.exact.message!.body);
+
+    // Bytes that carry a Bcc the stored fields, and so the card, leave out.
+    const reply = JSON.parse(row(id).payload_json) as Parameters<typeof emailProposal>[0];
+    const { bcc: _bcc, ...unshown } = await emailProposal({ ...reply, message_id: '<hidden-bcc@waldo-send>' });
+    const hidden = await desk.proposeSendEmail(unshown);
+    expect((await approvals()).find(item => item.approval_id === hidden)!.exact.recipients!.bcc).toEqual([]);
+    expect(await desk.decide(hidden, 'a', 'trace')).toMatchObject({ toast: 'Email changed' });
+    expect(sent).toHaveLength(1);
   });
 });
 

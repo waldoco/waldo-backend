@@ -115,7 +115,7 @@ export type ApprovalSurface = 'telegram' | 'whatsapp' | 'app' | 'console';
 // Where a decision came from. messageRef names the tapped card when the surface reports one.
 export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: string }>;
 export type ApprovalReview =
-  | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
+  | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string; earlier_unknown_at?: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
@@ -480,8 +480,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // Said the same whether the stored draft changed, its bytes disagree with its words, or its card recorded no digest.
   const changedSend = (entry: LedgerRow): ApprovalDecision => entry.kind === 'email_send'
-    ? { toast: 'Email changed', message: `The stored email doesn't match the card you reviewed, so nothing was sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Ask me again and I'll prepare a fresh one.` }
-    : { toast: 'Message changed', message: "The stored message doesn't match the card you reviewed, so nothing was sent. Ask me again and I'll prepare a fresh one." };
+    ? { toast: 'Email changed', message: `I couldn't confirm the stored email is the one on the card you reviewed, so nothing was sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Ask me again and I'll prepare a fresh one.` }
+    : { toast: 'Message changed', message: "I couldn't confirm the stored message is the one on the card you reviewed, so nothing was sent. Ask me again and I'll prepare a fresh one." };
   const notPresented = (entry: LedgerRow): ApprovalDecision => {
     const id = entry.id;
     const inApp = deps.appLink && appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
@@ -1145,7 +1145,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const card = shown.find(s => s.surface === surface && s.surface !== 'app');
       if (!card) return id;
       const url = await deps.reviewUrl?.().catch(() => null);
-      const detail = url ? ` View details: ${url}. This page cannot approve email sends.` : '';
+      const detail = url ? ` You can also review it at ${url}.` : '';
       const inApp = deps.appLink && shown.some(s => s.surface === 'app' && s.approvable);
       const receipt = card.approvable
         ? 'Email ready for review. The card above has the exact recipients, subject and body. If it is right, use the Send it instruction on that card. Nothing has been sent.'
@@ -1240,7 +1240,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (r.kind === 'email_send') {
             const p = JSON.parse(r.payload_json) as EmailSendProposal;
             if (!Array.isArray(p.to) || !p.to.length || !p.to.every((address) => typeof address === 'string') || !Array.isArray(p.cc ?? []) || !Array.isArray(p.bcc ?? []) || !(p.cc ?? []).every((address) => typeof address === 'string') || !(p.bcc ?? []).every((address) => typeof address === 'string') || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
-            return { kind: 'email_send', ...(p.account ? {account:p.account} : {}), to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body };
+            return { kind: 'email_send', ...(p.account ? {account:p.account} : {}), to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body,
+              ...(typeof p.earlier_unknown_at === 'string' ? { earlier_unknown_at: p.earlier_unknown_at } : {}) };
           }
           if (r.kind === 'message_send') {
             const p = JSON.parse(r.payload_json) as MessageSendProposal;

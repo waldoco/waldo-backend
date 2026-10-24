@@ -60,6 +60,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
       const draft = send && item.state === 'open' && item.review?.kind === item.kind;
       const sendApprove = draft && item.actions.includes('approval.send'), sendChange = draft && item.actions.includes('approval.edit');
+      const earlier = sendApprove && item.review?.kind === 'email_send' ? item.review.earlier_unknown_at : undefined;
       const note = item.state === 'review_only' ? 'Too long for a chat card, so there’s no Send it button. Ask Waldo for a shorter version or a draft.'
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'
           : sendApprove ? 'Sending can’t be undone, so check the sender, recipients and words above. Change it asks Waldo for a new draft; this one stays as it is.'
@@ -70,6 +71,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
         <div className="disclosure-body">
           {item.review ? <Review review={item.review} timezone={record.data.timezone}/> : <p>Full details aren’t available for this one. Ask Waldo to show them before you decide.</p>}
           {note && <p className="meta">{note}</p>}
+          {earlier && <p role="alert">{`An identical email from ${earlier} may already have gone out. Check Gmail’s Sent folder before you send it again.`}</p>}
           <div className="control-actions">
             {calendarApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>Approve this calendar change</button>}
             {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.send', { id: item.id })}>{item.kind === 'email_send' ? 'Send this email' : 'Send this message'}</button>}

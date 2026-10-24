@@ -4356,7 +4356,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
           if (!(await google.disconnect(id))) return false;
-        } else {
+        } else if (action === 'card.today' || action === 'card.pin' || action === 'card.unpin') {
           const card = cardFor(id);
           if (card === null) return false;
           // A card whose row this version cannot read is not changed, and the owner is told why.
@@ -4367,7 +4367,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if (action === 'card.pin') plans.pin(card.id, value);
             await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
           }
-        }
+        } else return false;
         // consoleActionTraceDetail strips the free-form form id before it can reach the
         // gated trace sinks; only integer target ids survive next to the enum action.
         log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
