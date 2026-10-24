@@ -55,6 +55,7 @@ describe('the numeric health floor', () => {
     'The movement meets in 30 minutes',
     'Daylight saving ends in 2 weeks',
     'Booked a 45-minute workout with the trainer at 6',
+    'Booked a 45 minute workout for Friday',
     'Midpoint review at 3:30',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);

@@ -122,6 +122,11 @@ const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?cl
 // A weight that follows a bag or a parcel is the luggage's.
 const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
+// HRV with the method get_health labels it by, or the method alone.
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*\(?\s*(?:rmssd|sdnn)\b\s*\)?)?|(?:rmssd|sdnn)\b)`;
+const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
+// The minute signals get_health returns beside sleep.
+const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?)`;
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
 // count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
@@ -133,7 +138,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   // "1 hr 30" is an hour, and "HR of 12 people" a team.
   reading(String.raw`(?<!\d\s?)\b(?:hr|pulse)\b${BARE_GAP}${BARE_VALUE}(?!\s*(?:people|staff|employees|members|%))`),
-  reading(String.raw`\b(?:hrv|heart\s+rate\s+variability)\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
+  reading(String.raw`\bvo2\s*max\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${BARE_GAP}${BARE_VALUE}`),
   // A systolic of 60 to 249 over a diastolic of 30 to 149, so a date ("12/10") or "24/7" is not a pressure.
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
@@ -141,8 +148,14 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
   reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*(?:h|hr|hrs|hours?|m|min|mins|minutes?)\b`),
-  reading(String.raw`\b${READING_NUMBER}\s*(?:h|hrs?|hours?)\s+(?:of\s+)?(?:sleep|asleep)\b`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep|sleep\s+duration)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:sleep|asleep)\b`),
+  // get_health gives the midpoint as a minute of the day; it is relayed as that or as a clock time.
+  reading(String.raw`\bsleep\s+mid-?point\b${READING_GAP}(?:\d{1,2}[:.]\d{2}|\d{1,4})\b`),
+  // Needs a unit or a minutes metric, and "of" before the signal, so a booked "45 minute workout" is a plan, not a reading.
+  reading(String.raw`\b${MINUTE_SIGNAL}(?:\s+(?:time|duration))?\b${READING_GAP}${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+of\s+${MINUTE_SIGNAL}\b`),
+  reading(String.raw`\b(?:${READING_NUMBER}\s+(?:movement|daylight|workout)\s+(?:minutes|mins)\b|(?:movement|daylight|workout)\s+(?:minutes|mins)\b${BARE_GAP}${READING_NUMBER}\b)`),
   reading(String.raw`\b(?:\d{1,3}(?:,\d{3})+|\d{4,}|${READING_NUMBER}\s*k)\s*steps\b`),
   reading(String.raw`\bsteps\b${READING_GAP}(?:\d{1,3}(?:,\d{3})+|\d{4,})\b`),
   // A plain "temperature" is as often the weather or an oven, so only a fever or a body temperature, or a value in the
