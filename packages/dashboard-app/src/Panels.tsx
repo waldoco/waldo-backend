@@ -44,7 +44,7 @@ function Review({ review, timezone }: { review: ProposalReview; timezone: string
     return <div className="proposal-full-review letter">{review.account && <div className="letter-row"><span className="label">From</span><span className="person">{review.account}</span></div>}{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   }
   if (review.kind === 'message_send') return <div className="proposal-full-review chat-preview"><span className="channel">{review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/> : <Icon name="paperplane"/>}To your {review.channel} chat</span><p className="bubble">{review.content}</p><CopyText text={review.content}/></div>;
-  if (review.kind === 'mcp_call' || review.kind === 'tainted_action' || review.kind === 'browser_submit') return <div className="proposal-full-review"><pre className="owner-record-text">{review.text}</pre></div>;
+  if ('text' in review) return <div className="proposal-full-review"><pre className="owner-record-text">{review.text}</pre></div>;
   return <CalendarReview review={review} timezone={timezone}/>;
 }
 
