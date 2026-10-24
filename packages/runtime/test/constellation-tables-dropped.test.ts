@@ -29,12 +29,12 @@ it('an owner\'s forget removes the claim and settles with the constellation tabl
     const sql = state.storage.sql;
     const store = claimStore(sql, work => state.storage.transactionSync(work));
     store.add({ kind: 'fact', text: 'Posterbot standup is at nine', source: 'stated', evidence: 'Posterbot standup is at nine', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
-    const purged: { texts: readonly string[]; topics: readonly string[] }[] = [];
+    const purged: { ids: readonly number[]; topics: readonly string[] }[] = [];
     applyClaimOps(store, JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_topic: 'Posterbot' }), AT, 'owner, tg-2',
-      (texts, _ids, topics = []) => { purged.push({ texts, topics }); }, { owner: 'please forget Posterbot' }, true);
+      (_texts, ids, topics = []) => { purged.push({ ids, topics }); }, { owner: 'please forget Posterbot' }, true);
     expect(tables(sql)).toEqual([]);
     expect(purged).toHaveLength(1);
-    store.settle(purged[0]!.texts, purged[0]!.topics);
+    store.settle(purged[0]!.ids, purged[0]!.topics);
     expect(store.pendingTopics()).toEqual([]);
     expect(store.allClaims().filter(claim => claim.text.includes('Posterbot'))).toEqual([]);
     expect(store.recall('Posterbot')).toEqual([]);
