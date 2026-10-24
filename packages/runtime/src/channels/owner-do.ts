@@ -15,7 +15,7 @@ import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, ha
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
-import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
+import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
@@ -121,7 +121,7 @@ import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpi
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
-import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
+import { changeLines, collectChanges, reviewMailFollowup, touchesDay, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { memoryHandlers } from '../tools/live/memory';
 import { literalTextRedactor, toolNameSchema } from '@waldo/contracts';
@@ -3847,7 +3847,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })),
       compute: computeDailyScores, readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
-    } });
+    }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()) });
     const healthSamples = () => recompute.ask();
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
@@ -4047,6 +4047,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const changes = await collectChanges(updates, client, now, sourceFollowups);
         const day = localIso(now, clock.timezone).slice(0, 10);
         let id = changes.length ? updates.record(day, now, changes, null) : null;
+        // Weight follows the day: a change on the owner's today asks for a recompute. A failed ask never costs the update.
+        if (changes.some(change => touchesDay(change, day, clock.timezone))) await recompute.calendarChanged().then(
+          code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
+          () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' }));
         updates.pruneMail(now);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
         const { volume } = loops.proactivity();
