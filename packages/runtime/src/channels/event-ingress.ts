@@ -38,6 +38,7 @@ export type EventIngressEnv = Readonly<{
   SUPABASE_PROJECT_URL?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
   WALDO_EVENT_SOURCES?: string;
+  GMAIL_PUSH_PROJECT?: string;
 }>;
 
 const cap = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
@@ -139,7 +140,7 @@ type PushVerifier = (token: string, expect: Readonly<{ audience: string; service
 // A Gmail push comes through Pub/Sub with Google's OIDC token for the owner's push service account.
 // It names only a mailbox and a history point; the connections table says whose mailbox it is, and
 // each owner object gets only its connection and the history point, then runs its own update check.
-export const handleGmailPush = async (request: Request, env: EventIngressEnv, config: GmailPushConfig | null = gmailPush(), verify: PushVerifier = verifyPushToken): Promise<Response> => {
+export const handleGmailPush = async (request: Request, env: EventIngressEnv, config: GmailPushConfig | null = gmailPush(env.GMAIL_PUSH_PROJECT), verify: PushVerifier = verifyPushToken): Promise<Response> => {
   const rpc = signedRpc(env);
   if (request.method !== 'POST' || !config || !env.OWNER_DO || !rpc) return new Response('not found', { status: 404 });
   const url = new URL(request.url);

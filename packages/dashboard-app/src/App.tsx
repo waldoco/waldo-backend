@@ -17,7 +17,7 @@ import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
 import type { OverviewV1 } from './model';
-import { fetchOverview, SignInRequired } from './model';
+import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
@@ -132,7 +132,7 @@ type FeedbackState = { kind: 'loading' } | { kind: 'error'; message: string; sig
 export function DashboardFeedback({ state, onRetry }: { state: FeedbackState; onRetry: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-page"><span className="visually-hidden">Checking what has been recorded…</span><i className="sk sk-title"/><i className="sk sk-rail"/><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
   return <div role="alert" className="feedback tile"><h1>{state.signedOut ? 'Sign in to your Waldo.' : 'Couldn’t load your dashboard.'}</h1>
-    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href="/console/signin">Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
+    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href={signInHref()}>Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
 }
 
 
