@@ -33,11 +33,11 @@ const graph = (sql: SqlStorage) => {
   sql.exec("INSERT INTO constellation_edges (from_id, to_id, relation, strength, evidence_count) VALUES (1, 2, 'improves', 0.4, 1)");
 };
 
-it('serves every sub-view of the console memory graph under the app contract, without table-local or DO ids', async () => {
+it('serves every sub-view under the app contract with claims only, without table-local or DO ids, even over legacy node rows', async () => {
   await owner(graph, async (storage, doId) => {
     const summary = await get(storage, 'view=constellation');
     expect(summary.status).toBe(200);
-    expect(data(summary.body)).toMatchObject({ memory_view: 'summary', state: 'available', complete: true, counts: { claims: 2, interpretations: 2, associations: 1 } });
+    expect(data(summary.body)).toMatchObject({ memory_view: 'summary', state: 'available', complete: true, counts: { claims: 2, interpretations: 0, associations: 0 } });
 
     const first = data((await get(storage, 'view=constellation&memory_view=claims&limit=1')).body);
     if (first.memory_view !== 'claims') throw Error('expected claims');
@@ -49,16 +49,13 @@ it('serves every sub-view of the console memory graph under the app contract, wi
     expect(second.page.next_cursor).toBeNull();
 
     const nodes = data((await get(storage, 'view=constellation&memory_view=interpretations&limit=50')).body);
-    if (nodes.memory_view !== 'interpretations') throw Error('expected interpretations');
-    const [center] = nodes.items;
-    expect(center!.support.claim_ids).toEqual(first.items.map(item => item.id).concat(second.items.map(item => item.id)));
+    expect(nodes).toMatchObject({ memory_view: 'interpretations', items: [] });
     const claimDetail = data((await get(storage, `view=constellation&memory_view=detail&id=${first.items[0]!.id}`)).body);
-    expect(claimDetail).toMatchObject({ kind: 'claim', linked_interpretation_ids: nodes.items.map(item => item.id) });
-    expect(data((await get(storage, `view=constellation&memory_view=detail&id=${center!.id}`)).body)).toMatchObject({ kind: 'interpretation', support_unavailable_count: 0 });
-    const pattern = data((await get(storage, `view=constellation&memory_view=pattern&id=${center!.id}&max_nodes=5&max_links=5`)).body);
-    expect(pattern).toMatchObject({ memory_view: 'pattern', showing: { nodes: 1, of_nodes: 1, links: 1, of_links: 1 }, truncated: false });
+    expect(claimDetail).toMatchObject({ kind: 'claim', linked_interpretation_ids: [] });
+    expect(await get(storage, 'view=constellation&memory_view=detail&id=memory:node:1')).toEqual({ status: 404, body: { error: 'not_found' } });
 
-    const served = JSON.stringify([summary.body, first, second, nodes, claimDetail, pattern]);
+    const served = JSON.stringify([summary.body, first, second, nodes, claimDetail]);
+    expect(served).not.toMatch(/Afternoon reset|Evening wind-down|calmer afternoon/);
     expect(served).not.toContain('local_id');
     expect(served).not.toContain(doId);
   });
@@ -88,7 +85,7 @@ it('refuses malformed paging and passes the pager errors through', async () => {
     expect(await get(storage, 'view=constellation&memory_view=claims')).toEqual({ status: 400, body: { error: 'limit_required' } });
     expect(await get(storage, 'view=constellation&memory_view=claims&limit=5&cursor=bm90LWEtY3Vyc29y')).toEqual({ status: 400, body: { error: 'cursor_invalid' } });
     expect(await get(storage, 'view=constellation&memory_view=detail&id=memory:claim:999')).toEqual({ status: 404, body: { error: 'not_found' } });
-    expect(await get(storage, 'view=constellation&memory_view=pattern&id=memory:node:1&max_nodes=5')).toEqual({ status: 400, body: { error: 'max_links_required' } });
+    expect(await get(storage, 'view=constellation&memory_view=pattern&id=memory:node:1&max_nodes=5&max_links=5')).toEqual({ status: 404, body: { error: 'not_found' } });
   });
 });
 
