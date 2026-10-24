@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import {act,useEffect,useState} from 'react';
+import {act} from 'react';
 import {createRoot,type Root} from 'react-dom/client';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {MemoryPanel} from './Memory';
@@ -7,11 +7,7 @@ import {response} from './memory-test-fixtures';
 
 let root:Root,host:HTMLDivElement;
 const requests:{url:string;options:RequestInit}[]=[];
-function Harness(){
- const [hash,setHash]=useState(window.location.hash);
- useEffect(()=>{const listener=()=>setHash(window.location.hash);window.addEventListener('hashchange',listener);return()=>window.removeEventListener('hashchange',listener);},[]);
- return <MemoryPanel subview={hash.startsWith('#/memory/constellation')?'constellation':'spots'}/>;
-}
+function Harness(){return <MemoryPanel subview="spots"/>;}
 const settle=async()=>{await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});};
 async function mount(hash:string){window.history.replaceState(null,'',hash);await act(async()=>root.render(<Harness/>));await settle();await toList();}
 async function toList(){const toggle=Array.from(host.querySelectorAll('button')).find(b=>b.textContent?.trim()==='List');if(toggle){await act(async()=>toggle.click());await settle();}}
@@ -29,7 +25,6 @@ beforeEach(()=>{
   if(url.includes('/memory-controls?'))return new Response(JSON.stringify({version:1,view:'memory',state:'available',csrf:'fixture',revision:'a'.repeat(64),data:{id:p.get('id'),status:'active',review:{label:'Current item',note:'Synthetic'},actions:[]}}));
   const data=response(p.toString());
   if('page' in data)return new Response(JSON.stringify({...data,page:{...data.page,total:2,next_cursor:p.has('cursor')?null:'page-two'}}));
-  if('expand' in data)return new Response(JSON.stringify({...data,expand:{...data.expand,next_cursor:p.has('cursor')?null:'graph-two'}}));
   return new Response(JSON.stringify(data));
  }));
 });
@@ -46,14 +41,6 @@ describe('mounted Memory read navigation',()=>{
   await mount('#/memory/spots');await hashTo('#/memory/spots?cursor=page-two');
   await act(async()=>window.history.back());await settle();expect(window.location.hash).toBe('#/memory/spots');expect(readUrls().at(-1)).not.toContain('cursor=');
   await act(async()=>window.history.forward());await settle();expect(window.location.hash).toContain('cursor=page-two');expect(readUrls().at(-1)).toContain('cursor=page-two');assertReadOnly();
- });
- it('persists graph expansion cursor and returns to the originating pattern list',async()=>{
-  await mount('#/memory/constellation?cursor=list-two');await click('Pattern A');await click('Explore saved connections');
-  expect(window.location.hash).toContain('returnCursor=list-two');
-  const next=Array.from(host.querySelectorAll('button')).find(e=>e.textContent?.includes('Expand')||e.textContent?.includes('Next'));
-  expect(next).toBeDefined();await act(async()=>next!.click());await settle();
-  expect(window.location.hash).toContain('cursor=graph-two');expect(readUrls().some(url=>url.includes('view=pattern')&&url.includes('cursor=graph-two'))).toBe(true);
-  await click('← Back to pattern details');await click('← Back to patterns');expect(window.location.hash).toBe('#/memory/constellation?cursor=list-two');assertReadOnly();
  });
  it('requests nothing for invalid links and recovers through the visible list link',async()=>{
   await mount('#/memory/spots?id=1&owner=other');expect(host.textContent).toContain('Memory link unavailable');expect(requests).toEqual([]);
@@ -77,9 +64,9 @@ describe('mounted Memory read navigation',()=>{
   await mount('#/memory/spots?cursor=expired');expect(host.textContent).toContain('Restart list');const before=readUrls().length;
   await click('Restart list');expect(window.location.hash).toBe('#/memory/spots');expect(readUrls().slice(before).filter(url=>url.includes('view=claims'))).toEqual(['/console/dashboard/api/v1/memory?view=claims&limit=25']);assertReadOnly();
  });
- it('preserves cross-view list origin on a failed detail read',async()=>{
+ it('preserves the list origin on a failed detail read',async()=>{
   const original=globalThis.fetch;vi.stubGlobal('fetch',vi.fn((url:string,options:RequestInit)=>url.includes('view=detail')?Promise.resolve(new Response('{"error":"not_found"}',{status:404})):original(url,options)));
-  await mount('#/memory/constellation?id=synthetic-owner%3Anode%3A1&returnView=spots&returnCursor=page-two');
+  await mount('#/memory/spots?id=synthetic-owner%3Aclaim%3A1&returnView=spots&returnCursor=page-two');
   expect(host.textContent).toContain('Memory unavailable.');await click('Back to list');expect(window.location.hash).toBe('#/memory/spots?cursor=page-two');assertReadOnly();
  });
  it.each([401,503])('shows truthful current %s recovery without launching a write',async(status)=>{

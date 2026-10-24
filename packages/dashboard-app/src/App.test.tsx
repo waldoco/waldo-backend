@@ -36,7 +36,7 @@ describe('dashboard routing and overview boundaries', () => {
     }
   });
   it('loads Memory subviews in-shell without manufacturing saved context', () => {
-    for (const route of ['memory', 'memory/spots', 'memory/constellation'] as const) {
+    for (const route of ['memory', 'memory/spots'] as const) {
       const html = renderToStaticMarkup(<Dashboard data={empty} route={route}/>);
       expect(html).toContain('Loading your saved');
       expect(html).toContain('role="status"');
@@ -50,7 +50,7 @@ describe('dashboard routing and overview boundaries', () => {
     expect(profile).not.toContain('No saved profile');
   });
   it('keeps one Memory destination and shows no waiting count in navigation', () => {
-    const nav = renderToStaticMarkup(<DashboardNavigation route="memory/constellation"/>);
+    const nav = renderToStaticMarkup(<DashboardNavigation route="memory/profile"/>);
     expect(nav).toMatch(/aria-current="page"[^>]*href="#\/memory"/);
     expect(nav).not.toMatch(/nav-count|waiting decision/);
   });
@@ -59,9 +59,8 @@ describe('dashboard routing and overview boundaries', () => {
       expect(resolveRoute(`${route}?id=scope%3Aclaim%3A1&owner=other&explore=1`)).toBe(route);
     }
     expect(resolveRoute('memory/spots?id=scope%3Aclaim%3A1')).toBe('memory/spots');
-    expect(resolveRoute('memory/constellation?id=scope%3Anode%3A1&explore=1')).toBe('memory/constellation');
     expect(resolveRoute('memory/profile')).toBe('memory/profile');
-    for(const value of ['memory/spots?owner=other','memory/profile?id=1','memory/unknown'])expect(resolveRoute(value)).toBe('memory');
+    for(const value of ['memory/spots?owner=other','memory/profile?id=1','memory/unknown','memory/constellation?id=scope%3Anode%3A1&explore=1'])expect(resolveRoute(value)).toBe('memory');
     expect(resolveRoute('')).toBe('today');
     expect(resolveRoute('overview?owner=other')).toBe('today');
     expect(resolveRoute('unknown?view=waiting')).toBe('not-found');
@@ -86,7 +85,7 @@ describe('dashboard routing and overview boundaries', () => {
     }
   });
   it('does not expose summary approval or mutations before a protected read', () => {
-    for (const route of ['today', 'waiting', 'memory/spots', 'memory/constellation', 'memory/profile', 'connections', 'files', 'settings', 'invites'] as const) {
+    for (const route of ['today', 'waiting', 'memory/spots', 'memory/profile', 'connections', 'files', 'settings', 'invites'] as const) {
       const html = renderToStaticMarkup(<Dashboard data={empty} route={route}/>);
       expect(html).not.toContain('<form');
       expect(html).not.toContain('<input');

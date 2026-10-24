@@ -3,10 +3,8 @@ import { buildMemoryDestination, isMemoryCursor, isMemoryItemId, parseMemoryDest
 
 const cases: MemoryDestination[] = [
   { kind: 'list', view: 'spots' },
-  { kind: 'list', view: 'constellation', cursor: 'eyJ2IjoxLCJrIjoiaW50ZXJwcmV0YXRpb25zIiwiYWZ0ZXIiOjF9' },
+  { kind: 'list', view: 'spots', cursor: 'eyJ2IjoxLCJrIjoiY2xhaW1zIiwiYWZ0ZXIiOjF9' },
   { kind: 'detail', view: 'spots', id: 'owner:claim:7', returnTo: { view: 'spots', cursor: 'page_two' } },
-  { kind: 'detail', view: 'constellation', id: 'owner:node:9', returnTo: { view: 'spots', cursor: 'origin_page' } },
-  { kind: 'explore', id: 'owner:node:9', cursor: 'graph_page', returnTo: { view: 'constellation', cursor: 'list_page' } },
   { kind: 'profile' },
 ];
 
@@ -46,7 +44,7 @@ describe('Memory destination contract', () => {
   });
 
   it('round trips maximum-length valid selectors after percent-encoding expands them', () => {
-    const destination: MemoryDestination = { kind: 'explore', id: '雪'.repeat(256), cursor: '雪'.repeat(512), returnTo: { view: 'spots', cursor: '雪'.repeat(512) } };
+    const destination: MemoryDestination = { kind: 'detail', view: 'spots', id: '雪'.repeat(256), returnTo: { view: 'spots', cursor: '雪'.repeat(512) } };
     expect(parseMemoryDestination(buildMemoryDestination(destination))).toEqual({ kind: 'valid-memory', destination });
   });
 
@@ -56,7 +54,7 @@ describe('Memory destination contract', () => {
     '#/memory/spots?cursor=a&cursor=b', '#/memory/spots?token=secret',
     '#/memory/spots?id=a&csrf=secret', '#/memory/spots?id=a&next=https://foreign.test',
     '#/memory/spots?id=a&cursor=b', '#/memory/spots?explore=1',
-    '#/memory/spots?id=a&explore=1', '#/memory/constellation?explore=1',
+    '#/memory/spots?id=a&explore=1', '#/memory/constellation', '#/memory/constellation?explore=1',
     '#/memory/constellation?id=a&explore=0', '#/memory/constellation?id=a&explore=true',
     '#/memory/profile?id=a', '#/memory/profile?cursor=a',
     '#/memory/spots?returnView=spots', '#/memory/spots?id=a&returnCursor=a',
@@ -74,15 +72,6 @@ describe('Memory destination contract', () => {
     expect(parseMemoryDestination(url)).toEqual({ kind: 'invalid-memory' });
   });
 
-  it('separates list-return context from selected detail and graph pagination', () => {
-    const destination: MemoryDestination = { kind: 'explore', id: 'owner:node:9', cursor: 'graph_page', returnTo: { view: 'spots', cursor: 'list_page' } };
-    const link = buildMemoryDestination(destination);
-    expect(link).toContain('explore=1');
-    expect(link).toContain('cursor=graph_page');
-    expect(link).toContain('returnView=spots&returnCursor=list_page');
-    expect(parseMemoryDestination(link)).toEqual({ kind: 'valid-memory', destination });
-    expect(buildMemoryDestination({ kind: 'list', ...destination.returnTo! })).toBe('#/memory/spots?cursor=list_page');
-  });
 
   it('does not decode, refresh or bind a well-formed cursor to another owner', () => {
     expect(parseMemoryDestination('#/memory/spots?cursor=old_position')).toEqual({ kind: 'valid-memory', destination: { kind: 'list', view: 'spots', cursor: 'old_position' } });
