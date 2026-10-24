@@ -96,3 +96,21 @@ it('fails closed when the memory read throws', async () => {
   const broken = { sql: { exec: () => { throw Error('storage reset'); } } } as unknown as DurableObjectStorage;
   expect(await get(broken, 'view=constellation')).toEqual({ status: 503, body: { error: 'projection_unavailable' } });
 });
+
+it('an owner without constellation tables gets every claim, an empty graph and a complete read', async () => {
+  const claimsOnly = (sql: SqlStorage) => {
+    claimStore(sql);
+    sql.exec('DROP TABLE IF EXISTS constellation_edges'); sql.exec('DROP TABLE IF EXISTS constellation_nodes');
+    sql.exec(`INSERT INTO claims (kind, text, source, evidence, status, created_at, last_seen_at, seen_count, origin, source_ref)
+      VALUES ('routine', 'Walks after lunch', 'stated', 'Said so on Monday', 'active', '2026-10-01', '2026-10-02', 2, 'owner', 'app:1')`);
+  };
+  await owner(claimsOnly, async (storage) => {
+    expect(data((await get(storage, 'view=constellation')).body)).toMatchObject({ memory_view: 'summary', state: 'available', complete: true, counts: { claims: 1, interpretations: 0, associations: 0 } });
+    const claims = data((await get(storage, 'view=constellation&memory_view=claims&limit=50')).body);
+    if (claims.memory_view !== 'claims') throw Error('expected claims');
+    expect(claims).toMatchObject({ state: 'available', complete: true });
+    expect(claims.items.map(item => item.text)).toEqual(['Walks after lunch']);
+    expect(data((await get(storage, `view=constellation&memory_view=detail&id=${claims.items[0]!.id}`)).body)).toMatchObject({ kind: 'claim', linked_interpretation_ids: [] });
+    expect(data((await get(storage, 'view=constellation&memory_view=interpretations&limit=50')).body)).toMatchObject({ state: 'available', complete: true, items: [] });
+  });
+});
