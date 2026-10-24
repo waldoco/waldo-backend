@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(147);
+select plan(153);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -59,7 +59,7 @@ update waldo.owners set phone_verified_at = now() where do_name = 'sms-dev';
 select throws_ok($$ select waldo.phone_sms_transition('reserve_send', '{"do_name":"sms-asha"}', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged transition is refused');
 select throws_ok($$ select waldo.owner_phone_state('sms-asha', pg_temp.at(), pg_temp.rsig('phonestate.sms-ben')) $$, '42501', 'unsigned router call', 'a state read signed for another owner is refused');
 select is(pg_temp.step('drop_table', jsonb_build_object('do_name', 'sms-asha'))->>'kind', 'denied', 'an unknown action is denied');
-select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', 'VAnot', 'operation', pg_temp.op('a')))->>'kind', 'denied', 'a malformed service is denied');
+select is(pg_temp.step('reserve_send', jsonb_build_object('do_name', 'sms-asha', 'service', 'VAnot', 'operation', pg_temp.op('a'), 'countries', '["+91"]'::jsonb, 'daily_limit', 200))->>'kind', 'denied', 'a malformed service is denied');
 
 -- The state the console and the app read: the number on file and whether it is proven.
 select is(pg_temp.state('sms-asha'), '{"phone":"+919800000001","verified":false,"challenge":null}'::jsonb, 'asha reads her unverified number and no challenge');
@@ -252,6 +252,8 @@ select is(pg_temp.send('sms-sol', pg_temp.op('b')), 'reserved', 'her resend is r
 select is(pg_temp.sent('sms-sol', pg_temp.op('b'), 'refused', ''), 'refused', 'and Twilio refuses it');
 select is(pg_temp.state('sms-sol')->'challenge'->>'state', 'pending', 'the first code still works');
 select is(pg_temp.owner_sends('sms-sol'), 1, 'and only the first send is charged');
+select is((select sends from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-sol'), 1,
+  'or counted against the code''s three sends');
 select is((pg_temp.state('sms-sol')->'challenge'->>'retry_at')::bigint, (select extract(epoch from next_send)::bigint from waldo.phone_sms_challenges c join waldo.owners o on o.id = c.owner_id where o.do_name = 'sms-sol'),
   'with the next resend paced from the refused one');
 
@@ -272,6 +274,17 @@ create temp table before_midnight as select pg_temp.global() as sends;
 select is(pg_temp.sent('sms-tao', pg_temp.op('a'), 'refused', ''), 'refused', 'Twilio refuses it after midnight');
 select is(pg_temp.owner_sends('sms-tao', pg_temp.today() - 1) || '/' || pg_temp.global(pg_temp.today() - 1), '0/0', 'yesterday''s charge is refunded');
 select is(pg_temp.global(), (select sends from before_midnight), 'and today''s count is untouched');
+
+-- A resend is charged on its own day: the first send was yesterday, the resend today, and a refusal refunds today.
+insert into waldo.owners (do_name, email, phone) values ('sms-xia', 'xia@test.invalid', '+919800000022');
+select is(pg_temp.send('sms-xia', pg_temp.op('a')), 'reserved', 'xia''s send is reserved');
+select is(pg_temp.sent('sms-xia', pg_temp.op('a'), 'pending', pg_temp.sid('6')), 'pending', 'and goes out');
+update waldo.phone_sms_challenges set send_day = send_day - 1 where owner_id = (select id from waldo.owners where do_name = 'sms-xia');
+select pg_temp.age('sms-xia', interval '61 seconds');
+create temp table before_resend as select pg_temp.global() as sends;
+select is(pg_temp.send('sms-xia', pg_temp.op('b')), 'reserved', 'her resend is reserved');
+select is(pg_temp.sent('sms-xia', pg_temp.op('b'), 'refused', ''), 'refused', 'and Twilio refuses it');
+select is(pg_temp.owner_sends('sms-xia') || '/' || pg_temp.global(), '1/' || (select sends from before_resend), 'today''s charge for the resend is refunded');
 
 -- Every path that texts or proves a number takes one lock on it, so two owners proving a number take turns. CI and the
 -- local runner execute this file in one transaction on one connection, so a second session cannot wait on the lock

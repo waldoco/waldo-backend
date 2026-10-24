@@ -102,6 +102,13 @@ describe('sending a code', () => {
     expect(f.ledgerCalls()).toHaveLength(1);
   });
 
+  it.each(['pending', 'approved', 'refused'])('a reservation answered %s, which only a finish can say, reads as unknown and texts nothing', async (kind) => {
+    const f = fake(() => ({ kind }));
+    expect(await phoneSms(env, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'unknown' });
+    expect(await phoneSms(env, f.fetcher, () => NOW).check('owner-a', '123456')).toEqual({ kind: 'unknown' });
+    expect(f.twilioCalls()).toEqual([]);
+  });
+
   it.each([[{ kind: 'reserved' }], [{ kind: 'reserved', phone: '98000 00001' }], [{ kind: 'reserved', phone: 42 }]])('a reservation without a valid number texts nothing and stays unknown: %j', async (reservation) => {
     const f = fake((action) => action === 'reserve_send' ? reservation : { kind: 'unknown' });
     expect(await phoneSms(env, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'unknown' });
