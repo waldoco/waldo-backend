@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, memoryPrompt, type Claim } from '../src/memory/claims';
+import { applyClaimOps, claimStore, memoryPrompt, profile, type Claim } from '../src/memory/claims';
 import { dashboardMemory } from '../src/channels/dashboard-memory';
 import { memoryControl } from '../src/channels/dashboard-memory-actions';
 import { renderConsole } from '../src/channels/console';
@@ -72,8 +72,10 @@ describe('a claim Waldo confirmed from words the owner wrote', () => {
       expect(store.claims()[0]).toMatchObject({ source: 'waldo_confirmed', origin: 'owner', verification_status: 'owner-grounded' });
       expect(store.pin(row!.id, 'profile', 1)).toBe(false);
       expect(memoryPrompt(store)).toContain(`source="waldo_confirmed"`);
+      expect(profile(store.claims())).toEqual([]);
       expect(store.ownerGround(row!.id, AT, 'owner, console')).toBe(true);
       expect(store.pin(row!.id, 'profile', 1)).toBe(true);
+      expect(profile(store.claims())).toEqual([{ title: 'Preferences', lines: ['Likes a window seat on long flights'] }]);
     });
   });
 });
