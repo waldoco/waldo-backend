@@ -4274,7 +4274,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS, unconfirmed: unconfirmedCards(finalOutbox.records(), day),
           approvals: desk.pending(now), run: latest && latest.status === 'running' && waiting.has(latest.id) ? { ...latest, summary: waiting.get(latest.id)! } : latest, trace: traces.latest(), grants: await google.state() });
       },
-      act: async ({ action, id, value }, assertCurrent) => {
+      act: async ({ action, id, value, surface }, assertCurrent) => {
         await assertCurrent?.();
         const now = Date.now();
         const spotId = Number(id);
@@ -4316,7 +4316,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const checked = await sanitise({ payload: { text }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
           if (!checked.ok) return 'spot.edit.failed';
           const at = new Date(now).toISOString();
-          if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', evidence: 'owner, console edit', source_ref: 'owner, console:spot.edit' }, at)) return 'spot.edit.failed';
+          const where = surface === 'app' ? { evidence: 'owner, app edit', source_ref: 'owner, app:claim.edit' } : { evidence: 'owner, console edit', source_ref: 'owner, console:spot.edit' };
+          if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', ...where }, at)) return 'spot.edit.failed';
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.

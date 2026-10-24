@@ -62,7 +62,7 @@ const detail = async (ctx: Ctx, id: number) => {
   if (body.view !== 'constellation' || body.data.memory_view !== 'detail' || body.data.kind !== 'claim') throw Error('expected a claim detail');
   return { revision: body.revision, item: body.data.item };
 };
-const act = async (ctx: Ctx, fields: Record<string, string>, contract: string | undefined = 'controls=2') => {
+const act = async (ctx: Ctx, fields: Record<string, string>, contract = 'controls=2') => {
   const response = await ctx.owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers: { ...headers(ctx.name, contract), 'content-type': 'application/json' },
     body: JSON.stringify({ view: 'constellation', request_id: `claim-${crypto.randomUUID()}`, ...fields }) }));
   return { status: response.status, body: await response.json() as Record<string, unknown> };
@@ -115,7 +115,7 @@ it('refuses a claim action from a revision 1 client, on a stale read, for a kind
     const id = seed(ctx, 'fact', 'Has two cats');
     const event = seed(ctx, 'event', 'Dentist on Tuesday');
     const { revision } = await detail(ctx, id);
-    expect((await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'profile', revision }, undefined)).status).toBe(400);
+    expect((await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'profile', revision }, '')).status).toBe(400);
     expect((await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'profile', revision }, 'controls=1')).status).toBe(400);
     ctx.state.storage.sql.exec("UPDATE claims SET pinned = 'facts', pin_order = 0 WHERE id = ?", id);
     expect(await act(ctx, { action: 'claim.unpin', id: `memory:claim:${id}`, revision })).toMatchObject({ status: 409, body: { error: 'stale_read' } });
