@@ -42,7 +42,14 @@ vi.mock('../src/connectors/google', async load => {
     events: async () => world.events,
     calendarPage: async () => ({ events: world.events, next_page_token: null, fetched_count: world.events.length, account, observed_at: new Date().toISOString() }),
     event: async (id: string) => world.events.find(event => event.id === id) ?? null,
-    // Google as Waldo's own writes leave it: the new event is busy, listed with the kind it was tagged with, and seen as a change.
+    // Waldo's rest blocks as the connector finds them by their private kind, with what else falls inside them.
+    restBlocks: async (_calendarId: string, from: string, to: string) => {
+      const within = (e: { start: string; end: string }, s: string, t: string) => Date.parse(e.end) > Date.parse(s) && Date.parse(e.start) < Date.parse(t);
+      const tagged = world.events as (CalendarItem & { block?: string })[];
+      const blocks = tagged.filter(e => e.block === 'rest' && within(e, from, to));
+      return { blocks: blocks.map(({ start, end }) => ({ start, end })), others: tagged.filter(e => !blocks.includes(e) && blocks.some(b => within(e, b.start, b.end))).map(({ start, end, all_day }) => ({ start, end, all_day })) };
+    },
+    // Google as Waldo's own writes leave it: the new event is busy, carries the kind it was tagged with, and is seen as a change.
     createEvent: async (input: { id?: string; title: string; start: string; end: string; block?: 'rest' | 'deep_work' }) => {
       world.created.push(input.block ?? 'none');
       const item = { id: input.id ?? `gcal-new-${world.created.length}`, title: input.title, start: input.start, end: input.end, all_day: false, etag: 'n1', ...(input.block ? { block: input.block } : {}) } as CalendarItem;

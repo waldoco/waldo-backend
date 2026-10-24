@@ -16,19 +16,21 @@ const CALENDAR_SCOPES = [`${AUTH}calendar.events`, `${AUTH}calendar.events.freeb
 
 type Busy = Readonly<{ calendar: string; start: string; end: string }>;
 // `failing` calendars answer with a transient error, `gone` calendars with Google's notFound.
-// `events` is what the calendar lists, with the kind Waldo tagged a block with; `pageFails` calendars cannot be listed and
-// `endless` ones never finish paging.
-type Listed = Readonly<{ calendar: string; id: string; start: string; end: string; block?: 'rest' | 'deep_work' }>;
-type FakeAccount = { calendars: Partial<CalendarListItem>[]; busy: Busy[]; failing?: string[]; gone?: string[]; scopes?: readonly string[] | null; events?: Listed[]; pageFails?: string[]; endless?: string[] };
+// `events` is what the calendar holds, with the kind Waldo tagged a block with; Google cannot list the `blocksFail` ones.
+type Listed = Readonly<{ calendar: string; id: string; start: string; end: string; block?: 'rest' | 'deep_work'; all_day?: boolean }>;
+type FakeAccount = { calendars: Partial<CalendarListItem>[]; busy: Busy[]; failing?: string[]; gone?: string[]; scopes?: readonly string[] | null; events?: Listed[]; blocksFail?: string[] };
 const calendar = (id: string, over: Partial<CalendarListItem> = {}): Partial<CalendarListItem> => ({ id, title: id, access_role: 'owner', primary: false, selected: true, hidden: false, ...over });
 
-const fakeClient = (account: FakeAccount, calls: { from: string; to: string; ids: readonly string[] }[], pages: string[] = []): DemandClient => ({
-  async calendarPage(calendarId, from, to) {
-    pages.push(calendarId);
-    if (account.pageFails?.includes(calendarId)) throw new Error('calendar page failed');
-    const events = (account.events ?? []).filter(e => e.calendar === calendarId && Date.parse(e.end) > Date.parse(from) && Date.parse(e.start) < Date.parse(to))
-      .map(({ id, start, end, block }) => ({ id, title: id, start, end, all_day: false, ...(block ? { block } : {}) }));
-    return { events, next_page_token: account.endless?.includes(calendarId) ? 'more' : null, fetched_count: events.length, account: null as never, observed_at: new Date(NOW).toISOString() };
+const overlaps = (e: Readonly<{ start: string; end: string }>, from: string, to: string) => Date.parse(e.end) > Date.parse(from) && Date.parse(e.start) < Date.parse(to);
+const fakeClient = (account: FakeAccount, calls: { from: string; to: string; ids: readonly string[] }[], blockReads: string[] = []): DemandClient => ({
+  // As the connector answers: the timed rest blocks in the range, and what else on the calendar falls inside them.
+  async restBlocks(calendarId, from, to) {
+    blockReads.push(calendarId);
+    if (account.blocksFail?.includes(calendarId)) throw new Error('calendar listing failed');
+    const mine = (account.events ?? []).filter(e => e.calendar === calendarId);
+    const blocks = mine.filter(e => e.block === 'rest' && !e.all_day && overlaps(e, from, to));
+    const others = mine.filter(e => !blocks.includes(e) && blocks.some(b => overlaps(e, b.start, b.end)));
+    return { blocks: blocks.map(({ start, end }) => ({ start, end })), others: others.map(({ start, end, all_day }) => ({ start, end, all_day: all_day ?? false })) };
   },
   async calendarListsPage() {
     return { items: account.calendars as CalendarListItem[], next_page_token: null, fetched_count: account.calendars.length, account: null as never, observed_at: new Date(NOW).toISOString() };
@@ -51,15 +53,15 @@ const withDemand = <T>(work: (sql: SqlStorage) => Promise<T>) =>
 
 const setup = (sql: SqlStorage, accounts: Record<string, FakeAccount>, options: { failing?: string[]; now?: () => number } = {}) => {
   const calls: { from: string; to: string; ids: readonly string[] }[] = [];
-  const clients: string[] = [], pages: string[] = [];
+  const clients: string[] = [], blockReads: string[] = [];
   const clock = { now: NOW };
   const demand = calendarDemand({
     sql,
     accounts: async () => Object.entries(accounts).map(([email, account]) => ({ email, scopes: account.scopes === undefined ? CALENDAR_SCOPES : account.scopes, error: options.failing?.includes(email) ? 'invalid_grant' : null })),
-    client: async email => { clients.push(email); return accounts[email] ? fakeClient(accounts[email]!, calls, pages) : null; },
+    client: async email => { clients.push(email); return accounts[email] ? fakeClient(accounts[email]!, calls, blockReads) : null; },
     now: options.now ?? (() => clock.now),
   });
-  return { demand, calls, clients, clock, pages };
+  return { demand, calls, clients, clock, blockReads };
 };
 type Answer = Awaited<ReturnType<ReturnType<typeof calendarDemand>['read']>>;
 const byDay = (answer: Answer) => answer.state === 'available' ? Object.fromEntries(answer.days.map(d => [d.day, d.busy_minutes])) : answer;
@@ -265,7 +267,7 @@ describe('calendar demand route', () => {
 });
 
 // The owner's ruling: a rest block Waldo put in does not count toward Weight; a deep-work block, and every event Waldo did
-// not tag, counts as before. Free/busy cannot tell them apart, so the kind is read from the calendar's own listing.
+// not tag, counts as before. Free/busy cannot tell them apart, so the connector finds the rest blocks by their private kind.
 describe('calendar demand with Waldo\'s own blocks', () => {
   const range = { from: '2026-03-18', to: '2026-03-20', timezone: TZ };
   const at = (hh: string) => `2026-03-19T${hh}:00Z`;
@@ -290,28 +292,50 @@ describe('calendar demand with Waldo\'s own blocks', () => {
     expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 90 });
   }));
 
-  it('lists only calendars Waldo can write to, and only for an account that granted event access', () => withDemand(async sql => {
-    const { demand, pages } = setup(sql, {
+  it('counts the whole day when an all-day busy event on the calendar covers a rest block', () => withDemand(async sql => {
+    const work = account([calendar('work')], [busyAndListed('work', 'recharge', '13:00', '14:00', 'rest')]);
+    work.busy.push({ calendar: 'work', start: '2026-03-19T00:00:00Z', end: '2026-03-20T00:00:00Z' });
+    work.events!.push({ calendar: 'work', id: 'offsite', start: '2026-03-19', end: '2026-03-20', all_day: true });
+    expect(byDay(await setup(sql, { 'work@example.com': work }).demand.read(range))).toMatchObject({ '2026-03-19': 1440 });
+  }));
+
+  it('reads blocks only on calendars Waldo can write to, only for an account that granted event access, and only where time is busy', () => withDemand(async sql => {
+    const { demand, blockReads } = setup(sql, {
       'work@example.com': account([calendar('work'), calendar('shared', { access_role: 'reader' }), calendar('quiet')], [busyAndListed('work', 'standup', '14:00', '15:00'), busyAndListed('shared', 'tagged', '09:00', '10:00', 'rest')]),
       'home@example.com': account([calendar('home')], [busyAndListed('home', 'tagged', '11:00', '12:00', 'rest')], { scopes: CALENDAR_SCOPES.slice(1) }),
     });
     expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 180 });
-    // A calendar with nothing busy has no block to find, so it is not listed either.
-    expect(pages).toEqual(['work']);
+    expect(blockReads).toEqual(['work']);
   }));
 
-  it('counts a rest block it could not confirm, and keeps that day out of the cache until it can', () => withDemand(async sql => {
-    for (const fault of ['pageFails', 'endless'] as const) {
-      const work = account([calendar('work')], [busyAndListed('work', 'recharge', '13:00', '14:00', 'rest')], { [fault]: ['work'] });
-      const { demand, calls } = setup(sql, { 'work@example.com': work });
-      sql.exec('DELETE FROM calendar_demand');
-      expect([fault, byDay(await demand.read(range))]).toMatchObject([fault, { '2026-03-19': 60 }]);
-      expect([fault, byDay(await demand.read(range)), calls.length]).toMatchObject([fault, { '2026-03-19': 60 }, 2]);
-      delete work[fault];
-      expect([fault, byDay(await demand.read(range))]).toMatchObject([fault, { '2026-03-19': 0 }]);
-      await demand.read(range);
-      // Once read whole, yesterday and the day before are final and today waits its half hour.
-      expect([fault, calls.length]).toEqual([fault, 3]);
-    }
+  it('reads a month of rest blocks in one small read per calendar and stretch, and none again while the days are cached', () => withDemand(async sql => {
+    const month = { from: '2026-02-18', to: '2026-03-20', timezone: TZ };
+    const days = Array.from({ length: 31 }, (_, i) => new Date(Date.parse('2026-02-18T00:00:00Z') + i * 86_400_000).toISOString().slice(0, 10));
+    const work: FakeAccount = { calendars: [calendar('work')], busy: days.map(day => ({ calendar: 'work', start: `${day}T09:00:00Z`, end: `${day}T10:00:00Z` })),
+      events: days.map(day => ({ calendar: 'work', id: `rest-${day}`, start: `${day}T09:00:00Z`, end: `${day}T10:00:00Z`, block: 'rest' as const })) };
+    const { demand, calls, blockReads, clock } = setup(sql, { 'work@example.com': work });
+    const first = await demand.read(month);
+    expect(first.state === 'available' && first.days.every(day => day.busy_minutes === 0)).toBe(true);
+    // Five stretches of at most seven days: five free/busy reads and five block reads.
+    expect([calls.length, blockReads.length]).toEqual([5, 5]);
+    clock.now = NOW + 10 * MINUTE;
+    await demand.read(month);
+    expect([calls.length, blockReads.length]).toEqual([5, 5]);
+  }));
+
+  it('counts a rest block it could not read, keeps that answer for half an hour, then reads again', () => withDemand(async sql => {
+    const work = account([calendar('work')], [busyAndListed('work', 'recharge', '13:00', '14:00', 'rest')], { blocksFail: ['work'] });
+    const { demand, calls, blockReads, clock } = setup(sql, { 'work@example.com': work });
+    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 60 });
+    clock.now = NOW + 29 * MINUTE;
+    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 60 });
+    expect([calls.length, blockReads.length]).toEqual([1, 1]);
+    // The listing works again: once the half hour is up the day is read whole, and then kept as final.
+    delete work.blocksFail;
+    clock.now = NOW + 31 * MINUTE;
+    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 0 });
+    clock.now = NOW + 45 * MINUTE;
+    await demand.read(range);
+    expect([calls.length, blockReads.length]).toEqual([2, 2]);
   }));
 });

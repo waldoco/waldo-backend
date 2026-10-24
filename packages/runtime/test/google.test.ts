@@ -570,3 +570,57 @@ describe('the kind of a protected block on the owner\'s calendar', () => {
     expect(await read({ calendar_details: true, calendar_owner_status: true })).not.toHaveProperty('block');
   });
 });
+
+// Calendar demand asks for Waldo's rest blocks on one calendar: one query finds them by their private kind, and only their
+// own windows are read again to see what else keeps that time busy.
+describe('Waldo\'s rest blocks on one calendar', () => {
+  const from = '2026-10-11T00:00:00.000Z', to = '2026-10-12T00:00:00.000Z';
+  const timed = (id: string, start: string, end: string, over: Record<string, unknown> = {}) => ({ id, summary: id, start: { dateTime: `2026-10-11T${start}:00Z` }, end: { dateTime: `2026-10-11T${end}:00Z` }, ...over });
+  const tag = (where: 'private' | 'shared', kind = 'rest') => ({ extendedProperties: { [where]: { waldoBlock: kind } } });
+  const reading = (answer: (url: URL) => Record<string, unknown>) => {
+    const urls: URL[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      urls.push(url);
+      return Response.json({ kind: 'calendar#events', ...answer(url) });
+    }) as typeof fetch;
+    return { urls, client: googleClient(app, { refresh_token: 'synthetic' }, fetcher) };
+  };
+
+  it('finds them with one filtered query, then reads only their merged windows for what else is busy there', async () => {
+    const recharge = timed('recharge', '13:00', '14:00', tag('private')), stretch = timed('stretch', '13:30', '15:00', tag('private')), evening = timed('evening', '18:00', '19:00', tag('private'));
+    const { urls, client } = reading(url => url.searchParams.has('privateExtendedProperty') ? { items: [
+      recharge, stretch, evening,
+      // What a filter should never return, and is never taken for a rest block if it does: an invite whose organiser set
+      // the shared kind, an all-day event, a cancelled one, and deep work.
+      timed('invite', '09:00', '10:00', tag('shared')), { id: 'allday', start: { date: '2026-10-11' }, end: { date: '2026-10-12' }, ...tag('private') },
+      timed('gone', '11:00', '12:00', { status: 'cancelled', ...tag('private') }), timed('focus', '16:00', '17:00', tag('private', 'deep_work')),
+    ] } : url.searchParams.get('timeMin') === '2026-10-11T13:00:00.000Z' ? { items: [
+      recharge, stretch, timed('review', '14:30', '15:30'), { id: 'offsite', start: { date: '2026-10-11' }, end: { date: '2026-10-12' } },
+      timed('free', '13:00', '14:00', { transparency: 'transparent' }), timed('declined', '13:00', '14:00', { attendees: [{ self: true, responseStatus: 'declined' }] }),
+      timed('dropped', '13:00', '14:00', { status: 'cancelled' }),
+    ] } : { items: [evening] });
+    const found = await client.restBlocks!('primary', from, to);
+    expect(found).toEqual({
+      blocks: [recharge, stretch, evening].map(e => ({ start: e.start.dateTime, end: e.end.dateTime })),
+      others: [{ start: '2026-10-11T14:30:00Z', end: '2026-10-11T15:30:00Z', all_day: false }, { start: '2026-10-11', end: '2026-10-12', all_day: true }],
+    });
+    const [query, ...windows] = urls;
+    expect([query!.pathname, query!.searchParams.get('privateExtendedProperty'), query!.searchParams.get('timeMin'), query!.searchParams.get('timeMax'), query!.searchParams.get('singleEvents')])
+      .toEqual(['/calendar/v3/calendars/primary/events', 'waldoBlock=rest', from, to, 'true']);
+    expect(windows.map(url => [url.searchParams.get('timeMin'), url.searchParams.get('timeMax'), url.searchParams.has('privateExtendedProperty')]))
+      .toEqual([['2026-10-11T13:00:00.000Z', '2026-10-11T15:00:00.000Z', false], ['2026-10-11T18:00:00.000Z', '2026-10-11T19:00:00.000Z', false]]);
+  });
+
+  it('reads nothing more when there are no rest blocks', async () => {
+    const { urls, client } = reading(() => ({ items: [] }));
+    expect(await client.restBlocks!('team@group.calendar.google.com', from, to)).toEqual({ blocks: [], others: [] });
+    expect(urls.map(url => url.pathname)).toEqual(['/calendar/v3/calendars/team%40group.calendar.google.com/events']);
+  });
+
+  it('fails rather than answer from a listing that does not end', async () => {
+    const { client } = reading(url => url.searchParams.has('privateExtendedProperty') ? { items: [timed('recharge', '13:00', '14:00', tag('private'))] } : { items: [], nextPageToken: 'more' });
+    await expect(client.restBlocks!('primary', from, to)).rejects.toThrow('Calendar listing did not end');
+  });
+});
