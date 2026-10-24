@@ -1,11 +1,16 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
-import { GOOGLE_METHODS, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleTokens } from './google';
+import { GOOGLE_METHODS, GOOGLE_REVOKE_OUTCOMES, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleRevokeOutcome, type GoogleTokens } from './google';
 import type { CalendarWatch, GmailWatch } from './google-push';
+import { withRequestTimeout } from '../identity/request-timeout';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
 export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly string[]; profile?: GoogleProfile }>;
+// What a disconnect did: whether the signed delete removed the row's secret, and what Google said when asked to revoke the
+// grant first. 'shared' is a mailbox another live connection also holds, so Google was not asked; 'unavailable' is a check or
+// an edge that could not answer (an edge that predates the revoke operation included), so Google was not asked either.
+export type GoogleRevokeResult = Readonly<{ removed: boolean; google: GoogleRevokeOutcome | 'shared' | 'unavailable' }>;
 export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
@@ -17,7 +22,7 @@ export type GoogleProxy = Readonly<{
   calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
-  revoke(doName: string, connection: string): Promise<boolean>;
+  revoke(doName: string, connection: string, account: string): Promise<GoogleRevokeResult>;
 }>;
 
 const METHODS = GOOGLE_METHODS;
@@ -89,6 +94,20 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
       return { historyId: data.historyId, expiration: data.expiration };
     },
-    revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
+    // Google is asked first, and no answer of its keeps the secret: the delete runs whatever it was, and only a failed
+    // delete fails the disconnect. Google's revocation ends Waldo's whole authorization for that Google user, so it would end
+    // every other owner's grant on the same mailbox: it is asked only when the mailbox's live connections are this one alone.
+    // A lookup that does not list this connection does not describe this grant, so it cannot say the mailbox is unshared.
+    revoke: async (doName, connection, account) => {
+      const mailbox = account.toLowerCase();
+      const live = await rpc('gmail_push_route', `gmailroute.${mailbox}`, { p_account: mailbox })
+        .then((rows) => Array.isArray(rows) ? rows.map((row: { connection?: unknown }) => row?.connection) : null)
+        .catch(() => null);
+      const google = live === null || !live.includes(connection) ? 'unavailable' as const
+        : live.some((held) => held !== connection) ? 'shared' as const : await withRequestTimeout(() => post({ do_name: doName, op: 'revoke', connection }))
+        .then((json) => { const said = (json as { data?: { provider?: unknown } }).data?.provider; return GOOGLE_REVOKE_OUTCOMES.find((known) => known === said) ?? 'unavailable'; })
+        .catch(() => 'unavailable' as const);
+      return { removed: (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true, google };
+    },
   };
 };
