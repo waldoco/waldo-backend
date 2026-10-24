@@ -79,8 +79,8 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     for (const row of rows) sql.exec('DELETE FROM owner_findings WHERE id = ?', row.id);
     return texts;
   };
-  // The owner object builds this store when it wakes (alarms included) and for each app request, so a finding past its age
-  // limit goes even if the owner never opens What Waldo knows.
+  // The owner object builds this store for each app onboarding request and when it builds a channel's turn runtime (once per
+  // instance per channel), so a finding past its age limit goes even if the owner never opens What Waldo knows.
   settle();
   const claimFor = (row: Row, text: string, kept: boolean) => ({
     kind: row.category === 'interest' ? 'preference' : 'fact', text, origin: 'owner', source: kept ? 'confirmed' : 'stated',

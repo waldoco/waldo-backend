@@ -43,6 +43,7 @@ const DEVICE_ROW = ['device.revoke', 'device.query', 'device.notify'] as const;
 // Liveness sits beside data: it is not part of the revision, so it can change between reads without blocking a decision.
 export type IMessageRecord = Base<'imessage', {
   enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; phone: string | null; photon: 'connected' | 'disconnected' | null; actions: (typeof IMESSAGE_TOP)[number][];
+  phone_on_file: { phone: string; verified: boolean } | null;
   bridges: { id: string; kind: 'owner' | 'shared'; state: string; subject: string | null; chat: string | null; observed: boolean; host_version: string; actions: (typeof IMESSAGE_ROW)[number][] }[];
 }> & { status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
 export type DevicesRecord = Base<'devices', {
@@ -151,15 +152,18 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'imessage') {
     const status = value.status;
-    // phone and photon are newer fields: a server without them reads as not enrollable, Photon unknown.
+    // phone, photon and phone_on_file are newer fields: a server without them reads as not enrollable, Photon unknown, number on file not known.
+    const onFile = data.phone_on_file;
     if (typeof data.enabled !== 'boolean' || !optionalString(data.address) || !optionalString(data.linked_hint) || typeof data.admin !== 'boolean' || !listed(data.actions, IMESSAGE_TOP) || !Array.isArray(data.bridges)
       || (data.phone !== undefined && !optionalString(data.phone)) || (data.photon !== undefined && data.photon !== null && data.photon !== 'connected' && data.photon !== 'disconnected')
+      || (onFile !== undefined && onFile !== null && !(obj(onFile) && string(onFile.phone) && typeof onFile.verified === 'boolean'))
       || !data.bridges.every(row => obj(row) && string(row.id) && /^imb_[0-9a-f]{32}$/.test(row.id) && ['owner', 'shared'].includes(String(row.kind)) && string(row.state) && optionalString(row.subject) && optionalString(row.chat) && typeof row.observed === 'boolean' && string(row.host_version) && listed(row.actions, IMESSAGE_ROW))
       || !obj(status) || !Array.isArray(status.bridges) || !status.bridges.every(row => obj(row) && string(row.id) && typeof row.online === 'boolean' && typeof row.text_ready === 'boolean' && typeof row.sending_paused === 'boolean')) throw shapeError();
     type Bridge = IMessageRecord['data']['bridges'][number];
     return { ...base, view: 'imessage', data: {
       enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, phone: (data.phone ?? null) as string | null,
       photon: (data.photon ?? null) as IMessageRecord['data']['photon'], actions: [...data.actions] as IMessageRecord['data']['actions'],
+      phone_on_file: obj(onFile) ? { phone: onFile.phone as string, verified: onFile.verified as boolean } : null,
       bridges: (data.bridges as Bridge[]).map(row => ({ id: row.id, kind: row.kind, state: row.state, subject: row.subject, chat: row.chat, observed: row.observed, host_version: row.host_version, actions: [...row.actions] })),
     }, status: { bridges: (status.bridges as IMessageRecord['status']['bridges']).map(row => ({ id: row.id, online: row.online, text_ready: row.text_ready, sending_paused: row.sending_paused })) } } as Records[V];
   }

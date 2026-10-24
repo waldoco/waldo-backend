@@ -50,7 +50,7 @@ const withSweep = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const check = (over: Partial<Parameters<typeof updateSweepCheck>[0]> = {}) => updateSweepCheck({
       updates, jobs: book, google, now: clock.at, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: true,
       gate: () => gate.code, providerDown: () => down.breaker, transaction: work => state.storage.transactionSync(work),
-      enqueued: job => { held.push(job.created_at); }, ...over,
+      enqueued: job => { held.push(job.created_at); }, dayChanged: async () => undefined, ...over,
     });
     return work({
       sql, storage: state.storage, clock, updates, book, mail, events, reads, gate, down, held, check,
@@ -155,6 +155,41 @@ describe('the sweep check writes a machine job', () => {
       expect(taskBrief(job!).machine!.withheld).toEqual(['event:ev-7', 'message:m-1']);
       expect(taskBrief(job!).context).toContain(`[event:ev-7] ${HEALTH_DETAIL_DROPPED}`);
       expect(numericHealthIn(job!.brief_json)).toBe(false);
+    });
+  });
+
+  // Weight follows the day: a change the sweep read on the owner's today asks for one health recompute, after the record
+  // commits, whatever the card does. A failed ask never costs the update.
+  const TODAY_MEETING = { id: 'ev-1', title: 'Budget review', start: '2026-10-20T15:00:00Z', end: '2026-10-20T16:00:00Z', all_day: false, status: 'confirmed', created: '2026-10-20T08:58:00Z' } as CalendarChange;
+  it('a read with a change on today asks for the recompute once, and one that throws still writes the job', async () => {
+    for (const fails of [false, true]) {
+      await withSweep(async (h) => {
+        h.events.push(TODAY_MEETING);
+        let asked = 0;
+        const check = await h.check({ dayChanged: async () => { asked += 1; if (fails) throw new Error('recompute unavailable'); } });
+        expect(asked).toBe(1);
+        expect(check.code).toBe('enqueued');
+        expect(h.jobs()).toHaveLength(1);
+        expect(h.rows()).toHaveLength(1);
+      });
+    }
+  });
+  it('asks for the recompute with the card held, and not for a change on another day or when nothing was read', async () => {
+    await withSweep(async (h) => {
+      let asked = 0;
+      const dayChanged = async () => { asked += 1; };
+      h.events.push({ ...TODAY_MEETING, id: 'ev-2', start: '2026-10-21T15:00:00Z', end: '2026-10-21T16:00:00Z' });
+      await h.check({ dayChanged });
+      expect(asked).toBe(0);
+      h.events.splice(0, 1, TODAY_MEETING);
+      h.clock.at = T0 + 600_000;
+      // An open sweep job holds the window, so nothing is read and nothing is asked; the read after it settles asks.
+      expect((await h.check({ now: h.clock.at, dayChanged })).code).toBe('held_open_job');
+      expect(asked).toBe(0);
+      for (const job of h.jobs()) h.book.cancel(job.id, 'owner');
+      h.gate.code = 'held_quiet';
+      expect((await h.check({ now: h.clock.at, dayChanged })).code).toBe('held_quiet');
+      expect(asked).toBe(1);
     });
   });
 

@@ -22,6 +22,9 @@ export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean
 // lookupOffered for the look-up the notice discloses. Off, a purpose cannot be granted and a yes recorded earlier does not
 // count; the rows stay as evidence. The look-up rests on the notice, so it is offered only while the agreements are too.
 export type ConsentOptions = Readonly<{ agreementsOffered: boolean; lookupOffered: boolean }>;
+// The one reading of the Worker's APP_AGREEMENTS and OWNER_LOOKUP: only "1" turns either on.
+export const consentSwitches = (env: Readonly<{ APP_AGREEMENTS?: string; OWNER_LOOKUP?: string }>): ConsentOptions =>
+  ({ agreementsOffered: env.APP_AGREEMENTS === '1', lookupOffered: env.OWNER_LOOKUP === '1' });
 
 // The owner's consent ledger in the owner object, next to the data it governs, so a check and the write it guards can share
 // one transaction. Rows are only ever appended: a withdrawal is a new row, and the current state is the newest row per purpose.

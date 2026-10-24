@@ -6,7 +6,7 @@ import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
 import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { localIso } from './reminders';
-import { changeLines, readChanges, writeChanges, type Change, type UpdateBook } from './update-cards';
+import { changeLines, readChanges, touchesDay, writeChanges, type Change, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
 // it for the next main card. When an update card could go out now and something changed, it writes a reader job in the
@@ -33,10 +33,13 @@ export type SweepCheckDeps = Readonly<{
   transaction<T>(work: () => T): T;
   // Runs inside that transaction for a job it wrote (the jobs lane's wake).
   enqueued(job: JobRow): void;
+  // A change it read lands on the owner's today: asks for a health recompute, after the transaction.
+  dayChanged(): Promise<void>;
 }>;
 
 // The job's key is the window it covers: the watermarks before this tick moved them.
-export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow }>> => {
+type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow }>;
+export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
   // A sweep still open holds the window: nothing is read, so the next tick after it settles reads everything since.
   if (deps.jobs.openMachine('update_sweep', 'owner')) return { code: 'held_open_job', changes: 0, analysis: 0 };
@@ -44,7 +47,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<Readonly<{
   if (gate === null && deps.providerDown()) return { code: 'held_breaker', changes: 0, analysis: 0 };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
   const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups);
-  return deps.transaction(() => {
+  const checked = deps.transaction((): SweepChecked => {
     writeChanges(updates, read);
     let recordId = read.changes.length ? updates.record(deps.day, deps.now, read.changes, null) : null;
     updates.pruneMail(deps.now);
@@ -58,6 +61,10 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<Readonly<{
     if (made.code === 'enqueued') deps.enqueued(made.job);
     return { code: made.code, ...counts, job: made.job };
   });
+  // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
+  // recorded. A failed ask never costs the update.
+  if (read.changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);
+  return checked;
 };
 
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({

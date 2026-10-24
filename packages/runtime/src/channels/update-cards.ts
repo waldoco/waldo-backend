@@ -1,4 +1,5 @@
-import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type GoogleClient } from '../connectors/google';
+import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type CalendarItem, type GoogleClient } from '../connectors/google';
+import { localDayWindow } from '../health/scores/time';
 import { localIso } from './reminders';
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -92,6 +93,17 @@ const toChange = (item: CalendarChange, since: number): Change => {
   const { status, created, ...event } = item;
   const kind = status === 'cancelled' ? 'cancelled' : Date.parse(created) >= since ? 'added' : 'changed';
   return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}` };
+};
+
+// Whether a change can move the owner's load on one local day: a calendar event that overlaps that day, or one Google
+// returned without times (a cancelled event comes back without them, so it may have been that day's).
+export const touchesDay = (change: Change, day: string, timezone: string): boolean => {
+  if (change.source !== 'calendar') return false;
+  const event = JSON.parse(change.detail) as Partial<Pick<CalendarItem, 'start' | 'end' | 'all_day'>>;
+  if (!event.start || !event.end) return true;
+  if (event.all_day) return event.start.slice(0, 10) <= day && day < event.end.slice(0, 10);
+  const start = Date.parse(event.start), end = Date.parse(event.end), window = localDayWindow(day, timezone);
+  return !Number.isFinite(start) || !Number.isFinite(end) || (start < window.end && end > window.start);
 };
 
 // What changed since the watermarks, read with no write: the caller records the changes, the mail it observed and the new
