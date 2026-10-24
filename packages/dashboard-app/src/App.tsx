@@ -20,7 +20,7 @@ import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'connections/imessage' | 'connections/devices' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/profile' | 'connections' | 'connections/imessage' | 'connections/devices' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -28,12 +28,12 @@ const routes = [
 export const resolveRoute = (raw: string): Route => {
   const memory = parseMemoryDestination(raw);
   if(memory.kind==='invalid-memory')return 'memory';
-  if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
+  if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':`memory/${d.view}`;}
   const value = raw.split('?')[0] ?? '';
   if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
   if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
-  if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
+  if (value === 'memory/spots' || value === 'memory/profile') return value;
   if(isThreadRoute(value))return value as Route;
   if(value===''||value==='overview')return 'today';
   return routes.find((r) => r.key === value)?.key ?? 'not-found';
@@ -86,7 +86,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
   if(route==='invites')return <><SettingsHead selected="invites" isAdmin={isAdmin}/><OwnerControlsPanel view={route} embedded/></>;
   if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section} isAdmin={isAdmin}/>;}
-  if (route === 'memory' || route.startsWith('memory/')) return <MemoryPanel subview={route === 'memory/constellation' ? 'constellation' : route === 'memory/profile' ? 'profile' : 'spots'}/>;
+  if (route === 'memory' || route.startsWith('memory/')) return <MemoryPanel subview={route === 'memory/profile' ? 'profile' : 'spots'}/>;
 
   const brief = data.brief.status === 'sent_recorded'
     ? { title: 'Sent, as recorded.', body: 'Waldo logged a send. That doesn’t confirm delivery or show the message; check your chat.' }

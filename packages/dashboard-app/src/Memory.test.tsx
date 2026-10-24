@@ -1,20 +1,17 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {MemoryPanel,MemoryList,MemoryDetailView,PatternExplorer} from './Memory';
-import {readMemory,type MemoryPage,type MemoryDetail,type MemoryPattern} from './memory-model';
+import {MemoryPanel,MemoryList,MemoryDetailView} from './Memory';
+import {readMemory,type MemoryPage,type MemoryDetail} from './memory-model';
 import {response} from './memory-test-fixtures';
 afterEach(()=>vi.unstubAllGlobals());
 describe('modern Memory presentation',()=>{
- it('keeps originating list context in detail, exploration and supporting-item links',()=>{
+ it('keeps originating list context in list and detail links',()=>{
   const origin={view:'spots' as const,cursor:'saved-page'};
   const page=renderToStaticMarkup(<MemoryList initialView="list" data={readMemory(response('view=claims&limit=25')) as MemoryPage} returnTo={origin} onNext={()=>{}} onRestart={()=>{}}/>);
   expect(page).toContain('returnView=spots&amp;returnCursor=saved-page');
-  const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:node:1')) as MemoryDetail} returnTo={origin}/>);
+  const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail} returnTo={origin}/>);
   expect(detail).toContain('#/memory/spots?cursor=saved-page');
   expect(detail).toContain('Back to Spots');
-  const spot=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail} returnTo={{view:'constellation'}}/>);
-  expect(spot).toContain('Back to patterns');
-  expect(detail).toContain('explore=1&amp;returnView=spots&amp;returnCursor=saved-page');
  });
  it('renders invalid Memory selectors as recovery without action controls or network requests',()=>{
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);vi.stubGlobal('window',{location:{hash:'#/memory/spots?id=1&owner=other'}});
@@ -37,12 +34,7 @@ describe('modern Memory presentation',()=>{
  });
  it('labels writer evidence and source pointers and preserves supported mutation recovery',()=>{
   const html=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail}/>);
-  expect(html).toContain('Writer’s note');expect(html).toContain('not proof');expect(html).toContain('Source pointer withheld');expect(html).toContain('Linked saved patterns');expect(html).not.toContain('hidden-message');expect(html).not.toContain('>Approve');
- });
- it('renders only saved pattern associations with keyboard/list fallback and capped-link honesty',()=>{
-  const data=readMemory(response('view=pattern&id=synthetic-owner:node:1&max_nodes=12&max_links=20')) as MemoryPattern;
-  const html=renderToStaticMarkup(<PatternExplorer data={{...data,expand:{...data.expand,links_capped:true,capped_links:1},omitted_links:1,truncated:true}} onNext={()=>{}} onRestart={()=>{}}/>);
-  expect(html).toContain('<svg');expect(html).toContain('role="button"');expect(html).toContain('tabindex="0"');expect(html).toContain('Saved branches');expect(html).toContain('Unverified association');expect(html).toContain('cannot be recovered');expect(html).toContain('tentative');expect(html).not.toContain('Your days');
+  expect(html).toContain('Writer’s note');expect(html).toContain('not proof');expect(html).toContain('Source pointer withheld');expect(html).not.toContain('hidden-message');expect(html).not.toContain('>Approve');
  });
 });
 it('puts evidence before collapsed technical metadata without implying a source link',()=>{
@@ -57,12 +49,4 @@ it('never labels an untrusted-origin Spot as Shared on cards or detail',()=>{
  if(detail.kind!=='claim')throw new Error('Expected claim fixture');
  const html=renderToStaticMarkup(<MemoryDetailView data={{...detail,item:{...detail.item,origin:'untrusted'}}}/>);
  for(const result of [cards,html]){expect(result).toContain('Untrusted origin');expect(result).not.toContain('Shared');}
-});
-
-it('opens on the graph with the view toggle and an honest page note, and offers a refresh for an incomplete read',()=>{
- const page=readMemory(response('view=claims&limit=25')) as MemoryPage;
- const html=renderToStaticMarkup(<MemoryList data={page} onNext={()=>{}} onRestart={()=>{}}/>);
- expect(html).toContain('mm scene');expect(html).toMatch(/aria-pressed="true"[^>]*>.*Graph/);expect(html).toContain('Spots on this page');expect(html).not.toContain('Refresh list');
- expect(renderToStaticMarkup(<MemoryList data={{...page,complete:false,state:'partial'}} onNext={()=>{}} onRestart={()=>{}}/>)).toContain('Refresh list');
- expect(renderToStaticMarkup(<MemoryList data={readMemory(response('view=interpretations&limit=25')) as MemoryPage} onNext={()=>{}} onRestart={()=>{}}/>)).not.toContain('Calendar');
 });

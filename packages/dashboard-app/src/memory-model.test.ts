@@ -4,17 +4,17 @@ import {SignInRequired} from './model';
 import {response} from './memory-test-fixtures';
 afterEach(()=>vi.unstubAllGlobals());
 describe('owner Memory read client',()=>{
- it('reads the actual server list/detail/pattern shape, drops unrelated fields and withholds source pointers',()=>{
+ it('reads the server claims list and claim detail, drops unrelated fields and withholds source pointers',()=>{
   const list=readMemory({...response('view=claims&limit=25'),secret:'never retain'});
   expect(list.view).toBe('claims');expect(list).not.toHaveProperty('secret');
   if(list.view==='claims') {expect(list.items[0]).not.toHaveProperty('source_ref');expect(list.items[0]).toMatchObject({origin:'shared',source_reference:{link:null,state:'unverified'}});}
   expect(readMemory(response('view=detail&id=synthetic-owner:claim:1')).view).toBe('detail');
-  expect(readMemory(response('view=pattern&id=synthetic-owner:node:1&max_nodes=12&max_links=20')).view).toBe('pattern');
  });
- it('fails closed on mutation grants, unsupported evidence and dangling graph edges',()=>{
+ it('fails closed on mutation grants and on the retired interpretation and pattern views',()=>{
   expect(()=>readMemory({...response('view=claims&limit=25'),actions:['claim.confirm']})).toThrow();
-  const pattern=response('view=pattern&id=synthetic-owner:node:1&max_nodes=12&max_links=20');
-  expect(()=>readMemory({...pattern,associations:[{from:'foreign',to:'synthetic-owner:node:1',relation:'fake',state:'unverified_association',estimate:.3}]})).toThrow();
+  expect(()=>readMemory({...response('view=claims&limit=25'),view:'interpretations',items:[]})).toThrow();
+  expect(()=>readMemory({...response('view=detail&id=synthetic-owner:claim:1'),kind:'interpretation'})).toThrow();
+  expect(()=>readMemory({version:1,state:'available',complete:true,unavailable_claim_count:0,actions:[],view:'pattern'})).toThrow();
  });
  it('preserves partial suppression and never treats it as a complete empty list',()=>{
   const page=readMemory({...response('view=claims&limit=25'),complete:false,state:'partial',items:[],page:{limit:25,returned:0,total:0,next_cursor:null}});
@@ -33,18 +33,17 @@ describe('owner Memory read client',()=>{
   for(const value of ['x'.repeat(257),'bad\u0001id','\ud800']){
    const page=response('view=claims');if(!('items' in page))throw new Error('Wrong fixture');
    expect(()=>readMemory({...page,items:page.items.map(item=>({...item,id:value}))})).toThrow();
-   const detail=response('view=detail&id=synthetic-owner:claim:1');expect(()=>readMemory({...detail,linked_interpretation_ids:[value]})).toThrow();
+   const detail=response('view=detail&id=synthetic-owner:claim:1');if(!('item' in detail))throw new Error('Wrong fixture');
+   expect(()=>readMemory({...detail,item:{...detail.item,id:value}})).toThrow();
   }
   for(const cursor of ['x'.repeat(513),'bad\u0001cursor','\ud800']){
    const page=response('view=claims');if(!('page' in page))throw new Error('Wrong fixture');
    expect(()=>readMemory({...page,page:{...page.page,next_cursor:cursor}})).toThrow();
-   const pattern=response('view=pattern');if(!('expand' in pattern))throw new Error('Wrong fixture');
-   expect(()=>readMemory({...pattern,expand:{...pattern.expand,next_cursor:cursor}})).toThrow();
   }
  });
- it('rejects an unexpected view or a different detail/pattern target',async()=>{
+ it('rejects an unexpected view or a different detail target',async()=>{
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
-  for(const [query,body] of [['view=detail&id=other',response('view=detail&id=synthetic-owner:claim:1')],['view=pattern&id=other',response('view=pattern')],['view=detail&id=other',response('view=claims')]] as const){
+  for(const [query,body] of [['view=detail&id=other',response('view=detail&id=synthetic-owner:claim:1')],['view=detail&id=other',response('view=claims')]] as const){
    fetch.mockResolvedValueOnce(new Response(JSON.stringify(body)));await expect(fetchMemory(new URLSearchParams(query))).rejects.toMatchObject({code:'unsupported'});
   }
  });
