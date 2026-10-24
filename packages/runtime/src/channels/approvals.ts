@@ -381,7 +381,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const where = `${p.calendar_id && p.calendar_id !== 'primary' ? ` on ${p.calendar_id}` : ''}${p.account ? ` (${p.account})` : ''}`;
     const details = guests(p);
     const tail = details ? `.${details.replace(/\.$/, '')}` : '';
-    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${where}${tail}`;
+    // A block's kind decides whether it counts toward the owner's load, so the card names it for them to correct.
+    const kind = p.block === 'rest' ? " (rest: it won't add to your day's load)" : p.block === 'deep_work' ? " (deep work: it adds to your day's load)" : '';
+    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${where}${kind}${tail}`;
     if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${where}${tail}`;
     return `Cancel ${name}${where}${tail}`;
   };
@@ -529,7 +531,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
       const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
-        ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}) });
+        ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}), ...(p.block ? { block: p.block } : {}) });
       return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
     }
     const before = await client.event(p.event_id!, p.calendar_id);
