@@ -4298,14 +4298,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           // Rebuild runtimes so values captured at build time follow the new zone.
           this.runtimes = {};
         } else if (action === 'spot.pin' || action === 'spot.unpin') {
-          // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry are offered.
+          // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
           const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);
           if (!claim) return false;
           if (action === 'spot.unpin') return memory.unpin(spotId);
           if ((value !== 'profile' && value !== 'facts') || !PROFILE_KINDS.includes(claim.kind)) return 'spot.pin.failed';
           const block: PinBlock = value;
           const last = [...memory.claims(), ...memory.claims('promoted')].filter((row) => row.pinned === block).reduce((most, row) => Math.max(most, row.pin_order ?? 0), -1);
-          if (!memory.pin(spotId, block, last + 1)) return 'spot.pin.failed';
+          // The owner pinning a claim says it is theirs, whoever wrote it: it is grounded first, so the pin always holds.
+          if (!memory.ownerGround(spotId, new Date(now).toISOString(), surface === 'app' ? 'owner, app:claim.pin' : 'owner, console:spot.pin')
+            || !memory.pin(spotId, block, last + 1)) return 'spot.pin.failed';
         } else if (action === 'spot.edit') {
           // The owner's own text replaces the claim: correct() supersedes the old row and keeps its pin. A credential never
           // enters memory, whoever typed it, so the text crosses the same scribe check a remembered fact does.
