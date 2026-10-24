@@ -73,6 +73,9 @@ export function IMessageControls({ record, busy, onAction }: { record: IMessageR
         ? <p>Your Waldo number is <strong>{data.address}</strong>. Get a one-time code, then text <strong>waldo</strong> and the code to it from your iPhone. Only your own number reaches your Waldo.</p>
         : <p>Enter your iPhone number. Waldo gives you a number to text and a one-time code to send it.</p>}
       {data.linked_hint && <p>Linked: •••{data.linked_hint}. Texts from this number reach your Waldo.</p>}
+      {data.phone_on_file && (data.phone_on_file.verified
+        ? <p>Your number on file, <strong>{data.phone_on_file.phone}</strong>, is verified.</p>
+        : <p>Your number on file, <strong>{data.phone_on_file.phone}</strong>, is not verified yet. To verify it, text your link code to Waldo from that number.</p>)}
       {offered('imessage.enroll') && !data.address && <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('imessage.enroll', { phone }); }}>
         <label>Your iPhone number<input type="tel" autoComplete="tel" placeholder="+15551234567" value={phone} disabled={busy} onChange={event => setPhone(event.target.value)} required/></label>
         <div className="control-actions"><button className="primary" disabled={busy || !phone.trim()}>Get my Waldo number</button></div>

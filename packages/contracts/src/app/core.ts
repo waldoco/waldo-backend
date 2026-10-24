@@ -38,7 +38,9 @@ export const appSendWireFits = (value: unknown): boolean => appJsonWireBytes(val
 const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
 export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
+// phone is the number a new member joins with, in E.164 as the console stores it. It is unverified contact data until the
+// owner texts their link code to Waldo from it. A member who already has an account is not changed by it.
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: z.string().regex(/^\+[1-9]\d{6,14}$/).optional() });
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
