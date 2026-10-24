@@ -44,7 +44,8 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; model.respond = undefined; });
 
-const ownerReply = async (name: string, toolSearch: boolean): Promise<LLMRequest> => {
+// flag: the owner DO's WALDO_TOOL_SEARCH, undefined as in a deploy without the var.
+const ownerReply = async (name: string, flag: string | undefined): Promise<LLMRequest> => {
   model.requests = [];
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-11-04T09:00:00Z') });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,7 +65,7 @@ const ownerReply = async (name: string, toolSearch: boolean): Promise<LLMRequest
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'owner@example.test', scopes: [...GOOGLE_CONSENT_SCOPES] }]);
-    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...(toolSearch ? { WALDO_TOOL_SEARCH: 'on' } : {}) });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_SEARCH: flag });
     try {
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: ASKED }) }));
       expect(sent.status).toBe(202);
@@ -123,7 +124,7 @@ describe('the brain tool surface', () => {
   });
 
   it('switch off: the request and both wire bodies carry every tool up front, non-strict, as before', async () => {
-    const request = await ownerReply('tool-surface-off', false);
+    const request = await ownerReply('tool-surface-off', 'off');
     expect(request.tool_search).toBeUndefined();
     expect(request.tools!.some((tool) => tool.namespace !== undefined || tool.defer_loading !== undefined)).toBe(false);
     expect(request.system).not.toContain(TOOL_SEARCH_LINE);
@@ -133,9 +134,16 @@ describe('the brain tool surface', () => {
     expect(anthropic).toEqual(request.tools!.map((tool) => ({ name: tool.name, description: tool.description, input_schema: { ...tool.parameters, type: 'object' } })));
   });
 
+  // Only the exact string 'on' turns search on: unset and every other spelling send the full menu, as production does.
+  it.each([undefined, '', 'off', 'ON', 'true', 'on '].map((flag, index) => [JSON.stringify(flag) ?? 'unset', flag, index] as const))('switch %s is off: no tool search, no deferred tool', async (_label, flag, index) => {
+    const request = await ownerReply(`tool-surface-flag-${index}`, flag);
+    expect(request.tool_search).toBeUndefined();
+    expect(request.tools!.some((tool) => tool.namespace !== undefined || tool.defer_loading !== undefined)).toBe(false);
+  });
+
   it('switch on: under 4k tokens of tool definitions per round for both providers, strict on OpenAI where it fits', async () => {
-    const off = await ownerReply('tool-surface-before', false);
-    const request = await ownerReply('tool-surface-on', true);
+    const off = await ownerReply('tool-surface-before', 'off');
+    const request = await ownerReply('tool-surface-on', 'on');
     expect(request.system).toContain(TOOL_SEARCH_LINE);
     // One menu every round, so propose_action is offered before anything outside arrives; the switch-off loop adds it
     // only once the turn is tainted. Otherwise the same tools, each placed by its record.
@@ -198,7 +206,7 @@ describe('the brain tool surface', () => {
       ];
       return { text: '', tool_calls: [{ call_id: 'c1', name: 'list_reminders', arguments: '{}' }], output_items: produced };
     };
-    await ownerReply('tool-surface-search-round', true);
+    await ownerReply('tool-surface-search-round', 'on');
     const searched = model.requests.find((request) => request.tool_turns?.some((turn) => turn.call.name === 'list_reminders'));
     expect(searched, 'the round after the search reached the model').toBeDefined();
     const turn = searched!.tool_turns!.find((item) => item.call.name === 'list_reminders')!;
