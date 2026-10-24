@@ -106,7 +106,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
     const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
       projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true);return detail.status===200?detail.data as never:null;},
-      act:async spot=>{await host.assertCurrent();return host.act({...spot,surface:'app'});}});
+      act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);

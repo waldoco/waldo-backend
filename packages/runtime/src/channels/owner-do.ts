@@ -4274,7 +4274,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS, unconfirmed: unconfirmedCards(finalOutbox.records(), day),
           approvals: desk.pending(now), run: latest && latest.status === 'running' && waiting.has(latest.id) ? { ...latest, summary: waiting.get(latest.id)! } : latest, trace: traces.latest(), grants: await google.state() });
       },
-      act: async ({ action, id, value, surface }, assertCurrent) => {
+      act: async ({ action, id, value, made }, assertCurrent) => {
         await assertCurrent?.();
         const now = Date.now();
         const spotId = Number(id);
@@ -4306,7 +4306,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const block: PinBlock = value;
           const last = [...memory.claims(), ...memory.claims('promoted')].filter((row) => row.pinned === block).reduce((most, row) => Math.max(most, row.pin_order ?? 0), -1);
           // The owner pinning a claim says it is theirs, whoever wrote it: it is grounded first, so the pin always holds.
-          if (!memory.ownerGround(spotId, new Date(now).toISOString(), surface === 'app' ? 'owner, app:claim.pin' : 'owner, console:spot.pin')
+          if (!memory.ownerGround(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:spot.pin'}`)
             || !memory.pin(spotId, block, last + 1)) return 'spot.pin.failed';
         } else if (action === 'spot.edit') {
           // The owner's own text replaces the claim: correct() supersedes the old row and keeps its pin. A credential never
@@ -4318,8 +4318,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const checked = await sanitise({ payload: { text }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
           if (!checked.ok) return 'spot.edit.failed';
           const at = new Date(now).toISOString();
-          const where = surface === 'app' ? { evidence: 'owner, app edit', source_ref: 'owner, app:claim.edit' } : { evidence: 'owner, console edit', source_ref: 'owner, console:spot.edit' };
-          if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', ...where }, at)) return 'spot.edit.failed';
+          const where = `owner, ${made ?? 'console:spot.edit'}`;
+          if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', evidence: where, source_ref: where }, at)) return 'spot.edit.failed';
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.
