@@ -370,6 +370,38 @@ describe('taint goes to a card', () => {
     });
   });
 
+  // A past-due loop's check-back runs every 4 hours and a close card lasts 12, so a second card for one loop is likely.
+  // While a card for that loop waits, even put off, the model is told it exists; once it is decided or expired, a new one may go.
+  it('propose refuses a second close card for a loop while one waits, and allows it once that card is decided or expired', async () => {
+    await runInDurableObject(stub('close-loop-waiting'), async (_instance, state) => {
+      let n = 0;
+      const loops = loopBook(state.storage.sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const read = (over: Partial<ToolDispatcherContext> = {}) => tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), ...over });
+      const { desk, rows, clock } = deskIn(state);
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const ask = (id: string, outcome: 'done' | 'dropped', call: string) => propose.handle({ tool: 'close_loop', args: { id, outcome }, reasoning: 'A mail says it is settled.' } as never, read({ toolCallId: call }));
+
+      const first = await ask(power.id, 'done', 'p1') as { ok: true; data: { proposal_id: string } };
+      expect(first).toMatchObject({ ok: true });
+      for (const [outcome, call] of [['done', 'p2'], ['dropped', 'p3']] as const) {
+        expect(await ask(power.id, outcome, call)).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(`card ${first.data.proposal_id}`) });
+      }
+      expect(await ask(power.id, 'done', 'p4')).toMatchObject({ error: expect.stringContaining('already waiting') });
+      expect(await ask(passport.id, 'dropped', 'p5')).toMatchObject({ ok: true });
+      expect(rows('tainted_action')).toHaveLength(2);
+
+      await desk.decide(first.data.proposal_id, 'd', 't');
+      expect(await ask(power.id, 'done', 'p6')).toMatchObject({ ok: false, code: 'rejected' });
+      await desk.decide(first.data.proposal_id, 's', 't');
+      expect(await ask(power.id, 'done', 'p7')).toMatchObject({ ok: true });
+      clock.advance(PROPOSAL_TTL_MS + 1);
+      expect(await ask(passport.id, 'dropped', 'p8')).toMatchObject({ ok: true });
+      expect(rows('tainted_action')).toHaveLength(4);
+    });
+  });
+
   it('a forget by ids from a tainted turn goes to the card and forgets on approval', async () => {
     await runInDurableObject(stub('forget'), async (_instance, state) => {
       const store = claimStore(state.storage.sql);

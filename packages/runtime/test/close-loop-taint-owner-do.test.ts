@@ -73,9 +73,9 @@ it('a forwarded "paid" mail closes the owner\'s loop only from the card; the mai
   });
 }, 30_000);
 
-// A close card waits up to 12 hours. The owner closes that loop in their own words first, then taps the old card: the card
-// has nothing left to close, and the owner is told so rather than "Done".
-it('tapping a close card after the owner closed that loop in their own words says nothing changed', async () => {
+// A close card waits up to 12 hours. A later turn that reads the same mail gets no second card for that loop. The owner
+// closes the loop in their own words first, then taps the old card: it has nothing left to close, and says so, not "Done".
+it('a waiting close card is not raised twice, and tapping it after the owner closed that loop says nothing changed', async () => {
   const name = `close-loop-noop-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
@@ -92,11 +92,19 @@ it('tapping a close card after the owner closed that loop in their own words say
     };
     const said = () => proof.telegram.filter(entry => entry.method === 'sendMessage').map(entry => String(entry.body.text));
     try {
-      proof.outputs.push([call('card-own', 'propose_action', { tool: 'close_loop', args: { id: own.id, outcome: 'done' }, reasoning: 'A forwarded mail says the City Power invoice is paid.' })], []);
+      const cardFor = (callId: string) => call(callId, 'propose_action', { tool: 'close_loop', args: { id: own.id, outcome: 'done' }, reasoning: 'A forwarded mail says the City Power invoice is paid.' });
+      const forwarded = (update_id: number, message_id: number) => ({ update_id, message: { message_id, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: SPOOF, forward_origin: { type: 'hidden_user', sender_user_name: 'City Power Billing', date: 1760331000 }, forward_date: 1760331000 } });
+      proof.outputs.push([cardFor('card-own')], []);
       proof.replies.push('', 'Tap the card if I should take City Power off your list.');
-      await deliver({ update_id: 300, message: { message_id: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: SPOOF, forward_origin: { type: 'hidden_user', sender_user_name: 'City Power Billing', date: 1760331000 }, forward_date: 1760331000 } });
+      await deliver(forwarded(300, 1));
       const card = proof.telegram.find(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
       expect(card).toBeDefined();
+      // The same mail forwarded again, in a later turn: the card already waiting is named, and no second card is raised.
+      proof.outputs.push([cardFor('card-again')], []);
+      proof.replies.push('', 'The card to take City Power off your list is still waiting for you.');
+      await deliver(forwarded(303, 3));
+      expect(toolOutput('card-again')).toContain('already waiting');
+      expect(sql.exec("SELECT id FROM ledger WHERE kind = 'tainted_action'").toArray()).toHaveLength(1);
       expect(status()).toBe('open');
 
       proof.outputs.push([call('close-direct', 'close_loop', { id: own.id, outcome: 'done' })], []);
