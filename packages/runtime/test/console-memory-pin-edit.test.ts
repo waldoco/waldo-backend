@@ -66,6 +66,18 @@ describe('console pin and unpin', () => {
     expect(await o.row(second)).toMatchObject({ pinned: null, pin_order: null });
   });
 
+  it('a pin makes a claim Waldo inferred, or one from shared content, the owner\'s own word', async () => {
+    const o = await owner('console-pin-ground-owner');
+    await o.codeAge(60_000);
+    const inferred = await o.seed('preference', 'Likes window seats', 'agent', 'inferred', 'provisional');
+    const shared = await o.seed('fact', 'Team lunch is on Fridays', 'untrusted', 'stated', null);
+    for (const claim of [inferred, shared]) {
+      expect((await o.act(await o.scoped(claim), 'spot.pin', 'profile')).status).toBe(200);
+      expect(await o.row(claim)).toMatchObject({ pinned: 'profile', origin: 'owner', verification_status: 'owner-grounded' });
+      expect((await o.row(claim))!.source).not.toBe('inferred');
+    }
+  });
+
   it('pins to the facts block when asked, and refuses any other block', async () => {
     const o = await owner('console-pin-facts-owner');
     await o.codeAge(60_000);

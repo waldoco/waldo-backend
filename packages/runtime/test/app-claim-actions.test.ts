@@ -99,6 +99,16 @@ it('pins to the block the owner picks and unpins, each on the revision of that c
   });
 });
 
+it('a pin from the app makes a claim Waldo inferred the owner\'s own word', async () => {
+  await appOwner('app-claim-pin-ground', async ctx => {
+    ctx.state.storage.sql.exec("INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, seen_count, verification_status) VALUES ('goal', 'Run a half marathon', 'inferred', 'synthetic note', 'agent', 'active', '2026-10-01', '2026-10-01', 1, 'provisional')");
+    const id = ctx.state.storage.sql.exec<{ id: number }>('SELECT id FROM claims ORDER BY id DESC LIMIT 1').one().id;
+    const pinned = await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'profile', revision: (await detail(ctx, id)).revision });
+    expect(pinned.status).toBe(200);
+    expect(rows(ctx)[0]).toMatchObject({ pinned: 'profile', origin: 'owner', verification_status: 'owner-grounded', source: 'confirmed' });
+  });
+});
+
 it('edits a claim in the owner\'s words: the old row is superseded and the new one names the app', async () => {
   await appOwner('app-claim-edit', async ctx => {
     const id = seed(ctx, 'fact', 'Works at Acme');
