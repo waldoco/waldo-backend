@@ -10,7 +10,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import {
   calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
-  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
+  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
 // Distinctive synthetic values: if any of them shows up in a prompt, a ledger row, a log line or a proposal, a reading leaked.
@@ -509,6 +509,20 @@ describe('proposal checks', () => {
     const cancel = (notify: boolean | null) => parseHealthDecision(JSON.stringify({ kind: 'propose', action: 'cancel', item: 'e1', start: null, end: null, title: null, notify_guests: notify, reason: 'Clear the morning.' }), [REVIEW], NOW, TZ);
     expect(cancel(true)).toEqual({ kind: 'propose', args: { action: 'cancel', event_id: 'gcal-review-1', reason: 'Clear the morning.', send_updates: 'all' } });
     expect(cancel(null)).toEqual({ kind: 'propose', args: { action: 'cancel', event_id: 'gcal-review-1', reason: 'Clear the morning.', send_updates: 'none' } });
+  });
+
+  it('carries the kind the model gave a new block, and refuses a kind on a move or one it does not know', () => {
+    const answer = (over: Record<string, unknown>) => JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T16:00', title: 'Recharge', notify_guests: null, reason: 'Keep the afternoon light.', ...over });
+    const create = (block: unknown) => parseHealthDecision(answer({ block }), [REVIEW], NOW, TZ);
+    expect(create('rest')).toEqual({ kind: 'propose', args: { action: 'create', title: 'Recharge', start: '2026-10-21T09:30:00.000Z', end: '2026-10-21T10:30:00.000Z', reason: 'Keep the afternoon light.', block: 'rest' } });
+    expect(create('deep_work')).toMatchObject({ args: { block: 'deep_work' } });
+    // Null, and an answer written before the field existed, make an ordinary event.
+    expect([create(null), parseHealthDecision(answer({}), [REVIEW], NOW, TZ)].map(d => d.kind === 'propose' && 'block' in d.args)).toEqual([false, false]);
+    expect(() => create('nap')).toThrow('invalid health decision shape');
+    expect(() => parseHealthDecision(answer({ action: 'move', item: 'e1', title: null, block: 'rest' }), [REVIEW], NOW, TZ)).toThrow('invalid health decision shape');
+    expect(HEALTH_TRIGGER_FORMAT.schema.required).toContain('block');
+    expect(HEALTH_TRIGGER_FORMAT.schema.properties.block).toEqual({ type: ['string', 'null'], enum: ['rest', 'deep_work', null] });
+    expect(healthTriggerPrompt({ view: healthTriggerView(ROW, NOW, TZ)!, items: [REVIEW], now: NOW, timezone: TZ, feedback: {} })).toContain('block (rest or deep_work for a create, else null)');
   });
 
   it('arms the evaluation no earlier than an hour after the last one', () => {
