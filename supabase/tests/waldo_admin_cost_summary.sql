@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(13);
+select plan(15);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -8,6 +8,7 @@ create function pg_temp.sig(msg text) returns text language sql as $$ select enc
 create function pg_temp.summary(p_do text) returns jsonb language sql as $$ select waldo.admin_cost_summary(p_do, pg_temp.at(), pg_temp.sig('admincost.' || p_do)) $$;
 
 insert into waldo.owners (do_name, email, is_admin) values ('do-cost-admin', 'admin@test.invalid', true), ('do-cost-user', 'user@test.invalid', false);
+insert into waldo.owners (do_name, email, is_admin, state) values ('do-cost-suspended', 'suspended@test.invalid', true, 'suspended');
 insert into waldo.cost_ledger_daily (owner_id, day, kind, model, calls, input_tokens, output_tokens, cached_tokens, usd_estimate)
 select o.id, r.day, r.kind, r.model, r.calls, r.input, r.output, r.cached, r.usd
 from waldo.owners o join (values
@@ -23,6 +24,10 @@ select is(pg_temp.summary('do-missing'), null, 'an unknown DO sees no spend');
 select throws_ok($$ select waldo.admin_cost_summary('do-cost-admin', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged call is refused');
 select throws_ok($$ select waldo.admin_cost_summary('do-cost-admin', pg_temp.at(), pg_temp.sig('admin.do-cost-admin')) $$, '42501', 'unsigned router call', 'the admin overview signature does not open spend');
 
+select is(pg_temp.summary('do-cost-suspended'), null, 'a suspended admin sees no spend');
+select throws_ok($$ select waldo.admin_cost_summary('do-cost-admin', pg_temp.at() - 301,
+  encode(extensions.hmac((pg_temp.at() - 301)::text || '.admincost.do-cost-admin', 'test-router-secret', 'sha256'), 'hex')) $$,
+  '42501', 'unsigned router call', 'a correctly signed call older than 300 seconds is refused');
 select is(jsonb_array_length(pg_temp.summary('do-cost-admin')->'rows'), 3, 'the admin gets one row per owner per day in the window');
 select is(pg_temp.summary('do-cost-admin')->'truncated', 'false'::jsonb, 'a small ledger is not truncated');
 select is((select r from jsonb_array_elements(pg_temp.summary('do-cost-admin')->'rows') r

@@ -97,6 +97,32 @@ describe('admin read rate limit',()=>{
      expect(await refused.json()).toEqual({error:'rate_limited'});
     }
     expect(asked).toBe(before);
+    // Any other method is refused outright, before the budget or a directory call, so it cannot read past the limit.
+    for(const method of ['POST','HEAD','PUT']){
+     const other=await host.fetch(new Request('https://w.test/console/admin',{method,headers:{cookie,'sec-fetch-site':'same-origin'}}));
+     expect(other.status).toBe(405);
+    }
+    expect(asked).toBe(before);
+   }finally{globalThis.fetch=original;}
+  });
+ });
+
+ it('refuses an admin read by any method but GET with no directory call, even with budget left',async()=>{
+  const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');
+  const {consoleAccess}=await import('../src/channels/console');
+  const stub=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-method-test'));
+  const token=await runInDurableObject(stub,(_instance,state)=>consoleAccess(state.storage).grant());
+  await runInDurableObject(stub,async(instance,state)=>{
+   const host=instance as unknown as {env:Record<string,unknown>;fetch:(r:Request)=>Promise<Response>};
+   Object.assign(host.env,env);state.storage.kv.put('do_name','admin-method-test');
+   const original=globalThis.fetch;let asked=0;
+   globalThis.fetch=async()=>{asked++;return json({owners:[],invites:[]});};
+   try{
+    for(const accept of ['application/json',undefined]){
+     const posted=await host.fetch(new Request('https://w.test/console/admin',{method:'POST',headers:{cookie:`waldo_console=${token}`,'sec-fetch-site':'same-origin',...(accept?{accept}:{})},body:new URLSearchParams({csrf:'x'})}));
+     expect(posted.status).toBe(405);
+    }
+    expect(asked).toBe(0);
    }finally{globalThis.fetch=original;}
   });
  });
