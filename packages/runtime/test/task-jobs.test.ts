@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
-import { jobBook, jobCheckpoint, jobResult, JOB_START_GRACE_MS, TASK_LEASE_MS, TASK_MAX_CRASHES, type CreateJob, type TaskBrief } from '../src/tasks/jobs';
+import { jobBook, jobCheckpoint, jobResult, JOB_START_GRACE_MS, TASK_LEASE_MS, TASK_MAX_CRASHES, taskBrief, type CreateJob, type RetryBrief, type TaskBrief } from '../src/tasks/jobs';
 
 // The job book on real Durable Object SQLite. Each case drives one recovery path of the job protocol and checks that the
 // row ends where the protocol says, and that a call from the wrong attempt changes nothing.
@@ -149,6 +149,29 @@ describe('task job book', () => {
       expect(book.claim(ticket)).toBe('fenced');
       expect(book.get(row.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner', checkpoint_json: null, result_json: null, lease_token: null });
       expect(book.startAttempt(row.id)).toBeNull();
+    });
+  });
+
+  it('a settled or cancelled job keeps only its title and times of the brief: the goal, context and the owner\'s message go', async () => {
+    await withBook((book) => {
+      const outside = { ...brief, context: 'Asha\'s mail says the Lisbon deal closes Friday.', outside_text: true as const };
+      const reported = book.create(job('k1', { brief: outside })).job;
+      book.report(book.startAttempt(reported.id)!, result, spend);
+      expect(book.settle(reported.id)).toBe(true);
+      const cancelled = book.create(job('k2', { taint: 'external' })).job;
+      expect(book.cancel(cancelled.id, 'owner')).toBe(true);
+      const retryBrief: RetryBrief = { message_ref: 'm-1', text: 'Move my 4pm with Asha to 5pm.', conversation_ref: 'chain-1', said_at: 1_800_000_000_000, promised_by: 1_800_001_800_000 };
+      const retry = book.create(job('k3', { kind: 'retry_turn', profile: null, brief: retryBrief })).job;
+      expect(book.park(retry.id, 'deadline')).toBe(true);
+      expect(book.settle(retry.id)).toBe(true);
+      for (const before of [reported, cancelled, retry]) {
+        const after = book.get(before.id)!;
+        expect(after.brief_json).not.toMatch(/Lisbon|unanswered client mail|company domains|4pm/);
+        expect(after).toMatchObject({ profile: before.profile, brief_digest: before.brief_digest, origin: before.origin, taint: before.taint });
+      }
+      expect(JSON.parse(book.get(reported.id)!.brief_json)).toEqual({ title: brief.title, started_at: brief.started_at, outside_text: true });
+      expect(taskBrief(book.get(cancelled.id)!).title).toBe(brief.title);
+      expect(JSON.parse(book.get(retry.id)!.brief_json)).toEqual({ ...retryBrief, text: '' });
     });
   });
 
