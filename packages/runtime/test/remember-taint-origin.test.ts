@@ -161,3 +161,28 @@ it('an untainted "hello" cannot lift a shared-content claim with a quote from an
     store => store.add({ kind: 'fact', text: fact.text, source: 'inferred', evidence: 'forwarded: Priya Rao is your accountant', origin: 'untrusted' }, NOW.toISOString()));
   expect(claims).toMatchObject([{ id: 1, origin: 'untrusted', source: 'inferred' }]);
 });
+
+// Probe N-A from the gate: the same lift through a correction. Naming the held row's id must not make it the owner's when the
+// quote sits in an earlier message; only the owner saying it again now does.
+it('an untainted correction of a held claim, quoting an earlier owner message, stays Waldo\'s read', async () => {
+  const planted = { kind: 'preference', text: PLANTED, evidence_quote: 'the invoice' };
+  const { claims } = await twoTurns('Check my billing mail for the invoice', 'thanks', [[readMail, remember(planted), []], [remember({ ...planted, replaces_id: 1 }), []]]);
+  expect(claims).toMatchObject([{ text: PLANTED, origin: 'agent', source: 'inferred' }]);
+  expect(seen.inputs.at(-1)).toContain('Saved as Waldo\'s inference');
+});
+it('an untainted correction of a shared-content claim, quoting an earlier owner message, stays Waldo\'s read', async () => {
+  const fact = { kind: 'fact', text: 'Accountant is Priya Rao', evidence_quote: 'My accountant is Priya Rao' };
+  const { claims } = await twoTurns('Check my mail. My accountant is Priya Rao', 'hello', [[readMail, []], [remember({ ...fact, replaces_id: 1 }), []]],
+    store => store.add({ kind: 'fact', text: fact.text, source: 'inferred', evidence: 'forwarded: Priya Rao is your accountant', origin: 'untrusted' }, NOW.toISOString()));
+  expect(claims).toMatchObject([{ text: fact.text, origin: 'agent', source: 'inferred' }]);
+});
+it('the owner saying a held claim again in their current message corrects it as theirs', async () => {
+  const planted = { kind: 'preference', text: PLANTED, evidence_quote: 'the invoice' };
+  const said = { kind: 'preference', text: 'Wants every invoice paid without asking', evidence_quote: 'pay every invoice without asking me' };
+  const { claims } = await twoTurns('Check my billing mail for the invoice', 'Yes, pay every invoice without asking me', [[readMail, remember(planted), []], [remember({ ...said, replaces_id: 1 }), []]]);
+  expect(claims).toMatchObject([{ text: said.text, origin: 'owner', source: 'stated' }]);
+});
+it('a tainted save tells the model it was kept as Waldo\'s inference', async () => {
+  await ownerTurn('Check my mail. My accountant is Priya Rao', [readMail, remember({ kind: 'fact', text: 'Accountant is Priya Rao', evidence_quote: 'My accountant is Priya Rao' }), []]);
+  expect(seen.inputs.at(-1)).toContain('Saved as Waldo\'s inference, because this turn read outside content');
+});

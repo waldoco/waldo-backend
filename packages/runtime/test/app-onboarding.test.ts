@@ -8,6 +8,7 @@ import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } f
 import { claimStore } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
+import { recordSignupName } from '../src/onboarding/first-run';
 import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
@@ -65,6 +66,23 @@ describe('first run', () => {
     expect(claims.filter(claim => claim.text.startsWith('Wants to be called'))).toHaveLength(1);
     expect(claims.find(claim => claim.text === 'Wants to be called Sammy')?.pinned).toBe('profile');
     expect((await act({ action: 'mood.set', value: 'tired' })).status).toBe(400);
+  }));
+  it('reads the name step as done when sign-up recorded the name, keeps the first answer, and lets name.set correct it', () => owner(async ({ storage, act, send }) => {
+    const claims = claimStore(storage.sql, work => storage.transactionSync(work));
+    expect(recordSignupName(claims, 'Asha Menon', 1)).toBe(true);
+    expect(recordSignupName(claims, 'Someone Else', 2)).toBe(false);
+    expect(claims.claims().filter(claim => claim.text.startsWith('Wants to be called')).map(claim => [claim.text, claim.origin, claim.source, claim.pinned]))
+      .toEqual([['Wants to be called Asha Menon', 'owner', 'stated', 'profile']]);
+    await act({ action: 'start' }); await act(agree);
+    expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.name).toBe('done');
+    await act({ action: 'name.set', name: 'Asha' });
+    expect(claims.claims().filter(claim => claim.text.startsWith('Wants to be called')).map(claim => claim.text)).toEqual(['Wants to be called Asha']);
+    expect((await run(await act({ action: 'complete' }))).steps.name).toBe('done');
+  }));
+  it('asks the name when sign-up recorded none, and a finished run without it reads skipped', () => owner(async ({ act }) => {
+    await act({ action: 'start' }); await act(agree);
+    expect((await run(await act({ action: 'brief_time.set', time: '07:30', timezone: 'Asia/Kolkata' }))).steps.name).toBe('pending');
+    expect((await run(await act({ action: 'complete' }))).steps.name).toBe('skipped');
   }));
   it('skips health honestly: nothing is recorded about the body and the health plane is not asked', () => owner(async ({ storage, calls, act }) => {
     await act({ action: 'start' }); await act(agree);

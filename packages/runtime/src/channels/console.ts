@@ -140,7 +140,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -304,15 +304,18 @@ const serviceStatus = (view: ConsoleView) => {
   }).join('')}</div><p class="note">These are permission states, not proof that a tool succeeded. Recent activity below shows requests Waldo actually ran.</p>`;
 };
 
-// Sends need a bound sender account and exact destination in addition to words. The current
-// proposal stores neither for every channel, so console APPROVAL stays chat-only for sends.
-// Dismissal is the safe direction - it can only prevent a send, never cause one - so the
-// console offers Don't do this for open send proposals. That also un-strands proposals whose
-// Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
-// Open email/message send proposals the console may only dismiss (approve stays in chat).
+// The retired page renders its own forms and binds no read, so it approves no send. Dismissal is
+// the safe direction - it can only prevent a send, never cause one - so it offers Don't do this
+// for open send proposals. That also un-strands proposals whose Telegram approval card lost its
+// inline keyboard.
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
   (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
+// The Waiting view shows a send's whole draft and binds each decision to the read that showed it, so it sends
+// (approval.send) and changes an open email or message. Sending is its own action so the step-up table can ask for a
+// recent email code; the retired page's form route binds no read and handles no send.
+export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
+  Boolean(item && item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && item.review?.kind === item.kind);
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
