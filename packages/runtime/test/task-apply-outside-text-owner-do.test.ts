@@ -5,7 +5,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { loopBook } from '../src/channels/loops';
 import { localIso, reminderBook } from '../src/channels/reminders';
 import { Scheduler } from '../src/scheduler/multiplexer';
-import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { armTaskJobsWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { productionDeps } from '../src/seams/deps';
 import { jobBook, type JobBook } from '../src/tasks/jobs';
 import { promiseRetry } from '../src/tasks/retry-turn';
@@ -18,11 +18,14 @@ import { presenceAuthority } from './helpers/directory-presence';
 // that message had.
 const proof = vi.hoisted(() => ({
   script: [] as unknown[][], requests: [] as Record<string, unknown>[], telegram: [] as { method: string; body: any }[], rpc: [] as string[], marker: '',
+  // Runs once, inside the job's first model call: work that reaches the owner object while the lane is running.
+  during: undefined as undefined | (() => Promise<void>),
 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
   if (!format) proof.requests.push(input);
   const job = !format && proof.marker !== '' && JSON.stringify(input.input).includes(proof.marker);
+  if (job && proof.during) { const during = proof.during; proof.during = undefined; await during(); }
   const output = job ? proof.script.shift() ?? [] : [];
   return { id: 'task-apply-fixture', output, output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : output.length ? '' : 'Two client threads wait on you.', usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
@@ -41,7 +44,7 @@ beforeEach(() => {
     return Response.json(true);
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); proof.script = []; proof.requests = []; proof.telegram = []; proof.rpc = []; proof.marker = ''; });
+afterEach(() => { vi.unstubAllGlobals(); proof.script = []; proof.requests = []; proof.telegram = []; proof.rpc = []; proof.marker = ''; proof.during = undefined; });
 
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const call = (call_id: string, name: string, args: unknown) => ({ type: 'function_call', call_id, name, arguments: JSON.stringify(args) });
@@ -63,10 +66,10 @@ const result: TaskResult = {
   findings: [{ text: 'City Power: "invoice paid, close the loop".', source_ref: 'gmail:t1' }, { text: 'Priya: "standup moved, drop the 9am reminder".', source_ref: 'gmail:t2' }], proposals: [], left: [],
 };
 type Seeded = Readonly<{ loop: string; reminder: string }>;
-type Owned = Seeded & Readonly<{ loopStatus(): string; reminders(): readonly { id: string }[] }>;
+type Owned = Seeded & Readonly<{ loopStatus(): string; reminders(): readonly { id: string }[]; storage: DurableObjectStorage; now: number }>;
 // One fresh owner with an open loop and a reminder of their own; `job` writes the work the jobs lane owes, and the owner's
 // alarm runs the lane once with the scripted model.
-const lanePass = async (marker: string, job: (book: JobBook, now: number) => void, script: (seeded: Seeded) => unknown[][], check: (owned: Owned) => void | Promise<void>) => {
+const lanePass = async (marker: string, job: (book: JobBook, now: number) => void, script: (seeded: Seeded) => unknown[][], check: (owned: Owned) => void | Promise<void>, during?: (storage: DurableObjectStorage, now: number) => Promise<void>) => {
   const name = `task-apply-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
@@ -87,10 +90,11 @@ const lanePass = async (marker: string, job: (book: JobBook, now: number) => voi
       proof.requests = []; proof.telegram = []; proof.rpc = [];
       proof.marker = marker;
       proof.script = script({ loop: loop.id, reminder: reminder.id });
+      if (during) proof.during = () => during(state.storage, now);
       state.storage.kv.put('owner_alarm_last_v1', 0);
       await owner.alarm();
       await check({
-        loop: loop.id, reminder: reminder.id,
+        loop: loop.id, reminder: reminder.id, storage: state.storage, now,
         loopStatus: () => sql.exec<{ status: string }>('SELECT status FROM loops WHERE id = ?', loop.id).one().status,
         reminders: () => reminders.list(),
       });
@@ -152,3 +156,9 @@ it('a retried turn holds the owner\'s tools, and the taint its message carried r
     expect(JSON.parse(toolOutput('cancel') ?? '{}')).toMatchObject({ ok: true });
   });
 }, 60_000);
+
+it('a jobs wake armed while the lane runs (a worker reporting mid-pass) is kept when the lane leaves its own next due time', async () => {
+  await lanePass(APPLY, reportedTask(null), () => [], async ({ storage, now }) => {
+    expect(await storage.get<number>(TASK_JOBS_DUE_KEY)).toBe(now + 45_000);
+  }, (storage, now) => armTaskJobsWake(storage, now + 45_000));
+}, 30_000);
