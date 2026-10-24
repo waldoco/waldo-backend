@@ -11,7 +11,7 @@ export type WhoopConfig = Readonly<{ clientId: string; redirectUri: string }>;
 export const WHOOP_SCOPES = 'offline read:profile read:sleep read:recovery read:workout';
 export const WHOOP_CALLBACK_PATH = '/oauth/whoop/callback';
 export const WHOOP_START_PATH = '/oauth/whoop/start/';
-// How long a connect the app starts stays usable: the app is told this expiry, and the browser binding lasts no longer.
+// How long the browser binding of a WHOOP connect lasts, from the moment the browser takes the hop.
 export const WHOOP_ATTEMPT_TTL_MS = 30 * 60_000;
 const ISSUER = 'https://api.prod.whoop.com';
 const AUTH_URL = `${ISSUER}/oauth/oauth2/auth`;

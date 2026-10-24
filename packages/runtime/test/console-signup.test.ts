@@ -52,19 +52,19 @@ it('retains legacy contact continuation through resend, refresh and repeated sub
   const verifiedCookie = cookieFrom(verified);
   const phoneForm = await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: verifiedCookie } }), env, s.a, s.signup);
   expect(await phoneForm.text()).toContain('Email verified. Finish');
-  const collected = await handleSignup(post('/phone', { csrf: progress.csrf, phone: '+91 98765 43210' }, verifiedCookie), env, s.a, s.signup);
+  const collected = await handleSignup(post('/phone', { csrf: progress.csrf, name: 'Person Example', phone: '+91 98765 43210' }, verifiedCookie), env, s.a, s.signup);
   expect(collected.status).toBe(303);
   const pendingCookie = cookieFrom(collected);
   const refresh = await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: pendingCookie } }), env, s.a, s.signup);
   const html = await refresh.text();
   expect(html).not.toContain('Phone:');
-  expect(html).toContain('No SMS is sent');
+  expect(html).toContain('Nothing is sent to this number now');
   expect(html).not.toContain('value="+919876543210"');
   expect(html).toContain('retrying opens that same account');
   expect(html).toContain("addEventListener('hashchange'");
   expect(html).not.toContain('never-retain');
   expect(pendingCookie).not.toContain('waldo_owner');
-  const again = await handleSignup(post('/phone', { csrf: progress.csrf, phone: '+919876543210' }, pendingCookie), env, s.a, s.signup);
+  const again = await handleSignup(post('/phone', { csrf: progress.csrf, name: 'Person Example', phone: '+919876543210' }, pendingCookie), env, s.a, s.signup);
   expect(again.status).toBe(303);
   expect(s.fetcher.mock.calls.every(c => !String(c[0]).includes('owner_for_auth'))).toBe(true);
   const fresh = await handleSignup(new Request('https://w.test/console/signup?restart=1', { headers: { cookie: pendingCookie } }), env, s.a, s.signup);
@@ -134,7 +134,7 @@ it('renders provider failure honestly and keeps invite denial non-enumerating', 
   expect(await (await handleSignup(post('/resend', { csrf: p.csrf }, cookie), env, failure.a, failure.signup)).text()).toContain('another email code');
 });
 
-it('finishes verified signup with an optional blank phone and both owner-scoped console cookies', async () => {
+it('finishes verified signup with a name and a phone, and both owner-scoped console cookies', async () => {
   const s = setup();
   const grant = vi.fn(async () => new Response('console-ticket'));
   const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
@@ -144,10 +144,10 @@ it('finishes verified signup with an optional blank phone and both owner-scoped 
   const verifiedCookie = cookieFrom(verified);
   const complete = vi.fn(async () => 'owner-new');
   const signup = { ...s.signup, complete };
-  const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, verifiedCookie), e, a, signup);
+  const result = await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+1 415 555 0100' }, verifiedCookie), e, a, signup);
   expect(result.status).toBe(303);
-  expect(result.headers.get('location')).toBe('/console');
-  expect(complete).toHaveBeenCalledWith(expect.objectContaining({ authUser: 'u-1', emailVerified: true }), '');
+  expect(result.headers.get('location')).toBe('/console/signup/welcome');
+  expect(complete).toHaveBeenCalledWith(expect.objectContaining({ authUser: 'u-1', emailVerified: true, name: 'Person Example' }), '+14155550100');
   expect(grant).toHaveBeenCalledWith('https://telegram-owner/grant-console', expect.objectContaining({ headers: { 'x-waldo-do-name': 'owner-new' } }));
   const cookies = result.headers.get('set-cookie')!;
   expect(cookies).toContain('waldo_owner=owner-session');
@@ -165,14 +165,14 @@ it('a signup that resolves to the member signed in here caps this browser\'s old
   const { cookie, progress } = await start(s);
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
   const signedIn = `${verifiedCookie}; waldo_console=old-ticket; waldo_owner=owner-new.old.sig`;
-  const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, signedIn), e, a, { ...s.signup, complete: vi.fn(async () => 'owner-new') });
+  const result = await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+1 415 555 0100' }, signedIn), e, a, { ...s.signup, complete: vi.fn(async () => 'owner-new') });
   expect(result.status).toBe(303);
   expect(grant).toHaveBeenCalledWith('https://telegram-owner/grant-console', expect.objectContaining({ headers: { 'x-waldo-do-name': 'owner-new', cookie: 'waldo_console=old-ticket' } }));
   expect(ownerCookie.mock.calls[0]?.[0]).toBe('owner-new');
   expect(ownerCookie.mock.calls[0]?.[1]?.headers.get('cookie')).toContain('waldo_owner=owner-new.old.sig');
 });
 
-it.each(['grant', 'session', 'response'])('retains verified proof and optional contact on %s failure, then retries without another OTP', async failure => {
+it.each(['grant', 'session', 'response'])('retains verified proof and contact on %s failure, then retries without another OTP', async failure => {
   const s = setup();
   let failed = true;
   const grant = vi.fn(async () => new Response('ticket', { status: failed && failure === 'grant' ? 503 : 200 }));
@@ -182,7 +182,7 @@ it.each(['grant', 'session', 'response'])('retains verified proof and optional c
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
   const complete = vi.fn(async () => { if (failed && failure === 'response') throw new Error('private body'); return 'owner-new'; });
   const signup = { ...s.signup, complete };
-  const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '+1 415 555 0100' }, verifiedCookie), e, a, signup);
+  const result = await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+1 415 555 0100' }, verifiedCookie), e, a, signup);
   expect(result.status).toBe(200);
   const retained = cookieFrom(result);
   const p = (await signup.read(new Request('https://w.test/console/signup', { headers: { cookie: retained } })))!;
@@ -191,7 +191,7 @@ it.each(['grant', 'session', 'response'])('retains verified proof and optional c
   expect(html).not.toContain('value="+14155550100"');
   expect(html).not.toContain('private body');
   failed = false;
-  expect((await handleSignup(post('/complete', { csrf: p.csrf, phone: p.phone! }, retained), e, a, signup)).status).toBe(303);
+  expect((await handleSignup(post('/complete', { csrf: p.csrf, name: p.name!, phone: p.phone! }, retained), e, a, signup)).status).toBe(303);
   expect(s.fetcher.mock.calls.filter(c => String(c[0]).endsWith('/verify'))).toHaveLength(1);
 });
 
@@ -201,11 +201,12 @@ it('refuses completion before email proof, with wrong CSRF, or without owner rou
   expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, cookie), env, s.a, signup)).text()).toContain('Verify your email before');
   expect(await (await handleSignup(post('/complete', { csrf: 'wrong' }, cookie), env, s.a, signup)).text()).toContain('expired');
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, signup));
-  expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, verifiedCookie), env, s.a, signup)).text()).toContain('temporarily unavailable');
+  expect(await (await handleSignup(post('/complete', { csrf: progress.csrf }, verifiedCookie), env, s.a, signup)).text()).toContain('Enter what Waldo should call you, and your phone');
+  expect(await (await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+14155550100' }, verifiedCookie), env, s.a, signup)).text()).toContain('temporarily unavailable');
   expect(complete).not.toHaveBeenCalled();
 });
 
-it('routes two fresh email-only members and an existing member to distinct canonical owner consoles', async () => {
+it('routes two fresh members and an existing member to distinct canonical owner consoles', async () => {
   const { consoleAuth: createAuth } = await import('../src/identity/console-auth');
   const { handleConsole } = await import('../src/channels/console-signin');
   const sessions = new Set<string>();
@@ -231,7 +232,7 @@ it('routes two fresh email-only members and an existing member to distinct canon
   const initial = await handleSignup(post('/send', { email: 'person@example.com', invite: 'ABCDEFGHJKLMNPQRSTUV' }), e, auth, signup);
   const draftCookie = cookieFrom(initial); const progress = (await signup.read(new Request('https://w.test/console/signup', { headers: { cookie: draftCookie } })))!;
   const proofCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, draftCookie), e, auth, signup));
-  const done = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, proofCookie), e, auth, signup);
+  const done = await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+14155550100' }, proofCookie), e, auth, signup);
   expect(done.status).toBe(303);
   const ownerCookie = done.headers.get('set-cookie')!.split(/, (?=waldo_)/).find(cookie => cookie.startsWith('waldo_owner='))!.split(';')[0]!;
   const newConsole = await handleConsole(new Request('https://w.test/console', { headers: { cookie: ownerCookie } }), e, auth);
@@ -242,7 +243,7 @@ it('routes two fresh email-only members and an existing member to distinct canon
   const otherDraft = cookieFrom(otherInitial);
   const otherProgress = (await signup.read(new Request('https://w.test/console/signup', { headers: { cookie: otherDraft } })))!;
   const otherProof = cookieFrom(await handleSignup(post('/verify', { csrf: otherProgress.csrf, code: '123456' }, otherDraft), e, auth, signup));
-  const otherDone = await handleSignup(post('/complete', { csrf: otherProgress.csrf, phone: '' }, otherProof), e, auth, signup);
+  const otherDone = await handleSignup(post('/complete', { csrf: otherProgress.csrf, name: 'Other Example', phone: '+14155550101' }, otherProof), e, auth, signup);
   expect(otherDone.status).toBe(303);
   const otherCookie = otherDone.headers.get('set-cookie')!.split(/, (?=waldo_)/).find(cookie => cookie.startsWith('waldo_owner='))!.split(';')[0]!;
   const otherConsole = await handleConsole(new Request('https://w.test/console', { headers: { cookie: otherCookie } }), e, auth);
@@ -260,7 +261,7 @@ it('can finish with verified proof when the OTP-send budget is exhausted', async
   const a = { ...s.a, throttle: vi.fn(async (key: string) => !key.startsWith('send:')), ownerCookie: vi.fn(async () => 'session') };
   const e = { ...env, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('ticket') }) } as unknown as DurableObjectNamespace };
   const complete = vi.fn(async () => 'owner-new');
-  const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, verifiedCookie), e, a, { ...s.signup, complete });
+  const result = await handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+14155550100' }, verifiedCookie), e, a, { ...s.signup, complete });
   expect(result.status).toBe(303);
   expect(a.throttle).toHaveBeenCalledWith('complete:person@example.com', 10, 900);
 });
@@ -274,7 +275,7 @@ it.each(['fetch', 'body'])('bounds hanging console grant %s and retains signup r
   const a = { ...s.a, ownerCookie: vi.fn(async () => 'session') };
   vi.useFakeTimers();
   try {
-    const pending = handleSignup(post('/complete', { csrf: progress.csrf, phone: '+14155550100' }, proof), e, a, { ...s.signup, complete: vi.fn(async () => 'owner-new') });
+    const pending = handleSignup(post('/complete', { csrf: progress.csrf, name: 'Person Example', phone: '+14155550100' }, proof), e, a, { ...s.signup, complete: vi.fn(async () => 'owner-new') });
     await vi.waitFor(() => expect(grant).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(10_000);
     const result = await Promise.race([pending, Promise.resolve(null)]);
@@ -285,7 +286,7 @@ it.each(['fetch', 'body'])('bounds hanging console grant %s and retains signup r
   } finally { vi.useRealTimers(); }
 });
 
-it('retains email-only completion context when a throttle refuses a legacy contact attempt', async () => {
+it('retains completion context when a throttle refuses a completion attempt', async () => {
   const s = setup(); const { cookie, progress } = await start(s);
   const proof = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, s.signup));
   const a = { ...s.a, throttle: vi.fn(async () => false) };
@@ -297,15 +298,16 @@ it('retains email-only completion context when a throttle refuses a legacy conta
   expect(html).toContain('Too many attempts');
 });
 
-it('offers email-only signup at entry, OTP and verified completion without a phone collection control',async()=>{
+it('asks for the name and phone only on the verified finish step, and never shows the phone back',async()=>{
  const s=setup(),{cookie,progress}=await start(s);
  const entry=await handleSignup(new Request('https://w.test/console/signup'),env,s.a,s.signup);
  const pending=await handleSignup(new Request('https://w.test/console/signup',{headers:{cookie}}),env,s.a,s.signup);
  const verified=cookieFrom(await handleSignup(post('/verify',{csrf:progress.csrf,code:'123456'},cookie),env,s.a,s.signup));
- const saved=cookieFrom(await handleSignup(post('/phone',{csrf:progress.csrf,phone:'+14155550100'},verified),env,s.a,s.signup));
+ const saved=cookieFrom(await handleSignup(post('/phone',{csrf:progress.csrf,name:'Person Example',phone:'+14155550100'},verified),env,s.a,s.signup));
  const finish=await handleSignup(new Request('https://w.test/console/signup',{headers:{cookie:saved}}),env,s.a,s.signup);
- for(const response of [entry,pending,finish]){
-  const html=await response.text();expect(html).not.toMatch(/name="phone"|type="tel"|Phone:|Save contact and continue later/);
-  expect(html).not.toContain('+14155550100');
- }
+ for(const response of [entry,pending]) expect(await response.text()).not.toMatch(/name="phone"|type="tel"|name="name"/);
+ const html=await finish.text();
+ expect(html).toMatch(/name="name"[^>]*value="Person Example"/);
+ expect(html).toMatch(/name="phone" type="tel"/);
+ expect(html).not.toContain('+14155550100');
 });

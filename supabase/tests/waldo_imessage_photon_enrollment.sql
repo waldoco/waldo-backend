@@ -22,7 +22,7 @@ select throws_ok($$ select waldo.imessage_enrollment_read('pe-a', 'test', '["pe-
   '42501', 'imessage locator mismatch', 'a locator for another owner is refused');
 
 -- Read: the owner's email, phone on file, and no enrollment yet.
-select is(pg_temp.read('pe-a'), '{"email":"a@test.invalid","phone":"+15550000001","enrollment":null}'::jsonb, 'an unenrolled owner reads email and phone only');
+select is(pg_temp.read('pe-a'), '{"email":"a@test.invalid","phone":"+15550000001","phone_verified":false,"enrollment":null}'::jsonb, 'an unenrolled owner reads email and phone only');
 select is(pg_temp.read('nobody'), null, 'an unknown owner reads nothing');
 
 -- Record, then read it back.
