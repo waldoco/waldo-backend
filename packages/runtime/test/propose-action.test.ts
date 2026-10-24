@@ -436,6 +436,45 @@ describe('taint goes to a card', () => {
     });
   });
 
+  // A card waits while the owner can still decide it: shown for review only, or held for their next message. A card whose
+  // send never reached them and is not held is not waiting, so it must not stop a fresh card that does reach them.
+  it('a review-only or held close card blocks a second one; an unconfirmed card that is not held does not', async () => {
+    await runInDurableObject(stub('close-loop-held'), async (_instance, state) => {
+      const sql = state.storage.sql;
+      let n = 0, m = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => Date.UTC(2026, 9, 22, 9) });
+      const power = loops.open({ title: 'Pay City Power', due: '2026-10-24T18:00' });
+      const passport = loops.open({ title: 'Renew the passport', due: null });
+      const dentist = loops.open({ title: 'Book the dentist', due: null });
+      let send: 'shown' | 'failed' | 'held' = 'shown';
+      const desk = approvalDesk(sql, {
+        owner: 42, google: async () => null, newId: () => `ph${++m}`, now: () => Date.UTC(2026, 9, 22, 9), timezone: 'UTC', log: () => undefined,
+        call: async () => { if (send === 'failed') throw new Error('telegram unavailable'); return send === 'held' ? null : { message_id: ++m }; },
+        writesFirstNow: () => send !== 'held',
+      });
+      const propose = proposeActionHandler(desk, { loop: (id) => loops.get(id) });
+      const ask = (id: string, call: string) => propose.handle({ tool: 'close_loop', args: { id, outcome: 'done' }, reasoning: 'A mail says it is settled.' } as never, tainted({ loopIsSourceBound: (loop) => loops.sourceBound(loop), toolCallId: call }));
+      const card = (id: string) => sql.exec<{ status: string; card_waits_on: string | null }>("SELECT status, card_waits_on FROM ledger WHERE kind = 'tainted_action' AND json_extract(payload_json, '$.args.id') = ? ORDER BY created_at", id).toArray();
+
+      const shown = await ask(passport.id, 'p1') as { ok: true; data: { proposal_id: string } };
+      sql.exec("UPDATE ledger SET status = 'review_only' WHERE id = ?", shown.data.proposal_id);
+      expect(await ask(passport.id, 'p2')).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already waiting') });
+
+      send = 'held';
+      expect(await ask(dentist.id, 'p3')).toMatchObject({ ok: true });
+      expect(card(dentist.id)).toEqual([{ status: 'card_unconfirmed', card_waits_on: 'telegram' }]);
+      send = 'shown';
+      expect(await ask(dentist.id, 'p4')).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('already waiting') });
+
+      send = 'failed';
+      await expect(ask(power.id, 'p5')).rejects.toThrow('telegram unavailable');
+      expect(card(power.id)).toEqual([{ status: 'card_unconfirmed', card_waits_on: null }]);
+      send = 'shown';
+      expect(await ask(power.id, 'p6')).toMatchObject({ ok: true });
+      expect(card(power.id).map((row) => row.status)).toEqual(['card_unconfirmed', 'open']);
+    });
+  });
+
   it('a forget by ids from a tainted turn goes to the card and forgets on approval', async () => {
     await runInDurableObject(stub('forget'), async (_instance, state) => {
       const store = claimStore(state.storage.sql);
