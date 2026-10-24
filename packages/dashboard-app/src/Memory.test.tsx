@@ -3,6 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {MemoryPanel,MemoryList,MemoryDetailView,PatternExplorer} from './Memory';
 import {readMemory,type MemoryPage,type MemoryDetail,type MemoryPattern} from './memory-model';
 import {response} from './memory-test-fixtures';
+import {SOURCE} from './memory-map-graph';
 afterEach(()=>vi.unstubAllGlobals());
 describe('modern Memory presentation',()=>{
  it('keeps originating list context in detail, exploration and supporting-item links',()=>{
@@ -24,6 +25,13 @@ describe('modern Memory presentation',()=>{
  it('renders returned Spots directly with honest origin and in-shell detail links',()=>{
   const html=renderToStaticMarkup(<MemoryList initialView="list" data={readMemory(response('view=claims&limit=25')) as MemoryPage} onNext={()=>{}} onRestart={()=>{}}/>);
   expect(html).toContain('&lt;script&gt;claim&lt;/script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('Shared');expect(html).toContain('Waldo’s inference');expect(html).toContain('#/memory/spots?id=');expect(html).toContain('Spots in this read');expect(html).not.toContain('Open Spots');
+ });
+ it('labels a Spot the nightly model confirmed as Waldo\'s, not the owner\'s',()=>{
+  const data=readMemory(response('view=claims&limit=25')) as MemoryPage;
+  const items=data.items.map((item,index)=>index===0&&'text' in item?{...item,source:'waldo_confirmed'}:item);
+  const html=renderToStaticMarkup(<MemoryList initialView="list" data={{...data,items}} onNext={()=>{}} onRestart={()=>{}}/>);
+  expect(html).toContain('Waldo confirmed');expect(html).not.toContain('Recorded source: waldo_confirmed');
+  expect(SOURCE.waldo_confirmed).toEqual({name:'Waldo confirmed',shape:'triangle'});
  });
  it('keeps incomplete reads distinct from true empty and offers retry/restart',()=>{
   const data=readMemory(response('view=claims&limit=25')) as MemoryPage;

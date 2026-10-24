@@ -4,7 +4,7 @@ import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from '.
 import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
-import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
+import { awaitsOwnerConfirm, type Claim, type ConstellationEdge, type ConstellationNode, type profile } from '../memory/claims';
 import type { Proactivity } from './loops';
 import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
@@ -382,7 +382,7 @@ const checklist = (view: ConsoleView) => {
   ].join('');
 };
 
-const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
+const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', waldo_confirmed: 'Waldo confirmed', inferred: 'Waldo\'s inference' };
 
 // A source pointer is an audit hint, never proof that the note is true. Only the
 // owner-DO source id may become a local episode search link; never emit a guessed
@@ -405,7 +405,7 @@ const spotEdit = (view: ConsoleView, spot: ConsoleView['spots'][number]) => spot
   : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="spot.edit"><input type="hidden" name="id" value="${spot.id}"><input name="value" value="${esc(spot.text)}" maxlength="${APP_CLAIM_TEXT_MAX_V1}" required aria-label="Edit this spot"><button class="btn quiet">Save edit</button></form>`;
 
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, edit it here or tell Waldo in chat. Pin what Waldo should keep in mind on every turn. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${spotPin(view, spot)}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}${spotEdit(view, spot)}</div></div>`).join('')}`;
+  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, edit it here or tell Waldo in chat. Pin what Waldo should keep in mind on every turn. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', awaitsOwnerConfirm(spot) || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${awaitsOwnerConfirm(spot) ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${spotPin(view, spot)}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}${spotEdit(view, spot)}</div></div>`).join('')}`;
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
