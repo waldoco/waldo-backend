@@ -4,7 +4,7 @@ import {
   checkHealthChangeV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
-  healthScoresUnavailableV1Schema,
+  healthScoresUnavailableV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
@@ -104,7 +104,8 @@ const pillarView = (pillar: Pillar, stored: unknown): object | null => {
 };
 
 // The one reading of a scores_read answer, for the app and for the owner's console: the contract body, or the closed error.
-export const healthScoresView = (result: unknown, day: string | null, now: number): View => {
+// revision is the client's health revision: builds pinned before the app took sleep_debt parse the scores strictly without it.
+export const healthScoresView = (result: unknown, day: string | null, now: number, revision: number): View => {
   // No row to show is an answer, not an error: a 200 that says why, never a zero score.
   const nothing = (reason: unknown): View => {
     const body = healthScoresUnavailableV1Schema.safeParse({ state: 'unavailable', day, reason });
@@ -120,9 +121,15 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   const stored = asObject(answered?.scores);
   // The stored freshness is the row's at write time; the row is aged when read instead, by its compile time and its own day in its own zone.
   const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, now) : null;
+  // A stored sleep debt that does not read as the contract's is left out, never passed on, so it cannot cost the owner
+  // their scores.
+  const shown = revision >= HEALTH_SLEEP_DEBT_REVISION_V1;
+  const debt = shown && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(stored.sleep_debt) : null;
+  if (debt && !debt.success) console.error('app health scores sleep debt shape');
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
     recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
+    ...(debt?.success ? { sleep_debt: debt.data } : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return { body: parsed.data };
@@ -142,7 +149,8 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   const unknown = [...url.searchParams.keys()].some(key => key !== 'day');
   const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
   if (unknown || !query.success) return refuse('invalid_request');
-  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now()));
+  const revision = appContractRevision(input.request.headers.get(APP_CONTRACT_HEADER), 'health');
+  return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision));
 };
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot

@@ -12,6 +12,7 @@ import {
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
+  healthReadSignalSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
@@ -76,12 +77,31 @@ describe('getHealthArgsSchema', () => {
   });
 
   it('rejects an unknown signal, an empty list, a reversed range, a range over 31 days and a smuggled argument', () => {
-    expect(getHealthArgsSchema.safeParse({ signals: ['spo2'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['blood_glucose'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: [], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-08', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-09-06', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01', to: '2026-10-07', metrics: ['hrv'] }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01T00:00:00Z', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('asks for the Watch signals, every signal in one call, and no more entries than there are signals', () => {
+    const watch = ['sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful'];
+    expect(getHealthArgsSchema.safeParse({ signals: watch, from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    const every = healthReadSignalSchema.options;
+    expect(every).toEqual(expect.arrayContaining([...watch, 'sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts']));
+    expect(getHealthArgsSchema.safeParse({ signals: every, from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: [...every, 'sleep'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('types the Watch signals\' units and temperature methods in the result', () => {
+    const base = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1 };
+    const one = (signal: string, unit: string, method: string | null = null) => ({ signal, unit, source: 'apple', method, days: [{ day: '2026-10-01', value: 1 }] });
+    const signals = [one('wrist_temperature', 'celsius', 'absolute'), one('wrist_temperature', 'celsius', 'baseline_delta'), one('spo2', 'percent'), one('respiratory_rate', 'breaths_per_minute'),
+      one('sleep_efficiency', 'ratio'), one('vo2_max', 'ml_per_kg_min'), one('steps', 'count'), one('active_energy', 'kcal'), one('sleep_rem', 'minutes')];
+    expect(getHealthResultSchema.safeParse({ ...base, signals }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...base, signals: [one('wrist_temperature', 'fahrenheit', 'absolute')] }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ ...base, signals: [one('wrist_temperature', 'celsius', 'skin')] }).success).toBe(false);
   });
 
   it('types the result: values by day or a summary, or a reason', () => {

@@ -113,7 +113,9 @@ const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload()
   });
 };
 const entry = (state: DurableObjectState, id = HEALTH_RECOMPUTE_ID) => state.storage.sql.exec<{ kind: string; due_at: number; status: string; attempts: number }>('SELECT kind, due_at, status, attempts FROM schedule WHERE id = ?', id).toArray()[0] ?? null;
-const reads = () => plane.calls.filter(call => call.fn === 'health_series_read');
+// A recompute reads the month for its scores, and beside it the night's vital signals; this counts the scores' reads.
+const seriesReads = (vitals: boolean) => plane.calls.filter(call => call.fn === 'health_series_read' && Array.isArray(call.payload.signals) && call.payload.signals.includes('respiratory_rate') === vitals);
+const reads = () => seriesReads(false);
 const writtenDays = () => plane.calls.filter(call => call.fn === 'health_context_write').map(call => call.payload.day);
 const pending = (state: DurableObjectState) => state.storage.sql.exec<{ day: string }>("SELECT day FROM health_trigger_pending").toArray().map(row => row.day);
 const recomputeLogs = () => printed.flatMap(line => { try { const entry = JSON.parse(line) as Record<string, unknown>; return entry.hop === 'health_recompute' ? [{ ok: entry.ok, code: entry.code }] : []; } catch { return []; } });
@@ -202,6 +204,7 @@ describe('the owner object recomputes the derived rows', () => {
       vi.setSystemTime(NOW + HEALTH_RECOMPUTE_WINDOW_MS);
       await pass();
       expect(reads()).toHaveLength(1);
+      expect(seriesReads(true)).toHaveLength(1);
       expect(writtenDays()).toEqual(['2026-10-20', '2026-10-21']);
       expect(pending(state)).toEqual(['2026-10-21']);
       expect(entry(state, HEALTH_TRIGGER_ID)).toMatchObject({ kind: 'patrol' });

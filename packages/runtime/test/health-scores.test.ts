@@ -16,7 +16,7 @@ const hourly = (day: string, offset: number, opts: { hr?: number; hrv?: number |
     heartRate: (opts.hr ?? 72) + wobble(h + offset, 2),
     hrv: opts.hrv === undefined ? 55 : opts.hrv,
     hrvMethod: opts.hrv === null ? null : 'rmssd',
-    daylightMinutes: 20, movementMinutes: 12,
+    daylightMinutes: 20, movementMinutes: 12, activeEnergyKcal: null,
   }));
 
 const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {
@@ -24,8 +24,8 @@ const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {
   return {
     day: d, timezone: 'Europe/London',
     sleep: { startAt: `${addDays(d, -1)}T23:00:00.000Z`, endAt: `${d}T07:00:00.000Z`, asleepMinutes: 450 + wobble(i, 20), midpointMinute: 180 + wobble(i, 15) },
-    overnightHrv: { value: 60 + wobble(i, 6), method: 'rmssd' },
-    restingHeartRate: 55 + wobble(i, 2),
+    overnightHrv: [{ value: 60 + wobble(i, 6), method: 'rmssd' }],
+    restingHeartRate: [{ value: 55 + wobble(i, 2), method: 'provider_resting_daily' }],
     hourly: hourly(d, i), workouts: [],
     demand: { meetingMinutes: 240 + wobble(i, 40), messageCount: 30 + wobble(i, 5), openTaskMinutes: 120 + wobble(i, 20), physicalLoad: 100 + wobble(i, 10) },
     ...over,
@@ -45,7 +45,7 @@ describe('health scores: Recovery', () => {
     expect(r.score).toBeGreaterThanOrEqual(0);
     expect(r.score).toBeLessThanOrEqual(100);
     expect(r.activation).toBe('candidate_unaccepted');
-    expect(r.algorithm_version).toMatch(/\.v1$/);
+    expect(r.algorithm_version).toBe('recovery.candidate.v2');
     expect(r.coverage).toBe(1);
     expect(r.hrv_method).toBe('rmssd');
     expect(r.used.signals).toEqual(expect.arrayContaining(['sleep', 'hrv', 'resting_heart_rate']));
@@ -67,7 +67,7 @@ describe('health scores: Recovery', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).recovery).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
   });
   it('is unavailable with missing_resting_signal when neither HRV nor resting heart rate exists', () => {
-    expect(computeDailyScores(input(replaceTarget({ overnightHrv: null, restingHeartRate: null }))).recovery).toEqual({ state: 'unavailable', reason: 'missing_resting_signal' });
+    expect(computeDailyScores(input(replaceTarget({ overnightHrv: [], restingHeartRate: [] }))).recovery).toEqual({ state: 'unavailable', reason: 'missing_resting_signal' });
   });
   it('is unavailable with baseline_immature when fewer than 14 prior days back the signals', () => {
     expect(computeDailyScores(input(week(10))).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
@@ -76,7 +76,7 @@ describe('health scores: Recovery', () => {
     expect(computeDailyScores(input([])).recovery).toEqual({ state: 'unavailable', reason: 'no_readings' });
   });
   it('is unavailable with conflicting_inputs when a day appears twice with different values', () => {
-    const days = [...week(), day(3, { restingHeartRate: 90 })];
+    const days = [...week(), day(3, { restingHeartRate: [{ value: 90, method: 'provider_resting_daily' }] })];
     expect(computeDailyScores(input(days)).recovery).toEqual({ state: 'unavailable', reason: 'conflicting_inputs' });
   });
   it.each(['not_linked', 'consent_required', 'consent_withdrawn'] as const)('reports %s for every pillar and reads nothing else', access => {
@@ -84,14 +84,14 @@ describe('health scores: Recovery', () => {
     for (const p of [s.recovery, s.form, s.weight, s.sleep_debt]) expect(p).toEqual({ state: 'unavailable', reason: access });
   });
   it('labels the SDNN fallback and never blends it with RMSSD baselines', () => {
-    const days = week().map((d, i) => (i === 0 ? { ...d, overnightHrv: { value: 40, method: 'sdnn' as const } } : d));
+    const days = week().map((d, i) => (i === 0 ? { ...d, overnightHrv: [{ value: 40, method: 'sdnn' as const }] } : d));
     const r = computeDailyScores(input(days)).recovery;
     // Every baseline day is RMSSD, so the SDNN reading has no baseline of its own; resting HR still scores.
     expect(r.state).toBe('available');
     if (r.state !== 'available') return;
     expect(r.hrv_method).toBeNull();
     expect(r.coverage).toBeCloseTo(0.7, 5);
-    const sdnnWeek = week().map(d => ({ ...d, overnightHrv: d.overnightHrv && { ...d.overnightHrv, method: 'sdnn' as const } }));
+    const sdnnWeek = week().map(d => ({ ...d, overnightHrv: d.overnightHrv.map(reading => ({ ...reading, method: 'sdnn' as const })) }));
     const r2 = computeDailyScores(input(sdnnWeek)).recovery;
     expect(r2.state === 'available' && r2.hrv_method).toBe('sdnn');
   });
@@ -118,6 +118,14 @@ describe('health scores: Sleep debt', () => {
     expect(s.debt_minutes).toBeCloseTo(60 * (14 - 91 / 26), 2);
     expect(s.coverage).toBe(1);
     expect(s.need_basis).toBe('owner_confirmed');
+  });
+  // The derived-row writer refuses a negative debt, and with it the whole row, so a long night must never offset a short one.
+  it('earns nothing back for a night longer than need, so debt is never below zero', () => {
+    const asleep = (minutes: (i: number) => number) => week().map((d, i) => ({ ...d, sleep: d.sleep && { ...d.sleep, asleepMinutes: minutes(i) } }));
+    const offset = computeDailyScores(input(asleep(i => (i === 0 ? 360 : i === 1 ? 780 : 480)))).sleep_debt;
+    expect(offset.state === 'available' && [offset.debt_minutes, offset.observed_weighted_shortfall_minutes]).toEqual([120, 120]);
+    const rested = computeDailyScores(input(asleep(() => 600))).sleep_debt;
+    expect(rested.state === 'available' && [rested.debt_minutes, rested.observed_weighted_shortfall_minutes]).toEqual([0, 0]);
   });
   it('is partial with null debt and honest coverage when nights are missing', () => {
     const days = week().filter((_, i) => i !== 2 && i !== 5);
@@ -203,10 +211,10 @@ const wallHour = (d: string, tz: string, h: number): number | null => {
 const habitual = (d: string, tz: string, through = 24): DayRecord => ({
   day: d, timezone: tz,
   sleep: { startAt: new Date(wallHour(addDays(d, -1), tz, 23)!).toISOString(), endAt: new Date(wallHour(d, tz, 7)!).toISOString(), asleepMinutes: 450, midpointMinute: 180 },
-  overnightHrv: { value: 60, method: 'rmssd' }, restingHeartRate: 55, workouts: [], demand: null,
+  overnightHrv: [{ value: 60, method: 'rmssd' }], restingHeartRate: [{ value: 55, method: 'provider_resting_daily' }], workouts: [], demand: null,
   hourly: Array.from({ length: through }, (_, h) => h).flatMap(h => {
     const at = wallHour(d, tz, h);
-    return at === null ? [] : [{ startAt: new Date(at).toISOString(), heartRate: 70, hrv: 55, hrvMethod: 'rmssd' as const, daylightMinutes: h >= 7 && h < 19 ? 20 : null, movementMinutes: h >= 7 && h < 22 ? 10 : null }];
+    return at === null ? [] : [{ startAt: new Date(at).toISOString(), heartRate: 70, hrv: 55, hrvMethod: 'rmssd' as const, daylightMinutes: h >= 7 && h < 19 ? 20 : null, movementMinutes: h >= 7 && h < 22 ? 10 : null, activeEnergyKcal: null }];
   }),
 });
 const formOn = (target: string, tz: string, through: number, historyTz: (i: number) => string = () => tz) => {
@@ -221,7 +229,7 @@ describe('health scores: Form on a day still in progress', () => {
     if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
     expect(afternoon.used.signals).toEqual(expect.arrayContaining(['daylight', 'movement', 'stress']));
     expect(afternoon.score).toBe(wholeDay.score);
-    expect(afternoon.algorithm_version).toBe('form.candidate.v4');
+    expect(afternoon.algorithm_version).toBe('form.candidate.v5');
   });
   it('still reads a day that is really behind its usual hours as lower', () => {
     const quiet = (record: DayRecord): DayRecord => ({ ...record, hourly: record.hourly.map(bucket => ({ ...bucket, daylightMinutes: bucket.daylightMinutes && 5, movementMinutes: bucket.movementMinutes && 2 })) });
@@ -312,7 +320,7 @@ describe('health scores: time', () => {
   it('counts a 23-hour spring-forward day as full when every hour exists', () => {
     const target = '2026-03-08'; // America/New_York spring forward
     const days = Array.from({ length: 21 }, (_, i) => ({ ...dstDay(addDays(target, -i), 'America/New_York', i) }));
-    const hours = (d: string) => Array.from({ length: 23 }, (_, h) => ({ startAt: new Date(Date.parse(`${d}T05:00:00Z`) + h * 3_600_000).toISOString(), heartRate: 70, hrv: 50, hrvMethod: 'rmssd' as const, daylightMinutes: 20, movementMinutes: 10 }));
+    const hours = (d: string) => Array.from({ length: 23 }, (_, h) => ({ startAt: new Date(Date.parse(`${d}T05:00:00Z`) + h * 3_600_000).toISOString(), heartRate: 70, hrv: 50, hrvMethod: 'rmssd' as const, daylightMinutes: 20, movementMinutes: 10, activeEnergyKcal: null }));
     days[0] = { ...days[0]!, hourly: hours(target) };
     const r = computeDailyScores({ access: 'granted', targetDay: target, days, sleepNeedMinutes: 480, asOf: '2026-03-08T23:00:00.000Z' });
     expect(r.form.state === 'available' || r.form.state === 'unavailable').toBe(true);
@@ -327,8 +335,8 @@ describe('health scores: time', () => {
     expect(r.form.state).toBe('available');
   });
   it('never emits NaN or Infinity for a zero-variance baseline', () => {
-    const flat = week().map(d => ({ ...d, overnightHrv: { value: 60, method: 'rmssd' as const }, restingHeartRate: 55 }));
-    const target = { ...flat[0]!, overnightHrv: { value: 80, method: 'rmssd' as const } };
+    const flat = week().map(d => ({ ...d, overnightHrv: [{ value: 60, method: 'rmssd' as const }], restingHeartRate: [{ value: 55, method: 'provider_resting_daily' as const }] }));
+    const target = { ...flat[0]!, overnightHrv: [{ value: 80, method: 'rmssd' as const }] };
     const r = computeDailyScores(input([target, ...flat.slice(1)])).recovery;
     expect(r.state).toBe('available');
     if (r.state === 'available') expect(Number.isFinite(r.score)).toBe(true);

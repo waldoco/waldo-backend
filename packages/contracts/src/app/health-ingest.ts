@@ -101,19 +101,67 @@ export const healthSampleOriginV1Schema = z.strictObject({
   client_record_version: z.int().nonnegative().nullable().optional(),
   sync_version: z.int().nonnegative().nullable().optional(),
 });
-export const healthSleepContextV1Schema = z.strictObject({
-  source_ref: z.string().min(1).max(200),
-  session_ref: sampleIdV1,
-  waking_day: healthDayV1Schema,
-  reducer_version: z.literal('asleep-interval-union.v1'),
-  contributor_ids: z.array(sampleIdV1).max(128),
-  intervals: z.array(z.strictObject({
-    contributor_id: sampleIdV1, start_at: healthInstantV1Schema, end_at: healthInstantV1Schema,
-    kind: z.enum(['asleep', 'in_bed']),
-  }).refine(interval => Date.parse(interval.start_at) < Date.parse(interval.end_at), 'invalid sleep interval')).max(128),
-}).superRefine((sleep, context) => {
+// Sleep context names the intervals a night's readings were reduced from. Reducer v1 knows asleep and in-bed time only.
+// Reducer v2 also carries the Watch's waking time in the night and, on asleep time, the stage: Apple core sleep and Health
+// Connect LIGHT are `light`; an asleep interval with no stage is unspecified. A v1 context carries neither, so its meaning
+// is unchanged.
+const sleepIntervalAt = { contributor_id: sampleIdV1, start_at: healthInstantV1Schema, end_at: healthInstantV1Schema };
+const inOrder = (interval: { start_at: string; end_at: string }) => Date.parse(interval.start_at) < Date.parse(interval.end_at);
+const sleepContextAt = { source_ref: z.string().min(1).max(200), session_ref: sampleIdV1, waking_day: healthDayV1Schema, contributor_ids: z.array(sampleIdV1).max(128) };
+export const healthSleepStageV1Schema = z.enum(['light', 'deep', 'rem']);
+const sleepContextV2Schema = z.strictObject({
+  ...sleepContextAt,
+  reducer_version: z.literal('asleep-interval-union.v2'),
+  intervals: z.array(z.strictObject({ ...sleepIntervalAt, kind: z.enum(['asleep', 'in_bed', 'awake']), stage: healthSleepStageV1Schema.optional() })
+    .refine(inOrder, 'invalid sleep interval').refine(interval => interval.stage === undefined || interval.kind === 'asleep', 'only asleep time has a stage')).max(128),
+});
+type SleepContextV2 = z.infer<typeof sleepContextV2Schema>;
+type Spans = [number, number][];
+const union = (spans: Spans): Spans => {
+  const merged: Spans = [];
+  for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end); else merged.push([start, end]);
+  }
+  return merged;
+};
+const spanMs = (spans: Spans): number => spans.reduce((total, [start, end]) => total + end - start, 0);
+const sharedMs = (a: Spans, b: Spans): number => a.reduce((total, [s1, e1]) => total + b.reduce((inner, [s2, e2]) => inner + Math.max(0, Math.min(e1, e2) - Math.max(s1, s2)), 0), 0);
+export type HealthSleepStagesV1 = Readonly<{ light: number; deep: number; rem: number; unspecified: number; awake: number }>;
+// Minutes per kind and stage of a v2 night. Asleep is the union of asleep intervals, as in v1, and each stage the union of
+// its own. Awake is waking time inside the night: awake intervals clipped to the first asleep start and the last asleep end,
+// less any asleep time under them. Two differently staged intervals that overlap have no single reading, so the night has
+// none (null). The phone and the backend run this one function, so their totals cannot drift.
+export const reduceSleepContextV2 = (context: SleepContextV2): (HealthSleepStagesV1 & { asleep: number }) | null => {
+  const of = (kind: string, stage?: string): Spans => union(context.intervals.filter(i => i.kind === kind && i.stage === stage).map(i => [Date.parse(i.start_at), Date.parse(i.end_at)]));
+  const staged = { light: of('asleep', 'light'), deep: of('asleep', 'deep'), rem: of('asleep', 'rem'), unspecified: of('asleep') };
+  const kinds = Object.values(staged);
+  if (kinds.some((a, i) => kinds.slice(i + 1).some(b => sharedMs(a, b) > 0))) return null;
+  const asleep = union(kinds.flat());
+  const night = asleep.length ? [asleep[0]![0], asleep[asleep.length - 1]![1]] as const : null;
+  const awake = night ? union(context.intervals.filter(i => i.kind === 'awake').flatMap((i): Spans => {
+    const start = Math.max(Date.parse(i.start_at), night[0]), end = Math.min(Date.parse(i.end_at), night[1]);
+    return start < end ? [[start, end]] : [];
+  })) : [];
+  const minutes = (ms: number) => ms / 60_000;
+  return {
+    asleep: minutes(spanMs(asleep)), light: minutes(spanMs(staged.light)), deep: minutes(spanMs(staged.deep)), rem: minutes(spanMs(staged.rem)),
+    unspecified: minutes(spanMs(staged.unspecified)), awake: minutes(spanMs(awake) - sharedMs(awake, asleep)),
+  };
+};
+export const healthSleepContextV1Schema = z.discriminatedUnion('reducer_version', [
+  z.strictObject({
+    ...sleepContextAt,
+    reducer_version: z.literal('asleep-interval-union.v1'),
+    intervals: z.array(z.strictObject({ ...sleepIntervalAt, kind: z.enum(['asleep', 'in_bed']) }).refine(inOrder, 'invalid sleep interval')).max(128),
+  }),
+  sleepContextV2Schema.refine(context => reduceSleepContextV2(context) !== null, 'differently staged sleep intervals overlap'),
+]).superRefine((sleep, context) => {
   if (new Set(sleep.contributor_ids).size !== sleep.contributor_ids.length || sleep.intervals.some(interval => !sleep.contributor_ids.includes(interval.contributor_id))) context.addIssue({ code: 'custom', message: 'invalid sleep contributors' });
 });
+// A night's stage totals in minutes, on its time-asleep reading. light + deep + rem + unspecified is the time asleep.
+const stageMinutes = z.number().finite().min(0).max(1440);
+export const healthSleepStagesV1Schema = z.strictObject({ light: stageMinutes, deep: stageMinutes, rem: stageMinutes, unspecified: stageMinutes, awake: stageMinutes });
 
 // Identity. A point record (a sample the OS stored, a workout, one SpO2 reading) uses its OS record id
 // and revision 0 unless the OS edits it. A window signal is one fixed local-hour bucket: the same hour
@@ -124,7 +172,8 @@ export const healthSleepContextV1Schema = z.strictObject({
 // replaces the session instead of adding a second one.
 // Sleep definitions: sleep_duration is the minutes of the union of asleep intervals; sleep_efficiency is
 // asleep minutes divided by in-bed minutes; sleep_midpoint is the local minute of day, in the reading's
-// zone, of the midpoint between the first asleep start and the last asleep end.
+// zone, of the midpoint between the first asleep start and the last asleep end. A time-asleep reading from a v2 context
+// carries its stage totals, which are that context's reducer output to within a minute.
 const sampleCommon = {
   sample_id: sampleIdV1,
   origin: healthSampleOriginV1Schema.optional(),
@@ -145,9 +194,22 @@ const isLocalHourBucket = (sample: { start_at: string; end_at: string; utc_offse
   return Date.parse(sample.end_at) - start === HOUR_MS && (start + sample.utc_offset_minutes * 60_000) % HOUR_MS === 0;
 };
 const bpm = z.number().finite().positive().max(300);
+// A time-asleep reading from a v2 context carries that context's stage totals, and only such a reading does: stages without
+// the intervals they come from, or a v2 night's time asleep without its stages, is not one reading.
+const stagesMatchContext = (sample: { method?: string | undefined; value: number; sleep_context?: z.infer<typeof healthSleepContextV1Schema> | undefined; stages?: HealthSleepStagesV1 | undefined }): boolean => {
+  const context = sample.sleep_context?.reducer_version === 'asleep-interval-union.v2' ? sample.sleep_context : null;
+  const asleep = sample.method === undefined || sample.method === 'asleep_duration';
+  if (!sample.stages) return !(context && asleep);
+  const reduced = context && asleep ? reduceSleepContextV2(context) : null;
+  if (!reduced) return false;
+  const { light, deep, rem, unspecified, awake } = sample.stages;
+  const near = (a: number, b: number) => Math.abs(a - b) <= 1;
+  return near(light, reduced.light) && near(deep, reduced.deep) && near(rem, reduced.rem) && near(unspecified, reduced.unspecified) && near(awake, reduced.awake)
+    && near(light + deep + rem + unspecified, sample.value);
+};
 // Bounds are plausibility limits that catch unit mistakes. They are not medical thresholds.
 export const healthSampleV1Schema = z.discriminatedUnion('signal', [
-  z.strictObject({ ...sampleCommon, signal: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440), stages: healthSleepStagesV1Schema.optional() }),
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_efficiency'), unit: z.literal('ratio'), value: z.number().finite().min(0).max(1) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_midpoint'), unit: z.literal('local_minute'), method: z.literal('sleep_midpoint'), value: z.number().finite().min(0).max(1439.999) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('overnight_hrv'), unit: z.literal('milliseconds'), method: hrvMethodV1, value: z.number().finite().positive().max(1000) }),
@@ -162,12 +224,25 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('steps_window'), unit: z.literal('count'), value: z.int().min(0).max(300_000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('active_energy_window'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(30_000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('workout'), unit: z.literal('minutes'), activity: z.string().min(1).max(64), value: z.number().finite().min(0).max(1440), energy_kcal: z.number().finite().min(0).max(30_000).optional() }),
+  // The Apple Watch wellness tier. A build sends these only under health revision 3, so a backend that does not know one yet
+  // rejects that reading, never the batch. Sleeping wrist temperature is one value per night: HealthKit's is absolute;
+  // Health Connect's is the night's mean delta against its own baseline. The two have separate baselines, never blended.
+  z.strictObject({ ...sampleCommon, signal: z.literal('wrist_temperature'), unit: z.literal('celsius'), method: z.enum(['absolute', 'baseline_delta']), value: z.number().finite() })
+    .refine(sample => (sample.method === 'absolute' ? sample.value >= 25 && sample.value <= 42 : sample.value >= -5 && sample.value <= 5), 'wrist temperature outside its method scale'),
+  z.strictObject({ ...sampleCommon, signal: z.literal('walking_heart_rate_average'), unit: z.literal('beats_per_minute'), value: bpm }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('vo2_max'), unit: z.literal('ml_per_kg_min'), value: z.number().finite().min(10).max(90) }),
+  // The drop from peak workout heart rate to one minute after.
+  z.strictObject({ ...sampleCommon, signal: z.literal('heart_rate_recovery'), unit: z.literal('beats_per_minute'), value: z.number().finite().min(0).max(120) }),
+  // One mindful session: its minutes are its start to its end.
+  z.strictObject({ ...sampleCommon, signal: z.literal('mindful_duration'), unit: z.literal('minutes'), value: z.number().finite().min(0).max(1440) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
-  .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range');
+  .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
+  .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals');
 export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
+  'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
@@ -283,6 +358,9 @@ export const healthScoresV1Schema = z.strictObject({
   // Absent when the row was not computed with it, never a stand-in for zero debt.
   sleep_debt: healthSleepDebtV1Schema.optional(),
 });
+// Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
+// names health revision 2 or later, whose pin always has it.
+export const HEALTH_SLEEP_DEBT_REVISION_V1 = HEALTH_PROVIDER_REVISION_V1;
 // No row to show for the day: a 200 with the reason, never a zero score.
 export const healthScoresUnavailableV1Schema = z.strictObject({
   state: z.literal('unavailable'),

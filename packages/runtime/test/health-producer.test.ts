@@ -45,10 +45,16 @@ const seriesOf = (samples: Sample[], over: { source?: string; epoch?: number; tr
 });
 
 type Harness = { deps: ProducerDeps; writes: Record<string, unknown>[]; reads: Record<string, unknown>[]; inputs: DailyScoresInput[] };
+// Like waldo.health_series_read, the fake returns only the signals it was asked for.
+const askedFor = (series: unknown, signals: readonly string[]): unknown => {
+  const body = series as { sources?: unknown } | null;
+  if (!body || typeof body !== 'object' || !Array.isArray(body.sources)) return series;
+  return { ...body, sources: body.sources.map(source => ({ ...source, samples: (source as { samples: Sample[] }).samples.filter(entry => !entry || signals.includes(String(entry.signal))) })) };
+};
 const harness = (series: unknown, writeResult: unknown = { written: true }, compute = computeDailyScores, extra: Partial<ProducerDeps> = {}): Harness => {
   const h: Harness = { writes: [], reads: [], inputs: [], deps: null as never };
   h.deps = {
-    readSeries: async range => { h.reads.push(range); return series; },
+    readSeries: async range => { h.reads.push(range); return askedFor(series, range.signals); },
     writeContext: async payload => { h.writes.push(JSON.parse(payload)); return writeResult; },
     compute: input => { h.inputs.push(input); return compute(input); },
     ...extra,
@@ -66,7 +72,11 @@ describe('produceHealthScores', () => {
   it('reads thirty days back from the owner\'s local today and writes today and yesterday', async () => {
     const h = harness(seriesOf(history(25)));
     expect(await run(h)).toBe('written');
-    expect(h.reads).toEqual([{ from: addDays(TODAY, -30), to: TODAY, signals: expect.arrayContaining(['sleep_duration', 'overnight_hrv', 'workout']) }]);
+    // The scores' signals, and beside them the night's vital signals, which can be dense, in a read of their own.
+    expect(h.reads).toEqual([
+      { from: addDays(TODAY, -30), to: TODAY, signals: expect.arrayContaining(['sleep_duration', 'overnight_hrv', 'workout', 'active_energy_window']) },
+      { from: addDays(TODAY, -30), to: TODAY, signals: ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'] },
+    ]);
     expect(h.reads[0]!.signals).not.toContain('steps_window');
     expect(h.writes.map(w => w.day).sort()).toEqual([addDays(TODAY, -1), TODAY]);
   });
@@ -136,7 +146,7 @@ describe('produceHealthScores', () => {
     const { readSeries, writeContext } = h.deps;
     h.deps = { ...h.deps, readSeries: range => { order.push('series'); return readSeries(range); }, writeContext: payload => { order.push(settled ? 'write after demand' : 'write'); return writeContext(payload); } };
     expect(await run(h)).toBe('written');
-    expect(order).toEqual(['demand', 'series', 'write', 'write']);
+    expect(order).toEqual(['demand', 'series', 'series', 'write', 'write']);
     expect(h.writes.find(w => w.day === TODAY)!.weight).toEqual({ reason: 'calendar_demand_unavailable' });
     expect(typeof (h.writes.find(w => w.day === TODAY)!.form as Record<string, unknown>).score).toBe('number');
     expect(demandLogs(log)).toEqual([{ hop: 'weight_demand', ok: false, code: 'demand_late' }]);
@@ -216,7 +226,7 @@ describe('produceHealthScores', () => {
     const h = harness(seriesOf(history(25)));
     await run(h);
     for (const row of h.writes) {
-      expect(Object.keys(row).every(k => ['day', 'timezone', 'basis', 'form', 'recovery', 'weight', 'drivers', 'confidence', 'freshness', 'tags', 'read_at'].includes(k))).toBe(true);
+      expect(Object.keys(row).every(k => ['day', 'timezone', 'basis', 'form', 'recovery', 'weight', 'drivers', 'confidence', 'freshness', 'tags', 'read_at', 'sleep_debt'].includes(k))).toBe(true);
       for (const pillar of ['form', 'recovery', 'weight'] as const) {
         const p = row[pillar] as Record<string, unknown>;
         expect('reason' in p ? Object.keys(p) : ['score', 'zone', 'algorithm_version', 'activation']).toEqual('reason' in p ? ['reason'] : ['score', 'zone', 'algorithm_version', 'activation']);
@@ -242,7 +252,7 @@ describe('produceHealthScores', () => {
     const h = harness(seriesOf(history(25, { hrvMethod: 'sdnn' })));
     await run(h);
     const today = h.inputs.find(i => i.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
-    expect(today.overnightHrv?.method).toBe('sdnn');
+    expect(today.overnightHrv.map(entry => entry.method)).toEqual(['sdnn']);
     expect((h.writes.find(w => w.day === TODAY)!.recovery as Record<string, unknown>).hrv_method).toBe('sdnn');
   });
 
@@ -264,7 +274,7 @@ describe('produceHealthScores', () => {
   });
 
   it('flags a day that holds readings from two zones, and keeps the zone each day was read in', async () => {
-    const travelled = [...history(25), sample('steps_window', TODAY, { timezone: 'Asia/Tokyo', utc_offset_minutes: 540, value: 100 })];
+    const travelled = [...history(25), sample('active_energy_window', TODAY, { timezone: 'Asia/Tokyo', utc_offset_minutes: 540, value: 100 })];
     const h = harness(seriesOf(travelled));
     await run(h);
     expect(h.writes.find(w => w.day === TODAY)!.tags).toEqual(['zone_changed']);
@@ -309,7 +319,7 @@ describe('produceHealthScores', () => {
       const load = (day: string) => h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === day)!.demand?.physicalLoad;
       expect([load(TODAY), load(YESTERDAY)]).toEqual([null, 96 + 60]);
       // Weight's baselines admit fewer physical-load days too, so Weight is a new version as well.
-      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v3');
+      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v4');
     });
 
     it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
@@ -351,7 +361,7 @@ describe('produceHealthScores', () => {
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
       // Admitting fewer inputs is a new Form version under ADR-0081.
-      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v4');
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v5');
     });
   });
 
@@ -410,7 +420,7 @@ describe('produceHealthScores', () => {
     const scored = (form: number, version = 'form.candidate.v4', recovery = 70): DailyScores => ({
       recovery: { state: 'available', score: recovery, zone: recoveryZone(recovery), algorithm_version: 'recovery.candidate.v1', activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
       form: { state: 'available', score: form, zone: formZone(form), algorithm_version: version, activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
-      weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' }, sleep_debt: { state: 'unavailable', reason: 'no_readings' },
+      weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' }, sleep_debt: { state: 'unavailable', reason: 'no_readings' }, drivers: [],
     });
     // One recompute per score; for each, whether the owner's object was told today moved zone.
     const uploads = async (scores: readonly number[], store = plane(), version?: string, recovery?: number) => {
@@ -570,7 +580,121 @@ describe('produceHealthScores', () => {
     const today = h.writes[1]!;
     expect(today.read_at).toBe(realSeries.read_at);
     expect(today.basis).toEqual([{ source: 'apple', consent_epoch: 1 }]);
-    expect(today.recovery).toMatchObject({ zone: expect.stringMatching(/^(low|moderate|good|high)$/), algorithm_version: 'recovery.candidate.v1' });
+    expect(today.recovery).toMatchObject({ zone: expect.stringMatching(/^(low|moderate|good|high)$/), algorithm_version: 'recovery.candidate.v2' });
     expect(today.weight).toEqual({ reason: 'calendar_demand_unavailable' });
+  });
+
+  describe('Apple Watch coverage', () => {
+    // A night's breathing rate, read twice: once before midnight, dated the day before, and once after.
+    const breathing = (day: string, i: number, late = 14 + wobble(i, 0.6), early = 14 + wobble(i + 3, 0.6)) => [
+      sample('respiratory_rate', addDays(day, -1), { start_at: `${addDays(day, -1)}T23:30:00.000Z`, end_at: `${addDays(day, -1)}T23:30:00.000Z`, value: late }),
+      sample('respiratory_rate', day, { start_at: `${day}T03:00:00.000Z`, end_at: `${day}T03:00:00.000Z`, value: early }),
+    ];
+    const nights = (n: number, reading: (day: string, i: number) => Sample[]) => Array.from({ length: n }, (_, i) => reading(addDays(TODAY, -i), i)).flat();
+    const todayRow = (h: Harness) => h.writes.find(w => w.day === TODAY)!;
+
+    it('stores sleep debt on the row in the shape the app reads, in every state', async () => {
+      const full = harness(seriesOf(history(25)));
+      await run(full);
+      expect(todayRow(full).sleep_debt).toEqual({ state: 'available', debt_minutes: expect.any(Number), need_basis: 'own_average', algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' });
+      const gaps = harness(seriesOf(history(25).filter(entry => entry.signal !== 'sleep_duration' || entry.day !== addDays(TODAY, -3))));
+      await run(gaps);
+      expect(todayRow(gaps).sleep_debt).toEqual({ state: 'partial', confidence: expect.any(Number), algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' });
+      const young = harness(seriesOf(history(3)));
+      await run(young);
+      expect(todayRow(young).sleep_debt).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    });
+
+    it('names a night\'s breathing rate far above usual, counting the reading before midnight toward the night it falls in', async () => {
+      const h = harness(seriesOf([...history(25), ...nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 14) : breathing(day, i)))]));
+      await run(h);
+      expect(todayRow(h).drivers).toEqual(['breathing rate far above usual']);
+      // The same high reading dated today but outside the night is daytime, not the night's.
+      const daytime = harness(seriesOf([...history(25), ...nights(25, (day, i) => (i === 0 ? [...breathing(day, i, 14, 14), sample('respiratory_rate', day, { start_at: `${day}T11:00:00.000Z`, end_at: `${day}T11:00:00.000Z`, value: 30 })] : breathing(day, i)))]));
+      await run(daytime);
+      expect(todayRow(daytime).drivers).toEqual([]);
+    });
+
+    it('reads blood oxygen, the night\'s wrist temperature of each method, walking heart rate and awake time', async () => {
+      const temperature = (day: string, value: number, method = 'absolute') => sample('wrist_temperature', day, { start_at: `${addDays(day, -1)}T23:00:00.000Z`, end_at: `${day}T07:00:00.000Z`, value, method });
+      const oxygen = (day: string, value: number) => sample('spo2', day, { start_at: `${day}T02:00:00.000Z`, end_at: `${day}T02:00:00.000Z`, value });
+      const walking = (day: string, value: number) => sample('walking_heart_rate_average', day, { start_at: `${day}T00:00:00.000Z`, end_at: `${day}T23:59:00.000Z`, value });
+      const staged = (entries: Sample[], awake: (i: number) => number) => entries.map((entry, index) => {
+        if (entry.signal !== 'sleep_duration') return entry;
+        const i = Math.floor(index / 36);
+        return { ...entry, stages: { light: 200, deep: 80, rem: 90, unspecified: (entry.value as number) - 370, awake: awake(i) } };
+      });
+      // Earlier nights wobble around the owner's usual; today sits on it unless a test moves it.
+      const usual = nights(25, (day, i) => (i === 0 ? [temperature(day, 34), oxygen(day, 96), walking(day, 100)] : [temperature(day, 34 + wobble(i, 0.3)), oxygen(day, 96 + wobble(i, 1)), walking(day, 100 + wobble(i, 3))]));
+      const awake = (i: number) => (i === 0 ? 25 : 25 + wobble(i, 8));
+      const h = harness(seriesOf([...staged(history(25), awake), ...usual.filter(entry => entry.day !== TODAY),
+        temperature(TODAY, 36.5), oxygen(TODAY, 90), walking(TODAY, 100), temperature(TODAY, 1.5, 'baseline_delta')]));
+      await run(h);
+      expect(todayRow(h).drivers).toEqual(['wrist temperature far above usual', 'blood oxygen far below usual']);
+      const restless = harness(seriesOf([...staged(history(25), i => (i === 0 ? 90 : awake(i))), ...usual]));
+      await run(restless);
+      expect(todayRow(restless).drivers).toEqual(['awake time in the night far above usual']);
+    });
+
+    it('scores exactly as before when the vital signals cannot be read, and names no driver from them', async () => {
+      const series = seriesOf([...history(25), ...nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 30) : breathing(day, i)))]);
+      const read = harness(series);
+      await run(read);
+      const failing = harness(series, undefined, undefined, { readSeries: async range => { if (range.signals.includes('respiratory_rate')) throw new Error('down'); return askedFor(series, range.signals); } });
+      expect(await run(failing)).toBe('written');
+      const strip = (row: Record<string, unknown>) => ({ ...row, drivers: undefined });
+      expect(failing.writes.map(strip)).toEqual(read.writes.map(strip));
+      expect([todayRow(read).drivers, todayRow(failing).drivers]).toEqual([['breathing rate far above usual'], []]);
+    });
+
+    it('reaches the prompt through the existing reader: the stored phrase, word for word, and no value', async () => {
+      const h = harness(seriesOf([...history(25), ...nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 30) : breathing(day, i)))]));
+      await run(h);
+      const written = todayRow(h);
+      const material = toContextHealthMaterial({
+        context: { id: 'ctx', day: TODAY, form: written.form, recovery: written.recovery, weight: written.weight, drivers: written.drivers, confidence: written.confidence ?? null, freshness: written.freshness, tags: written.tags ?? [], compiled_at: '2026-03-20T12:00:01.000Z' },
+        previous: null,
+      }, { timezone: 'UTC', now: () => new Date(NOW + 5_000) });
+      expect(material!.narrative.day_summary).toContain('Drivers: breathing rate far above usual.');
+      expect(material!.narrative.day_summary).not.toMatch(/\d/);
+    });
+
+    it('takes a vital reading only from the consent epoch the scores were read under', async () => {
+      const vitals = nights(25, (day, i) => (i === 0 ? breathing(day, i, 30, 30) : breathing(day, i)));
+      const main = seriesOf(history(25));
+      const regranted = seriesOf(vitals, { epoch: 4 });
+      const h = harness(main, undefined, undefined, { readSeries: async range => (range.signals.includes('respiratory_rate') ? regranted : askedFor(main, range.signals)) });
+      await run(h);
+      expect(todayRow(h).drivers).toEqual([]);
+    });
+
+    it('puts active energy in the hour it was burned, so Weight can read it', async () => {
+      const energy = [8, 9, 10].map(h => sample('active_energy_window', TODAY, { start_at: `${TODAY}T${String(h).padStart(2, '0')}:00:00.000Z`, end_at: `${TODAY}T${String(h + 1).padStart(2, '0')}:00:00.000Z`, value: 40 }));
+      const h = harness(seriesOf([...history(25), ...energy]));
+      await run(h);
+      const today = h.inputs[0]!.days.find(d => d.day === TODAY)!;
+      expect(today.hourly.slice(0, 4).map(bucket => bucket.activeEnergyKcal)).toEqual([40, 40, 40, null]);
+    });
+
+    it('drops the oldest day of each truncated read, which may be partial, and logs which read without a value', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const h = harness(seriesOf(history(25), { truncated: true }));
+      await run(h);
+      const days = h.inputs[0]!.days.map(d => d.day);
+      expect(days).not.toContain(addDays(TODAY, -24));
+      expect(days).toContain(addDays(TODAY, -23));
+      const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('health_series'));
+      expect(lines.sort()).toEqual([JSON.stringify({ hop: 'health_series', ok: true, code: 'series_truncated' }), JSON.stringify({ hop: 'health_series', ok: true, code: 'vitals_truncated' })]);
+    });
+
+    it('keeps one HRV reading per method and one resting reading per method for each night', async () => {
+      const both = [sample('overnight_hrv', TODAY, { start_at: `${addDays(TODAY, -1)}T23:00:00.000Z`, end_at: `${TODAY}T07:00:00.000Z`, value: 44, method: 'sdnn' }),
+        sample('resting_heart_rate', TODAY, { start_at: `${TODAY}T05:00:00.000Z`, end_at: `${TODAY}T05:00:00.000Z`, value: 51, method: 'overnight_resting' })];
+      const h = harness(seriesOf([...history(25), ...both]));
+      await run(h);
+      const today = h.inputs[0]!.days.find(d => d.day === TODAY)!;
+      expect(today.overnightHrv.map(entry => entry.method).sort()).toEqual(['rmssd', 'sdnn']);
+      expect(today.restingHeartRate.map(entry => entry.method).sort()).toEqual(['overnight_resting', 'unknown']);
+    });
   });
 });
