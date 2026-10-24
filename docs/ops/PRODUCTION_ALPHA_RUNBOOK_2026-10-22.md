@@ -92,7 +92,8 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
 | `WHATSAPP_ONBOARDING_URL`, `WHATSAPP_REENGAGE_TEMPLATE`, `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` | onboarding URL set; templates empty | empty | empty until Meta verification and a production number (D5) |
 | `GMAIL_PUSH_PROJECT` | `waldo-dev-492217` | `""` | `""` until the production Cloud project has its `waldo-gmail-push` topic and push subscription (S7). While it is empty, production starts no Gmail watch (`gmail_watch_skipped:unconfigured`) and `/events/gmail` answers 404; mail reads still work (`connectors/google-push.ts`, `channels/event-ingress.ts`). |
-| `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_SEARCH`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, tool search off, offload on. |
+| `WALDO_TOOL_SEARCH` | `on` | `off` | `off` until staging's tool-search E2E and a live flag-on eval pass (`docs/ops/staging-e2e/tool-search.md`). `off` is the rollback. |
+| `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, offload on. |
 
 ### 1.3 Worker secrets (names only)
 

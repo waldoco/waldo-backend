@@ -57,9 +57,10 @@ const storableResult = (result: TaskResult): TaskResult => numericHealthIn(JSON.
   ? { status: result.status === 'done' ? 'partial' : result.status, summary: 'The worker\'s result named health readings with their numbers, which a task never stores, so it was not kept.', findings: [], proposals: [], left: ['The findings themselves: the owner can ask again, and Waldo can read their mail or files directly.'] }
   : result;
 
-// A checkpoint persists in the owner object's storage, and the owner's health values are never stored. What an
-// owner-connected MCP server returns is not known to be free of them (a wearable's server, say), so its output is left out,
-// and so is any other call or output that carries a reading (a lab result in a mail, a result that quoted it). A resumed
+// A checkpoint persists in the owner object's storage, where health readings are not stored. What an owner-connected MCP
+// server returns is not known to be free of them (a wearable's server, say), so its output is left out, and so is any other
+// call or output the shared health floor (numericHealthIn) finds a reading in. A reading that check does not recognise (many
+// lab values) stays in the checkpoint until the job settles or is cancelled. A resumed
 // attempt reads it again if it still needs it, which a read allows; a step that cannot be replayed is told it already ran.
 const UNKEPT_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read_mcp_tool']);
 export const UNKEPT_OUTPUT = 'Not kept across a restart. Call the tool again if you still need this.';
@@ -139,6 +140,73 @@ export const taskHost = (deps: TaskHostDeps) => {
     return (await eligibleHandlers(allowed)).handlers;
   };
 
+  // One worker tool call's work, once the call holds its attempt busy.
+  const serve = async (ticket: TaskTicket, row: JobRow, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> => {
+    const started = deps.now();
+    const allowed = jobTools(row).includes(call.name as never);
+    const scope = scopeFor(ticket, row);
+    // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
+    const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
+    if (admission === 'dormant') {
+      deps.book.suspend(row.id);
+      fence(row.id);
+      hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' });
+      return 'fenced';
+    }
+    let result: LoopToolResult;
+    if (!allowed) {
+      const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
+      result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
+    } else if (admission === 'retry') {
+      const unchecked = toolError('transient', 'The owner\'s access could not be checked just now, so nothing ran.');
+      result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
+    } else {
+      const handlers = await profileHandlers(row);
+      const spend = ownerSpend();
+      const ctx: ToolDispatcherContext = {
+        ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
+        hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,
+        // Past the ceiling a worker's paid tools are held the way an owner turn's are; the cost ledger counts each hold.
+        heldTool: (tool: string) => {
+          if (!spend || spend.spentUsd < spend.ceilingUsd || !PAID_RUNG_TOOLS.has(tool)) return null;
+          deps.log({ trace: traceOf(ticket), hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached', cost_kind: 'worker', job_id: row.id, job_profile: row.profile! });
+          return spendHold(new Date(deps.now()));
+        },
+        session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
+      };
+      const effect = unreplayable(call.name);
+      // The intent is written once the call can start, after any wait for the serial lane, with a fresh lease: a job that
+      // waited behind a long turn did nothing yet and must not look like an interrupted effect.
+      const run = async () => {
+        scope.admit();
+        if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
+        return dispatchLoopTool(call, { handlers, ctx });
+      };
+      try {
+        result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
+      } catch (error) {
+        if (error instanceof ClosedRunError) return 'fenced';
+        const failed = toolError('handler_failed');
+        result = { ok: false, error: failed.cause, error_code: failed.code, fix: failed.fix, retryable: false, code: 'transient' };
+      }
+      // A handler that threw may have crossed its side-effect boundary first, so the effect is uncertain whatever the
+      // worker would do next: the job parks rather than hand the worker a failure it might retry.
+      if (effect && result.error_code === 'handler_failed') {
+        deps.book.park(row.id, 'uncertain_effect');
+        fence(row.id);
+        hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: call.name });
+        return 'fenced';
+      }
+    }
+    if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
+    deps.log({
+      trace: traceOf(ticket), hop: `task_tool_${call.name}`, ms: deps.now() - started, ok: result.ok, job_id: row.id, job_profile: row.profile!, cost_kind: 'worker',
+      ...(result.error_code ? { error_code: result.error_code } : {}), ...(result.error ? { error: result.error } : {}),
+      text: { input: call.arguments, output: JSON.stringify(result) },
+    });
+    return result;
+  };
+
   return {
     fence,
     // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
@@ -198,74 +266,16 @@ export const taskHost = (deps: TaskHostDeps) => {
     async tool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> {
       const row = deps.book.get(ticket.jobId);
       if (!row || !deps.book.touch(ticket, null)) return 'fenced';
-      const started = deps.now();
-      const allowed = jobTools(row).includes(call.name as never);
-      const scope = scopeFor(ticket, row);
-      // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
-      const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
-      if (admission === 'dormant') {
-        deps.book.suspend(row.id);
-        fence(row.id);
-        hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' });
-        return 'fenced';
+      // Busy from here, before any wait (the directory, the serial lane), so a re-fired alarm rejoining this attempt in that
+      // window is fenced by claim instead of dispatching the same step again.
+      const key = attemptKey(ticket);
+      busy.set(key, (busy.get(key) ?? 0) + 1);
+      try {
+        return await serve(ticket, row, call, canaries);
+      } finally {
+        const left = (busy.get(key) ?? 1) - 1;
+        if (left > 0) busy.set(key, left); else busy.delete(key);
       }
-      let result: LoopToolResult;
-      if (!allowed) {
-        const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
-        result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
-      } else if (admission === 'retry') {
-        const unchecked = toolError('transient', 'The owner\'s access could not be checked just now, so nothing ran.');
-        result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
-      } else {
-        const handlers = await profileHandlers(row);
-        const spend = ownerSpend();
-        const ctx: ToolDispatcherContext = {
-          ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
-          hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,
-          // Past the ceiling a worker's paid tools are held the way an owner turn's are; the cost ledger counts each hold.
-          heldTool: (tool: string) => {
-            if (!spend || spend.spentUsd < spend.ceilingUsd || !PAID_RUNG_TOOLS.has(tool)) return null;
-            deps.log({ trace: traceOf(ticket), hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached', cost_kind: 'worker', job_id: row.id, job_profile: row.profile! });
-            return spendHold(new Date(deps.now()));
-          },
-          session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
-        };
-        const effect = unreplayable(call.name);
-        // The intent is written once the call can start, after any wait for the serial lane, with a fresh lease: a job that
-        // waited behind a long turn did nothing yet and must not look like an interrupted effect.
-        const run = async () => {
-          scope.admit();
-          if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
-          return dispatchLoopTool(call, { handlers, ctx });
-        };
-        const key = attemptKey(ticket);
-        busy.set(key, (busy.get(key) ?? 0) + 1);
-        try {
-          result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
-        } catch (error) {
-          if (error instanceof ClosedRunError) return 'fenced';
-          const failed = toolError('handler_failed');
-          result = { ok: false, error: failed.cause, error_code: failed.code, fix: failed.fix, retryable: false, code: 'transient' };
-        } finally {
-          const left = (busy.get(key) ?? 1) - 1;
-          if (left > 0) busy.set(key, left); else busy.delete(key);
-        }
-        // A handler that threw may have crossed its side-effect boundary first, so the effect is uncertain whatever the
-        // worker would do next: the job parks rather than hand the worker a failure it might retry.
-        if (effect && result.error_code === 'handler_failed') {
-          deps.book.park(row.id, 'uncertain_effect');
-          fence(row.id);
-          hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: call.name });
-          return 'fenced';
-        }
-      }
-      if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
-      deps.log({
-        trace: traceOf(ticket), hop: `task_tool_${call.name}`, ms: deps.now() - started, ok: result.ok, job_id: row.id, job_profile: row.profile!, cost_kind: 'worker',
-        ...(result.error_code ? { error_code: result.error_code } : {}), ...(result.error ? { error: result.error } : {}),
-        text: { input: call.arguments, output: JSON.stringify(result) },
-      });
-      return result;
     },
     async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes: readonly ProviderOutcome[] = []): Promise<'ok' | 'stale' | 'fenced'> {
       logEvents(events);

@@ -36,7 +36,7 @@ type Harness = Readonly<{
   // The owner's provider breaker, on the harness clock.
   health: InMemoryCircuitBreaker;
   // What the directory says of the owner when a worker call asks.
-  admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws' };
+  admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws'; waiting?: Promise<void> };
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -64,7 +64,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
-      admitted: async () => { if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
+      admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
@@ -464,6 +464,51 @@ describe('the task brain host', () => {
       expect(await second).toBe('fenced');
       expect(ran).toEqual([]);
       expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 1, lease_token: null, inflight_json: null });
+    });
+  });
+
+  it('a rejoin of the same attempt while the directory is still being asked fences both: the step never runs twice', async () => {
+    await withHost(async ({ host, ticket, book, ran, log, admission }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      let admit!: () => void;
+      admission.waiting = new Promise<void>(resolve => { admit = resolve; });
+      const asking = host.tool(t, call('browse_act'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const rejoined = await host.claim(t);
+      const rejoinFenced = log.some(entry => entry.hop === 'task_rejoin_fenced');
+      expect({ rejoined, rejoinFenced }).toEqual({ rejoined: 'fenced', rejoinFenced: true });
+      const second = host.tool(t, call('browse_act'), CANARIES);
+      admit();
+      expect(await asking).toBe('fenced');
+      expect(await second).toBe('fenced');
+      expect(ran).toEqual([]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'queued', crashes: 1, lease_token: null, inflight_json: null });
+    });
+  });
+
+  it('a call the directory turned away or could not answer leaves the attempt free to rejoin: nothing stays busy', async () => {
+    await withHost(async ({ host, ticket, book, admission }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      admission.now = 'retry';
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: false, retryable: true });
+      expect(host.busy().has(t.jobId)).toBe(false);
+      expect(book.lapse(host.busy())).toEqual([]);
+      admission.now = 'admitted';
+      expect(await host.claim(t)).not.toBe('fenced');
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+    });
+    await withHost(async ({ host, ticket, book, admission }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      admission.now = 'dormant';
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toBe('fenced');
+      admission.now = 'admitted';
+      const next = book.startAttempt(t.jobId)!;
+      expect(await host.claim(next)).not.toBe('fenced');
+      expect(host.busy().has(t.jobId)).toBe(false);
+      expect(await host.tool(next, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
     });
   });
 

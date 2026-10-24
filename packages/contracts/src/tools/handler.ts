@@ -180,7 +180,8 @@ export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTain
 // card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
 // their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
 // Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good. A background
-// task is a schedule too: it runs paid workers on its brief and reports to the owner later, without being asked again.
+// task is a schedule too: it runs paid workers on its brief and reports to the owner later, without being asked again, and
+// cancelling one stops work the owner asked for, as cancelling a reminder does.
 export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_reminder',
   'cancel_reminder',
@@ -191,6 +192,7 @@ export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_schedule_preference',
   'forget_memory',
   'start_task',
+  'cancel_task',
 ];
 
 // The owner-approval law for a tainted turn: every privileged action, and every standing change. One exception, read

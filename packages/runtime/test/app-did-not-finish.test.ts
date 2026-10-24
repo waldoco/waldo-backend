@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { APP_UPDATE_BASE, appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
-import { APP_INBOX_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { APP_INBOX_DUE_KEY, rearmSharedAlarm, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -25,6 +25,12 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
+// An arm of the jobs wake that never runs, as when the object is evicted before its waitUntil work does.
+const wakes = vi.hoisted(() => ({ lost: false }));
+vi.mock('../src/scheduler/alarm-slot', async load => {
+  const original = await load<typeof import('../src/scheduler/alarm-slot')>();
+  return { ...original, armTaskJobsWake: (...args: Parameters<typeof original.armTaskJobsWake>) => wakes.lost ? Promise.resolve() : original.armTaskJobsWake(...args) };
+});
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
@@ -35,7 +41,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const owners = vi.hoisted(() => ({ runtime: 'admitted' as 'admitted' | 'outage' | 'revoked' }));
 
 beforeEach(() => {
-  model.requests = []; model.fail = false; model.effectThenFail = false; owners.runtime = 'admitted';
+  model.requests = []; model.fail = false; model.effectThenFail = false; owners.runtime = 'admitted'; wakes.lost = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -130,12 +136,28 @@ describe('an app turn that does not finish', () => {
       expect(notices(messages)).toHaveLength(0);
       expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.$/);
       expect(state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM task_jobs').toArray()).toEqual([{ kind: 'retry_turn', status: 'queued' }]);
+      const [{ due_at: due }] = state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM task_jobs').toArray() as [{ due_at: number }];
+      await vi.waitFor(async () => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(due), { timeout: 2_000, interval: 20 });
       model.fail = false;
       const next = await send(owner(), state, name, 'client-next-0001', 'Did that happen?');
       expect(next.outcome).toBe('completed');
       expect(model.requests.at(-1)).toContain("I'll come back to you by");
       const after = await shown(owner(), name);
       expect(after.map(message => message.parent_id)).toEqual([null, failed.id, after[1]!.id, next.id]);
+    });
+  });
+
+  it('the retry job\'s wake commits with the job, so an arm that never runs still leaves the jobs lane due', async () => {
+    const name = 'did-not-finish-lost-wake';
+    await withOwner(name, {}, async (owner, state) => {
+      model.fail = true; wakes.lost = true;
+      expect((await send(owner(), state, name, 'client-lost-wake-1', 'Move my 4pm to 5pm.')).outcome).toBe('completed');
+      const [job] = state.storage.sql.exec<{ due_at: number }>("SELECT due_at FROM task_jobs WHERE kind = 'retry_turn'").toArray();
+      expect(job).toBeDefined();
+      expect(await state.storage.get<number>(TASK_JOBS_DUE_KEY)).toBe(job!.due_at);
+      await state.storage.deleteAlarm();
+      await rearmSharedAlarm(state.storage, null, Date.now());
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(job!.due_at);
     });
   });
 

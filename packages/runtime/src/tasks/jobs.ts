@@ -1,7 +1,7 @@
-import { type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
+import { replaceLiteralText, type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
 import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
-import { carriesTopic, hidesTopic } from '../memory/forget-guard';
-import { FORGOTTEN } from '../memory/claims';
+import { FORGOTTEN, projectionValueHolds } from '../memory/claims';
+import type { ForgetStore } from '../memory/forget-purge';
 import { md5Hex } from '../channels/md5';
 import { ClosedRunError } from '../channels/run-effect-scope';
 
@@ -96,6 +96,29 @@ export type Fenced = 'fenced';
 const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
 const SETTLED = "status IN ('applied', 'cancelled', 'parked')";
 const MACHINE_ROW = `origin LIKE '${MACHINE_ORIGIN}%'`;
+// What a settled row keeps of its brief: a task's title (cancel_task names it) and start time, a retry's references and
+// times. The goal, the context and the owner's message are dropped with the job's progress; the digest stays as the record
+// of what the job was given.
+const TITLE_KEPT = 80;
+// A brief can be unreadable (one an older build's literal replace cut across the JSON's own quotes); it keeps nothing, so
+// neither a settle nor the trim fails on it.
+const settledBrief = (row: Pick<JobRow, 'kind' | 'brief_json'>): string => {
+  try {
+    if (row.kind === 'retry_turn') return JSON.stringify({ ...(JSON.parse(row.brief_json) as RetryBrief), text: '' });
+    const { title, started_at, outside_text } = JSON.parse(row.brief_json) as TaskBrief;
+    return JSON.stringify({ title: title.slice(0, TITLE_KEPT), started_at, ...(outside_text ? { outside_text } : {}) });
+  } catch {
+    return '{}';
+  }
+};
+// The texts a forget names, longest first: redacting a shorter text first would cut a longer one that contains it into a
+// fragment. A stored value carries one when the forget purge job's readback says so: raw, spelled by an escape, or in a decoded
+// JSON string or key.
+const forgetTopics = (texts: readonly string[]) => [...new Set(texts.map(text => text.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+const carriesAny = (topics: readonly string[]) => (value: string | null) => value !== null && topics.some(topic => projectionValueHolds(value, topic));
+type Copies = Pick<JobRow, 'id' | 'status' | 'brief_json' | 'checkpoint_json' | 'result_json'>;
+const copies = (sql: Sql): Copies[] => sql.exec<Copies>('SELECT id, status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray();
+const columns = (row: Copies) => [row.brief_json, row.checkpoint_json, row.result_json];
 type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>;
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
@@ -272,22 +295,28 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return running.map((row) => row.id);
     },
     // The cancellation fence: the token is cleared in the same write that settles the job, so every later call from the
-    // worker is fenced and a result that arrives late is discarded.
+    // worker is fenced and a result that arrives late is discarded. A forget's cancel keeps the brief for the redaction that
+    // follows it in the same call (forget below); the next trim drops the rest.
     cancel(id: string, reason: CancelReason): boolean {
       const now = deps.now();
+      const row = get(id);
+      if (!row || !OPEN.includes(row.status)) return false;
       return sql.exec(
-        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
-         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, now, now, id, ...OPEN,
+        `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, brief_json = ?, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
+         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, reason === 'forgotten' ? row.brief_json : settledBrief(row), now, now, id, ...OPEN,
       ).rowsWritten > 0;
     },
     // A reported job that the owner heard about. Parked jobs settle as parked; the rest as applied. The checkpoint, which
-    // only a resumed attempt needs, and the result, which only the apply turn reads, are dropped once the job is settled:
-    // they hold what the worker read, and a settled row is kept for the console and audit.
+    // only a resumed attempt needs, the result, which only the apply turn reads, and the brief's text are dropped once the
+    // job is settled: they hold what the owner and the worker wrote and read, and a settled row is kept for the console and
+    // audit.
     settle(id: string): boolean {
       const now = deps.now();
+      const row = get(id);
+      if (row?.status !== 'reported') return false;
       return sql.exec(
-        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
-         WHERE id = ? AND status = 'reported'`, now, now, id,
+        `UPDATE task_jobs SET status = CASE WHEN park_reason IS NULL THEN 'applied' ELSE 'parked' END, due_at = NULL, brief_json = ?, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'reported'`, settledBrief(row), now, now, id,
       ).rowsWritten > 0;
     },
     // Runs as the commit of a progress note's delivery: a job that stopped running since writes no row, and the throw rolls
@@ -333,20 +362,43 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       ).toArray()[0];
       return row?.next ?? null;
     },
-    // Owner forget: open jobs whose brief, progress or result carries a forgotten text are cancelled, since their worker
-    // holds a copy. The text itself is redacted from every row by the memory purge, which lists this table among its
-    // literal-redacted stores and reads it back. A purge that ran first leaves its marker where the text was, and that
-    // job's worker still holds the original, so the marker cancels it too.
-    forget(texts: readonly string[]): readonly string[] {
-      const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
-      if (!topics.length) return [];
-      const holds = (value: string | null) => value !== null && (value.includes(FORGOTTEN) || topics.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
-      return sql.exec<Pick<JobRow, 'id' | 'brief_json' | 'checkpoint_json' | 'result_json'>>(
-        `SELECT id, brief_json, checkpoint_json, result_json FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
-      ).toArray().filter(row => [row.brief_json, row.checkpoint_json, row.result_json].some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);
+    // Owner forget: open jobs whose brief, progress or result carries a forgotten text are cancelled, since their worker holds
+    // a copy; then the text leaves the brief, progress and result of every row. Only after the cancel, so no open job is ever
+    // rewritten under its worker. A settled copy the literal redaction cannot rewrite (an escape that spells the text, a key)
+    // is dropped from the row: a settled row needs none of it. Answers the jobs cancelled, for the caller to fence, and how
+    // many copies remain.
+    forget(texts: readonly string[]): Readonly<{ cancelled: readonly string[]; remaining: number }> {
+      const topics = forgetTopics(texts);
+      if (!topics.length) return { cancelled: [], remaining: 0 };
+      const holds = carriesAny(topics);
+      const cancelled = copies(sql).filter(row => OPEN.includes(row.status) && columns(row).some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);
+      const redact = (text: string) => topics.reduce((value, topic) => replaceLiteralText(value, topic, FORGOTTEN), text);
+      const rewrite = (value: string) => {
+        let parsed: unknown;
+        try { parsed = JSON.parse(value); } catch { return redact(value); }
+        return JSON.stringify(parsed, (_key, leaf: unknown) => (typeof leaf === 'string' ? redact(leaf) : leaf));
+      };
+      for (const row of copies(sql)) {
+        for (const column of ['brief_json', 'checkpoint_json', 'result_json'] as const) {
+          const value = row[column];
+          if (!holds(value)) continue;
+          const next = rewrite(value!);
+          const kept = holds(next) && !OPEN.includes(row.status) ? (column === 'brief_json' ? '{}' : null) : next;
+          sql.exec(`UPDATE task_jobs SET ${column} = ? WHERE id = ?`, kept, row.id);
+        }
+      }
+      const remaining = copies(sql).reduce((count, row) => count + columns(row).filter(holds).length, 0);
+      return { cancelled, remaining };
     },
-    // TTL sweep: the owner's settled rows past the newest TASK_SETTLED_KEPT are dropped, and machine rows past their own.
+    // TTL sweep: a settled row still holding its whole brief (a forget's cancel, a row settled before briefs were dropped)
+    // keeps only what a settled row keeps; the owner's settled rows past the newest TASK_SETTLED_KEPT are dropped, and machine
+    // rows past their own.
     trim(): number {
+      const whole = sql.exec<Pick<JobRow, 'id' | 'kind' | 'brief_json'>>(
+        `SELECT id, kind, brief_json FROM task_jobs WHERE ${SETTLED}
+           AND (NOT json_valid(brief_json) OR json_type(brief_json, '$.goal') IS NOT NULL OR (kind = 'retry_turn' AND json_extract(brief_json, '$.text') <> ''))`,
+      ).toArray();
+      for (const row of whole) sql.exec('UPDATE task_jobs SET brief_json = ? WHERE id = ?', settledBrief(row), row.id);
       const owner = sql.exec(
         `DELETE FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW}
            AND id NOT IN (SELECT id FROM task_jobs WHERE ${SETTLED} AND NOT ${MACHINE_ROW} ORDER BY settled_at DESC LIMIT ?)`, TASK_SETTLED_KEPT,
@@ -359,6 +411,27 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
   };
 };
 export type JobBook = ReturnType<typeof jobBook>;
+// Whether this storage has a job book, asked without opening one (which creates the table).
+export const jobsKept = (sql: Sql): boolean =>
+  sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray().length > 0;
+// Whether a forget of these texts would change the job book, asked without opening one: the forget tool counts a task that
+// carries the text as memory it touched.
+export const jobsCarry = (sql: Sql, texts: readonly string[]): boolean => {
+  const topics = forgetTopics(texts);
+  return topics.length > 0 && jobsKept(sql) && copies(sql).some(row => columns(row).some(carriesAny(topics)));
+};
+
+// The forget purge job's store for task jobs (memory/forget-purge.ts). One transaction cancels the open jobs that carry a text,
+// fences their attempts and withdraws their errands' cards (cancelled), and redacts every row; a fence that throws rolls it
+// all back, so the job's retry cancels and fences again. Storage with no job book has nothing to clean and gets none made.
+export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(work: () => T) => T; book: () => JobBook; cancelled: (id: string) => void }>): ForgetStore => ({
+  name: 'task_jobs',
+  run: (texts) => (!jobsKept(deps.sql) ? 0 : deps.transaction(() => {
+    const { cancelled, remaining } = deps.book().forget(texts);
+    for (const id of cancelled) deps.cancelled(id);
+    return remaining;
+  })),
+});
 
 export const taskBrief = (row: JobRow): TaskBrief => JSON.parse(row.brief_json) as TaskBrief;
 export const retryBrief = (row: JobRow): RetryBrief => JSON.parse(row.brief_json) as RetryBrief;

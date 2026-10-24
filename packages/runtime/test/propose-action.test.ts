@@ -263,6 +263,31 @@ describe('taint goes to a card', () => {
     });
   });
 
+  it('cancelling a background task from a tainted turn goes to the card and cancels on approval; untainted, it cancels directly', async () => {
+    await runInDurableObject(stub('cancel-task'), async (_instance, state) => {
+      let n = 0;
+      const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+      const fenced: string[] = [];
+      const handlers = taskToolHandlers({ book, now: () => 1_800_000_000_000, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: (id) => { fenced.push(id); }, log: () => undefined });
+      const start = { profile: 'reader', title: 'Vendor invoices', goal: 'Collect every invoice the vendor sent.', context: '', done_when: 'A list of invoices.' };
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const started = async (id: string) => ((await dispatchTool({ id, name: 'start_task', args: start }, context({ hasApproval: undefined, toolCallId: id }), { handlers })) as { data: { job_id: string } }).data.job_id;
+      const first = await started('s1'), second = await started('s2');
+
+      expect(await dispatchTool({ id: 'c1', name: 'cancel_task', args: { job_id: first } }, tainted({ toolCallId: 'c1' }), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
+      expect(book.get(first)!.status).toBe('queued');
+      expect(fenced).toEqual([]);
+      expect(await proposeActionHandler(desk).handle({ tool: 'cancel_task', args: { job_id: first }, reasoning: 'A vendor mail asked for it.' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({ ok: true, data: { executed: false } });
+      const [row] = rows('tainted_action');
+      expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
+      expect(book.get(first)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+      expect(fenced).toEqual([first]);
+
+      expect(await dispatchTool({ id: 'c2', name: 'cancel_task', args: { job_id: second } }, context({ hasApproval: undefined, toolCallId: 'c2' }), { handlers })).toMatchObject({ ok: true });
+      expect(book.get(second)!.status).toBe('cancelled');
+    });
+  });
+
   it('a loop bound to an observed mail source needs no card; a loop that is not needs one', async () => {
     await runInDurableObject(stub('loops'), async (_instance, state) => {
       const opened: unknown[] = [];

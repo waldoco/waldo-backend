@@ -1,17 +1,17 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
 import { persistInboxWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { jobBook, type JobRow } from '../src/tasks/jobs';
-import { taskWorkerName } from '../src/tasks/worker-do';
+import { TASK_ALARM_SLICE_MS, taskWorkerName } from '../src/tasks/worker-do';
 
 // The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
 // worker's alarm runs the attempt and reports over RPC, and the owner's next alarm tells the owner once. The model and
 // Telegram are the only fakes.
-const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0 }));
+const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0, skew: 0 }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string, params?: unknown) => {
@@ -21,11 +21,14 @@ vi.mock('../src/channels/telegram-api', async load => ({
 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.bodies.push(JSON.stringify(body));
+  // A worker's model call that takes this long: the clock moves past the attempt's alarm slice.
+  if (seen.skew > 0 && JSON.stringify(body).includes('"finish_task"')) { vi.setSystemTime(Date.now() + seen.skew); seen.skew = 0; }
   if (seen.down > 0) { seen.down -= 1; throw Object.assign(new Error('provider down'), { status: 503 }); }
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   return { id: 'fixture', output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [] };
 } }; } }));
-beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; });
+beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; seen.skew = 0; });
+afterEach(() => { vi.useRealTimers(); });
 
 const NAME = 'task-worker-e2e';
 const owner = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(NAME));
@@ -250,4 +253,37 @@ it('one owner\'s provider failures open only that owner\'s breaker: another owne
     expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(false);
   });
   expect(seen.bodies.length).toBeGreaterThan(before);
+}, 30_000);
+
+it('an attempt that outlasts its alarm slice hands over to a fresh alarm of the same worker and finishes there', async () => {
+  const name = 'task-slice-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const workers = (env as unknown as TelegramWebhookEnv).TASK_WORKER_DO!;
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+  const ticket = await runInDurableObject(stub, async (_instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'slice-1', origin: 'tg-1', surface: 'telegram', brief: { ...BRIEF, effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    return book.startAttempt(job.id)!;
+  });
+  const worker = workers.get(workers.idFromName(taskWorkerName(stub.id.toString(), ticket)));
+  // The first round's model call runs past the slice; its step is checkpointed and the attempt continues on a new alarm.
+  seen.skew = TASK_ALARM_SLICE_MS + 60_000;
+  seen.outputs.push(fn('get_tasks', {}), fn('finish_task', RESULT), []);
+  await worker.start({ owner: stub.id.toString(), ticket });
+  const handed = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.checkpoint_seq === 1);
+  expect(handed).toMatchObject({ status: 'running', attempt: 1, crashes: 0, checkpoint_seq: 1 });
+  await runInDurableObject(worker, async (_instance, state) => {
+    expect([...state.storage.kv.list()].map(([key]) => key)).toEqual(['task_worker_ticket_v1']);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+  });
+  // The next alarm of the same worker resumes the attempt from that checkpoint and reports.
+  expect(await runDurableObjectAlarm(worker)).toBe(true);
+  const reported = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status !== 'running');
+  expect(reported).toMatchObject({ attempt: 1, crashes: 0, outcome: 'done' });
+  const resumed = seen.bodies.filter(body => body.includes('"finish_task"'));
+  expect(resumed).toHaveLength(2);
+  expect(resumed[1]).toContain('get_tasks');
+  await runInDurableObject(worker, async (_instance, state) => { expect([...(await state.storage.list()).keys()]).toEqual([]); });
+  await runInDurableObject(stub, async (_instance, state) => { await state.storage.deleteAlarm(); });
 }, 30_000);

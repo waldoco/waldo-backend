@@ -322,7 +322,7 @@ describe('applying a heartbeat job', () => {
       await h.tick(NOW);
       const job = h.jobs()[0]!;
       const ticket = h.book.startAttempt(job.id)!;
-      expect(h.book.forget(['Asha'])).toEqual([job.id]);
+      expect(h.book.forget(['Asha'])).toEqual({ cancelled: [job.id], remaining: 0 });
       expect(h.book.report(ticket, RESULT, { rounds: 1, costUsd: 0 })).toBe('fenced');
       const a = applying(h);
       await a.lane();

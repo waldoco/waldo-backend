@@ -3,6 +3,7 @@ import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimS
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
+import { jobsCarry } from '../../tasks/jobs';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../dispatcher';
 
@@ -18,7 +19,8 @@ type Dependencies = Readonly<{
   conversationRef: string;
   now?: () => Date;
   transaction?<T>(work: () => T): T;
-  hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
+  // Resolves with how many texts are still being cleaned, when it knows.
+  hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<Readonly<{ pending: number }> | void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
@@ -112,28 +114,37 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);
         }
-        for (const claim of selected.values()) { texts.add(claim.text); if (claim.origin === 'owner') texts.add(claim.evidence); }
+        // Only what the owner named purges the claims table, deleting the derived memory that carries it. The forget removes
+        // exactly the selected claims: their sentences and evidence may be repeated or cited by other claims, so they only
+        // leave the transcript and the stores outside the table.
+        const purged = [...texts];
+        const words = [...selected.values()].flatMap(claim => claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]);
+        for (const word of words) texts.add(word);
+        // With no claim selected, earlier chat the episode index holds counts as memory touched; the owner's current message,
+        // which always names the topic, does not. Read before the commit, which redacts both.
+        const current = new Set(turn ? [turn.current.text, ...ownerParts(turn.current)] : []);
+        const inHistory = selected.size === 0 && deps.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n > 0
+          && deps.sql.exec<{ text: string }>('SELECT text FROM episodes').toArray().some(row => !current.has(row.text) && purged.some(text => carriesTopic(row.text, text)));
+        // A background task that carries it counts too: the purge job cancels the task and redacts its row.
+        const inTasks = selected.size === 0 && jobsCarry(deps.sql, purged);
         await ready(ctx);
-        // Hide retained history before deleting the only claim-to-source link. A failed
-        // cleanup is a failed tool, not an invented completion receipt.
-        await deps.hideHistory([...texts], ctx); await ready(ctx);
-        let incomplete = false, touched = false;
+        let touched = false; let deletedWith: readonly number[] = [];
+        // Custody before destruction: the purge records the texts in custody, then deletes the claims and cleans the claims
+        // table and its derived rows, all in one commit. The stores outside it are cleaned by the forget purge job, handed every
+        // text after the commit; until it settles, the forget barrier keeps them out of the model's view.
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
-          // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
-          // A purge that cannot verify clean leaves the pending row in place and this call reports incomplete; a topic row is closed only by a verified purge.
-          const topics = args.topic ? [args.topic] : [], ids = [...selected.keys()];
-          if (ids.length || topics.length) {
-            const purge = store.purge(ids, now(), topics);
-            const counts = purge.receipt; touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
-            if (purge.ready) store.settle(ids, topics); else incomplete = true;
-          }
-          if (args.topic && !incomplete) for (const held of store.pendingTopics()) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
+          const purge = store.purge([...selected.keys()], now(), purged, words), counts = purge.receipt;
+          deletedWith = purge.deletedClaims;
+          touched = inHistory || inTasks || [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
-        if (incomplete) return fail('Memory cleanup could not be verified. The topic stays recorded and hidden from recall until a forget completes with verified cleanup.');
+        // The commit above already deleted the claims and took custody of every text, so the forget holds even if cleaning
+        // fails here: the barrier keeps the texts out of the model's view, and the purge job and each turn retry the cleaning.
+        const cleaning = await deps.hideHistory([...texts], ctx).catch(() => undefined); await ready(ctx);
+        const cleaned = cleaning?.pending === 0;
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
@@ -141,7 +152,10 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const history = swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        // A named topic or span also deletes other claims that carry it (aliases and other messages included), so the receipt
+        // lists those beside the selected ones.
+        const removed = [...new Set([...selected.keys(), ...deletedWith])].sort((a, b) => a - b);
+        return success({ removed_ids: removed, scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running', scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
       } },
   ];
 };

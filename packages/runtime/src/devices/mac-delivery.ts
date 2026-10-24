@@ -4,6 +4,8 @@ import { macResultPayload } from './mac-wire';
 import { sha256Hex } from './signing';
 export const MAC_FOLLOWUP_RETRY_MS = 60_000;
 export const MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS = 15 * 60_000;
+// The delivery outbox id of a Mac follow-up: the prefix, then the inbox row id.
+export const MAC_FOLLOWUP_RECORD_PREFIX = 'device-';
 export type MacDelivery = {kind:'result'|'session_event';request_id:string;device_id:string;owner_id:string;payload:Record<string,unknown>};
 export function macDelivery(value:unknown):value is MacDelivery {
  if(!record(value)||!exact(value,['kind','request_id','device_id','owner_id','payload'])||!identifier(value.request_id)||!identifier(value.device_id)||!identifier(value.owner_id)||!record(value.payload)||new TextEncoder().encode(canonicalJson(value)).length>8192)return false;

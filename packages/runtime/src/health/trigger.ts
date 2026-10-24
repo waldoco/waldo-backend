@@ -229,10 +229,11 @@ const mentions = (text: string, words: readonly string[]): boolean => {
 const zoneLine = (zones: Zones): string =>
   `recovery ${zones.recovery ?? 'unavailable'}, form ${zones.form ?? 'unavailable'}, load ${zones.load ?? 'unavailable'}`;
 
-export const HEALTH_TRIGGER_FORMAT = { name: 'health_proposal', schema: { type: 'object', additionalProperties: false, required: ['kind', 'action', 'item', 'start', 'end', 'title', 'notify_guests', 'reason'], properties: {
+export const HEALTH_TRIGGER_FORMAT = { name: 'health_proposal', schema: { type: 'object', additionalProperties: false, required: ['kind', 'action', 'item', 'start', 'end', 'title', 'block', 'notify_guests', 'reason'], properties: {
   kind: { type: 'string', enum: ['propose', 'no_op'] },
   action: { type: ['string', 'null'], enum: ['move', 'cancel', 'create', null] },
   item: { type: ['string', 'null'] }, start: { type: ['string', 'null'] }, end: { type: ['string', 'null'] }, title: { type: ['string', 'null'] },
+  block: { type: ['string', 'null'], enum: ['rest', 'deep_work', null] },
   notify_guests: { type: ['boolean', 'null'] }, reason: { type: 'string' },
 } } };
 
@@ -271,9 +272,9 @@ export const healthTriggerPrompt = (input: Readonly<{
     JSON.stringify(items),
     `How the owner answered recent health proposals: ${answered || 'none yet'}.`,
     earlier.length ? `Earlier on ${localIso(now, timezone).slice(0, 10)} you proposed: ${JSON.stringify(earlier)}. Do not put up again a change the owner is still deciding on or has turned down; propose something new only when it clearly helps more.` : `Nothing proposed earlier on ${localIso(now, timezone).slice(0, 10)}.`,
-    'Decide whether this change meets a coming decision where waiting would make the day worse: a hard meeting, a long drive, a deadline. If one change to the plan would clearly help, propose exactly one: move or cancel one listed event by its ref, or create one block of protected time. Otherwise return no_op. A proposal the owner skips costs their trust, so when it is not clearly worth an interruption, return no_op.',
+    'Decide whether this change meets a coming decision where waiting would make the day worse: a hard meeting, a long drive, a deadline. If one change to the plan would clearly help, propose exactly one: move or cancel one listed event by its ref, or create one block of protected time, as rest (a break, recovery or a lighter stretch) or deep_work (focused work). Otherwise return no_op. A proposal the owner skips costs their trust, so when it is not clearly worth an interruption, return no_op.',
     'Never diagnose or alarm, and never mention medicine. The reason is one short line for the owner, at most 200 characters, and may use the zone words. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it (for example "Focus block" or "Buffer"). Times are owner-local ISO (YYYY-MM-DDTHH:MM). notify_guests says whether Google should email the guests of a moved or cancelled event.',
-    'Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), notify_guests (true or false when the event has guests, else null), reason (empty for no_op).',
+    'Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), block (rest or deep_work for a create, else null), notify_guests (true or false when the event has guests, else null), reason (empty for no_op).',
   ].join('\n\n');
 };
 
@@ -315,13 +316,14 @@ export const parseHealthDecision = (raw: string, items: readonly ComingItem[], n
   if (value.action === 'create') {
     const title = typeof value.title === 'string' ? value.title.trim() : '';
     if (!title || title.length > TITLE_MAX) throw new Error('invalid health decision title');
-    return propose({ action: 'create', title, ...span(), reason });
+    return propose({ action: 'create', title, ...span(), reason, ...(value.block == null ? {} : { block: value.block }) });
   }
   if (value.action !== 'move' && value.action !== 'cancel') throw new Error('invalid health decision action');
   const item = typeof value.item === 'string' ? refsOf(items).get(value.item) : undefined;
   if (!item || item.kind !== 'event') throw new Error('invalid health decision item');
   const notify = item.guests ? { send_updates: value.notify_guests === true ? 'all' as const : 'none' as const } : {};
-  return value.action === 'move' ? propose({ action: 'move', event_id: item.id, ...span(), reason, ...notify }) : propose({ action: 'cancel', event_id: item.id, reason, ...notify });
+  const block = value.block == null ? {} : { block: value.block };
+  return value.action === 'move' ? propose({ action: 'move', event_id: item.id, ...span(), reason, ...notify, ...block }) : propose({ action: 'cancel', event_id: item.id, reason, ...notify, ...block });
 };
 
 // The calendar fields that reach Google carry no health word from this run. Egress is a hard boundary, so a hit refuses

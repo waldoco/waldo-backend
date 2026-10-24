@@ -33,6 +33,8 @@ const world = vi.hoisted(() => ({
   access: 'granted', scoresAccess: true, decision: '' as string, latencyMs: 0,
   // How many update records the sweep had saved each time the health row was read.
   recorded: null as null | (() => number), recordedAtRead: [] as number[],
+  // The kind of each event Waldo created, as the approval handed it to Google.
+  created: [] as string[],
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -41,6 +43,22 @@ vi.mock('../src/connectors/google', async load => {
     events: async () => world.events,
     calendarPage: async () => ({ events: world.events, next_page_token: null, fetched_count: world.events.length, account, observed_at: new Date().toISOString() }),
     event: async (id: string) => world.events.find(event => event.id === id) ?? null,
+    // Waldo's rest blocks as the connector finds them by their private kind, with what else falls inside them.
+    restBlocks: async (_calendarId: string, from: string, to: string) => {
+      const within = (e: { start: string; end: string }, s: string, t: string) => Date.parse(e.end) > Date.parse(s) && Date.parse(e.start) < Date.parse(t);
+      const tagged = world.events as (CalendarItem & { block?: string })[];
+      const blocks = tagged.filter(e => e.block === 'rest' && within(e, from, to));
+      return { blocks: blocks.map(({ start, end }) => ({ start, end })), others: tagged.filter(e => !blocks.includes(e) && blocks.some(b => within(e, b.start, b.end))).map(({ start, end, all_day }) => ({ start, end, all_day })) };
+    },
+    // Google as Waldo's own writes leave it: the new event is busy, carries the kind it was tagged with, and is seen as a change.
+    createEvent: async (input: { id?: string; title: string; start: string; end: string; block?: 'rest' | 'deep_work' }) => {
+      world.created.push(input.block ?? 'none');
+      const item = { id: input.id ?? `gcal-new-${world.created.length}`, title: input.title, start: input.start, end: input.end, all_day: false, etag: 'n1', ...(input.block ? { block: input.block } : {}) } as CalendarItem;
+      world.events.push(item);
+      world.busy.push({ start: new Date(Date.parse(input.start)).toISOString(), end: new Date(Date.parse(input.end)).toISOString() });
+      world.changed.push({ ...item, status: 'confirmed', created: new Date().toISOString() });
+      return item;
+    },
     // Google answers with what changed since the last look, so each change is seen once.
     changedEvents: async () => { world.trace.push('calendar_changes'); const seen = world.changed; world.changed = []; return seen; },
     newMail: async () => [],
@@ -87,7 +105,7 @@ const pillars = ['recovery', 'form', 'weight'] as const;
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; world.latencyMs = 0; world.recorded = null; world.recordedAtRead = []; printed.length = 0;
+  world.rows.clear(); world.trace = []; world.requests = []; world.changed = []; world.events = []; world.access = 'granted'; world.scoresAccess = true; world.latencyMs = 0; world.recorded = null; world.recordedAtRead = []; world.created = []; printed.length = 0;
   // A month of one to two hours of meetings a day, and today's hour at 10:00 so far.
   world.busy = Array.from({ length: 31 }, (_, i) => block(addDays(TODAY, -i), 10, i === 0 ? 1 : 1 + (i % 3) * 0.5));
   world.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T11:30', end: '2026-10-21T12:30', title: 'Focus block', notify_guests: null, reason: 'Load is peaking with the offsite; an hour clear before it keeps the day steady.' });
@@ -135,9 +153,10 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(({ name }) => [name, state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray()]),
   [...state.storage.kv.list()],
 ]);
-type Runtime = { ready: Promise<unknown>; updateCheck(trace: string): Promise<void> };
+type Desk = { propose(args: Record<string, unknown>, turnKey?: string): Promise<string>; decide(id: string, action: 'a', trace: string, via?: { surface: string }): Promise<{ toast: string }> };
+type Runtime = { ready: Promise<unknown>; updateCheck(trace: string): Promise<void>; desk: Desk };
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): Runtime };
-const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>; pass(): Promise<void>; upload(): Promise<void> }) => Promise<void>, google = true) => {
+const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>; pass(): Promise<void>; upload(): Promise<void>; desk(): Desk }) => Promise<void>, google = true) => {
   const doName = `health-replan-do-${sequence++}`;
   let sweeps = 0;
   world.trace = [];
@@ -160,7 +179,7 @@ const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>
       if (open) jobs.cancel(open.id, 'owner');
       const runtime = owner.setup('telegram'); await runtime.ready; await runtime.updateCheck(`update:${sweeps++}:${Date.now()}`);
     };
-    try { await work({ state, sweep, pass, upload }); } finally { await state.storage.deleteAlarm(); }
+    try { await work({ state, sweep, pass, upload, desk: () => owner.setup('app').desk }); } finally { await state.storage.deleteAlarm(); }
   });
 };
 const entry = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM schedule WHERE id = ?', id).toArray()[0] ?? null;
@@ -347,4 +366,34 @@ describe('Weight follows the day', () => {
       expect(calendarLogs()).toEqual([]);
     }, false);
   });
+
+  // The owner's ruling: a rest block Waldo put in leaves Weight where it was; a deep-work block counts like any meeting.
+  // One fixture and one approved three-hour block, with only its kind different.
+  const approvedBlock = (kind: 'rest' | 'deep_work') => withOwner(async o => {
+    await morning(o);
+    const weight = () => (world.rows.get(TODAY)!.weight as Record<string, unknown>).zone;
+    const before = weight();
+    vi.setSystemTime(NOW + 10 * 60_000);
+    const desk = o.desk();
+    const id = await desk.propose({ action: 'create', title: 'Protected time', start: '2026-10-21T14:00:00+05:30', end: '2026-10-21T17:00:00+05:30', reason: 'Keep the afternoon clear.', block: kind }, 'turn-block');
+    expect((await desk.decide(id, 'a', 'approve-block', { surface: 'app' })).toast).toBe('Done');
+    expect(world.created).toEqual([kind]);
+    await o.sweep();
+    expect(calendarLogs()).toEqual([{ ok: true, code: 'asked' }]);
+    vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
+    await o.pass();
+    await o.pass();
+    const writes = world.trace.filter(step => step.startsWith(`context_write:${TODAY}`));
+    const evaluations = world.trace.filter(step => step === 'health_evaluation').length;
+    if (kind === 'rest') {
+      expect([writes, weight(), evaluations, entry(o.state, HEALTH_TRIGGER_ID)]).toEqual([[`context_write:${TODAY}:none`], before, 0, null]);
+    } else {
+      expect([writes, evaluations]).toEqual([[`context_write:${TODAY}:weight`], 1]);
+      expect(weight()).not.toBe(before);
+    }
+    for (const leak of LEAKS) for (const [where, text] of [['tables and storage', dump(o.state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
+  });
+
+  it('leaves Weight where it was for an approved rest block, so nothing is evaluated again', () => approvedBlock('rest'));
+  it('raises Weight for an approved deep-work block and evaluates that change once', () => approvedBlock('deep_work'));
 });

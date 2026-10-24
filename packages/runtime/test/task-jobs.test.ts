@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
-import { jobBook, jobCheckpoint, jobResult, JOB_START_GRACE_MS, TASK_LEASE_MS, TASK_MAX_CRASHES, type CreateJob, type TaskBrief } from '../src/tasks/jobs';
+import { jobBook, jobCheckpoint, jobResult, JOB_START_GRACE_MS, TASK_LEASE_MS, TASK_MAX_CRASHES, taskBrief, type CreateJob, type RetryBrief, type TaskBrief } from '../src/tasks/jobs';
 
 // The job book on real Durable Object SQLite. Each case drives one recovery path of the job protocol and checks that the
 // row ends where the protocol says, and that a call from the wrong attempt changes nothing.
@@ -152,7 +152,53 @@ describe('task job book', () => {
     });
   });
 
-  it('owner forget mid-job: open jobs carrying the text are cancelled, others keep running, settled rows wait for the purge', async () => {
+  it('a settled or cancelled job keeps only its title and times of the brief: the goal, context and the owner\'s message go', async () => {
+    await withBook((book) => {
+      const outside = { ...brief, context: 'Asha\'s mail says the Lisbon deal closes Friday.', outside_text: true as const };
+      const reported = book.create(job('k1', { brief: outside })).job;
+      book.report(book.startAttempt(reported.id)!, result, spend);
+      expect(book.settle(reported.id)).toBe(true);
+      const cancelled = book.create(job('k2', { taint: 'external' })).job;
+      expect(book.cancel(cancelled.id, 'owner')).toBe(true);
+      const retryBrief: RetryBrief = { message_ref: 'm-1', text: 'Move my 4pm with Asha to 5pm.', conversation_ref: 'chain-1', said_at: 1_800_000_000_000, promised_by: 1_800_001_800_000 };
+      const retry = book.create(job('k3', { kind: 'retry_turn', profile: null, brief: retryBrief })).job;
+      expect(book.park(retry.id, 'deadline')).toBe(true);
+      expect(book.settle(retry.id)).toBe(true);
+      for (const before of [reported, cancelled, retry]) {
+        const after = book.get(before.id)!;
+        expect(after.brief_json).not.toMatch(/Lisbon|unanswered client mail|company domains|4pm/);
+        expect(after).toMatchObject({ profile: before.profile, brief_digest: before.brief_digest, origin: before.origin, taint: before.taint });
+      }
+      expect(JSON.parse(book.get(reported.id)!.brief_json)).toEqual({ title: brief.title, started_at: brief.started_at, outside_text: true });
+      expect(taskBrief(book.get(cancelled.id)!).title).toBe(brief.title);
+      expect(JSON.parse(book.get(retry.id)!.brief_json)).toEqual({ ...retryBrief, text: '' });
+    });
+  });
+
+  it('a forget cancels the job and redacts its brief in the same call; the next trim drops the rest', async () => {
+    await withBook((book) => {
+      const { job: row } = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } }));
+      expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [row.id], remaining: 0 });
+      expect(book.get(row.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(taskBrief(book.get(row.id)!).context).toBe('Asha said "the [forgotten]" is off.');
+      book.trim();
+      expect(JSON.parse(book.get(row.id)!.brief_json)).toEqual({ title: brief.title, started_at: brief.started_at });
+      expect(book.get(row.id)!.brief_digest).toBe(row.brief_digest);
+    });
+  });
+
+  it('a settled brief left unreadable keeps none of it after the trim', async () => {
+    await withBook((book, _clock, sql) => {
+      const { job: row } = book.create(job());
+      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Monday\",\"goal', 'Monday') WHERE id = ?", row.id);
+      expect(() => JSON.parse(book.get(row.id)!.brief_json)).toThrow();
+      expect(book.forget(['unanswered client mail'])).toEqual({ cancelled: [row.id], remaining: 0 });
+      book.trim();
+      expect(book.get(row.id)).toMatchObject({ status: 'cancelled', brief_json: '{}' });
+    });
+  });
+
+  it('owner forget mid-job: open jobs carrying the text are cancelled, others keep running, settled rows stay settled', async () => {
     await withBook((book) => {
       const carrying = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } })).job;
       const other = book.create(job('k2')).job;
@@ -160,28 +206,56 @@ describe('task job book', () => {
       const ticket = book.startAttempt(finished.id)!;
       book.report(ticket, { ...result, findings: [{ text: 'Mail about the lisbon trip.' }] }, spend);
       book.settle(finished.id);
-      expect(book.forget(['Lisbon trip'])).toEqual([carrying.id]);
+      expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [carrying.id], remaining: 0 });
       expect(book.get(carrying.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
       expect(book.get(other.id)!.status).toBe('queued');
       expect(book.get(finished.id)!.status).toBe('applied');
-      expect(book.forget(['  '])).toEqual([]);
+      expect(book.forget(['  '])).toEqual({ cancelled: [], remaining: 0 });
     });
   });
 
-  it('a job the memory purge already rewrote is cancelled too: its worker still holds the text it was given', async () => {
+  it('a forget leaves no copy in the brief, checkpoint or result of any row: a job mid-run, a reported one, and a row an older build settled whole', async () => {
     await withBook((book, _clock, sql) => {
-      const rewritten = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } })).job;
-      const read = book.create(job('k2')).job;
-      const ticket = book.startAttempt(read.id)!;
-      book.checkpoint(ticket, 1, { turns: [turn(1)] }, spend);
-      const other = book.create(job('k3')).job;
-      // What the purge leaves: the literal replaced by its marker, in the brief of one job and the checkpoint of another.
-      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'the Lisbon trip', '[forgotten]') WHERE id = ?", rewritten.id);
-      sql.exec("UPDATE task_jobs SET checkpoint_json = replace(checkpoint_json, 'page 1', '[forgotten]') WHERE id = ?", read.id);
-      expect(book.forget(['Lisbon trip'])).toEqual([rewritten.id, read.id]);
-      expect(book.get(rewritten.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
-      expect(book.get(read.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
-      expect(book.get(other.id)!.status).toBe('queued');
+      const running = book.create(job('k1')).job;
+      book.checkpoint(book.startAttempt(running.id)!, 1, { turns: [{ ...turn(1), output: 'Mail about the Lisbon trip, page 1' }] }, spend);
+      const reported = book.create(job('k2')).job;
+      book.report(book.startAttempt(reported.id)!, { ...result, summary: 'The Lisbon trip is booked.' }, spend);
+      const old = book.create(job('k3')).job;
+      book.cancel(old.id, 'owner');
+      // What a build that kept a settled row's progress and result left behind.
+      sql.exec('UPDATE task_jobs SET brief_json = ?, checkpoint_json = ?, result_json = ? WHERE id = ?',
+        JSON.stringify({ ...brief, title: 'Plan the Lisbon trip' }), JSON.stringify({ turns: [{ ...turn(2), output: 'lisbon trip hotels' }] }),
+        JSON.stringify({ ...result, summary: 'Lisbon trip: two hotels.' }), old.id);
+      const other = book.create(job('k4')).job;
+      const out = book.forget(['Lisbon trip']);
+      expect(out).toEqual({ cancelled: [running.id, reported.id], remaining: 0 });
+      for (const id of [running.id, reported.id]) expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+      expect(book.get(old.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+      for (const column of ['brief_json', 'checkpoint_json', 'result_json']) {
+        expect(JSON.stringify(sql.exec(`SELECT ${column} FROM task_jobs`).toArray()), column).not.toMatch(/lisbon trip/i);
+      }
+      expect(jobCheckpoint(book.get(old.id)!).turns[0]!.output).toBe('[forgotten] hotels');
+      expect(jobResult(book.get(old.id)!)!.summary).toBe('[forgotten]: two hotels.');
+      expect(book.get(other.id)).toMatchObject({ status: 'queued', brief_json: JSON.stringify(brief) });
+    });
+  });
+
+  it('an open job that only carries a marker is not cancelled: no forget rewrites an open job, so the marker is the owner\'s words', async () => {
+    await withBook((book) => {
+      const marked = book.create(job('k1', { brief: { ...brief, context: 'The [forgotten] thread is closed.' } })).job;
+      expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [], remaining: 0 });
+      expect(book.get(marked.id)!.status).toBe('queued');
+    });
+  });
+
+  it('a settled copy the redaction cannot rewrite is dropped from the row, never left behind', async () => {
+    await withBook((book, _clock, sql) => {
+      const { job: row } = book.create(job());
+      book.cancel(row.id, 'owner');
+      // Unreadable JSON that spells the text through an escape: a literal replace cannot reach it.
+      sql.exec('UPDATE task_jobs SET brief_json = ?, result_json = ? WHERE id = ?', '{"title":"the \\u004cisbon trip', '{"summary":"\\u004cisbon trip"', row.id);
+      expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [], remaining: 0 });
+      expect(book.get(row.id)).toMatchObject({ status: 'cancelled', brief_json: '{}', result_json: null });
     });
   });
 

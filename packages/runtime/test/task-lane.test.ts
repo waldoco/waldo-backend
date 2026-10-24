@@ -225,7 +225,7 @@ describe('the jobs lane', () => {
     await withLane(async ({ book, sent, deps }) => {
       const id = reported(book, 'k1', { ...result, findings: [{ text: 'Asha asked about the Lisbon trip.' }] });
       const lane = deps();
-      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { expect(book.forget(['Lisbon trip'])).toEqual([id]); await lane.deliver(key, trace, text, commit); } });
+      await runJobsLane({ ...lane, deliver: async (key, trace, text, commit) => { expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [id], remaining: 0 }); await lane.deliver(key, trace, text, commit); } });
       expect(sent.size).toBe(0);
       expect(book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
     });
@@ -338,7 +338,7 @@ describe('R-4: the retried turn', () => {
     }
   });
 
-  it('a retry answered on another surface than the message came from says where it was sent, and never that it is in this conversation', async () => {
+  it('a retry that runs on another surface than the message came from names where it was sent and that it cannot see that conversation', async () => {
     await withLane(async ({ book, clock, deps }) => {
       promiseRetry(book, { traceId: 'tg-3', conversationRef: 'telegram-42', surface: 'telegram', text: 'Move my 3pm to Friday', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
       promiseRetry(book, { traceId: 'tg-4', conversationRef: 'telegram-42', surface: 'telegram', text: 'My HRV was 38 ms today, should I train?', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
