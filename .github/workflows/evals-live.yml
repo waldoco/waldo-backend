@@ -68,7 +68,7 @@ jobs:
         env:
           WALDO_EVAL_MODE: live
           WALDO_EVAL_TRIALS: '3'
-          WALDO_EVAL_MAX_CALLS: '3000'
+          WALDO_EVAL_MAX_CALLS: '3200'
           WALDO_EVAL_JUDGE_MODE: split
           OPENAI_API_KEY: ${{ secrets.WALDO_EVAL_OPENAI_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.WALDO_EVAL_ANTHROPIC_KEY }}

@@ -25,6 +25,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   ],
   retiredSpots: [spot(2, 'preference', 'Gym at 7am', 'inferred', 'one turn', 1, '21', 'dismissed'), spot(1, 'pattern', 'Late calls most weeks', 'stated', 'calendar', 4, '22', 'promoted')],
   forgettingSpots: [spot(7, 'fact', 'Old phone number ending 4123', 'stated', 'you said on 19 Sep', 1, '19', 'purging')],
+  forgettingTopics: [{ fingerprint: 'fnv1a:5e1c0a2b', label: 'p·········· (12)', started_at: '2026-09-19T10:00:00Z', stores: [{ name: 'conversation', state: 'done', attempts: 0 }, { name: 'imessage', state: 'pending', attempts: 2 }] }],
   holds: [{ id: 1, kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }],
   nodes: [
     { id: 1, domain: 'work rhythm', label: 'Late calls', summary: 'Calls after 10pm, 2-3 times a week', strength: 0.7, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[1]' },
@@ -39,6 +40,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   ],
   proactivity: { quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' },
   schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true, health_proposals: true },
+  pausedJobs: [{ name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }],
   ledger: 'Open approvals: none\nDone: reminder "drink water" set (daily 09:00)\nReminders:\n- 2026-09-24T09:00 drink water (daily)',
   files: [
     { id: 2, kind: 'document', file_id: 'f2', name: 'blood-panel-sept.pdf', mime: 'application/pdf', size: 482_000, caption: 'can you read this', at: Date.parse('2026-09-23T12:10:00Z') },

@@ -50,6 +50,34 @@ describe('calendar approval from the dashboard', () => {
  });
 });
 
+describe('send approval from the dashboard', () => {
+ const email=(id:string,extra:Record<string,unknown>={})=>({id,kind:'email_send',summary:'x',state:'open' as const,undoable:false,review:{kind:'email_send' as const,to:['sam@example.com'],cc:[],bcc:[],subject:'Friday',body:'See you at 4.'},...extra});
+ const decision=async(revision:string,action:string,id:string)=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision,view:'waiting',request_id:`${action.replace('.','-')}-${id}`,action,id}))f.set(k,v);return f;};
+ it('approves and changes an email or a message the Waiting view showed in full, and nothing else', async () => {
+  const {act,deps}=setup();
+  const approvals=[email('p-mail'),{...email('p-message'),kind:'message_send',review:{kind:'message_send' as const,channel:'telegram',content:'Running late.'}},email('p-long',{state:'review_only'}),email('p-stranded',{state:'unconfirmed'}),email('p-other',{review:{kind:'message_send' as const,channel:'telegram',content:'x'}}),
+   {id:'p-walk',kind:'calendar_change',summary:'x',state:'open' as const,undoable:false,review:{kind:'calendar_change' as const,action:'create' as const,title:'Walk',event_id:null,start:'2026-10-20T10:00:00Z',end:'2026-10-20T10:30:00Z',reason:'asked'}}];
+  deps.view=async()=>({cards:[],proactivity:day.data.proactivity,approvals} as unknown as ConsoleView);
+  const revision=await controlRevision(day);
+  // A send is approved as approval.send, which the step-up table gates; approval.approve stays the calendar decision.
+  for(const [action,id] of [['approval.send','p-long'],['approval.send','p-stranded'],['approval.send','p-other'],['approval.send','p-walk'],['approval.approve','p-mail'],['approval.approve','p-message'],['approval.edit','p-long'],['approval.edit','p-stranded'],['approval.edit','p-other'],['approval.edit','p-walk']]){
+   const refused=await controlAction(await decision(revision,action!,id!),deps);
+   expect({action,id,status:refused.status,body:await refused.json()}).toMatchObject({action,id,status:409,body:{error:'no_longer_eligible'}});
+  }
+  expect(act).not.toHaveBeenCalled();
+  for(const [action,id] of [['approval.send','p-mail'],['approval.edit','p-mail'],['approval.send','p-message'],['approval.edit','p-message'],['approval.approve','p-walk']])expect([action,id,(await controlAction(await decision(revision,action!,id!),deps)).status]).toEqual([action,id,200]);
+  expect((act.mock.calls as unknown as [{action:string;id:string}][]).map(([action])=>[action.action,action.id])).toEqual([['approval.send','p-mail'],['approval.edit','p-mail'],['approval.send','p-message'],['approval.edit','p-message'],['approval.approve','p-walk']]);
+ });
+ it('says what a Change it records: the request, never the draft', async () => {
+  const { approvalControlReceipt } = await import('../src/channels/dashboard-control-actions');
+  expect(approvalControlReceipt({ toast: 'Tell me what to change', message: 'What should I change? (Send email to sam@example.com: "PRIVATE-SUBJECT")' })).toEqual({ state: 'recorded', message: 'Tell Waldo in the chat what to change.' });
+  // A send the desk refused before anything went out is a definite refusal on the console too, never an unknown outcome.
+  for (const [toast, message] of [['Message changed', 'The stored message no longer matches what was approved, so nothing was sent.'], ['Email changed', 'The stored email no longer matches what was approved, so nothing was sent.'],
+   ['Not sent', 'Gmail refused the send, so nothing went out.'], ['Key already used', 'A different message already used this send key, so nothing was sent.'], ['Messaging is not set up', 'Messaging is not set up, so nothing was sent.']] as const)
+   expect(approvalControlReceipt({ toast, message: 'PRIVATE-DRAFT' })).toEqual({ state: 'rejected', message });
+ });
+});
+
 describe('views that list their own actions',()=>{
  const imessage={version:1,view:'imessage',state:'available',csrf:'csrf',data:{actions:['imessage.link'],bridges:[{id:'imb_listed',actions:['imessage.revoke','imessage.verify']}]}};
  const listedSetup=()=>{const rows=new Map<string,unknown>();const act=vi.fn(async():Promise<unknown>=>true);const view=vi.fn(async()=>({cards:[]} as unknown as ConsoleView));

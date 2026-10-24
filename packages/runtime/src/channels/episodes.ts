@@ -1,4 +1,4 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { literalTextRedactor, type ConversationEntry } from '@waldo/contracts';
 import type { ConversationStore } from './conversation-store';
 import type { RunEffectScope } from './run-effect-scope';
 import { localIso, localToEpoch, nextAfter } from './reminders';
@@ -178,6 +178,16 @@ export const consolidationSides = (day: readonly Episode[]) => {
     waldo: texts((episode) => episode.speaker === 'waldo'),
     ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
   };
+};
+
+// A forget's texts out of the episode index, by the shared whole-word rule. The index mirrors the transcript, so it is
+// rewritten in step with it.
+export const scrubEpisodeTexts = (sql: Pick<SqlStorage, 'exec'>, texts: readonly string[], marker: string): void => {
+  const redact = literalTextRedactor(texts, marker);
+  for (const row of sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
+    const text = redact(row.text);
+    if (text !== row.text) sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
+  }
 };
 
 export const NIGHTLY_ID = 'nightly-memory';
