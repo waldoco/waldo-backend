@@ -14,6 +14,8 @@ import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
 import { delegateTaskHandler } from '../src/conversation/subagent';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
+import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
 // tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
@@ -43,7 +45,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; model.respond = undefined; });
 
-const ownerReply = async (name: string, toolSearch: boolean): Promise<LLMRequest> => {
+const ownerReply = async (name: string, toolSearch: boolean, settings: Readonly<Record<string, string>> = {}): Promise<LLMRequest> => {
   model.requests = [];
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-11-04T09:00:00Z') });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -63,7 +65,7 @@ const ownerReply = async (name: string, toolSearch: boolean): Promise<LLMRequest
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'owner@example.test', scopes: [...GOOGLE_CONSENT_SCOPES] }]);
-    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...(toolSearch ? { WALDO_TOOL_SEARCH: 'on' } : {}) });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...(toolSearch ? { WALDO_TOOL_SEARCH: 'on' } : {}), ...settings });
     try {
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: ASKED }) }));
       expect(sent.status).toBe(202);
@@ -191,6 +193,42 @@ describe('the brain tool surface', () => {
     expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
     expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
+  });
+
+  // A worker round sends every tool of its profile, with no tool search: the owner-round budget above does not cover it, so
+  // each profile's round is pinned at its measured size plus a small margin, and growing it is a decision, not drift. The
+  // owner has Drive reads and MCP reads on, and browsing (added as above), so every profile tool is in the round.
+  it('a task worker\'s round stays within the size pinned for its profile', async () => {
+    const mcp = JSON.stringify([{ name: 'gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }]);
+    const request = await ownerReply('tool-surface-worker', false, { DRIVE_READS: '1', MCP_READ_INTENTS: '1', WALDO_MCP_SERVERS: mcp });
+    const owned = [...request.tools!, ...toolDefinitions([browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)])];
+    const PINNED = { reader: { openai: 5_100, anthropic: 4_950 }, errand: { openai: 6_700, anthropic: 6_550 } } as const;
+    const measured: Record<string, { openai: number; anthropic: number }> = {};
+    for (const profile of ['reader', 'errand'] as const) {
+      const tools = owned.filter((tool) => TASK_PROFILE_SPECS[profile].tools.includes(tool.name as never));
+      expect(tools.map((tool) => tool.name).sort(), profile).toEqual([...TASK_PROFILE_SPECS[profile].tools].sort());
+      let sent: LLMRequest['tools'];
+      const ticket = { jobId: `job_${profile}`, attempt: 1, token: 'tok' };
+      const brain: TaskBrainPort = {
+        claim: async () => ({ jobId: ticket.jobId, profile, brief: { title: 'Size', goal: 'Measure.', context: '', done_when: 'Now.', effort: 'standard', timezone: 'UTC', started_at: 0 }, tools, mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 3_600_000, roundsUsed: 0, ownerRef: 'owner-1' }),
+        tool: async () => 'fenced', checkpoint: async () => 'ok', report: async () => 'accepted', heartbeat: async () => true,
+      };
+      await runTaskAttempt(ticket, { brain, sliceEnd: Date.now() + 60_000, model: async ({ tools: round }) => {
+        sent = round ? [...round] : undefined;
+        return { response: { text: '', tool_calls: [{ call_id: 'f', name: 'finish_task', arguments: JSON.stringify({ status: 'done', summary: 'Measured.', findings: [], proposals: [], left: [] }) }] }, event: { trace: 'task:size', hop: 'llm_task', ms: 0, ok: true } };
+      } });
+      expect(sent!.map((tool) => tool.name)).toContain('finish_task');
+      const round = { system: request.system, messages: request.messages, tools: sent };
+      measured[profile] = {
+        openai: Math.round(bytes(openAIVisible((await openAIBody(round)).tools as WireTool[])) / BYTES_PER_TOKEN_EST),
+        anthropic: Math.round(bytes(anthropicVisible((await anthropicBody(round)).tools as WireTool[])) / BYTES_PER_TOKEN_EST),
+      };
+    }
+    console.log(`TASK_WORKER_ROUND ${JSON.stringify(measured)}`);
+    for (const profile of ['reader', 'errand'] as const) {
+      expect(measured[profile]!.openai, `${profile} openai`).toBeLessThanOrEqual(PINNED[profile].openai);
+      expect(measured[profile]!.anthropic, `${profile} anthropic`).toBeLessThanOrEqual(PINNED[profile].anthropic);
+    }
   });
 
   // A round after a search replays the provider's search items, and an OpenAI tool_search_output carries the loaded
