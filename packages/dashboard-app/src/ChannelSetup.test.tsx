@@ -5,7 +5,7 @@ import type { DevicesRecord, IMessageRecord } from './controls-model';
 
 const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repeat(64), revision: 'a'.repeat(64) };
 const bridge = (over: Partial<IMessageRecord['data']['bridges'][number]> = {}): IMessageRecord['data']['bridges'][number] => ({ id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: null, chat: null, observed: false, host_version: 'host-1', actions: ['imessage.verify', 'imessage.revoke'], ...over });
-const imessage = (data: Partial<IMessageRecord['data']> = {}, bridges: IMessageRecord['status']['bridges'] = []): IMessageRecord => ({ ...base, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: null, admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.pair'], bridges: [], ...data }, status: { bridges } });
+const imessage = (data: Partial<IMessageRecord['data']> = {}, bridges: IMessageRecord['status']['bridges'] = []): IMessageRecord => ({ ...base, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: null, admin: false, phone: null, photon: null, phone_on_file: null, actions: ['imessage.link', 'imessage.pair'], bridges: [], ...data }, status: { bridges } });
 const noop = () => {};
 
 describe('iMessage setup', () => {
@@ -28,6 +28,15 @@ describe('iMessage setup', () => {
     expect(html).toContain('Get my Waldo number'); expect(html).toContain('value="+15550000001"'); expect(html).not.toContain('Get an iMessage link code');
     const enrolled = renderToStaticMarkup(<IMessageControls record={imessage({ address: '+16285550100', phone: '+15550000001', actions: ['imessage.enroll', 'imessage.link', 'imessage.pair'] })} busy={false} onAction={noop}/>);
     expect(enrolled).toContain('Your Waldo number is <strong>+16285550100</strong>'); expect(enrolled).not.toContain('Get my Waldo number'); expect(enrolled).toContain('Get an iMessage link code');
+  });
+  it('says a number typed at sign-up is not verified yet and how to verify it, until a code arrives from it', () => {
+    const unverified = renderToStaticMarkup(<IMessageControls record={imessage({ address: '+16285550100', phone_on_file: { phone: '+15550000001', verified: false } })} busy={false} onAction={noop}/>);
+    expect(unverified).toContain('Your number on file, <strong>+15550000001</strong>, is not verified yet.');
+    expect(unverified).toContain('text your link code to Waldo from that number');
+    const verified = renderToStaticMarkup(<IMessageControls record={imessage({ phone_on_file: { phone: '+15550000001', verified: true } })} busy={false} onAction={noop}/>);
+    expect(verified).toContain('Your number on file, <strong>+15550000001</strong>, is verified.');
+    expect(verified).not.toContain('not verified yet');
+    expect(renderToStaticMarkup(<IMessageControls record={imessage()} busy={false} onAction={noop}/>)).not.toContain('number on file');
   });
   it('shows the operator the Photon connection, and nobody else', () => {
     const operator = renderToStaticMarkup(<IMessageControls record={imessage({ admin: true, photon: 'disconnected' })} busy={false} onAction={noop}/>);

@@ -34,9 +34,13 @@ const textFirstFromEnv = (env: WhatsAppWebhookEnv): WhatsAppTextFirst | null => 
 // another caller does not reset this one.
 const TEXT_FIRST_REPLIES = 3;
 const TEXT_FIRST_WINDOW_SECONDS = 3600;
+// Five "waldo CODE" tries per sender per hour, as on iMessage. A redemption from the owner's own number also proves it.
+const LINK_CODE_TRIES = 5;
+const LINK_CODE_WINDOW_SECONDS = 3600;
+const senderKeyOf = async (sender: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.${sender}`)));
 
 const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebhookEnv, textFirst: WhatsAppTextFirst): Promise<string | null> => {
-  const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.${sender}`)));
+  const senderKey = await senderKeyOf(sender);
   if (!(await textFirst.throttle(`walink.${senderKey}`, TEXT_FIRST_REPLIES, TEXT_FIRST_WINDOW_SECONDS))) return null;
   const token = newWhatsAppLinkToken();
   const opened = await textFirst.links.open(sender, await whatsappLinkTokenHash(token));
@@ -222,6 +226,8 @@ export const handleWhatsAppWebhook = async (
       continue;
     }
     deferred.push((async () => {
+      // Past the limit the try is dropped unanswered. Without the directory's throttle there is no directory to redeem in.
+      if (textFirst && !(await textFirst.throttle(`walinkcode.${await senderKeyOf(sender)}`, LINK_CODE_TRIES, LINK_CODE_WINDOW_SECONDS))) return;
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
