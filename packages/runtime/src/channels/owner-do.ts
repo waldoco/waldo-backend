@@ -205,7 +205,7 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
-import { jobBook, type JobBook, type TaskTicket } from '../tasks/jobs';
+import { jobBook, jobsKept, type JobBook, type TaskTicket } from '../tasks/jobs';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -468,16 +468,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     for (const id of this.jobs().forget(texts)) this.tasks.cancelled(id);
   }
 
-  // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book.
-  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return this.tasks.claim(ticket); }
-  async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return this.tasks.tool(ticket, call, canaries); }
+  // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book. Storage with no job
+  // book (an owner erase since the worker started) has no attempt to serve: the call is fenced before the book is opened,
+  // which would make its table again.
+  async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return jobsKept(this.ctx.storage.sql) ? this.tasks.claim(ticket) : 'fenced'; }
+  async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return jobsKept(this.ctx.storage.sql) ? this.tasks.tool(ticket, call, canaries) : 'fenced'; }
   async taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'> {
-    return this.tasks.checkpoint(ticket, seq, turns, events, spend, outcomes);
+    return jobsKept(this.ctx.storage.sql) ? this.tasks.checkpoint(ticket, seq, turns, events, spend, outcomes) : 'fenced';
   }
   async taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): ReturnType<OwnerTaskRpc['taskReport']> {
-    return this.tasks.report(ticket, outcome, events, spend, outcomes);
+    return jobsKept(this.ctx.storage.sql) ? this.tasks.report(ticket, outcome, events, spend, outcomes) : 'fenced';
   }
-  async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return this.tasks.heartbeat(ticket); }
+  async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return jobsKept(this.ctx.storage.sql) && this.tasks.heartbeat(ticket); }
 
   // Binds this owner's WhatsApp to a number, or unbinds it, inside the caller's transactionSync. When the number changes, an
   // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting.

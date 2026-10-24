@@ -337,6 +337,9 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
   };
 };
 export type JobBook = ReturnType<typeof jobBook>;
+// Whether this storage has a job book, asked without opening one (which creates the table).
+export const jobsKept = (sql: Sql): boolean =>
+  sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray().length > 0;
 
 export const taskBrief = (row: JobRow): TaskBrief => JSON.parse(row.brief_json) as TaskBrief;
 export const retryBrief = (row: JobRow): RetryBrief => JSON.parse(row.brief_json) as RetryBrief;
