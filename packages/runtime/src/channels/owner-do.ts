@@ -208,7 +208,7 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
-import { jobBook, jobsKept, type JobBook, type TaskTicket } from '../tasks/jobs';
+import { jobBook, jobsKept, taskJobsForgetStore, type JobBook, type TaskTicket } from '../tasks/jobs';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -463,12 +463,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private taskLog(entry: TurnLogEntry): void {
     try { this.setup(this.taskChannel()).log(entry); }
     catch { console.log(JSON.stringify({ hop: entry.hop, ok: entry.ok, ...(entry.code ? { code: entry.code } : {}), ...(entry.job_id ? { job_id: entry.job_id } : {}) })); }
-  }
-
-  // Owner forget, from every place it runs: an open task whose brief, progress or result carried the text is cancelled and
-  // its worker fenced, since the worker holds its own copy of what it was given.
-  private forgetTasks(texts: readonly string[]): void {
-    for (const id of this.jobs().forget(texts)) this.tasks.cancelled(id);
   }
 
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book. Storage with no job
@@ -901,28 +895,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return new Response(null, { status: 204 });
   }
 
-  // Hides retained copies of forgotten texts in every store a memory forget reaches, and throws when one still holds a copy.
-  // The look-up's forget and withdrawal use it; the memory forget tool goes through the forget purge job, whose forgetStores()
-  // list covers the same stores, so a store added to one is added to the other.
-  private async hideRetainedText(texts: readonly string[], scope?: RunEffectScope): Promise<void> {
-    const storage = this.ctx.storage;
-    scope?.admit();
-    const result = await redactConversationEntries(storage, texts, FORGOTTEN, scope);
-    await redactToolOutputLedger(storage, texts, FORGOTTEN, scope);
-    const mail = redactMailFollowupEntries(storage.kv, texts, FORGOTTEN, scope);
-    const prep = redactCalendarPrepEntries(storage.kv, texts, FORGOTTEN, scope);
-    const reports = redactJobReportEntries(storage.kv, texts, FORGOTTEN, scope);
-    forgetHeldWhatsApp(storage.kv, texts);
-    // A task holding a forgotten text is cancelled and its worker fenced; the purge then redacts the job rows.
-    this.forgetTasks(texts);
-    const cards = forgetWaitingCards(storage.sql, texts, Date.now());
-    const imessage = redactIMessageEntries(storage, texts, FORGOTTEN, scope);
-    const titles = redactThreadTitles(storage.kv, texts, FORGOTTEN, scope);
-    if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
-    // An owner who has not had a turn yet has no episodes table.
-    if (!storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) return;
-    const scrubEpisodes = () => scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
-    if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
+  // Hides retained copies of forgotten texts in every store the forget purge job cleans, and throws when one still holds a
+  // copy. The look-up's forget and withdrawal use it, so they reach exactly what a memory forget reaches.
+  private async hideRetainedText(texts: readonly string[]): Promise<void> {
+    let remaining = 0;
+    for (const store of this.forgetStores()) remaining += await store.run(texts);
+    if (remaining) throw new Error('Memory history cleanup is incomplete');
   }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
@@ -1325,7 +1303,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
-      { name: 'episodes', run: (texts) => { scrubEpisodeTexts(storage.sql, texts, FORGOTTEN); return 0; } },
+      taskJobsForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), book: () => this.jobs(), cancelled: (id) => this.tasks.cancelled(id) }),
+      // An owner who has not had a turn yet has no episodes table.
+      { name: 'episodes', run: (texts) => {
+        if (storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
+        return 0;
+      } },
     ];
   }
 
@@ -3754,7 +3737,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); this.forgetTasks(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
