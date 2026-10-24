@@ -72,6 +72,7 @@ it('revision 1 reads the same bytes whether or not a claim is pinned, and revisi
   await appOwner('app-claim-read', async ctx => {
     const id = seed(ctx, 'fact', 'Lives in Leeds');
     seed(ctx, 'routine', 'Walks after lunch');
+    ctx.state.storage.sql.exec("INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, seen_count) VALUES ('preference', 'Reads before bed', 'waldo_confirmed', 'synthetic note', 'agent', 'active', '2026-10-01', '2026-10-01', 1)");
     const bytes = async (query: string, contract?: string) => (await read(ctx, query, contract)).text();
     const queries = ['memory_view=claims&limit=10', `memory_view=detail&id=memory:claim:${id}`];
     const before = await Promise.all(queries.map(query => bytes(query)));
@@ -83,7 +84,8 @@ it('revision 1 reads the same bytes whether or not a claim is pinned, and revisi
     }
     const listed = appControlProjectionV1Schema.parse(await (await read(ctx, 'memory_view=claims&limit=10', 'controls=2')).json());
     if (listed.view !== 'constellation' || listed.data.memory_view !== 'claims') throw Error('expected claims');
-    expect(listed.data.items.map(item => [item.text, item.pinned])).toEqual([['Lives in Leeds', 'profile'], ['Walks after lunch', null]]);
+    expect(listed.data.items.map(item => [item.text, item.pinned])).toEqual([['Lives in Leeds', 'profile'], ['Walks after lunch', null], ['Reads before bed', null]]);
+    for (const query of queries) expect(await bytes(query)).not.toContain('waldo_confirmed');
   });
 });
 
