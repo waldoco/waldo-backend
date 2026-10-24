@@ -50,7 +50,7 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
     const { handler, reads } = unboundBrowser();
     const offered: Array<readonly string[] | undefined> = [];
     const events: ToolLoopEvent[] = [];
-    const text = await runToolLoop({ handlers: [clock, handler, browseAct], ctx, maxSteps: 25, onTool: (event) => events.push(event), step: s5Model(offered) });
+    const text = await runToolLoop({ handlers: [clock, handler, browseAct], ctx: { ...ctx }, maxSteps: 25, onTool: (event) => events.push(event), step: s5Model(offered) });
     expect(text).toBe('I could not read those pages.');
     expect(reads).toEqual(['https://example.com/page-1']);
     // Both browse tools go; nothing else does.
@@ -64,7 +64,7 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
     const { handler, reads } = unboundBrowser();
     const offered: Array<readonly string[] | undefined> = [];
     await runToolLoop({
-      handlers: [clock, handler, browseAct], ctx, maxSteps: 25,
+      handlers: [clock, handler, browseAct], ctx: { ...ctx }, maxSteps: 25,
       step: async (tools) => {
         offered.push(names(tools));
         return offered.length === 1
@@ -80,7 +80,7 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
     const { handler, reads } = unboundBrowser();
     const events: ToolLoopEvent[] = [];
     await runToolLoop({
-      handlers: [clock, handler], ctx, maxSteps: 25, onTool: (event) => events.push(event),
+      handlers: [clock, handler], ctx: { ...ctx }, maxSteps: 25, onTool: (event) => events.push(event),
       step: async (tools) => (tools?.some((tool) => tool.name === 'browse_page') && events.length === 0
         ? { text: '', tool_calls: [browse(1), browse(2)] }
         : { text: 'Neither page could be read.' }),
@@ -93,7 +93,7 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
   it('keys on the typed code, not the words: another browse failure leaves browsing offered', async () => {
     const { handler, reads } = unboundBrowser({ code: 'rejected', error: 'The selected Cloudflare browser provider is unavailable.' });
     const offered: Array<readonly string[] | undefined> = [];
-    await runToolLoop({ handlers: [clock, handler], ctx, maxSteps: 25, step: s5Model(offered) });
+    await runToolLoop({ handlers: [clock, handler], ctx: { ...ctx }, maxSteps: 25, step: s5Model(offered) });
     expect(reads).toHaveLength(3);
     expect(offered.slice(0, 4).every((tools) => tools?.includes('browse_page'))).toBe(true);
   });
@@ -104,7 +104,7 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
     const { handler } = unboundBrowser();
     const offered: Array<readonly string[] | undefined> = [];
     await runToolLoop({
-      handlers: [rejectedSearch, handler], ctx, maxSteps: 25,
+      handlers: [rejectedSearch, handler], ctx: { ...ctx }, maxSteps: 25,
       step: async (tools) => {
         offered.push(names(tools));
         return offered.length === 1
@@ -117,9 +117,9 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
 
   it('offers browsing again on the next turn, where eligibility decides', async () => {
     const { handler } = unboundBrowser();
-    await runToolLoop({ handlers: [clock, handler], ctx, maxSteps: 25, step: s5Model([]) });
+    await runToolLoop({ handlers: [clock, handler], ctx: { ...ctx }, maxSteps: 25, step: s5Model([]) });
     const offered: Array<readonly string[] | undefined> = [];
-    await runToolLoop({ handlers: [clock, handler], ctx, maxSteps: 25, step: s5Model(offered) });
+    await runToolLoop({ handlers: [clock, handler], ctx: { ...ctx }, maxSteps: 25, step: s5Model(offered) });
     expect(offered[0]).toEqual(['get_context', 'browse_page']);
   });
 });

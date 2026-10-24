@@ -356,6 +356,33 @@ describe('hook registry', () => {
       .rejects.toMatchObject({ toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
   });
 
+  it('after outside content, closes a mail-bound loop directly and sends any other loop close to the card', async () => {
+    const close = (id: string) => ({ event: 'PreToolUse' as const, tool: 'close_loop', args: { id, outcome: 'done' } });
+    const needsCard = { code: 'forbidden', toolError: expect.objectContaining({ code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') }) };
+    const asked: string[] = [];
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: (id) => { asked.push(id); return id === 'o-mail'; } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop' }, ctx);
+    await expect(runHooks('PreToolUse', close('o-mail'), ctx)).resolves.toMatchObject({ tool: 'close_loop' });
+    await expect(runHooks('PreToolUse', close('o-owner'), ctx)).rejects.toMatchObject(needsCard);
+    expect(asked).toEqual(['o-mail', 'o-owner']);
+
+    // A host that never wired the read admits no tainted close; a read that fails admits none either.
+    const unwired = runtimeCtx({ toolArgSourceTaint: 'external' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-unwired' }, unwired);
+    await expect(runHooks('PreToolUse', close('o-mail'), unwired)).rejects.toMatchObject(needsCard);
+    const failing = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: () => { throw new Error('storage gone'); } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-failing' }, failing);
+    await expect(runHooks('PreToolUse', close('o-mail'), failing)).rejects.toMatchObject({ hook: 'autonomy_gate_check', code: 'transient' });
+
+    // The approved replay of a frozen close runs; an untainted turn closes any loop without asking.
+    const approved = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: () => false, approvedTaintedAction: { tool: 'close_loop', args_digest: 'f'.repeat(64) } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-approved' }, approved);
+    await expect(runHooks('PreToolUse', close('o-owner'), approved)).resolves.toMatchObject({ tool: 'close_loop' });
+    const owner = runtimeCtx({ loopIsSourceBound: () => { throw new Error('an untainted close never asks'); } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-loop-untainted' }, owner);
+    await expect(runHooks('PreToolUse', close('o-owner'), owner)).resolves.toMatchObject({ tool: 'close_loop' });
+  });
+
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
     const ctx = runtimeCtx({ trigger: 'brief' });
     await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-schema' }, ctx);
