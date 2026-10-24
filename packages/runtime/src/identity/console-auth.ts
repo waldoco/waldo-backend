@@ -42,8 +42,9 @@ export type ConsoleAuth = Readonly<{
   throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
   // Console sign-in: resolves an existing member only; new console members use the signup flow.
   verify(email: string, code: string, phone?: string, inviteCode?: string): Promise<string | null>;
-  // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite.
-  verifyOrJoin(email: string, code: string, inviteCode: string): Promise<string | null>;
+  // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite. The phone is
+  // kept, unverified, only on a join; an existing member's sign-in never changes the number on file.
+  verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
@@ -182,7 +183,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
     return revoked;
   };
-  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean) => {
+  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '') => {
     const address = email.trim().toLowerCase();
     const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
       if (!response.ok) return null;
@@ -197,7 +198,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
     const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     if (owner || !join || !codeHash) return owner;
-    const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash });
+    const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
     return typeof joined === 'string' && joined.length > 0 ? joined : null;
   };
   return {
@@ -216,7 +217,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       });
     },
     verify: (email, code, _phone, inviteCode = '') => resolveOwner(email, code, inviteCode, false),
-    verifyOrJoin: (email, code, inviteCode) => resolveOwner(email, code, inviteCode, true),
+    verifyOrJoin: (email, code, inviteCode, phone = '') => resolveOwner(email, code, inviteCode, true, phone),
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);

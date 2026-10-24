@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
-import { GoogleError, GoogleTokenError, googleClient, sentCheck, sha256Hex, type GoogleClient } from '../src/connectors/google';
+import { GoogleError, GoogleTokenError, googleClient, sentCheck, type GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 // Synthetic mail only. An approved send is Sent only on Gmail metadata with SENT, our exact Message-ID
 // and the intended thread; these tests separate a send that landed but was not yet searchable, a
@@ -22,8 +23,7 @@ const approve = async (name: string, client: Partial<GoogleClient>, withLedger =
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const effects = withLedger ? ownerEffectLedger(state.storage, () => 1000) : undefined;
     const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => client as GoogleClient, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: (entry: Hop) => { hops.push(entry); }, wait: async () => { waits++; }, ...(effects ? { effects } : {}) });
-    const raw = 'approved bytes';
-    const id = await desk.proposeSendEmail({ to: ['friend@example.test'], subject: 'Hi', body: 'Hello', raw, digest: await sha256Hex(raw), message_id: MESSAGE_ID, ...(threadId ? { thread_id: threadId } : {}) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['friend@example.test'], subject: 'Hi', body: 'Hello', message_id: MESSAGE_ID, ...(threadId ? { thread_id: threadId } : {}) }));
     result = await desk.decide(id, 'a', 'test');
     ledgerState = effects?.get(`approval:${id}:apply`)?.state;
     status = state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;

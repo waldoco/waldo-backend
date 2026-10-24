@@ -9,7 +9,7 @@ describe('the connector OAuth state key', () => {
     expect(oauthStateSecret({ TELEGRAM_WEBHOOK_SECRET: 'telegram-fixture' } as never)).toBeNull();
     expect(oauthStateSecret({})).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(warn.mock.calls[0]![0]))).toEqual({ event: 'oauth_state_secret_missing', effect: 'google_and_mcp_sign_in_off' });
+    expect(JSON.parse(String(warn.mock.calls[0]![0]))).toEqual({ event: 'oauth_state_secret_missing', effect: 'connector_connect_off' });
     warn.mockRestore();
   });
 });

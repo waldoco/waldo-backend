@@ -11,7 +11,7 @@ export type FixtureBridge = {
   expected_subject: string | null; expected_chat_guid: string | null; challenge_hash: string | null; challenge_expires_at: number | null;
   observed: { subject: string; chat: string; at: number } | null; presence_id: string | null; kind: 'owner' | 'shared';
 };
-export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean; email?: string; phone?: string };
+export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean; email?: string; phone?: string; phone_verified?: boolean };
 
 class ClaimedElsewhere extends Error { constructor() { super('presence already linked to another owner'); } }
 
@@ -82,8 +82,12 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
       if (taken && taken.owner !== c.owner) throw new ClaimedElsewhere();
       c.used = true;
       for (const p of presences.values()) if (p.active && (p.provider ?? 'imessage') === a.p_provider && p.owner === c.owner) p.active = false;
+      // As the database does: a code arriving from the number on file verifies it, unless another active owner already has.
+      const number = a.p_provider === 'whatsapp' ? `+${a.p_subject}` : a.p_provider === 'imessage' ? a.p_subject : null, holder = owner(c.owner)!;
+      if (number && /^\+[1-9]\d{6,14}$/.test(number) && holder.phone === number && !holder.phone_verified
+        && !input.owners.some((other) => other.do_name !== holder.do_name && other.state === 'active' && other.phone === number && other.phone_verified)) holder.phone_verified = true;
       const id = crypto.randomUUID(); presences.set(id, { id, owner: c.owner, subject: a.p_subject, active: true, provider: a.p_provider });
-      return owner(c.owner)!.owner_id;
+      return holder.owner_id;
     },
     imessage_redeem_invitation: (a) => {
       const i = invitations.get(a.p_code_hash); if (!i || i.used || i.expires <= Date.now() || i.environment !== a.p_environment) return null;
@@ -140,7 +144,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     imessage_enrollment_read: (a) => {
       const o = owner(a.p_do_name); if (!o || o.state !== 'active') return null;
       const e = enrollments.get(o.do_name);
-      return { email: o.email ?? `${o.do_name}@fixture.invalid`, phone: o.phone ?? null,
+      return { email: o.email ?? `${o.do_name}@fixture.invalid`, phone: o.phone ?? null, phone_verified: o.phone_verified === true,
         enrollment: e && e.environment === a.p_environment ? { phone: e.phone, photon_user_id: e.photon_user_id, assigned_number: e.assigned_number } : null };
     },
     imessage_enrollment_record: (a) => {
