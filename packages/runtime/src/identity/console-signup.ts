@@ -3,6 +3,14 @@ import { linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from
 
 export const SIGNUP_COOKIE = 'waldo_signup';
 export const SIGNUP_TTL_SECONDS = 15 * 60;
+export const SIGNUP_NAME_MAX = 80;
+const E164 = /^\+[1-9]\d{6,14}$/;
+// The name as the owner typed it, with surrounding and repeated spaces folded; null when it is empty, too long, or carries a
+// control character.
+export const signupName = (raw: string): string | null => {
+  const name = raw.replace(/\s+/g, ' ').trim();
+  return name && name.length <= SIGNUP_NAME_MAX && !/[\p{Cc}]/u.test(raw.trim()) ? name : null;
+};
 export type SignupProgress = Readonly<{
   authUser: string | null;
   emailVerified: boolean;
@@ -11,6 +19,7 @@ export type SignupProgress = Readonly<{
   inviteHash: string;
   expires: number;
   phone: string | null;
+  name: string | null;
   phoneVerification: 'not_configured';
   complete: false;
 }>;
@@ -20,7 +29,8 @@ export type SignupAuth = Readonly<{
   sendCode(progress: SignupProgress): Promise<boolean>;
   verifyEmail(progress: SignupProgress, otp: string): Promise<string | null>;
   read(request: Request): Promise<SignupProgress | null>;
-  collectPhone(progress: SignupProgress, phone: string): Promise<string | null>;
+  // Seals the name and phone the owner entered; both are required, and the phone is not verified here.
+  collectContact(progress: SignupProgress, name: string, phone: string): Promise<string | null>;
 }>;
 
 // Readable signed bearer progress, not encrypted, device-bound or server-revocable.
@@ -39,8 +49,7 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
   };
   return {
     async complete(progress, phone) {
-      if (!progress.emailVerified || !progress.authUser || progress.expires <= Math.floor(now() / 1000)
-        || (phone !== '' && !/^\+[1-9]\d{6,14}$/.test(phone))) return null;
+      if (!progress.emailVerified || !progress.authUser || progress.expires <= Math.floor(now() / 1000) || !E164.test(phone)) return null;
       // Distinct admission RPC leaves legacy sign-in existing-owner-only. SQL rechecks
       // confirmed Auth email, identity and exact live invite atomically; retries resolve
       // the same bound owner without replaying an already-consumed email OTP.
@@ -50,7 +59,7 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
     },
     async begin(email, invite) {
       return seal({ authUser: null, emailVerified: false, csrf: crypto.randomUUID(), email: email.trim().toLowerCase(), inviteHash: await linkCodeHash(invite),
-        expires: Math.floor(now() / 1000) + SIGNUP_TTL_SECONDS, phone: null, phoneVerification: 'not_configured', complete: false });
+        expires: Math.floor(now() / 1000) + SIGNUP_TTL_SECONDS, phone: null, name: null, phoneVerification: 'not_configured', complete: false });
     },
     async sendCode(progress) {
       if (progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return false;
@@ -88,18 +97,22 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
       if (!await crypto.subtle.verify('HMAC', hmacKey, bytes, new TextEncoder().encode(`0.signup.${payload}`))) return null;
       try {
         const decoded = atob(payload.replaceAll('-', '+').replaceAll('_', '/'));
-        const p = JSON.parse(new TextDecoder().decode(Uint8Array.from(decoded, c => c.charCodeAt(0)))) as SignupProgress;
+        const sealed = JSON.parse(new TextDecoder().decode(Uint8Array.from(decoded, c => c.charCodeAt(0)))) as SignupProgress;
+        // Progress sealed before sign-up asked for a name carries none.
+        const p = { ...sealed, name: sealed.name ?? null };
         if ((p.authUser !== null && typeof p.authUser !== 'string') || typeof p.csrf !== 'string' || p.csrf.length !== 36 || typeof p.emailVerified !== 'boolean' || p.emailVerified !== (p.authUser !== null) || typeof p.email !== 'string' || !/^[0-9a-f]{64}$/.test(p.inviteHash)
           || !Number.isSafeInteger(p.expires) || p.expires <= Math.floor(now() / 1000)
           || p.expires > Math.floor(now() / 1000) + SIGNUP_TTL_SECONDS
-          || (p.phone !== null && (typeof p.phone !== 'string' || !/^\+[1-9]\d{6,14}$/.test(p.phone)))
+          || (p.phone !== null && (typeof p.phone !== 'string' || !E164.test(p.phone)))
+          || (p.name !== null && (typeof p.name !== 'string' || signupName(p.name) !== p.name))
           || p.phoneVerification !== 'not_configured' || p.complete !== false) return null;
         return p;
       } catch { return null; } // Malformed client cookie is an invalid continuation, not a server fault.
     },
-    async collectPhone(progress, phone) {
-      if (!progress.emailVerified || !progress.authUser || (phone !== '' && !/^\+[1-9]\d{6,14}$/.test(phone)) || progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return null;
-      return seal({ ...progress, phone: phone || null, phoneVerification: 'not_configured', complete: false });
+    async collectContact(progress, rawName, phone) {
+      const name = signupName(rawName);
+      if (!progress.emailVerified || !progress.authUser || !name || !E164.test(phone) || progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return null;
+      return seal({ ...progress, name, phone, phoneVerification: 'not_configured', complete: false });
     },
   };
 };

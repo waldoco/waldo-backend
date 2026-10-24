@@ -165,6 +165,31 @@ describe('handleWhatsAppWebhook', () => {
     expect((graph.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({ authorization: 'Bearer wabearer-t0ken' });
   });
 
+  it('a sender gets five link-code tries an hour; past that nothing is redeemed and nothing is sent', async () => {
+    const { ns } = namespace();
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
+    vi.stubGlobal('fetch', graph);
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async () => null, redeem };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    const counts = new Map<string, number>(), keys: [string, number, number][] = [];
+    const textFirst = { links: { open: async () => 'invite_only' as const }, throttle: async (key: string, limit: number, window: number) => {
+      keys.push([key, limit, window]); counts.set(key, (counts.get(key) ?? 0) + 1); return counts.get(key)! <= limit;
+    } } as unknown as Parameters<typeof handleWhatsAppWebhook>[4];
+    const send = async (from: string, text: string) => {
+      const pending: Promise<unknown>[] = [];
+      await handleWhatsAppWebhook(await post('x', payload([{ from, text }])), env, work => pending.push(work), directory, textFirst);
+      await Promise.all(pending);
+    };
+    for (let i = 0; i < 6; i += 1) await send('15550003333', `waldo WRONG${i}`);
+    expect(redeem).toHaveBeenCalledTimes(5);
+    expect(graph).toHaveBeenCalledTimes(5);
+    await send('15550004444', 'waldo WRONG9');
+    expect(redeem).toHaveBeenCalledTimes(6);
+    expect(new Set(keys.map(([, limit, window]) => `${limit}/${window}`))).toEqual(new Set(['5/3600']));
+    expect(keys.every(([key]) => /^walinkcode\.[0-9a-f]{64}$/.test(key))).toBe(true);
+  });
+
   it('a link-code reply that fails is logged by its name, HTTP status and Meta code, never by the number, a message id or Graph\'s text', async () => {
     const { ns } = namespace();
     const directory: OwnerDirectory = { byPresence: async () => null, redeem: async () => null };
