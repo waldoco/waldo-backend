@@ -338,7 +338,7 @@ describe('R-4: the retried turn', () => {
     }
   });
 
-  it('a retry answered on another surface than the message came from says where it was sent, and never that it is in this conversation', async () => {
+  it('a retry that runs on another surface than the message came from names where it was sent and that it cannot see that conversation', async () => {
     await withLane(async ({ book, clock, deps }) => {
       promiseRetry(book, { traceId: 'tg-3', conversationRef: 'telegram-42', surface: 'telegram', text: 'Move my 3pm to Friday', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
       promiseRetry(book, { traceId: 'tg-4', conversationRef: 'telegram-42', surface: 'telegram', text: 'My HRV was 38 ms today, should I train?', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
