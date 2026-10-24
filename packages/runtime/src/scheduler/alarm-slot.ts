@@ -78,6 +78,13 @@ export async function armWhatsappPendingWake(storage: DurableObjectStorage, due:
   await armAlarm(storage, existing === null ? due : Math.min(existing, due));
 }
 
+// The jobs wake written in the caller's synchronous commit, beside the job row it is for. The key moves earlier, never later.
+// A wake that commits with its row survives an alarm arm that never runs: every later arbitration arms from the key.
+export function commitTaskJobsWake(kv: Pick<SyncKvStorage, 'get' | 'put'>, due: number): void {
+  const held = kv.get<number | null>(TASK_JOBS_DUE_KEY);
+  kv.put(TASK_JOBS_DUE_KEY, typeof held === 'number' ? Math.min(held, due) : due);
+}
+
 // A jobs wake from outside the alarm pass (a worker's report, a new task): the key moves earlier, never later, and the alarm
 // slot moves earlier only, so no other lane's wake is dropped.
 export async function armTaskJobsWake(storage: DurableObjectStorage, due: number): Promise<void> {

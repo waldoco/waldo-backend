@@ -136,6 +136,8 @@ describe('an app turn that does not finish', () => {
       expect(notices(messages)).toHaveLength(0);
       expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.$/);
       expect(state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM task_jobs').toArray()).toEqual([{ kind: 'retry_turn', status: 'queued' }]);
+      const [{ due_at: due }] = state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM task_jobs').toArray() as [{ due_at: number }];
+      await vi.waitFor(async () => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(due), { timeout: 2_000, interval: 20 });
       model.fail = false;
       const next = await send(owner(), state, name, 'client-next-0001', 'Did that happen?');
       expect(next.outcome).toBe('completed');
