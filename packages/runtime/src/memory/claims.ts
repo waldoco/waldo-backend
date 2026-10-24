@@ -6,7 +6,11 @@ import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget
 import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
-export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
+// confirmed: the owner said it is right. waldo_confirmed: the nightly model read the owner's day as confirming it, which
+// stays Waldo's read until the owner confirms it.
+export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferred'] as const;
+// What the owner may still confirm as theirs.
+export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null }>;
@@ -453,8 +457,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     seen(id: number, at: string): void {
       sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
+    // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
-      sql.exec(`UPDATE claims SET source = 'confirmed', evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+      sql.exec(`UPDATE claims SET source = 'waldo_confirmed', evidence = evidence || ' | Waldo confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+    },
+    // The one place a live claim becomes the owner's: their own act (the console's "That's right"), named by `how` in its
+    // evidence and, when it had no owner source, as its source.
+    ownerGround(id: number, at: string, how: string): boolean {
+      return sql.exec(`UPDATE claims SET origin = 'owner', verification_status = 'owner-grounded',
+        source = CASE WHEN source IN ('inferred', 'waldo_confirmed') THEN 'confirmed' ELSE source END,
+        source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
+        WHERE id = ? AND status IN ('active', 'promoted')`, how, how, at, id).rowsWritten === 1;
     },
     correct(id: number, claim: NewClaim, at: string): boolean {
       // Two writes must never leave contradictory active claims. A caller without a DO
