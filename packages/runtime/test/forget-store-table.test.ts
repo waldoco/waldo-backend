@@ -30,7 +30,6 @@ const TABLES: Record<string, Row> = {
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),
   app_write_requests: exempt('request id, route, body digest and the stored answer: ids, states and times, never owner text'),
   onboarding_runs: exempt('run id, step states, the first-look client id, a clock time and times; the answers live as claims'),
-  cost_ledger: exempt('day, call kind, responsibility id, trigger enum, model name, token counts and cost; no owner text'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
   schedule_settings: exempt('a setting key and an enum value (the health proposal mode); no owner text'),
   health_trigger_pending: exempt('an owner-local day and the time it was marked; no owner text, zone word or reading'),
