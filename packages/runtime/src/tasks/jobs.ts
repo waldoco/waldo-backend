@@ -76,7 +76,7 @@ const OPEN: readonly JobStatus[] = ['queued', 'running', 'reported'];
 // of what the job was given.
 const TITLE_KEPT = 80;
 // A brief the memory purge rewrote can be unreadable (its literal replace may span the JSON's own quotes); it keeps nothing,
-// so a cancel from forget never fails on it.
+// so neither a settle nor the trim fails on it.
 const settledBrief = (row: Pick<JobRow, 'kind' | 'brief_json'>): string => {
   try {
     if (row.kind === 'retry_turn') return JSON.stringify({ ...(JSON.parse(row.brief_json) as RetryBrief), text: '' });
@@ -262,14 +262,15 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return running.map((row) => row.id);
     },
     // The cancellation fence: the token is cleared in the same write that settles the job, so every later call from the
-    // worker is fenced and a result that arrives late is discarded.
+    // worker is fenced and a result that arrives late is discarded. A forget's cancel keeps the brief for the memory purge
+    // that follows in the same call, which redacts the forgotten text and counts it; the next trim drops the rest.
     cancel(id: string, reason: CancelReason): boolean {
       const now = deps.now();
       const row = get(id);
       if (!row || !OPEN.includes(row.status)) return false;
       return sql.exec(
         `UPDATE task_jobs SET status = 'cancelled', cancel_reason = ?, lease_token = NULL, lease_until = NULL, due_at = NULL, brief_json = ?, checkpoint_json = NULL, result_json = NULL, settled_at = ?, updated_at = ?
-         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, settledBrief(row), now, now, id, ...OPEN,
+         WHERE id = ? AND status IN (${placeholders(OPEN)})`, reason, reason === 'forgotten' ? row.brief_json : settledBrief(row), now, now, id, ...OPEN,
       ).rowsWritten > 0;
     },
     // A reported job that the owner heard about. Parked jobs settle as parked; the rest as applied. The checkpoint, which
@@ -327,8 +328,14 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
         `SELECT id, brief_json, checkpoint_json, result_json FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
       ).toArray().filter(row => [row.brief_json, row.checkpoint_json, row.result_json].some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);
     },
-    // TTL sweep: settled rows past the newest TASK_SETTLED_KEPT are dropped.
+    // TTL sweep: a settled row still holding its whole brief (a forget's cancel, a row settled before briefs were dropped)
+    // keeps only what a settled row keeps, and settled rows past the newest TASK_SETTLED_KEPT are dropped.
     trim(): number {
+      const whole = sql.exec<Pick<JobRow, 'id' | 'kind' | 'brief_json'>>(
+        `SELECT id, kind, brief_json FROM task_jobs WHERE status IN ('applied', 'cancelled', 'parked')
+           AND (NOT json_valid(brief_json) OR json_type(brief_json, '$.goal') IS NOT NULL OR (kind = 'retry_turn' AND json_extract(brief_json, '$.text') <> ''))`,
+      ).toArray();
+      for (const row of whole) sql.exec('UPDATE task_jobs SET brief_json = ? WHERE id = ?', settledBrief(row), row.id);
       return sql.exec(
         `DELETE FROM task_jobs WHERE status IN ('applied', 'cancelled', 'parked')
            AND id NOT IN (SELECT id FROM task_jobs WHERE status IN ('applied', 'cancelled', 'parked') ORDER BY settled_at DESC LIMIT ?)`, TASK_SETTLED_KEPT,
