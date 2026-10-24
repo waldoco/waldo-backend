@@ -63,7 +63,7 @@ it('a forwarded "paid" mail closes the owner\'s loop only from the card; the mai
       expect(status(sourced.id)).toBe('done');
       const card = proof.telegram.find(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
       expect(card?.body.text).toContain('close_loop');
-      expect(card?.body.text).toContain('It closes:\n- Pay City Power (due 2026-10-16 18:00), as done');
+      expect(card?.body.text.split('\n')[0]).toBe('Run this action? It closes: Pay City Power (due 2026-10-16 18:00), as done');
       expect(status(own.id)).toBe('open');
 
       const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(card!.body.reply_markup))![1]!;
