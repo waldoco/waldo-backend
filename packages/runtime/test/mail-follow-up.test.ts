@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { loopBook, loopsSection } from '../src/channels/loops';
-import { collectChanges, updateBook, type UpdateBook } from '../src/channels/update-cards';
+import { updateBook, type UpdateBook } from '../src/channels/update-cards';
+import { collectChanges } from './helpers/collect-changes';
 import type { GoogleClient } from '../src/connectors/google';
 const observeMail = (book: UpdateBook, source_ref: string, thread_id: string, detail: string, at: number, message_id = source_ref) => {
   book.observeMail(source_ref, thread_id, at, message_id);

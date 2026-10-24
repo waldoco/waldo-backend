@@ -23,6 +23,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
@@ -1109,14 +1110,14 @@ it('an iMessage-only owner\'s two-part reminder whose second part never went say
 it('an iMessage-only owner\'s two-part follow-up whose second part never went says it was partly sent', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   await inTwoParts(w, 'heartbeat', ['sent', 'not_started']);
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(deliveryRecords(state).filter((row) => row.heartbeat)).toMatchObject([{ status: 'blocked', reason: 'provider_failed', arrived: [true, false] }]);
-    expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat'").toArray())
-      .toEqual([{ status: 'failed', summary: 'heartbeat partly sent; the rest was not sent' }]);
+    expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray())
+      .toEqual([TICK_RUN, { status: 'failed', summary: 'heartbeat partly sent; the rest was not sent' }]);
   });
-});
+}, 15_000);
 
 it('an iMessage-only owner\'s morning brief goes out on iMessage and counts as sent only once the bridge reports it', async () => {
   const w = await world();
@@ -1142,25 +1143,32 @@ const dueFollowUp = async (state: DurableObjectState) => {
   await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID },
     occurrenceAt: due, dueAt: due, recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: due % HEARTBEAT_EVERY_MS } });
 };
+// The follow-up tick writes a reader job; its worker reports (stood in for here), and the owner's next alarm applies it.
+const tickedFollowUp = async (w: Awaited<ReturnType<typeof world>>) => {
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await runDurableObjectAlarm(w.ownerStub); await w.settle();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { expect(reportMachineJobs(state.storage.sql)).toHaveLength(1); });
+};
+const TICK_RUN = { status: 'completed', summary: 'check-back handed to a reader job' };
 it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   const followUp = 'Did the invoice go out?';
   const delivery = await scheduledOnIMessage(w, followUp);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['running']));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed', 'running']));
   await hostReports(w, delivery);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed']));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed', 'completed']));
 });
 
 it('an iMessage-only owner\'s follow-up the bridge proves it never sent fails, saying it could not be delivered', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   const delivery = await scheduledOnIMessage(w, 'Did the invoice go out?');
   await hostReports(w, delivery, Date.now() + 24 * 3_600_000);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat'").toArray())
-    .toEqual([{ status: 'failed', summary: 'heartbeat could not be delivered' }]));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray())
+    .toEqual([TICK_RUN, { status: 'failed', summary: 'heartbeat could not be delivered' }]));
 });
 
 // An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only

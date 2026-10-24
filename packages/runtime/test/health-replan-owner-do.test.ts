@@ -7,6 +7,7 @@ import { HEALTH_RECOMPUTE_ID, HEALTH_RECOMPUTE_WINDOW_MS } from '../src/health/r
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { notifyOwnerHealthSamples } from '../src/health/zone-change-route';
 import { armAlarm } from '../src/scheduler/alarm-slot';
+import { jobBook } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
@@ -170,8 +171,14 @@ const withOwner = (work: (o: { state: DurableObjectState; sweep(): Promise<void>
       ? state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM update_cards').one().n : 0;
     const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
-    // The ten-minute sweep's update check, as the schedule runs it.
-    const sweep = async () => { const runtime = owner.setup('telegram'); await runtime.ready; await runtime.updateCheck(`update:${sweeps++}:${Date.now()}`); };
+    // The ten-minute sweep's update check, as the schedule runs it. A sweep's reader job holds the window until it settles,
+    // and its worker has reported by the next sweep: the one still open from the last sweep is settled here first.
+    const sweep = async () => {
+      const jobs = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID(), newToken: () => crypto.randomUUID() });
+      const open = jobs.openMachine('update_sweep', 'owner');
+      if (open) jobs.cancel(open.id, 'owner');
+      const runtime = owner.setup('telegram'); await runtime.ready; await runtime.updateCheck(`update:${sweeps++}:${Date.now()}`);
+    };
     try { await work({ state, sweep, pass, upload, desk: () => owner.setup('app').desk }); } finally { await state.storage.deleteAlarm(); }
   });
 };

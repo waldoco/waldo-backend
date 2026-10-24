@@ -132,6 +132,7 @@ describe('messages still waiting for WhatsApp', () => {
     expect(waiting(record({ id: 'heartbeat:hb:1', reminder: undefined, heartbeat: { id: 'hb', occurrence: 1, schedulerRunId: 'r', loops: [] } }))).toBe(true);
     expect(waiting(record({ id: 'day-card:2026-10-03:card:brief', reminder: undefined, dayCard: { day: '2026-10-03', card: 'card:brief', foldUpTo: 0 } }))).toBe(true);
     expect(waiting(record({ id: 'standing-order:order:ord1:1', reminder: undefined, standingOrder: { runId: 'run-3', gate: 'act_and_report' } }))).toBe(true);
+    expect(waiting(record({ id: 'update:job_1', reminder: undefined, update: { recordId: 4 } }))).toBe(true);
     expect(waiting(record({ id: `${WHATSAPP_COPY_PREFIX}scheduled-1`, reminder: undefined }))).toBe(false);
     expect(waiting(record({ id: 'turn:wa-1', reminder: undefined, inbox: { id: 'in-1', runId: 'run-2', attempt: 'a' } }))).toBe(false);
     // Another surface's record, and one whose chat and owner disagree, are never taken for WhatsApp's.

@@ -53,7 +53,9 @@ export type OwnerResponder = Readonly<{
   // done is false when the conversation was not consolidated and must be offered again.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string): Promise<string>;
-  promote(trace: string): Promise<string>;
+  // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
+  // the memory it leaves to `promoted` once a promotion is applied.
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
