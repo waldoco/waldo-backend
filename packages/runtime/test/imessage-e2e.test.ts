@@ -22,11 +22,13 @@ import { productionDeps } from '../src/seams/deps';
 import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
-import { armHeartbeat, HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
+import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
+import { OwnerDO } from '../src/channels/owner-do';
+import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 
@@ -488,9 +490,13 @@ it('non-minted ids never reach a bridge; an unknown tuple leaves no storage; one
     expect(tables).toEqual([]); // the unsigned request created no bridge tables
   });
   const ip = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
+  // The local limiter counts an address in fixed wall-clock minutes, 120 a minute. A burst that crosses a minute is split
+  // between two windows, and twice the limit plus one always fills one of them; a burst inside one minute is cut off by 130.
+  const minute = (ms: number) => Math.floor(ms / 60_000), start = Date.now();
   const statuses: number[] = [];
-  for (let i = 0; i < 130; i++) statuses.push((await forged(w, ghost.bridgeId, ghost.accountId, ip)).status);
-  expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  while (statuses.length < 241 && statuses.at(-1) !== 429) statuses.push((await forged(w, ghost.bridgeId, ghost.accountId, ip)).status);
+  expect(statuses.at(-1)).toBe(429);
+  if (minute(start - 1_000) === minute(Date.now() + 1_000)) expect(statuses.length).toBeLessThanOrEqual(130);
   expect(statuses.filter((s) => s !== 401 && s !== 429)).toEqual([]);
   expect((await w.host.heartbeat()).status).toBe(200); // another address is unaffected
 });
@@ -1037,7 +1043,9 @@ it('an iMessage-only owner\'s reminder whose host stays offline fails just past 
 // A message longer than one iMessage goes to the bridge as two commands, one per part, each frozen under its own key. The model
 // writes `text` for the due job, and the host reports on each part in turn: sent, or proved never sent. The bridge takes one
 // command at a time, so each next part goes on the owner's next hand-off try, seconds later; the job's record waits for the
-// bridge until the last report. Answers the commands the bridge received.
+// bridge until the last report. Before that retry, the drain that handed over a part polls the bridge's slot, which that part
+// holds until the host pulls it; here each poll's pause moves the test's clock instead of sleeping. Answers the commands the
+// bridge received.
 const LONG = 'Call Sam about the harbour fund before lunch. '.repeat(120).trim();
 const inTwoParts = async (w: Awaited<ReturnType<typeof world>>, job: 'reminder' | 'heartbeat', reports: readonly ('sent' | 'not_started')[]) => {
   expect(LONG.length).toBeGreaterThan(4_096);
@@ -1045,6 +1053,9 @@ const inTwoParts = async (w: Awaited<ReturnType<typeof world>>, job: 'reminder' 
   const received: { text: string; commandId: string }[] = [];
   const t0 = Date.now();
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  const host = Object.getOwnPropertyDescriptor(OwnerDO.prototype, 'imessageHost')!.get!;
+  vi.spyOn(OwnerDO.prototype as unknown as { imessageHost: OwnerHost }, 'imessageHost', 'get')
+    .mockImplementation(function (this: OwnerDO) { return { ...host.call(this), wait: async (ms: number) => { vi.setSystemTime(Date.now() + ms); } }; });
   try {
     proof.reply = LONG;
     try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
@@ -1120,11 +1131,14 @@ it('an iMessage-only owner\'s morning brief goes out on iMessage and counts as s
   await runInDurableObject(w.ownerStub, async (_i, state) => expect(sent(state)).toBeTruthy());
 });
 
-// A loop past its date, with the follow-up tick due now.
+// A loop past its date, with the follow-up tick due now. The ticks recur on the wall clock's half hours, so the tick is seeded
+// with its own phase: the next one is due a full interval later, never at a half hour the test happens to run across.
 const dueFollowUp = async (state: DurableObjectState) => {
   loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => Date.now() - 3 * 3_600_000 }).open({ title: 'Send the invoice', due: new Date(Date.now() - 3_600_000).toISOString().slice(0, 16) });
   state.storage.sql.exec("DELETE FROM schedule WHERE kind = 'heartbeat'");
-  await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - HEARTBEAT_EVERY_MS - 60_000);
+  const due = Date.now() - 60_000;
+  await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID },
+    occurrenceAt: due, dueAt: due, recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: due % HEARTBEAT_EVERY_MS } });
 };
 it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {
   const w = await world();
