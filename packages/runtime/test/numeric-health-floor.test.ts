@@ -1,3 +1,4 @@
+import { healthReadSignalSchema, type HealthReadSignal } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 
@@ -51,6 +52,10 @@ describe('the numeric health floor', () => {
     'Oven temp 180 degrees for the cake',
     'Goa is 32 degrees, temperature 32C at noon',
     'The cabin sleeps 6',
+    'The movement meets in 30 minutes',
+    'Daylight saving ends in 2 weeks',
+    'Booked a 45-minute workout with the trainer at 6',
+    'Midpoint review at 3:30',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
@@ -98,6 +103,27 @@ describe('the numeric health floor', () => {
     'calories burned 540',
   ])('holds a reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
+  });
+
+  // Every signal get_health returns, in the units it returns it in, as Waldo relays it or the owner repeats it.
+  const GET_HEALTH_READINGS: Record<HealthReadSignal, readonly string[]> = {
+    sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
+    sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
+    hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],
+    resting_hr: ['resting heart rate 58 bpm', 'resting HR 58'],
+    heart_rate: ['mean heart rate 72.4 bpm', 'average heart rate 72'],
+    movement: ['movement 45 minutes', '45 minutes of movement', '45 movement minutes'],
+    daylight: ['daylight 30 min', '30 minutes of daylight', '30 daylight minutes'],
+    workouts: ['45 workout minutes', 'workouts: 45 min', '45 minutes of workouts'],
+  };
+  it('covers every signal get_health returns', () => {
+    expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());
+  });
+  it.each(Object.entries(GET_HEALTH_READINGS).flatMap(([signal, texts]) => texts.map((text) => [signal, text])))('holds a %s reading: %s', (_signal, text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it('holds a VO2 max reading', () => {
+    expect(numericHealthIn('VO2 max 45')).toBe(true);
   });
 
   // A serialized field (a quoted key, an `=`, or a glued snake or camel key) carrying a number is a payload's shape; a

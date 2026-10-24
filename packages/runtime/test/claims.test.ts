@@ -910,6 +910,7 @@ it.each([
   ['E2E-b: sleep and HRV Waldo relayed, against a 6 and a 16 the owner typed elsewhere that day', { owner: 'Laundry at 6, then the 16 bus home. How did I sleep?', waldo: 'You slept 6 hours and your HRV was 16.' }, reading('On 24 Sep slept 6 hours, HRV 16', 'How did I sleep?')],
   ['N1c: a forwarded resting HR against "gate 58" the owner typed', { owner: 'Boarding at gate 58. Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],
   ['N1d: a number only in the evidence\'s citation, outside its quote', { owner: 'How did I sleep?', waldo: 'Your HRV was 16.' }, reading('HRV 16', 'owner, tg-16: "How did I sleep?"')],
+  ['an HRV in milliseconds Waldo relayed', { owner: 'How did I sleep?', waldo: 'Your HRV was 48ms.' }, reading('On 24 Sep HRV was 48ms', 'How did I sleep?')],
   ['a reading with one number the evidence quotes and one it does not', { owner: 'My blood pressure was 120/80 today', shared: 'Fwd: blood pressure 120/85' }, reading('Blood pressure 120/85', 'My blood pressure was 120/80 today')],
 ] as const)('holds %s', async (_probe, sides, claim) => {
   await withSql((sql) => {
