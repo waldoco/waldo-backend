@@ -19,7 +19,6 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
-  'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
   'schedule.set': { gated: false, why: 'Sets when the daily cards arrive; grants no access.' },

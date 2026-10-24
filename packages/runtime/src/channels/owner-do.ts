@@ -2001,7 +2001,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
-              if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(['spot.confirm','spot.dismiss','spot.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConsoleStart():null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
@@ -4247,7 +4247,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           })()),
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
-          nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
+          barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
@@ -4321,28 +4321,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             }
             // SQL and KV both verified clean: settle removes the source row and marker.
             memory.settle([spotId]);
-          }
-        } else if (action === 'node.forget') {
-          const node = memory.nodes().find((row) => row.id === spotId);
-          if (!node) return false;
-          memory.forgetNode(spotId);
-          memory.barrier(node.label, new Date(now).toISOString());
-          let remaining = 0;
-          const clean = async (work: () => { remaining: number } | void | Promise<{ remaining: number } | void>) => {
-            try { const result = await work(); remaining += result?.remaining ?? 0; }
-            catch { remaining += 1; }
-          };
-          await clean(() => redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN));
-          await clean(() => redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN).then(() => undefined));
-          await clean(() => redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
-          await clean(() => forgetWaitingCards(this.ctx.storage.sql, [node.label], now));
-          await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
-          if (remaining > 0) {
-            log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });
-            return 'node.forget.incomplete';
           }
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;

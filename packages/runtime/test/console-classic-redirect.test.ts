@@ -9,7 +9,7 @@ describe('classic console pages open the new console',()=>{
  it('sends every classic page to its new-console route',()=>{
   expect(Object.fromEntries(CONSOLE_PAGES.filter(page=>page.slug).map(page=>[page.slug,location('/console/'+page.slug)]))).toEqual({
    waiting:'/console#/waiting',setup:'/console#/setup',connections:'/console#/connections',spots:'/console#/memory/spots',
-   constellation:'/console#/memory/constellation',day:'/console#/day',memory:'/console#/memory',files:'/console#/files',
+   day:'/console#/day',memory:'/console#/memory',files:'/console#/files',
    usage:'/console#/usage',activity:'/console#/patrol',account:'/console#/account',
   });
   expect(location('/console/legacy')).toBe('/console');

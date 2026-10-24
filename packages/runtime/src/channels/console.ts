@@ -2,7 +2,7 @@ import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from '.
 import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
-import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
+import type { Claim, profile } from '../memory/claims';
 import type { Proactivity } from './loops';
 import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
@@ -140,7 +140,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -178,8 +178,6 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.confirm': 'Confirmed. It now counts as something you said.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. The current chat may still mention it until the conversation moves on.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
-  'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
-  'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
@@ -221,8 +219,6 @@ export type ConsoleView = Readonly<{
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
   holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];
-  nodes: readonly ConstellationNode[];
-  edges: readonly ConstellationEdge[];
   cards: readonly ConsoleCard[];
   ledger: string;
   proactivity: Proactivity;
@@ -391,20 +387,12 @@ const spotProvenance = (spot: Claim): string => {
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
   : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
 
-const constellation = (view: ConsoleView) => {
-  if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
-  const label = new Map(view.nodes.map((node) => [node.id, node.label]));
-  const nodes = view.nodes.map((node) => `<div class="row node"><div class="main"><div class="line"><b>${esc(node.label)}</b> ${chip(node.domain)} ${chip('Tentative association', 'provisional')}${node.status === 'stale' ? ` ${chip('stale', 'muted')}` : ''}</div><div class="sub">${esc(node.summary)} · last recorded ${esc(day(node.last_confirmed))} · supporting spots ${esc(node.supporting_spots)}</div></div><div class="strength">${meter(node.strength)}</div><div class="act">${form(view.csrf, 'node.forget', 'Forget', { id: String(node.id) }, { tone: 'danger', confirm: 'Forget this pattern and its links?' })}</div></div>`).join('');
-  const edges = view.edges.length === 0 ? '' : `<h3>Links</h3>${view.edges.map((edge) => `<div class="row edge"><div class="main"><b>${esc(label.get(edge.from_id) ?? `#${edge.from_id}`)}</b> <span class="rel">${esc(edge.relation)}</span> <b>${esc(label.get(edge.to_id) ?? `#${edge.to_id}`)}</b><div class="sub">Tentative link · ${edge.evidence_count} supporting observations</div></div><div class="strength">${meter(edge.strength)}</div></div>`).join('')}`;
-  return nodes + edges;
-};
-
 // Holds never store text (the admission gate refuses before write), so this list shows
 // kind + reason + day only - the owner sees the gate working without the refused words
 // ever entering memory or this page.
 const held = (view: ConsoleView) => view.holds.length === 0 ? '' : `<details><summary>Held at the gate (${view.holds.length})</summary><div class="sub">Waldo declined to remember these - the words were never stored, only what kind of thing it was and why.</div>${view.holds.map((hold) => `<div class="row"><div class="main"><div class="line">${chip(hold.kind)} ${chip(hold.reason.replace(/-/g, ' '), 'muted')}</div></div><div class="sub">${esc(day(hold.created_at))}</div></div>`).join('')}</details>`;
 
-const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'good' : 'muted')}</div>`).join('')}</details>`;
+const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'Promoted' : 'Dismissed', spot.status === 'promoted' ? 'good' : 'muted')}</div>`).join('')}</details>`;
 
 // A claim stuck mid-scrub (status 'purging') must stay visible with a working retry path -
 // the 'spot.forget.incomplete' notice tells the owner to try again, so the row and its Forget
@@ -552,7 +540,6 @@ export const CONSOLE_PAGES = [
   { slug: 'setup', title: 'Setup' },
   { slug: 'connections', title: 'Connections' },
   { slug: 'spots', title: 'Spots' },
-  { slug: 'constellation', title: 'Constellation' },
   { slug: 'day', title: 'Your day' },
   { slug: 'memory', title: 'Memory' },
   { slug: 'files', title: 'Files' },
@@ -566,7 +553,7 @@ export const CONSOLE_PAGES = [
 // never carried, so a crafted link cannot put its own words on the console.
 const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
   '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
-  constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
+  constellation: 'memory', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
   activity: 'patrol', account: 'account', invites: 'invites',
   imessage: 'connections/imessage', devices: 'connections/devices',
 };
@@ -587,12 +574,11 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   const section = (id: string, title: string, intro: string, body: string) => `<section id="${id}"><h2>${esc(title)}</h2><p class="intro">${esc(intro)}</p>${body}</section>`;
   const pages: Readonly<Record<string, string>> = {
     '': `<section id="overview" aria-label="Overview">${overview(view)}</section>
-<div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>`,
+<div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>`,
     waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. You can approve calendar changes here; email sends can only be approved on the full review card in chat.', approvals(view)),
     setup: section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view)),
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
     spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
-    constellation: section('constellation', 'Constellation', 'Lasting patterns earlier nights built from repeated spots, and how they link; no new ones are added. Strength is Waldo\'s uncalibrated estimate from 0 to 1, not a probability of truth.', constellation(view)),
     day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view) + '<h3>Scheduled behaviors</h3>' + schedules(view)),
     memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),
     files: section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view)),
