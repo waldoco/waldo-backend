@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, type Claim } from '../src/memory/claims';
+import { applyClaimOps, claimStore, memoryPrompt, type Claim } from '../src/memory/claims';
 import { dashboardMemory } from '../src/channels/dashboard-memory';
 import { memoryControl } from '../src/channels/dashboard-memory-actions';
 import { renderConsole } from '../src/channels/console';
@@ -59,6 +59,21 @@ describe('the nightly model confirming a claim', () => {
       expect(store.claims()[0]).toMatchObject({ source: 'waldo_confirmed', origin: 'agent', verification_status: 'provisional' });
       expect(store.claims()[0]!.evidence).toBe('two busy days | Waldo confirmed: owner, tg-9');
       expect(store.pin(row!.id, 'profile', 1)).toBe(false);
+    });
+  });
+});
+
+describe('a claim Waldo confirmed from words the owner wrote', () => {
+  it('is not pinned until the owner grounds it, and the memory prompt names it as Waldo\'s', async () => {
+    await withStore((store) => {
+      store.add({ kind: 'preference', text: 'Likes a window seat on long flights', source: 'inferred', evidence: '"window seat again"', origin: 'owner', source_ref: 'owner, tg-91' }, AT);
+      const [row] = store.claims();
+      applyClaimOps(store, ops([row!.id]), AT, 'owner, tg-92');
+      expect(store.claims()[0]).toMatchObject({ source: 'waldo_confirmed', origin: 'owner', verification_status: 'owner-grounded' });
+      expect(store.pin(row!.id, 'profile', 1)).toBe(false);
+      expect(memoryPrompt(store)).toContain(`source="waldo_confirmed"`);
+      expect(store.ownerGround(row!.id, AT, 'owner, console')).toBe(true);
+      expect(store.pin(row!.id, 'profile', 1)).toBe(true);
     });
   });
 });
