@@ -182,11 +182,13 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 
-// The kind of a block of protected time Waldo created, kept on the owner's own copy of the event: calendar demand leaves
-// rest out of Weight and counts deep work.
-export const CALENDAR_BLOCKS = ['rest', 'deep_work'] as const;
-export type CalendarBlock = (typeof CALENDAR_BLOCKS)[number];
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string; block?: CalendarBlock;
+// The kind of a block of protected time Waldo created, kept in a private property on the event in the calendar Waldo
+// wrote it to: calendar demand leaves rest out of Weight and counts deep work.
+export type CalendarBlock = 'rest' | 'deep_work';
+// Waldo's rest blocks on one calendar, and the other events inside their windows that keep that time busy. All-day
+// events keep their dates.
+export type RestBlocks = Readonly<{ blocks: readonly Readonly<{ start: string; end: string }>[]; others: readonly Readonly<{ start: string; end: string; all_day: boolean }>[] }>;
+export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
@@ -198,8 +200,8 @@ export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?:
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
 // the join link, attachments and the owner's status stay out of the shared card projection; meeting
 // prep adds the link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'block' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
-  const { etag: _etag, operation_marker: _marker, block: _block, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
   return projection;
 };
 
@@ -408,6 +410,7 @@ export type GoogleClient = Readonly<{
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
   driveReadFileContent?(input: import('./drive-rest.ts').DriveContentArgs): Promise<import('./drive-rest.ts').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
+  restBlocks?(calendarId: string, from: string, to: string): Promise<RestBlocks>;
   calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
   tasksPage?(taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
@@ -444,7 +447,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -588,17 +591,16 @@ export const revokeGoogleGrant = async (fetcher: Fetch, token: string): Promise<
 };
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status; blocks adds
-// the kind of a block Waldo created.
+// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
 // A Worker that predates a field parses calendar pages strictly and hashes every field into its prep digest,
 // so the connector-proxy maps each only when the calling Worker asks (proxyClientOptions). The Worker's own
 // clients default to on.
-export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean; blocks?: boolean }>;
-export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown; calendar_blocks?: unknown }>): GoogleClientOptions =>
-  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true, blocks: body.calendar_blocks === true });
+export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean }>;
+export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown }>): GoogleClientOptions =>
+  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
-  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true, options.blocks ?? true);
+  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
@@ -914,6 +916,39 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }
       return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(item).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};
     },
+    // One query finds the calendar's rest blocks by their private kind; only their own windows are read again, for the
+    // other events that keep that time busy (free, declined and cancelled ones do not). A listing that does not end is
+    // an error, never a partial answer.
+    async restBlocks(calendarId, from, to) {
+      if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from, to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to)) throw new Error('invalid Calendar block request');
+      const listed = async (query: Readonly<Record<string, string>>): Promise<GoogleEvent[]> => {
+        const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+        url.search = new URLSearchParams({ singleEvents: 'true', maxResults: String(REST_LISTING_MAX), ...query }).toString();
+        const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+        if (data.kind !== 'calendar#events' || (data.items !== undefined && !Array.isArray(data.items)) || !((data.items ?? []) as unknown[]).every(validCalendarEvent)) throw new Error('invalid Calendar page response');
+        if (data.nextPageToken) throw new Error('Calendar listing did not end');
+        return ((data.items ?? []) as GoogleEvent[]).filter(event => event.status !== 'cancelled');
+      };
+      const found = (await listed({ timeMin: from, timeMax: to, privateExtendedProperty: 'waldoBlock=rest' }))
+        .filter(event => event.extendedProperties?.private?.waldoBlock === 'rest' && event.start?.dateTime !== undefined && event.end?.dateTime !== undefined);
+      const blocks = found.map(event => ({ start: event.start.dateTime!, end: event.end.dateTime! }));
+      const windows: [number, number][] = [];
+      for (const [start, end] of blocks.map(block => [Date.parse(block.start), Date.parse(block.end)] as const).sort((a, b) => a[0] - b[0])) {
+        const last = windows.at(-1);
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else windows.push([start, end]);
+      }
+      if (windows.length > REST_WINDOWS_MAX) throw new Error('too many rest blocks to read');
+      const ids = new Set(found.map(event => event.id));
+      const others: { start: string; end: string; all_day: boolean }[] = [];
+      for (const [start, end] of windows) {
+        for (const event of await listed({ timeMin: new Date(start).toISOString(), timeMax: new Date(end).toISOString() })) {
+          if (ids.has(event.id) || event.transparency === 'transparent' || event.attendees?.find(a => a.self)?.responseStatus === 'declined') continue;
+          others.push({ start: event.start.dateTime ?? event.start.date!, end: event.end.dateTime ?? event.end.date!, all_day: event.start.dateTime === undefined });
+        }
+      }
+      return { blocks, others };
+    },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
       url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit) }).toString();
@@ -1049,6 +1084,8 @@ const calendarSourceUrl = (value: string | undefined): string | undefined => {
       && value.length <= 2048 && url.href.length <= 2048 ? url.href : undefined;
   } catch { return undefined; }
 };
+const REST_LISTING_MAX = 250;
+const REST_WINDOWS_MAX = 20;
 const calendarMarker = (operationMarker?: string) => operationMarker ? { extendedProperties: { private: { waldoOperation: operationMarker } } } : {};
 // Only a create names the kind. A move or cancel patches the marker alone, and a patch leaves the keys it does not name.
 const calendarTags = (operationMarker?: string, block?: CalendarBlock) => operationMarker || block
@@ -1060,7 +1097,7 @@ const calendarTimes = (start: string, end: string) => {
   // PATCH merges nested fields, so explicitly clear the previous representation.
   return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
 };
-const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean, blocks: boolean): CalendarItem => ({
+const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
   all_day: event.start?.dateTime === undefined,
@@ -1070,7 +1107,6 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean, bloc
   ...(event.etag ? { etag: event.etag } : {}),
   // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
   ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
-  ...(blocks && (CALENDAR_BLOCKS as readonly unknown[]).includes(event.extendedProperties?.private?.waldoBlock) ? { block: event.extendedProperties!.private!.waldoBlock as CalendarBlock } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
@@ -1093,7 +1129,7 @@ const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | '
 });
 
 type GoogleEvent = {
-  id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
+  id: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
