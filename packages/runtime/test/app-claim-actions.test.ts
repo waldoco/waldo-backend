@@ -116,13 +116,18 @@ it('pins to the block the owner picks and unpins, each on the revision of that c
   });
 });
 
-it('a session signed in over two hours ago still pins, unpins and edits the owner\'s own memory without a new code', async () => {
+it('a session signed in over two hours ago needs a new code to pin or edit, and nothing is written; it still unpins', async () => {
   await appOwner('app-claim-stale', async ctx => {
     wire.signedInAgo = 3 * 60 * 60_000;
     const id = seed(ctx, 'preference', 'Prefers mornings');
-    expect(await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'facts', revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
+    const before = rows(ctx);
+    const refused = { status: 403, body: { error: 'step_up_required', code: 'step_up_required' } };
+    expect(await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'facts', revision: (await detail(ctx, id)).revision })).toEqual(refused);
+    expect(await act(ctx, { action: 'claim.edit', id: `memory:claim:${id}`, value: 'Prefers early mornings', revision: (await detail(ctx, id)).revision })).toEqual(refused);
+    expect(rows(ctx)).toEqual(before);
+    ctx.state.storage.sql.exec("UPDATE claims SET pinned = 'facts', pin_order = 0 WHERE id = ?", id);
     expect(await act(ctx, { action: 'claim.unpin', id: `memory:claim:${id}`, revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
-    expect(await act(ctx, { action: 'claim.edit', id: `memory:claim:${id}`, value: 'Prefers early mornings', revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
+    expect((await detail(ctx, id)).item.pinned).toBeNull();
   });
 });
 

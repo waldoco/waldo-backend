@@ -24,9 +24,13 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
-  'spot.pin': { gated: false, why: 'Keeps one of the owner\'s own memories in mind on every turn; arranges, grants no access.' },
+  'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
   'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
-  'spot.edit': { gated: false, why: 'Corrects one of the owner\'s own memories in their words; changes the owner\'s own things once, grants no access.' },
+  'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  // The app's memory actions, named for themselves so each carries its own reason.
+  'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
+  'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
@@ -130,10 +134,8 @@ export const consoleStepUpRefusal = async (request: Request, session: ConsoleSes
 export const appStepUpRefusal = () => Response.json({ error: 'step_up_required', code: 'step_up_required' }, { status: 403, headers: { 'cache-control': 'private, no-store' } });
 // An action the table does not name is gated, so a new app action fails closed until it is classified.
 export const stepUpGated = (action: string): boolean => STEP_UP_ACTIONS[action]?.gated !== false;
-// Each app control is the console action of the same name, except that unlinking names its channel in id and a claim
-// action is the memory action it runs as.
-const CLAIM_SPOT: Readonly<Record<string, string>> = { 'claim.pin': 'spot.pin', 'claim.unpin': 'spot.unpin', 'claim.edit': 'spot.edit' };
-export const appControlStepUpAction = (action: Readonly<{ action: string; id?: string | undefined }>): string => action.action === 'channel.unlink' ? `${action.id}.unlink` : CLAIM_SPOT[action.action] ?? action.action;
+// Each app control is the console action of the same name, except that unlinking names its channel in id.
+export const appControlStepUpAction = (action: Readonly<{ action: string; id?: string | undefined }>): string => action.action === 'channel.unlink' ? `${action.id}.unlink` : action.action;
 export const appLinkStepUpAction = (provider: AppChatProviderV1): string => `${provider}.link`;
 
 // App routes with no console action of their own.
