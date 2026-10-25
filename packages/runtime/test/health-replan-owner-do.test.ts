@@ -117,7 +117,8 @@ beforeEach(() => {
     const payload = typeof body.p_payload === 'string' ? JSON.parse(body.p_payload) as Record<string, unknown> : {};
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
-    if (fn === 'health_series_read') { world.trace.push('series_read'); return Response.json(series(String(payload.to))); }
+    // A recompute reads the scores' readings and, beside them, the night's vital signals for the drivers.
+    if (fn === 'health_series_read') { world.trace.push((payload.signals as string[] | undefined)?.includes('respiratory_rate') ? 'vitals_read' : 'series_read'); return Response.json(series(String(payload.to))); }
     if (fn === 'health_scores_read') {
       const day = String(payload.day), row = world.rows.get(day);
       world.trace.push(`scores_read:${day}`);
@@ -231,10 +232,10 @@ describe('Weight follows the day', () => {
       expect(entry(o.state, HEALTH_TRIGGER_ID)).not.toBeNull();
       await o.pass();
       expect((world.rows.get(TODAY)!.weight as Record<string, unknown>).zone).not.toBe(weightBefore);
-      // The trace: one recompute (one read of the readings, one fresh read of today's busy minutes beside it), Weight the
+      // The trace: one recompute (one read of the readings and one of the vitals, one fresh read of today's busy minutes beside it), Weight the
       // only pillar that moved, then one evaluation of that change.
       const count = (step: string) => world.trace.filter(seen => seen === step).length;
-      expect([count('series_read'), count('free_busy'), count('health_evaluation')]).toEqual([1, 1, 1]);
+      expect([count('series_read'), count('vitals_read'), count('free_busy'), count('health_evaluation')]).toEqual([1, 1, 1, 1]);
       expect(world.trace.filter(step => step.startsWith('context_write'))).toEqual([`context_write:${addDays(TODAY, -1)}:none`, `context_write:${TODAY}:weight`]);
       expect(world.trace.indexOf(`context_write:${TODAY}:weight`)).toBeLessThan(world.trace.indexOf('health_evaluation'));
       expect(runs(o.state)).toEqual([{ mode: 'live', outcome: 'proposed' }]);
@@ -319,7 +320,7 @@ describe('Weight follows the day', () => {
       expect(entry(o.state, HEALTH_RECOMPUTE_ID)).toBeNull();
       vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
       await o.pass();
-      expect(world.trace.filter(step => step === 'series_read' || step === 'free_busy' || step.startsWith('context_write'))).toEqual([]);
+      expect(world.trace.filter(step => step === 'series_read' || step === 'vitals_read' || step === 'free_busy' || step.startsWith('context_write'))).toEqual([]);
       expect(world.requests.filter(r => r.request.response_format?.name === 'health_proposal')).toEqual([]);
     });
   });

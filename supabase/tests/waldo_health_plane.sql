@@ -182,7 +182,7 @@ create function pg_temp.ctx(day text default null,src text default 'apple',ep in
     'form',jsonb_build_object('score',72,'zone','good','drivers','[]'::jsonb,'confidence',0.8,'algorithm_version','form.v1','activation','candidate_unaccepted','hrv_method',null),
     'recovery',jsonb_build_object('score',64,'zone','moderate','algorithm_version','recovery.v1','activation','candidate_unaccepted','hrv_method','rmssd','confidence',0.7),
     'weight',jsonb_build_object('score',40,'zone','low','algorithm_version','weight.v1','activation','candidate_unaccepted','hrv_method',null),
-    'drivers','["sleep below baseline"]'::jsonb,'confidence',0.8,'freshness','fresh','tags','["degraded"]'::jsonb) $$;
+    'drivers','["breathing rate above usual"]'::jsonb,'confidence',0.8,'freshness','fresh','tags','["degraded"]'::jsonb) $$;
 select is(pg_temp.h('context_write','health-owner-c',pg_temp.ctx())->>'error','not_linked','a suspended owner cannot write a read-model row');
 select is(pg_temp.h('consent_grant','health-owner-b',pg_temp.grant_body('grant-b-model001','apple','model_processing'))->'consent'->>'status','granted','owner B also holds the model purpose');
 select is(pg_temp.h('context_write','health-owner-d',pg_temp.ctx())->>'error','consent_required','an owner without a live storage grant gets no derived row');

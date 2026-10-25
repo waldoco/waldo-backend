@@ -66,6 +66,14 @@ describe('owner health read', () => {
     expect(calls.map(c => [c.fn, c.message, c.args])).toEqual(['scores_read', 'consent_list', 'freshness_read'].map(op =>
       [`health_${op}`, `health.${op}.owner-b.${md5Hex('{}')}`, { p_do_name: 'owner-b', p_payload: '{}' }]));
   });
+  // The console page ships with this Worker, so it reads the latest health revision, sleep debt included.
+  it('shows the stored sleep debt, and leaves out one it cannot read', async () => {
+    const debt = { state: 'available', debt_minutes: 315.5, need_basis: 'own_average', algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
+    const scoresWith = async (sleep_debt: unknown) => ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: { scores: { ...stored(NOW - HOUR).scores, sleep_debt } } })).response).json()) as { scores: Record<string, unknown> }).scores;
+    expect((await scoresWith(debt)).sleep_debt).toEqual(debt);
+    const unreadable = await scoresWith({ state: 'available', debt_minutes: -1 });
+    expect(['sleep_debt' in unreadable, unreadable.recovery]).toMatchObject([false, { score: RECOVERY }]);
+  });
   it('ages the newest row when it is read: fresh, stale after six hours, expired after three days', async () => {
     const freshnessAt = async (compiledAt: number, day?: string) => ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: stored(compiledAt, day) })).response).json()) as { scores: { freshness: string } }).scores.freshness;
     expect(await freshnessAt(NOW - HOUR)).toBe('fresh');
