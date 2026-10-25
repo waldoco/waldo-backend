@@ -14,17 +14,18 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f';
 const HASH = 'b'.repeat(64);
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const wire = { revoked: false };
+const wire = { revoked: false, signedInAgo: 60_000 };
 
 beforeEach(() => {
   wire.revoked = false;
+  wire.signedInAgo = 60_000;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json(wire.revoked ? null : { owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
-    if (fn === 'console_session_list') return Response.json([{ session: HASH, created_at: new Date(Date.now() - 60_000).toISOString(), last_seen_at: new Date().toISOString() }]);
+    if (fn === 'console_session_list') return Response.json([{ session: HASH, created_at: new Date(Date.now() - wire.signedInAgo).toISOString(), last_seen_at: new Date().toISOString() }]);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(false);
@@ -112,6 +113,16 @@ it('pins to the block the owner picks and unpins, each on the revision of that c
     const unpinned = await act(ctx, { action: 'claim.unpin', id: `memory:claim:${id}`, revision: (await detail(ctx, id)).revision });
     expect(unpinned.status).toBe(200);
     expect((await detail(ctx, id)).item.pinned).toBeNull();
+  });
+});
+
+it('a session signed in over two hours ago still pins, unpins and edits the owner\'s own memory without a new code', async () => {
+  await appOwner('app-claim-stale', async ctx => {
+    wire.signedInAgo = 3 * 60 * 60_000;
+    const id = seed(ctx, 'preference', 'Prefers mornings');
+    expect(await act(ctx, { action: 'claim.pin', id: `memory:claim:${id}`, value: 'facts', revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
+    expect(await act(ctx, { action: 'claim.unpin', id: `memory:claim:${id}`, revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
+    expect(await act(ctx, { action: 'claim.edit', id: `memory:claim:${id}`, value: 'Prefers early mornings', revision: (await detail(ctx, id)).revision })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
   });
 });
 
