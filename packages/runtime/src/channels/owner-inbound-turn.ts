@@ -1,3 +1,4 @@
+import type { LLMAttachment } from '@waldo/contracts';
 import type { ReplyStream } from '../conversation/reply-stream';
 import type { RunEffectScope } from './run-effect-scope';
 import type { ReplyContext } from './owner-turn-envelope';
@@ -22,6 +23,8 @@ export type OwnerInboundTurn = Readonly<{
   text: string;
   parts: readonly InboundPart[];
   media?: TelegramMedia;
+  // Files the channel opened before the turn ran, for the model; `media` is a transport file the turn still has to read.
+  attachments?: readonly LLMAttachment[];
   replyTo?: ReplyContext;
   runScope?: RunEffectScope;
   // The host declared a route that carries files with this turn's reply.

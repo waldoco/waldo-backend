@@ -118,6 +118,19 @@ it('literal owner forget reaches the iMessage inbox and outbox records', async (
   });
 });
 
+it('a waiting turn\'s file names are owner words too: forget reaches them, and a closed turn keeps no files', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage);
+    const media = { messageGuid: 'm', files: [{ id: 'f1', name: 'secret plan.pdf', mimeType: 'application/pdf', size: 4 }, { id: 'f2', name: 'IMG_1.png', mimeType: 'image/png', size: 4 }] };
+    state.storage.kv.put('imessage:inbox-record:waiting', { ...turn('waiting', '', 'admitted'), media });
+    expect(redactIMessageEntries(state.storage, ['secret plan'], '[forgotten]')).toEqual({ rewritten: 1, remaining: 0 });
+    expect(inbox.get('waiting')?.media?.files.map(f => f.name)).toEqual(['[forgotten].pdf', 'IMG_1.png']);
+    const running = inbox.claim('waiting', true)!;
+    inbox.settle(running, true);
+    expect(inbox.get('waiting')).not.toHaveProperty('media');
+  });
+});
+
 // During another lane's streak the iMessage lane's wake is not held: a reply frozen during an app-lane streak of 10 reaches
 // the bridge at the floor, not at that lane's retry 17 or more minutes out.
 it('during an app-lane streak of 10, an iMessage reply reaches the bridge at the floor, not at the app lane\'s retry', async () => {

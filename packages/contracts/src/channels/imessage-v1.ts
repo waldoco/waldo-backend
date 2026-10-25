@@ -9,12 +9,15 @@ export const iMessageServiceSchema = z.enum(['iMessage', 'SMS', 'RCS']);
 export const iMessageTargetSchema = z.strictObject({
   bridgeId: id, accountId: id, chatGuid: id, messageGuid: id.optional(), partIndex: z.int().nonnegative().optional(),
 }).refine((t) => t.partIndex === undefined || t.messageGuid !== undefined, 'part requires message');
+const basename = id.refine((name) => !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..', 'filename must be a basename');
 export const iMessageAttachmentSchema = z.strictObject({
-  reference: id, sourceMessageGuid: id, filename: id.refine((name) => !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..', 'filename must be a basename'), mimeType: id,
+  reference: id, sourceMessageGuid: id, filename: basename, mimeType: id,
   byteLength: z.int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/),
   caption: z.string().optional(), kind: z.enum(['image', 'audio', 'video', 'document', 'file', 'sticker']),
   nativeVoice: z.boolean(),
 });
+// An attachment Photon holds, as Photon describes it: the backend fetches its bytes by id, so a host sends metadata only.
+export const iMessagePhotonAttachmentSchema = z.strictObject({ id, name: basename, mimeType: id, size: z.int().nonnegative() });
 const common = {
   version: z.literal(1), bridgeId: id, accountId: id, eventId: id,
   cursor: z.strictObject({ databaseGeneration: id, value: id }),
@@ -23,7 +26,7 @@ const common = {
   messageGuid: id, partIndex: z.int().nonnegative(),
 };
 const content = {
-  text: z.string(), attachments: z.array(iMessageAttachmentSchema),
+  text: z.string(), attachments: z.array(iMessageAttachmentSchema), photonAttachments: z.array(iMessagePhotonAttachmentSchema).optional(),
   replyToGuid: id.optional(), threadOriginatorGuid: id.optional(),
 };
 export const iMessageEventSchema = z.discriminatedUnion('kind', [

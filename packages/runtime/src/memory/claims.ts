@@ -73,7 +73,7 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 // Owner-DO free-text stores: in the selector inventory, redacted with the same case-insensitive literal as every other store, and read back.
 // trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
 export const LITERAL_REDACTED_STORES = [
-  ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
+  ['thread_topic_index', ['topic']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
   // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
   ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
