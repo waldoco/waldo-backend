@@ -320,7 +320,7 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
-    description: "Read a bounded page of events, now through the next 24 hours by default. Without account it reads every connected account's primary calendar at once, each account's events under its account. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
+    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
@@ -370,7 +370,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
-    description: "Read a sampled page from the Gmail Primary inbox category, not the entire inbox. Without account it reads every connected Gmail account at once: accounts says how each went, by_account holds each account's messages under its account. Defaults to a rolling 24-hour window, not today. A page with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. A message whose from differs from its account.email was sent by someone else, even when it is about the owner's own tasks. Pass that account and the same date_range with its page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
+    description: "Read a sampled page from the Gmail Primary inbox category, not the entire inbox. Defaults to a rolling 24-hour window, not today. A page with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. A message whose from differs from its account.email was sent by someone else, even when it is about the owner's own tasks. Pass that account and the same date_range with its page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
@@ -410,7 +410,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Space-separated Gmail terms must all match; do not paste a full natural-language ask as the query. Start with distinctive sender/repository/topic terms. An empty match is not absence: try a narrower-term query while preserving the same account, date range and result limit, then report the search limit. Never rewrite a quoted or operator query silently. Use get_communication for 'what is new' instead, and read_thread to read one thread in full. Without account it searches every connected account at once, each account's matches under its account. Continue search pages with that account's cursor and the same query/date range, passing that account.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Space-separated Gmail terms must all match; do not paste a full natural-language ask as the query. Start with distinctive sender/repository/topic terms. An empty match is not absence: try a narrower-term query while preserving the same account, date range and result limit, then report the search limit. Never rewrite a quoted or operator query silently. Use get_communication for 'what is new' instead, and read_thread to read one thread in full. Continue search pages with cursor and the same query/date range/account.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
@@ -433,7 +433,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_contacts',
-    description: "Find people in the owner's Google contacts and among the people they have emailed, by the start of a name or an address. Use it to work out who the owner means before drafting, sending or inviting. If more than one person could be meant, or the match is uncertain, ask the owner which person rather than guessing a recipient. An empty result does not mean the person is unknown: the owner may never have saved or emailed them. Without account it searches every connected account at once, each account's people under its account.",
+    description: "Find people in the owner's Google contacts and among the people they have emailed, by the start of a name or an address. Use it to work out who the owner means before drafting, sending or inviting. If more than one person could be meant, or the match is uncertain, ask the owner which person rather than guessing a recipient. An empty result does not mean the person is unknown: the owner may never have saved or emailed them.",
     schema: searchContactsArgsSchema,
     trigger_allowlist: allowlist('search_contacts'),
     autonomy_gated: false,
@@ -484,7 +484,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
-    description: "Read a bounded page of the owner's Google Tasks across all authorized lists by default, preserving each task_list_id. Without account it reads every connected account at once: accounts says how each went, by_account holds each account's tasks under its account. Use operation list_task_lists to discover list names, or task_list_id with its account to select one list. Continue next_page_token with that account and the same status/limit (coverage.page_limit)/operation/list. Inspect coverage: a continuation contains only its current page. Defaults to open tasks; completed/all reads include hidden completed tasks and assigned tasks. Google Tasks has no in-progress state; that filter returns open tasks with a note. Legacy adapters provide only a sampled default list with incomplete coverage.",
+    description: "Read a bounded page of the owner's Google Tasks across all authorized lists by default, preserving each task_list_id. Use operation list_task_lists to discover list names, or task_list_id with its account to select one list. Continue next_page_token with that account and the same status/limit (coverage.page_limit)/operation/list. Inspect coverage: a continuation contains only its current page. Defaults to open tasks; completed/all reads include hidden completed tasks and assigned tasks. Google Tasks has no in-progress state; that filter returns open tasks with a note. Legacy adapters provide only a sampled default list with incomplete coverage.",
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
