@@ -69,7 +69,7 @@ export const appSendResultV1Schema = z.strictObject({
 export const APP_CHAT_DRAFT_REVISION = 2;
 // The same revision's `activity`: what kind of work the running turn's tools are on, from the tool's name only (never its
 // arguments or output), and since when (epoch ms). Set when a tool starts; gone once the reply's draft shows or the turn
-// ends. A closed vocabulary the client words itself; a kind it does not know should read as `working`.
+// ends. A closed vocabulary the client words itself; a new kind is a contract change the app lane hears of first.
 export const APP_CHAT_ACTIVITY_KINDS = ['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working'] as const;
 export type AppChatActivityKind = typeof APP_CHAT_ACTIVITY_KINDS[number];
 export const appChatActivityV1Schema = z.strictObject({ kind: z.enum(APP_CHAT_ACTIVITY_KINDS), since: z.int().nonnegative() });
