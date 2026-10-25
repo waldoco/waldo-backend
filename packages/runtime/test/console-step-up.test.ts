@@ -149,7 +149,7 @@ const everyAction = (): readonly string[] => {
 const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
 const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown; startsFlow?: unknown }>>>;
 const LASTING = ['account.delete', 'approval.send', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
-  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'spot.edit', 'spot.pin', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
+  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
 const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
 
 describe('every console action is classified before it ships', () => {
@@ -308,6 +308,7 @@ describe('every app action and approval decision is classified by the same table
     }
     expect(stepUp.appControlStepUpAction({ action: 'google.connect' })).toBe('google.connect');
     expect(stepUp.appControlStepUpAction({ action: 'account.delete' })).toBe('account.delete');
+    for (const action of ['pin', 'unpin', 'edit']) expect(stepUp.appControlStepUpAction({ action: `claim.${action}` })).toBe(`spot.${action}`);
   });
 
   it('names each chat channel the app can link by its gated console link action', () => {
