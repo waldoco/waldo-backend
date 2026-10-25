@@ -315,6 +315,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     beginApply(id: string): boolean {
       return sql.exec("UPDATE task_jobs SET inflight_json = ? WHERE id = ? AND status = 'reported'", JSON.stringify({ turn: 'task_report', at: deps.now() }), id).rowsWritten > 0;
     },
+    // An apply turn that ended in this pass without a reply (closed partway) left no turn in flight.
+    endApply(id: string): boolean {
+      return sql.exec("UPDATE task_jobs SET inflight_json = NULL WHERE id = ? AND status = 'reported'", id).rowsWritten > 0;
+    },
     // An apply that could not run (no model to write the report) waits like a deferred attempt; it failed in this pass, so it
     // left no turn in flight. updated_at keeps the time the job was reported, which bounds how long its apply is retried.
     postpone(id: string, dueAt: number): boolean {

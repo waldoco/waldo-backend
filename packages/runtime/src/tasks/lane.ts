@@ -117,7 +117,8 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
         const tools = row.taint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : deps.applyTools();
         reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, tools));
       } catch (error) {
-        if (error instanceof ClosedRunError) return;
+        // Closed in this pass (the job moved on, or the owner's admission closed): nothing was lost, so the intent goes.
+        if (error instanceof ClosedRunError) { book.endApply(row.id); return; }
         if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) {
           hop(row, 'task_apply_deferred', { ok: false });
           return;
@@ -155,9 +156,9 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       // taint gate decides exactly as it would have then.
       reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone, { asked: row.surface, here: deps.surface }), current, row.taint, deps.applyTools()));
     } catch (error) {
-      if (error instanceof ClosedRunError) return;
-      // The turn failed in this pass rather than being lost: it waits for its next try as before.
-      if (!book.endEffect(ticket)) return;
+      // The turn ended in this pass rather than being lost, so its intent goes. Closed (the attempt fenced, or the owner's
+      // admission closed): its lease lapses and it is tried again as before. Failed: it waits for its next try.
+      if (!book.endEffect(ticket) || error instanceof ClosedRunError) return;
       const last = deps.now() >= brief.promised_by;
       if (last) book.park(row.id, 'provider_unavailable');
       else book.defer(ticket, Math.min(deps.now() + deferDelay(row.deferrals + 1), brief.promised_by), NO_SPEND);

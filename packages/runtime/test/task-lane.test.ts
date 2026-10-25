@@ -506,12 +506,9 @@ describe('R-4: the retried turn', () => {
       await runJobsLane(deps({ turn: async () => { throw new ClosedRunError(); } }));
       expect(book.get(job!.id)).toMatchObject({ status: 'running', inflight_json: null });
       clock.at += TASK_LEASE_MS + 1;
-      await runJobsLane(deps());
-      expect(book.get(job!.id)!.park_reason).toBeNull();
-      clock.at = Math.max(clock.at, book.get(job!.id)!.due_at ?? clock.at);
       await runJobsLane(deps({ turn: async () => 'Done: your 3pm is now Friday.' }));
       expect(sent.get(`retry:${job!.id}`)).toBe('Done: your 3pm is now Friday.');
-      expect(book.get(job!.id)!.status).toBe('applied');
+      expect(book.get(job!.id)).toMatchObject({ status: 'applied', park_reason: null, attempt: 2 });
     });
   });
 });
