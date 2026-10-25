@@ -49,6 +49,13 @@ is shared by every Worker that names it.
    `IMESSAGE_WALDO_ADDRESS`.
 3. An admin opens `/console/imessage` and clicks **Connect Photon**. They sign in to Photon and approve. The callback
    only accepts the browser that started the sign-in.
+4. Photos and files (optional): `wrangler secret put PHOTON_PROJECT_SECRET --env <env>` (the Spectrum project secret,
+   the one the host holds), then set the var `IMESSAGE_MEDIA` to `"1"`. It is `"0"` in every environment by default.
+   With it on, a photo or document an owner sends is fetched from Photon for that turn only: a project token from
+   `spectrum.photon.codes`, then the message and the file from `imessage.spectrum.photon.codes`, no other host. Waldo
+   reads a file only when Photon shows it on a message that owner sent. With it off, or when a fetch fails, the owner
+   gets one reply saying the file was not opened. Voice notes are always refused. The host must forward each message's
+   `photonAttachments` (see `HOST_CONNECTOR.md`).
 
 Photon's Dashboard API takes only user OAuth tokens. Refresh tokens rotate on every use and last 30 days, so one
 Durable Object holds them: the `IMessageBridgeDO` instance named `["photon-oauth", <environment>]`. It serializes

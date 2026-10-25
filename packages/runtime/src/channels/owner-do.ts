@@ -13,7 +13,7 @@ import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTurnText, openIMessageTurnMedia, type OpenedIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -871,6 +871,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly imessageAttempts = new Set<string>();
   private activeIMessage: IMessageInboxRecord | null = null;
   private iMessageProgress: ProgressPacer | null = null;
+  // The running iMessage turn's files, opened before it started; held in memory for that turn only.
+  private iMessageOpened: Readonly<{ updateId: number; parts: OpenedIMessageTurnMedia['parts']; attachments: OpenedIMessageTurnMedia['attachments'] }> | null = null;
   private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
   private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.OWNER_DO }; }
   /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
@@ -912,12 +914,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.activeScope = scope; this.activeAbort = abort; let completed = false;
       const timeout = setTimeout(() => abort.abort(), Math.max(0, scope.deadline - Date.now()));
       try {
-        this.iMessageProgress = this.startIMessageProgress(record, scope);
-        const subject = appSubjectFor(record.ownerDoName);
-        await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: record.text } }, 'imessage', true, scope);
+        const media = await openIMessageTurnMedia(this.imessageHost, record, scope);
+        if (media.kind !== 'answered') {
+          this.iMessageOpened = media.kind === 'opened' ? { updateId: record.updateId, parts: [...ownerWords(record.text), ...media.parts], attachments: media.attachments } : null;
+          this.iMessageProgress = this.startIMessageProgress(record, scope);
+          const subject = appSubjectFor(record.ownerDoName);
+          await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: iMessageTurnText(record) } }, 'imessage', true, scope);
+        }
         completed = true;
       } catch { console.error('imessage execution outcome unconfirmed'); }
-      finally { await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed, this.iMessageFailureNotice); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
+      finally { this.iMessageOpened = null; await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed, this.iMessageFailureNotice); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
       // Each reply goes to the bridge before the next turn starts, not after every turn this drain found.
       await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     }
@@ -3921,7 +3927,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
         recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
-        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
+        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==iMessageTurnText(record))throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),
       // Scheduled jobs for an owner whose only surface is iMessage run as the owner the pass admitted.
@@ -3958,6 +3964,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       respond: async (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
+        // An iMessage turn's files were opened before it ran: the model reads them beside the owner's own words.
+        const opened = this.iMessageOpened?.updateId === turn.updateId ? this.iMessageOpened : null;
+        if (opened) turn = { ...turn, parts: opened.parts, attachments: opened.attachments };
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
       // Freeze the reply text, stable commandId and exact target together with the turn's closure.

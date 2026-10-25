@@ -12,6 +12,7 @@ import { mintHostKey, sha256Hex, signCommitment, signS2, unwrapCredential, verif
 import { iMessageDirectory, IMessageDirectoryUnavailable, type BridgeAuthority, type SenderAuthority } from './directory';
 import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './policy';
 import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFinish, type PhotonStatus } from './photon';
+import { iMessageMediaOf, type IMessageMedia, type PhotonMediaEnv } from './photon-media';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 
 export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
@@ -28,7 +29,9 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
   IMESSAGE_WALDO_ADDRESS?: string;
   /** Shared Waldo number on Photon: the console page an enrolled but unlinked sender is sent to (https only). */
   IMESSAGE_CONSOLE_URL?: string;
-}>;
+  /** "1": photos and files on Photon are fetched for the model. Otherwise each gets one reply that it was not opened. */
+  IMESSAGE_MEDIA?: string;
+}> & PhotonMediaEnv;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
 export const iMessageComposition = (env: IMessageEnv): { policy: IMessageConnectorPolicy; environment: string; wrappingKey: string } | null => {
@@ -47,10 +50,10 @@ export type HostRoute = 'events' | 'heartbeat' | 'capabilities' | 'commands/pull
 /** JSON is serialized inside the DO so the RPC boundary carries only a status and a string. */
 export type HostReply = { status: number; json: string };
 
-/** Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. */
+/** Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only. */
 export type IMessageTurnHandoff = Readonly<{
   dedupKey: string; digest: string; envelope: OwnerTurnEnvelope; binding: IMessageBinding; revision: string;
-  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number;
+  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia;
 }>;
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
@@ -189,7 +192,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const event = result.data, digest = await sha256Hex(body);
     if (authority.state === 'pending') {
       // Setup scope: only the exact challenge from the expected sender in the expected direct chat.
-      if (event.kind !== 'message' || event.isFromMe || event.isGroup || event.service !== 'iMessage' || event.attachments.length
+      if (event.kind !== 'message' || event.isFromMe || event.isGroup || event.service !== 'iMessage' || event.attachments.length || event.photonAttachments?.length
         || !authority.challengeHash || event.senderHandle !== authority.expectedSubject || event.chatGuid !== authority.expectedChatGuid
         || await sha256Hex(event.text.trim()) !== authority.challengeHash) return invalid();
       const accepted = await this.directory().recordChallenge({ environment, bridgeId: event.bridgeId, accountId: event.accountId, challengeHash: authority.challengeHash,
@@ -396,7 +399,6 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       if (authority.kind === 'shared') {
         // Shared Waldo number: a sender reaches only their own Waldo, through their own presence.
         if (authority.state !== 'active') { settle('acknowledged', 'shared_bridge_pending'); continue; }
-        if (event.attachments.length) { settle('held', 'media_unsupported'); continue; }
         if (event.chatGuid !== `iMessage;-;${event.senderHandle}`) { settle('acknowledged', 'not_sender_direct_chat'); continue; }
         const outcome = await this.routeSharedSender(event, pending.digest, environment, bridgeId, accountId, store);
         if (outcome === 'retry') return false;
@@ -405,8 +407,6 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       }
       const binding = bindingFromAuthority(authority);
       if (!binding) { settle('held', 'binding_unavailable'); continue; }
-      // Incoming media is retained as evidence and never treated as complete text.
-      if (event.attachments.length) { settle('held', 'media_unsupported'); continue; }
       const outcome = await this.handToOwner(event, pending.digest, authority, binding, environment, store);
       if (outcome === 'retry') return false;
       settle(outcome === 'handed' ? 'handed' : outcome === 'held' ? 'held' : 'acknowledged', outcome);
@@ -420,7 +420,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     let latest = authority;
     const grant: IMessageAdmissionGrant = { binding, revision: authority.revision, doName: authority.doName };
     try {
-      const handoff = await admitIMessageOwnerTurn(event, {
+      // No bytes cross here: a host's files go to the owner as references beside the admitted words.
+      const media = event.kind === 'message' ? iMessageMediaOf(event) : undefined;
+      const handoff = await admitIMessageOwnerTurn(event.kind === 'message' ? { ...event, attachments: [] } : event, {
         authority: {
           // Unknown senders and other chats resolve to no grant: no directory lookup, no owner context.
           resolve: (e) => e.senderHandle === binding.subject && e.chatGuid === binding.chatGuid && e.bridgeId === binding.bridgeId && e.accountId === binding.accountId ? grant : null,
@@ -441,6 +443,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
         digest, envelope: turn, binding, revision: grant.revision, environment,
         bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
+        ...(media ? { media } : {}),
       }));
       const admitted = await this.owner(authority.doName).admitIMessageTurn(handoff);
       if (admitted === 'admitted' || admitted === 'duplicate') return 'handed';

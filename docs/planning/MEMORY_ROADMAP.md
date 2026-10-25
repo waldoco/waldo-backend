@@ -31,7 +31,7 @@ The bar is state-of-the-art personal memory. This roadmap merges the locked MVP 
 
 ## What already exists
 
-The DO schema (`packages/runtime/src/do-schema.ts`) and contracts (`packages/contracts/src/memory/hall.ts`) already define the five halls (facts, events, discoveries, preferences, advice), bi-temporal `memory_blocks` (valid_from, valid_to, superseded_by), trust classes, confidence, and a `memory_inbox` with conditions and conflict classes (ADR-0005, 0037, 0046, 0049). `SqliteTemporalRecallGateway` reads committed blocks. Nothing writes them yet, and the Telegram path runs with recall unavailable.
+The contracts (`packages/contracts/src/memory/hall.ts`) define the five halls (facts, events, discoveries, preferences, advice), trust classes, confidence, and conditions and conflict classes (ADR-0005, 0037, 0046, 0049). The DO tables that carried them, `memory_blocks` and `memory_inbox`, were never written and were dropped by DO migration 13; owner memory lives in `claims` and `episodes`.
 
 ## Stage 2 plan
 
