@@ -141,7 +141,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -182,7 +182,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
-  'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
+  'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
+  'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
+  'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',

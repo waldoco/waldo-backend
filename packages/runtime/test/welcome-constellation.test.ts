@@ -245,6 +245,26 @@ describe('welcome nodes: confirm, correct, forget', () => {
   });
 });
 
+describe('welcome nodes: forgotten in chat', () => {
+  it('forgetting the read behind a node in chat removes the node, and a rerun cannot write it back', async () => {
+    await withSql(async (sql, transaction) => {
+      const { claims, node } = await built(sql, transaction);
+      const target = node('Monday planning ritual');
+      const [support] = welcomeSupportIds(claims, target.id);
+      const text = claims.allClaims().find((claim) => claim.id === support)!.text;
+      // What forget_memory does with a selected claim: bar its text, then purge it with every store that cites it.
+      transaction(() => { claims.barrier(text, new Date(T0).toISOString()); claims.purge([support!], new Date(T0).toISOString()); });
+      expect(claims.nodes().some((row) => row.id === target.id)).toBe(false);
+      expect(turnMemoryPrompt(claims, 'hi')).not.toContain('Monday planning ritual');
+      const again = deps(sql, transaction, { answers: { calendar: answer(calendarNode({ label: 'Monday planning habit' })) } });
+      sql.exec('DELETE FROM welcome_builds');
+      again.build.start();
+      await runWelcome(again.deps);
+      expect(claims.nodes().map((row) => row.label)).not.toContain('Monday planning habit');
+    });
+  });
+});
+
 describe('welcome nodes: what reads them', () => {
   it('the nightly promotion leaves a welcome node untouched', async () => {
     await withSql(async (sql, transaction) => {

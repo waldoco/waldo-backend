@@ -6,7 +6,8 @@ import { shiftDay } from '../health/scores/time';
 import { foldDay, localDayOf, SIGNALS, type HealthReadBook } from '../tools/live/health';
 import type { GoogleAccess } from '../tools/live/google';
 import type { FindingStore } from './findings';
-import type { StageInput } from './welcome';
+import type { ClaimStore } from '../memory/claims';
+import { runWelcome, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
 // What each source gives the welcome build: bounded reads, as pointers to the items, never their contents.
 export const WELCOME_HEALTH_DAYS = 90;
@@ -148,3 +149,18 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
   if (!findings.offered() || findings.lookup() !== 'granted') return settled('skipped');
   return settled(findings.page(1).total > 0 ? 'done' : 'empty');
 };
+
+// The owner object's welcome run: the four readers over its own connections, and one model call per stage, which the owner
+// object runs as an owner job on its queue.
+export const ownerWelcome = (deps: Readonly<{
+  sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string;
+  healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
+  ask(stage: WelcomeStage, input: string): Promise<string>;
+}>) => ({
+  build: () => welcomeBuild(deps.sql, deps.now),
+  run: () => runWelcome({
+    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask,
+    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())() },
+  }),
+});
+export type OwnerWelcome = ReturnType<typeof ownerWelcome>;

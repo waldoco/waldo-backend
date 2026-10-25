@@ -1,4 +1,4 @@
-import { appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
 import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
@@ -17,6 +17,8 @@ export type AppControlsHost = Readonly<{
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
   cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
+  // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
+  welcome?():AppWelcomeBuildV1;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
@@ -60,7 +62,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       let paged:ReturnType<typeof pageMemoryGraph>;
       try{paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams(paging));}catch{return reply({error:'projection_unavailable'},503);}
       if(paged.status!==200)return reply({error:paged.body.error},paged.status);
-      const data=appMemoryGraph(paged.body),parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      const graph=appMemoryGraph(paged.body),data=graph.memory_view==='summary'&&host.welcome?{...graph,welcome:host.welcome()}:graph,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='account'){
@@ -88,6 +90,17 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
     return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // A node action runs as the console's memory action on the node it names, against the revision of that node's detail read.
+  if(action.success&&action.data.view==='constellation'){
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
+    const detail=async()=>{const paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams([['view','detail'],['id',id!]]));return paged.status===200?appMemoryGraph(paged.body) as never:null;};
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection:detail,
+      act:async node=>{await host.assertCurrent();return host.act(node);}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
   if(!action.success||!(action.data.view==='day'||(action.data.view==='connections'&&action.data.action==='google.connect')))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
