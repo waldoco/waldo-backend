@@ -329,18 +329,26 @@ const expectNotice = (delivery: Delivery) => {
   expect(text).not.toContain('upstream-detail-9f2');
   expect(text).not.toContain('Plan my afternoon');
 };
+// A turn no model answers (all failed, or one wrote nothing) gets the floor: a time the retry job keeps (R-4), never the error.
+const expectFloor = (delivery: Delivery) => {
+  const text = JSON.parse(delivery.body).text as string;
+  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+  expect(text).not.toContain('upstream-detail-9f2');
+};
 
-it('an iMessage turn the model fails tells the owner once, with a fixed notice and no error text; a replay sends nothing more', async () => {
+it('an iMessage turn the model fails tells the owner once, with the floor\'s promised time and no error text; a replay sends nothing more', async () => {
   const w = await world();
   await w.pairAndActivate();
   modelDown();
   const event = w.host.message('Plan my afternoon');
   expect((await w.host.send(event)).status).toBe(200);
   await w.pump();
-  expectNotice(await sendNext(w));
+  expectFloor(await sendNext(w));
   await w.pump(2);
-  expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed, r.text])).toEqual([['interrupted', true, '']]);
-  expect((await failureRows(w)).map(r => [r.state, r.result?.state])).toEqual([['settled', 'local_recorded']]);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
+  expect((await outbox(w.ownerStub)).map(r => [r.replyRef.split(':')[0], r.state])).toEqual([['reply', 'settled']]);
+  expect(await failureRows(w)).toEqual([]);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['queued']);
   // The bridge hands the same event again and the owner drains again: no second turn, no second notice.
   expect((await w.host.send(event)).status).toBe(200);
   await w.pump(3);
@@ -351,29 +359,31 @@ it('an iMessage turn the model fails tells the owner once, with a fixed notice a
   await replyFor(w, 'What time is it?');
   await sendNext(w);
   expect(sentTexts(w).slice(1)).toEqual(['Scripted owner reply.']);
-  expect(await failureRows(w)).toHaveLength(1);
+  expect(await failureRows(w)).toEqual([]);
+  expect((await retryRows(w))).toHaveLength(1);
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 
-it('an iMessage turn whose model writes nothing tells the owner once', async () => {
+it('an iMessage turn whose model writes nothing tells the owner once, with the floor\'s promised time', async () => {
   const w = await world();
   await w.pairAndActivate();
   const reply = proof.reply;
   proof.reply = '   ';
   try {
     await replyFor(w, 'Plan my afternoon');
-    expectNotice(await sendNext(w));
+    expectFloor(await sendNext(w));
   } finally { proof.reply = reply; }
   await w.pump(2);
-  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
-  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['failure']);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['queued']);
   expect(w.host.nativeSends).toHaveLength(1);
 }, 30_000);
 
 // The claimed turn's deadline is `offsetMs` from its claim instead of the full window.
 const shortDeadline = (offsetMs: number) => {
   const claim = IMessageOwnerInbox.prototype.claim;
-  vi.spyOn(IMessageOwnerInbox.prototype, 'claim').mockImplementation(function (this: IMessageOwnerInbox, id: string, current: boolean) {
+  return vi.spyOn(IMessageOwnerInbox.prototype, 'claim').mockImplementation(function (this: IMessageOwnerInbox, id: string, current: boolean) {
     return claim.call(this, id, current, Date.now() + offsetMs);
   });
 };
@@ -407,15 +417,16 @@ it('an iMessage turn whose deadline passes before it can run tells the owner onc
 it('an iMessage turn whose owner object was evicted mid-turn tells the owner once, when the next drain recovers it', async () => {
   const w = await world();
   await w.pairAndActivate();
-  modelDown();
-  // The instance dies before it can close the row: the row stays running under an attempt nobody holds any more.
+  // The model answers, but the instance dies before it can commit the reply or close the row: the row stays running under an
+  // attempt nobody holds any more. (A turn no model answers now ends with the floor's reply, so it is not the way in.)
+  const close = vi.spyOn(IMessageOwnerInbox.prototype, 'closeFinal').mockImplementation(() => { throw new Error('instance gone'); });
   const settle = vi.spyOn(IMessageOwnerInbox.prototype, 'settle').mockImplementation(() => { throw new Error('instance gone'); });
   expect((await w.host.send(w.host.message('Plan my afternoon'))).status).toBe(200);
   await runDurableObjectAlarm(w.bridgeStub()); await w.settle();
   await vi.waitFor(() => expect(settle).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 50 });
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['running']);
   expect(await failureRows(w)).toEqual([]);
-  settle.mockRestore();
+  settle.mockRestore(); close.mockRestore();
   const calls = proof.turns.length;
   await evictDurableObject(w.ownerStub);
   await w.pump(2);
@@ -429,7 +440,9 @@ it('an iMessage turn whose owner object was evicted mid-turn tells the owner onc
 it('a failure notice that cannot be queued still settles the turn, loops nowhere, and the next message runs', async () => {
   const w = await world();
   await w.pairAndActivate();
-  modelDown();
+  // A turn whose deadline passed before it ran is interrupted and owes the notice. (A turn no model answers ends with the
+  // floor's reply instead, so it owes none.)
+  const late = shortDeadline(-1);
   const freeze = vi.spyOn(IMessageFinalOutbox.prototype, 'freezeFailure').mockImplementation(() => { throw new Error('imessage_outbox_capacity'); });
   await replyFor(w, 'Plan my afternoon');
   const calls = proof.turns.length;
@@ -438,7 +451,7 @@ it('a failure notice that cannot be queued still settles the turn, loops nowhere
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
   expect(await outbox(w.ownerStub)).toEqual([]);
   expect(proof.turns).toHaveLength(calls);
-  proof.hold = null; freeze.mockRestore();
+  late.mockRestore(); freeze.mockRestore();
   await replyFor(w, 'What time is it?');
   await sendNext(w);
   expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
