@@ -4137,7 +4137,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string | null = null;
         if (cardNow && analysisChanges.length) {
           const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await promptLedger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
-          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
+          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_memory', 'search_episodes', 'open_loop'] : undefined)).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
         }
@@ -4150,7 +4150,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
-          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_owner_context', 'search_episodes']); },
+          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_memory', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);

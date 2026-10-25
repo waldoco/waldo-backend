@@ -80,7 +80,6 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   get_master_metrics: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_context: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
   query_availability: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  read_owner_context: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   read_memory: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_episodes: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.
