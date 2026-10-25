@@ -469,6 +469,18 @@ describe('applying a machine job', () => {
       expect(h.book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
     });
   });
+
+  it('a held topic cancels a running machine job and fences its worker, so the forget does not wait on it', async () => {
+    await withBook(async (h) => {
+      const id = enqueue(h.book, spec()).job.id;
+      expect(h.book.startAttempt(id)).not.toBeNull();
+      const fenced: string[] = [];
+      const host = { fence: () => undefined, cancelled: (job: string) => { fenced.push(job); }, busy: () => new Set<string>() } as unknown as TaskHost;
+      await runJobsLane(lane(h).deps({ host, heldTopics: () => ['Asha'] }));
+      expect(h.book.get(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(fenced).toEqual([id]);
+    });
+  });
 });
 
 describe('the worker route', () => {
