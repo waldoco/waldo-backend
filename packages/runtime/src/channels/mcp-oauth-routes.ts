@@ -20,6 +20,8 @@ const COPY: Record<ConnectOutcome['kind'], Readonly<{ status: number; title: str
   failed: { status: 502, title: 'Server could not be connected', body: 'The server\'s sign-in did not complete. Start again from Connections; if it keeps failing, the server may not support Waldo yet.' },
 };
 
+const GRANOLA_LINKED = { status: 200, title: 'Granola connected', body: 'Waldo can now read your Granola meeting notes when they help. He never changes your notes, folders or workspace. You can close this tab.' };
+
 const UNBOUND = { status: 403, title: 'Start the connection again', body: 'This sign-in came back to a different browser from the one that started it, or it took too long, so nothing was connected. Connect the server again from Connections in this browser.' };
 
 const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth', hop: 'mcp_oauth_callback', ok: false, error: reason }));
@@ -51,7 +53,7 @@ export const handleMcpCallback = async (request: Request, env: TelegramWebhookEn
         method: 'POST', body: JSON.stringify({ nonce: state.nonce, query: url.searchParams.toString() }),
       });
       const outcome = await response.json() as ConnectOutcome;
-      return callbackPage(outcome.kind === 'linked', COPY[outcome.kind] ?? COPY.failed);
+      return callbackPage(outcome.kind === 'linked', outcome.kind === 'linked' && outcome.reviewed ? GRANOLA_LINKED : COPY[outcome.kind] ?? COPY.failed);
     } catch (failure) {
       rejected(`owner unreachable: ${failure instanceof Error ? failure.name : 'unknown'}`);
       return callbackPage(false, COPY.failed);

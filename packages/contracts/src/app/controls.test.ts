@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -201,8 +201,41 @@ describe('constellation view', () => {
     ]) expect(appControlQueryV1Schema.safeParse(query).success).toBe(false);
   });
 
-  it('takes no actions', () => {
+  it('takes the node actions, and they only it', () => {
     expect(appControlActionV1Schema.safeParse({ view: 'constellation', action: 'timezone.set', value: 'UTC', revision, request_id: 'request-0009' }).success).toBe(false);
+    const act = (extra: object) => ({ view: 'constellation', revision, request_id: 'request-0010', ...extra });
+    for (const valid of [
+      act({ action: 'node.confirm', id: 'memory:node:7' }), act({ action: 'node.forget', id: 'memory:node:7' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'Walks before lunch, not after' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'x'.repeat(APP_NODE_CORRECTION_MAX_V1) }),
+    ]) expect(appControlActionV1Schema.safeParse(valid).success).toBe(true);
+    for (const invalid of [
+      act({ action: 'node.confirm' }), act({ action: 'node.confirm', id: 'memory:claim:7' }), act({ action: 'node.forget', id: 'memory:node:0' }),
+      act({ action: 'node.forget', id: 'memory:node:7', value: 'extra' }), act({ action: 'node.confirm', id: 'memory:node:7', volume: 'low' }),
+      act({ action: 'node.correct', id: 'memory:node:7' }), act({ action: 'node.correct', id: 'memory:node:7', value: '   ' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'x'.repeat(APP_NODE_CORRECTION_MAX_V1 + 1) }),
+      { ...act({ action: 'node.forget', id: 'memory:node:7' }), view: 'day' },
+    ]) expect(appControlActionV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  const stages = { health: 'done', calendar: 'reading', mail: 'pending', web: 'skipped' };
+  const welcome = { state: 'building', started_at: 1_761_400_000_000, finished_at: null, stages, nodes: 4 };
+  it('carries the welcome build on the summary, and node sources and confirmation, all optional', () => {
+    for (const data of [
+      { ...valid[0], welcome }, { ...valid[0], welcome: { ...welcome, state: 'not_started', started_at: null, nodes: 0, stages: { health: 'pending', calendar: 'pending', mail: 'pending', web: 'pending' } } },
+      { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: 1_761_400_090_000, stages: { health: 'empty', calendar: 'revoked', mail: 'unavailable', web: 'skipped' } } },
+      { ...valid[2], items: [{ ...node, sources: ['apple_health', 'calendar'], confirmation: 'waldos_read' }] },
+      { ...valid[2], items: [{ ...node, sources: [], confirmation: 'confirmed' }] },
+      { ...valid[4], item: { ...node, sources: ['gmail'], confirmation: 'waldos_read' } },
+    ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(true);
+    for (const data of [
+      { ...valid[0], welcome: { ...welcome, state: 'failed' } }, { ...valid[0], welcome: { ...welcome, stages: { ...stages, web: 'failed' } } },
+      { ...valid[0], welcome: { ...welcome, stages: { health: 'done', calendar: 'done', mail: 'done' } } }, { ...valid[0], welcome: { ...welcome, nodes: -1 } },
+      { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: null } }, { ...valid[0], welcome: { ...welcome, finished_at: 1 } },
+      { ...valid[0], welcome: { ...welcome, state: 'not_started' } },
+      { ...valid[2], items: [{ ...node, sources: ['web'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
+      { ...valid[1], welcome },
+    ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(false);
   });
   it('takes no actions but the claim actions of controls revision 2', () => {
     expect(APP_CONTROLS_MEMORY_REVISION).toBe(2);
@@ -244,6 +277,25 @@ describe('confirmed time zone', () => {
   it('says whether the owner set the zone, and stays optional for a Worker that does not say', () => {
     for (const valid of [{}, { timezone_confirmed: true }, { timezone_confirmed: false }]) expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
     for (const invalid of [{ timezone_confirmed: 'yes' }, { timezone_confirmed: null }, { timezone_confirmed: 1 }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
+  });
+});
+
+describe('signing out another device from the app', () => {
+  const ref = `sess_${'c'.repeat(64)}`;
+  const revoke = { view: 'connections', action: 'session.revoke', value: ref, revision, request_id: 'revoke-0001' };
+  it('names the device by the session_ref its connections row carries', () => {
+    expect(appControlActionV1Schema.safeParse(revoke).success).toBe(true);
+    const item = { signed_in: '2026-10-12T20:00:00Z', until: '2026-11-11T20:00:00Z', current: false, session_ref: ref };
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [item] } })).success).toBe(true);
+    const { session_ref: _ref, ...older } = item;
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [older] } })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [{ ...item, session_ref: 'sess_short' }] } })).success).toBe(false);
+  });
+  it('refuses a revoke without a session_ref, from another view, or carrying other fields', () => {
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: undefined }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: 'c'.repeat(64) }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, view: 'day' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, id: 'telegram' }).success).toBe(false);
   });
 });
 
@@ -311,6 +363,44 @@ describe("today's update cards", () => {
       updates([{ ...update, source: 'gmail' }]), updates([{ ...update, message_id: '' }]), updates([{ ...update, delivered_at: 0 }]),
       updates([], 0, 0), updates([], 0, 1.5), updates([], 0, '2026-10-13T10:40:00Z' as unknown as number), { updates: { ...updates([]).updates, held: 2 } },
     ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+});
+
+describe('Granola from the app', () => {
+  const connect = { view: 'connections', action: 'granola.connect', revision, request_id: 'granola-0001' };
+
+  it('connects and disconnects from the connections view, naming nothing', () => {
+    expect(appControlActionV1Schema.safeParse(connect).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect' }).success).toBe(true);
+  });
+
+  it('refuses another view, a server address or an id', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, view: 'day' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, value: 'https://mcp.granola.ai/mcp' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', id: 'connection-1' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, volume: 'low' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', confirmation: 'DELETE' }).success).toBe(false);
+  });
+
+  it('reads connections with or without Granola, so older Workers still parse', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: null } })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: { status: 'reauth_needed', connected_at: 1_761_400_000_000 } } })).success).toBe(true);
+  });
+
+  it('refuses a Granola state the app could misread', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: { status: 'connected', connected_at: 1 } } })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: null, email: 'owner@example.test' } })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true } })).success).toBe(false);
+  });
+});
+
+describe('welcome constellation fixture', () => {
+  it('parses every example the app builds against', async () => {
+    const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;
+    for (const projection of [fixture.summary_building, fixture.summary_done, fixture.interpretations_after_welcome, fixture.detail_node]) expect(appControlProjectionV1Schema.safeParse(projection).success).toBe(true);
+    for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
+    expect(appControlResultV1Schema.safeParse(fixture.action_result).success).toBe(true);
   });
 });
 

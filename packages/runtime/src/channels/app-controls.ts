@@ -1,4 +1,4 @@
-import { APP_CONTROLS_MEMORY_REVISION, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -20,6 +20,8 @@ export type AppControlsHost = Readonly<{
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
   cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
+  // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
+  welcome?():AppWelcomeBuildV1;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
   phone:PhoneSmsEnv;
 }>;
@@ -77,7 +79,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       let graph:ReturnType<typeof constellationData>;
       try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
-      const data=graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:host.welcome()}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='phone'){
@@ -112,6 +114,17 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
     return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
+  // A node action runs as the console's memory action on the node it names, against the revision of that node's detail read.
+  if(action.success&&action.data.view==='constellation'&&action.data.action.startsWith('node.')){
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request));return detail.status===200?detail.data as never:null;},
+      act:async node=>{await host.assertCurrent();return host.act(node);}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
   // A claim action runs as the console's memory action on the claim it names. It carries the revision of that claim's
   // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
   if(action.success&&action.data.view==='constellation'){
@@ -125,7 +138,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&action.data.action==='google.connect')))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','granola.connect','granola.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
   const phone=action.data.view==='phone';

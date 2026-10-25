@@ -138,7 +138,13 @@ describe('llmResponse metering', () => {
       'latency_ms',
       'output_items',
       'truncated',
+      'ttft_ms',
     ]);
+  });
+
+  it('a streamed response may carry its time to first token as a whole, non-negative number of ms', () => {
+    expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms: 420 }).success).toBe(true);
+    for (const ttft_ms of [-1, 1.5, '420', null]) expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms }).success, String(ttft_ms)).toBe(false);
   });
 
   it('requests may declare tools and replay prior tool turns', () => {

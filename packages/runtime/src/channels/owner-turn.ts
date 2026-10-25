@@ -28,7 +28,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -42,6 +42,7 @@ import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
+import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -51,6 +52,7 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { replyGate, withReplyStream } from '../conversation/reply-gate';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
@@ -267,7 +269,9 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const adapter = gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const streamed = ownerCall && purpose === 'reply' ? activeOwnerTurn?.replyStream : undefined;
+    const adapter = withReplyStream(gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } }),
+      streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -330,6 +334,7 @@ export const createOwnerResponder = (
     else log({
       trace, hop: `llm_${purpose}`, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
       ...(result.tool_search_degraded ? { tool_search_degraded: true } : {}),
+      ...(response?.ttft_ms === undefined ? {} : { ttft_ms: response.ttft_ms }),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
       ...(floor ? { code: 'template_floor' } : { usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
         web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 } }),
@@ -844,8 +849,13 @@ export const createOwnerResponder = (
       if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const plan = compactionPlan(tree, leafId, live, compaction);
-      if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
+      const planned = compactionPlan(tree, leafId, live, compaction);
+      if (!planned || tree.get(compactionId(planned.covers.to_id))) return;
+      // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
+      // reads a row that carries it.
+      const cut = barrier();
+      const plan = planWithout(planned, (message) => cut.shows(message.content));
+      if (!plan) { hop(false, 'held_topic'); return; }
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
@@ -854,10 +864,7 @@ export const createOwnerResponder = (
         privateRunScope?.admit();
       }
       const started = Date.now();
-      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
-      const input = plan.input.filter((message) => !barrier().shows(message.content));
-      if (!input.length) { hop(false, 'held_topic'); return; }
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
@@ -868,7 +875,13 @@ export const createOwnerResponder = (
       if (readingBeyondOwner(summary, ownerReadings(ownerWords))) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
-      await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
+      // A forget can land while the summary is being written, so the commit that writes it reads the topics held then: the
+      // summary must not show one (it can name a topic its input did not carry), and no row it was made from may carry one.
+      const fence = { sources: plan.sources, admits: () => {
+        const held = barrier();
+        return !held.shows(summary) && !plan.input.some((message) => held.shows(message.content));
+      } };
+      if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }
       tree.append(row);
       if (live) tree.replace(supersededCompaction(live));
       hop(true, 'compacted', { ms: Date.now() - started, detail: `rows=${plan.covers.rows}:chars=${summary.length}:gap=${plan.gap}` });
@@ -985,6 +998,13 @@ export const createOwnerResponder = (
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, off ? `${HEALTH_NOTES_OFF}\n\n${input}` : input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, off ? withoutHealthClaims(raw) : raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
+    },
+    // One welcome stage's structured call. The memory_ purpose keeps its text out of every trace: the health stage's input
+    // carries the owner's readings.
+    async welcome(trace, stage, input) {
+      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input));
+      if (asOwner !== undefined) return asOwner;
+      return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     },
     async promote(trace) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));

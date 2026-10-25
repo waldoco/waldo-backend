@@ -62,6 +62,23 @@ describe('console chat store', () => {
     expect(store.working()).toBe(false);
   });
 
+  it('shows the reply written so far while the turn runs, checking every second while it grows, and drops it when the turn closes', async () => {
+    const { store, state, advance } = harness();
+    store.open(); await settle();
+    store.send('Plan my afternoon'); await settle();
+    state.receipts.push({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, draft: 'Here is' });
+    await advance(700);
+    expect(store.get().local[0]!.draft).toBe('Here is');
+    state.receipts.push({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false, draft: 'Here is the plan' });
+    await advance(1000);
+    expect(store.get().local[0]!.draft).toBe('Here is the plan');
+    state.history = { messages: [msg('app-1', 'user', 'Plan my afternoon'), msg('r1', 'assistant', 'Here is the plan for today.')], next_cursor: null };
+    state.receipts.push({ message_id: 'app-1', state: 'completed', closed_reason: null, effects_unconfirmed: false });
+    await advance(1000);
+    expect(store.get().local).toEqual([]);
+    expect(store.get().messages.map(m => m.id)).toEqual(['app-1', 'r1']);
+  });
+
   it('never hands a new message over to an older row with the same words', async () => {
     const { store, state } = harness();
     state.history = { messages: [msg('old', 'user', 'ok'), msg('r0', 'assistant', 'Noted.')], next_cursor: null };

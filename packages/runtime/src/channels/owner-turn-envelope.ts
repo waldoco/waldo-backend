@@ -3,6 +3,7 @@ import type { InboundPart } from './owner-inbound-turn';
 import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
+import type { ReplyStream } from '../conversation/reply-stream';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
@@ -41,6 +42,8 @@ export type OwnerTurnEnvelope = Readonly<{
   // Set by the channel host. When false, memory write tools are not admitted on this turn. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
   runScope?: RunEffectScope;
+  // Set by a channel that shows the reply while it is written; absent, the reply is delivered whole as before.
+  replyStream?: ReplyStream;
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
@@ -55,6 +58,8 @@ export type OwnerResponder = Readonly<{
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   promote(trace: string): Promise<string>;
+  // One welcome-build stage's structured answer; its input and output never reach a trace.
+  welcome?(trace: string, stage: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
