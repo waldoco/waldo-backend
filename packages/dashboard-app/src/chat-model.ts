@@ -14,8 +14,12 @@ export type ChatPart =
 export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; parts: ChatPart[]; channel: string; parent_id: string | null; created_at: number | null };
 export type ChatPage = { messages: ChatMessage[]; next_cursor: string | null };
 export type RunState = 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
-// draft: the reply written so far, while the turn runs (chat contract revision 2).
-export type ChatReceipt = { message_id: string; state: RunState; closed_reason: string | null; effects_unconfirmed: boolean; draft?: string };
+// The kinds of work a running turn's tools can be on (app contract APP_CHAT_ACTIVITY_KINDS).
+export const CHAT_ACTIVITY_KINDS = ['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working'] as const;
+export type ChatActivityKind = typeof CHAT_ACTIVITY_KINDS[number];
+export type ChatActivity = { kind: ChatActivityKind; since: number };
+// draft: the reply written so far, while the turn runs; activity: what its tools are on before that (chat contract revision 2).
+export type ChatReceipt = { message_id: string; state: RunState; closed_reason: string | null; effects_unconfirmed: boolean; draft?: string; activity?: ChatActivity };
 
 export class ChatSignInRequired extends Error { constructor() { super('Sign in to chat with Waldo.'); } }
 // status 0 is the network; retryAfter is in seconds when the server named one.
@@ -28,6 +32,7 @@ const str = (v: unknown): v is string => typeof v === 'string';
 const RUN_STATES: readonly RunState[] = ['admitted', 'running', 'completed', 'interrupted', 'revoked'];
 const runState = (v: unknown): v is RunState => RUN_STATES.includes(v as RunState);
 const epoch = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const activityOf = (v: unknown): ChatActivity | null => obj(v) && CHAT_ACTIVITY_KINDS.includes(v.kind as ChatActivityKind) && epoch(v.since) ? { kind: v.kind as ChatActivityKind, since: v.since } : null;
 
 // A part this console cannot draw is dropped; the message's text always carries what it says.
 const readPart = (raw: unknown): ChatPart | null => {
@@ -61,7 +66,8 @@ export const readChatPage = (value: unknown): ChatPage => {
 
 export const readReceipt = (value: unknown): ChatReceipt => {
   if (!obj(value) || value.accepted !== true || !str(value.message_id) || !runState(value.state)) throw new ChatRequestError(200, 'Waldo sent a message status this console cannot read.');
-  return { message_id: value.message_id, state: value.state, closed_reason: str(value.closed_reason) ? value.closed_reason : null, effects_unconfirmed: value.effects_unconfirmed === true, ...(str(value.draft) && value.draft ? { draft: value.draft } : {}) };
+  const activity = activityOf(value.activity);
+  return { message_id: value.message_id, state: value.state, closed_reason: str(value.closed_reason) ? value.closed_reason : null, effects_unconfirmed: value.effects_unconfirmed === true, ...(str(value.draft) && value.draft ? { draft: value.draft } : {}), ...(activity ? { activity } : {}) };
 };
 
 const CHANGED = 'This chat changed in another window. Try again.';

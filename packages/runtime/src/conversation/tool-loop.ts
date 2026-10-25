@@ -113,6 +113,8 @@ export async function runToolLoop(input: Readonly<{
   maxSteps: number;
   offload?: ToolOutputStore;
   onTool?: (event: ToolLoopEvent) => void;
+  // Fired with a call's tool name just before it runs (not for a refused repeat or a withheld tool).
+  onToolStart?: (tool: string) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
@@ -253,6 +255,7 @@ export async function runToolLoop(input: Readonly<{
         const batch = offer ? concurrentBatch(calls, index, mutationTools, seen) : [index];
         if (batch.length > 1) {
           for (const member of batch) {
+            input.onToolStart?.(calls[member]!.name);
             const startedAt = Date.now();
             early.set(member, dispatch(calls[member]!, input).then((result) => ({ result, ms: Date.now() - startedAt })));
           }
@@ -279,6 +282,7 @@ export async function runToolLoop(input: Readonly<{
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
       const settled = early.has(index) ? await early.get(index) : undefined;
+      if (runs && !settled) input.onToolStart?.(call.name);
       let result = previous
         ? previous.ok
           ? refusal(toolError('repeat_refusal'), 'repeat_refusal')

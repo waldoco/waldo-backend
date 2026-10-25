@@ -1,4 +1,5 @@
 import type { LLMRequest, LLMTool, ToolName } from '@waldo/contracts';
+import type { AppChatActivityKind } from '../../../contracts/src/app/core';
 
 // Where a tool sits on the brain's surface. Core tools are loaded every round. Every other tool sits in a namespace the
 // model loads through the provider's tool search when a task needs it, so a round carries the core definitions and one
@@ -192,3 +193,23 @@ export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick
   const used = [...new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []))];
   return { tools: placed, tool_search: { namespaces: Object.fromEntries(used.map((name) => [name, BRAIN_NAMESPACES[name]])) } };
 };
+
+// The kind of work the owner sees a running tool doing (app chat=2 `activity`). Not the brain placement: most of the
+// slow reads (mail search, calendar, web, health) sit in core. Every tool is named so a new one fails the build here too.
+const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
+  search_communication: 'mail', read_thread: 'mail', get_communication: 'mail', search_contacts: 'mail', send_email: 'mail', draft_email: 'mail', archive_thread: 'mail', delete_message: 'mail', restore_message: 'mail',
+  query_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_schedule: 'calendar',
+  get_tasks: 'tasks', propose_google_task_change: 'tasks', write_task: 'tasks', update_task: 'tasks',
+  web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'web', search_mcp_tools: 'web', call_mcp_tool: 'web', search_connector: 'web',
+  read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files',
+  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health',
+  read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory',
+  set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
+  create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
+  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings',
+  search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  get_context: 'working', connect_service: 'working', delegate_task: 'working',
+};
+// From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.
+export const toolActivity = (name: string): AppChatActivityKind => (TOOL_ACTIVITY as Partial<Record<string, AppChatActivityKind>>)[name] ?? 'working';

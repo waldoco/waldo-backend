@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appMessageReceiptV1Schema } from '../../contracts/src/app/core';
+import type { LLMToolCall } from '@waldo/contracts';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
@@ -15,7 +16,7 @@ const gate = vi.hoisted(() => ({ toolsDone: null as null | (() => void), answer:
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request, stream }: LLMGatewayRequest) {
-    const done = (text: string, tool_calls?: unknown) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
+    const done = (text: string, tool_calls?: LLMToolCall[]) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
     if (!request.tools) return done('Done.');
     if (!request.tool_turns?.length) return done('', [{ call_id: 'mail-1', name: 'search_communication', arguments: JSON.stringify({ query: `from:${EMAIL} invoice` }) }]);

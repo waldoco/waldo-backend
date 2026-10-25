@@ -35,7 +35,7 @@ describe('the tool loop says which tool starts', () => {
   });
   const allowlist = (name: string) => triggerTypeSchema.options.filter((trigger) => (TOOL_PERMISSIONS[trigger] as readonly ToolName[]).includes(name as ToolName));
   const read = (name: string, timeline: unknown[]) => ({
-    name, description: `fixture ${name}`, schema: z.object({ query: z.string().optional() }), autonomy_gated: false, trigger_allowlist: allowlist(name),
+    name, description: `fixture ${name}`, schema: z.object({ query: z.string().optional(), thread_id: z.string().optional() }), autonomy_gated: false, trigger_allowlist: allowlist(name),
     handle: async () => { timeline.push(`run:${name}`); return { ok: true, data: { found: 1 }, source_taint: null }; },
   });
   const ask: LLMToolCall = { call_id: 'mail-1', name: 'search_communication', arguments: JSON.stringify({ query: 'from:alice@example.com invoice' }) };
@@ -44,16 +44,16 @@ describe('the tool loop says which tool starts', () => {
     const timeline: unknown[] = [];
     let steps = 0;
     await runToolLoop({
-      handlers: [read('search_communication', timeline), read('query_calendar', timeline)] as never, ctx: ctx(), maxSteps: 4,
+      handlers: [read('search_communication', timeline), read('read_thread', timeline)] as never, ctx: ctx(), maxSteps: 4,
       onToolStart: (...args: unknown[]) => { timeline.push(args); },
       step: async () => {
         steps += 1;
-        if (steps === 1) return { text: '', tool_calls: [ask, { call_id: 'cal-1', name: 'query_calendar', arguments: JSON.stringify({ query: 'today' }) }] };
+        if (steps === 1) return { text: '', tool_calls: [ask, { call_id: 'thread-1', name: 'read_thread', arguments: JSON.stringify({ thread_id: 't-1' }) }] };
         if (steps === 2) return { text: '', tool_calls: [{ ...ask, call_id: 'mail-2' }] };
         return { text: 'Done.' };
       },
     });
-    expect(timeline).toEqual([['search_communication'], 'run:search_communication', ['query_calendar'], 'run:query_calendar']);
+    expect(timeline).toEqual([['search_communication'], 'run:search_communication', ['read_thread'], 'run:read_thread']);
     expect(JSON.stringify(timeline)).not.toContain('alice@example.com');
   });
 
