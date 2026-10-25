@@ -1398,13 +1398,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
-      taskJobsForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), book: () => this.jobs(), cancelled: (id) => this.tasks.cancelled(id) }),
+      this.taskJobsForgetStore(),
       // An owner who has not had a turn yet has no episodes table.
       { name: 'episodes', run: (texts) => {
         if (storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
         return 0;
       } },
     ];
+  }
+
+  // A forget that stops an approved action's replay leaves its card for the jobs lane to settle, and nothing else may be due to
+  // run that lane: the wake is written in the cancel's own transaction and the alarm armed once it commits.
+  private taskJobsForgetStore(): ForgetStore {
+    const storage = this.ctx.storage;
+    let stopped = false;
+    const store = taskJobsForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), book: () => this.jobs(), cancelled: (id) => {
+      this.tasks.cancelled(id);
+      if (this.jobs().get(id)?.kind === 'approval_replay') { holdTaskJobsDue(storage.kv, Date.now()); stopped = true; }
+    } });
+    return { ...store, run: async (texts) => {
+      stopped = false;
+      const remaining = await store.run(texts);
+      if (stopped) await armTaskJobsWake(storage, Date.now());
+      return remaining;
+    } };
   }
 
   private forgetPurgeJob(): ForgetPurge {

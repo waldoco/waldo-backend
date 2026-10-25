@@ -128,6 +128,8 @@ type Steps = Readonly<{
   // A card the owner approved whose browser call waits on the jobs lane as a replay job; its frozen call carries the text.
   // Answers the card's ledger id.
   replayCard(text: string): Promise<string>;
+  // When the object's alarm is set for, if at all.
+  alarmAt(): Promise<number | null>;
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -243,6 +245,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
           .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
         cardStatus: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
+        alarmAt: () => state.storage.getAlarm(),
         replayCard: async text => {
           const args = { url: 'https://fixture.invalid/book', task: `Book the table the ${text} mail offered.` };
           const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'replay-card-1', now: Date.now, timezone: 'UTC', log: () => {} });
@@ -496,9 +499,12 @@ describe('owner forget reaches an open background task', { timeout: 30_000 }, ()
   });
 
   it('a forget that stops an approved action\'s replay wakes the jobs lane, which closes its card without running it', async () => {
-    await owned('wa-forget-replay-card', async ({ replayCard, tasks, cardStatus, forget, alarms }) => {
+    await owned('wa-forget-replay-card', async ({ replayCard, tasks, cardStatus, forget, alarms, alarmAt }) => {
       const card = await replayCard(SECRET);
+      await alarms(1);
+      expect(await alarmAt()).toBeNull();
       expect(await forget('spot', SECRET)).toBe(true);
+      expect(await alarmAt()).toEqual(expect.any(Number));
       expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
       expect(cardStatus(card)).toBe('running');
       await alarms(1);

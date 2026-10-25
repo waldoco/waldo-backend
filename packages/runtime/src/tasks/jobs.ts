@@ -113,6 +113,8 @@ const TITLE_KEPT = 80;
 const settledBrief = (row: Pick<JobRow, 'kind' | 'brief_json'>): string => {
   try {
     if (row.kind === 'retry_turn') return JSON.stringify({ ...(JSON.parse(row.brief_json) as RetryBrief), text: '' });
+    // A replay keeps which card it ran and the tool, which cancel_task names; the frozen arguments came from outside text.
+    if (row.kind === 'approval_replay') { const { approval_id, tool, approved_at } = JSON.parse(row.brief_json) as ReplayBrief; return JSON.stringify({ approval_id, tool, approved_at }); }
     const { title, started_at, outside_text } = JSON.parse(row.brief_json) as TaskBrief;
     return JSON.stringify({ title: title.slice(0, TITLE_KEPT), started_at, ...(outside_text ? { outside_text } : {}) });
   } catch {
@@ -443,7 +445,8 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     trim(): number {
       const whole = sql.exec<Pick<JobRow, 'id' | 'kind' | 'brief_json'>>(
         `SELECT id, kind, brief_json FROM task_jobs WHERE ${SETTLED}
-           AND (NOT json_valid(brief_json) OR json_type(brief_json, '$.goal') IS NOT NULL OR (kind = 'retry_turn' AND json_extract(brief_json, '$.text') <> ''))`,
+           AND (NOT json_valid(brief_json) OR json_type(brief_json, '$.goal') IS NOT NULL OR (kind = 'retry_turn' AND json_extract(brief_json, '$.text') <> '')
+             OR (kind = 'approval_replay' AND json_type(brief_json, '$.args') IS NOT NULL))`,
       ).toArray();
       for (const row of whole) sql.exec('UPDATE task_jobs SET brief_json = ? WHERE id = ?', settledBrief(row), row.id);
       const owner = sql.exec(
