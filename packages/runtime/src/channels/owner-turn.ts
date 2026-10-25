@@ -28,7 +28,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -825,8 +825,13 @@ export const createOwnerResponder = (
       if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const plan = compactionPlan(tree, leafId, live, compaction);
-      if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
+      const planned = compactionPlan(tree, leafId, live, compaction);
+      if (!planned || tree.get(compactionId(planned.covers.to_id))) return;
+      // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
+      // reads a row that carries it.
+      const cut = barrier();
+      const plan = planWithout(planned, (message) => cut.shows(message.content));
+      if (!plan) { hop(false, 'held_topic'); return; }
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
@@ -835,10 +840,7 @@ export const createOwnerResponder = (
         privateRunScope?.admit();
       }
       const started = Date.now();
-      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
-      const input = plan.input.filter((message) => !barrier().shows(message.content));
-      if (!input.length) { hop(false, 'held_topic'); return; }
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
@@ -849,7 +851,13 @@ export const createOwnerResponder = (
       if (readingBeyondOwner(summary, ownerReadings(ownerWords))) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
-      await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
+      // A forget can land while the summary is being written, so the commit that writes it reads the topics held then: the
+      // summary must not show one (it can name a topic its input did not carry), and no row it was made from may carry one.
+      const fence = { sources: plan.sources, admits: () => {
+        const held = barrier();
+        return !held.shows(summary) && !plan.input.some((message) => held.shows(message.content));
+      } };
+      if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }
       tree.append(row);
       if (live) tree.replace(supersededCompaction(live));
       hop(true, 'compacted', { ms: Date.now() - started, detail: `rows=${plan.covers.rows}:chars=${summary.length}:gap=${plan.gap}` });
