@@ -14,6 +14,8 @@ describe('the kind of work a tool is', () => {
     expect(['query_calendar', 'query_availability', 'propose_calendar_change'].map(toolActivity)).toEqual(['calendar', 'calendar', 'calendar']);
     expect(['get_tasks', 'propose_google_task_change'].map(toolActivity)).toEqual(['tasks', 'tasks']);
     expect(['web_search', 'browse_page', 'browse_act'].map(toolActivity)).toEqual(['web', 'web', 'web']);
+    // A connected MCP server may be the owner's mail or calendar, so its tools never claim to be the web.
+    expect(['read_mcp_tool', 'search_mcp_tools', 'call_mcp_tool', 'search_connector'].map(toolActivity)).toEqual(['working', 'working', 'working', 'working']);
     expect(['read_drive', 'read_document', 'workspace_read'].map(toolActivity)).toEqual(['files', 'files', 'files']);
     expect(['get_health', 'log_meal'].map(toolActivity)).toEqual(['health', 'health']);
     expect(['read_memory', 'remember', 'search_episodes'].map(toolActivity)).toEqual(['memory', 'memory', 'memory']);

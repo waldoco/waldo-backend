@@ -85,14 +85,14 @@ export function commitTaskJobsWake(kv: Pick<SyncKvStorage, 'get' | 'put'>, due: 
   kv.put(TASK_JOBS_DUE_KEY, typeof held === 'number' ? Math.min(held, due) : due);
 }
 
-// A jobs wake from outside the alarm pass (a worker's report, a new task): the key moves earlier, never later, and the alarm
-// slot moves earlier only, so no other lane's wake is dropped.
 // The jobs lane's due time, written in the caller's own transaction beside the job it is for. The arbiter arms the earliest
 // due key, so a pass that stops before armTaskJobsWake still leaves the wake behind.
 export function holdTaskJobsDue(kv: DurableObjectStorage['kv'], due: number): void {
   const held = kv.get<number | null>(TASK_JOBS_DUE_KEY);
   kv.put(TASK_JOBS_DUE_KEY, held === undefined || held === null ? due : Math.min(held, due));
 }
+// A jobs wake from outside the alarm pass (a worker's report, a new task): the key moves earlier, never later, and the alarm
+// slot moves earlier only, so no other lane's wake is dropped.
 export async function armTaskJobsWake(storage: DurableObjectStorage, due: number): Promise<void> {
   const held = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
   const next = held === undefined || held === null ? due : Math.min(held, due);
