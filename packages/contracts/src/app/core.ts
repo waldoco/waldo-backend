@@ -67,9 +67,11 @@ export const appSendResultV1Schema = z.strictObject({
 // Chat revision 2 (`chat=2`): a running message's receipt carries `draft`, the reply written so far, a prefix of the reply
 // its transcript row will hold. Revision 1 clients never receive the field.
 export const APP_CHAT_DRAFT_REVISION = 2;
-// The same revision's `activity`: what kind of work the running turn's tools are on, from the tool's name only (never its
-// arguments or output), and since when (epoch ms). Set when a tool starts; gone once the reply's draft shows or the turn
-// ends. A closed vocabulary the client words itself; a new kind is a contract change the app lane hears of first.
+// Chat revision 3 (`chat=3`) adds `activity`: what kind of work the running turn's tools are on, from the tool's name only
+// (never its arguments or output), and since when (epoch ms). Set when a tool starts; gone once the reply's draft shows or
+// the turn ends. Revision 2 receipts never carry it. A closed vocabulary the client words itself; a new kind is a contract
+// change the app lane hears of first.
+export const APP_CHAT_ACTIVITY_REVISION = 3;
 export const APP_CHAT_ACTIVITY_KINDS = ['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working'] as const;
 export type AppChatActivityKind = typeof APP_CHAT_ACTIVITY_KINDS[number];
 export const appChatActivityV1Schema = z.strictObject({ kind: z.enum(APP_CHAT_ACTIVITY_KINDS), since: z.int().nonnegative() });

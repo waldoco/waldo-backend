@@ -18,7 +18,7 @@ export type RunState = 'admitted' | 'running' | 'completed' | 'interrupted' | 'r
 export const CHAT_ACTIVITY_KINDS = ['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working'] as const;
 export type ChatActivityKind = typeof CHAT_ACTIVITY_KINDS[number];
 export type ChatActivity = { kind: ChatActivityKind; since: number };
-// draft: the reply written so far, while the turn runs; activity: what its tools are on before that (chat contract revision 2).
+// draft: the reply written so far, while the turn runs (chat revision 2); activity: what its tools are on before that (revision 3).
 export type ChatReceipt = { message_id: string; state: RunState; closed_reason: string | null; effects_unconfirmed: boolean; draft?: string; activity?: ChatActivity };
 
 export class ChatSignInRequired extends Error { constructor() { super('Sign in to chat with Waldo.'); } }
@@ -124,7 +124,7 @@ export const sendChatMessage = async (clientId: string, text: string, thread: st
   return { message_id: value.message_id, state: runState(value.state) ? value.state : 'admitted', closed_reason: null, effects_unconfirmed: false };
 };
 // The console reads chat revision 2, so a running reply's receipt carries the text written so far.
-export const fetchReceipt = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}`, { headers: { 'x-waldo-app-contract': 'chat=2' } }));
+export const fetchReceipt = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}`, { headers: { 'x-waldo-app-contract': 'chat=3' } }));
 export const cancelChatMessage = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}/cancel`, { method: 'POST' }));
 
 // The owner's chats beside main. Titles and previews are owner or model text and render as plain text.

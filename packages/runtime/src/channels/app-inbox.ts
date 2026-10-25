@@ -3,7 +3,7 @@ import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
-import { APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appContractRevision, type AppChatActivityKind } from '../../../contracts/src/app/core';
+import { APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appContractRevision, type AppChatActivityKind } from '../../../contracts/src/app/core';
 import { REPLY_TEXT_MAX_CHARS } from '../../../contracts/src/app/parts';
 import type { ReplyDraftSurface } from '../conversation/reply-stream';
 export const APP_TURN_DEADLINE_MS = 15 * 60_000;
@@ -41,8 +41,9 @@ const replyDrafts = new WeakMap<DurableObjectStorage, ReplyDraft>();
 // What kind of work that turn's tools are on, kept and served the same way, with when that kind began.
 type ReplyActivity = Readonly<{ id: string; attempt: string; kind: AppChatActivityKind; since: number }>;
 const replyActivities = new WeakMap<DurableObjectStorage, ReplyActivity>();
-// A client that reads chat revision 2 gets the draft; installed builds parse receipts strictly and never see it.
-export const wantsReplyDraft = (request: Request): boolean => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'chat') >= APP_CHAT_DRAFT_REVISION;
+// The chat revision a receipt is read at: 2 adds the draft, 3 the activity. Installed builds parse receipts strictly and
+// see neither until they declare the revision.
+export const chatRevision = (request: Request): number => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'chat');
 const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
 const clear = (row: AppInboxRecord) => { row.text = ''; };
 // One durable writer: admitted payload, digest, sequence and alarm commit before ACK.
@@ -51,10 +52,10 @@ export class AppInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
   records(): AppInboxRecord[] { return [...this.storage.kv.list<AppInboxRecord>({prefix:PREFIX})].map(([,row])=>row).sort((a,b)=>a.updateId-b.updateId); }
   // With a chat, only that chat's message answers.
-  receipt(owner: string, clientId: string, conversationRef?: string, withDraft = false) {
+  receipt(owner: string, clientId: string, conversationRef?: string, revision = 1) {
     const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId&&(conversationRef===undefined||row.conversationRef===conversationRef));
-    const draft=withDraft&&row?.state==='running'?replyDrafts.get(this.storage):undefined;
-    const activity=withDraft&&row?.state==='running'?replyActivities.get(this.storage):undefined;
+    const draft=revision>=APP_CHAT_DRAFT_REVISION&&row?.state==='running'?replyDrafts.get(this.storage):undefined;
+    const activity=revision>=APP_CHAT_ACTIVITY_REVISION&&row?.state==='running'?replyActivities.get(this.storage):undefined;
     return row?{accepted:true as const,message_id:row.id,state:row.state,...(row.closedReason?{closed_reason:row.closedReason}:{}),...(row.effectsUnconfirmed!==undefined?{effects_unconfirmed:row.effectsUnconfirmed}:{}),
       ...(draft&&draft.id===row.id&&draft.attempt===row.attempt&&draft.text?{draft:draft.text}:{}),
       ...(activity&&activity.id===row.id&&activity.attempt===row.attempt?{activity:{kind:activity.kind,since:activity.since}}:{})}:null;

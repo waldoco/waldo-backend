@@ -6,7 +6,7 @@ import { chatChannelLinks } from './chat-channel-links';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
-import { APP_TURN_DEADLINE_MS, AppInbox, wantsReplyDraft, type AppInboxRecord } from './app-inbox';
+import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
@@ -1363,7 +1363,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const client=path.slice(APP_CHAT_SEND_PATH.length+1);
       if(!/^[A-Za-z0-9_-]{8,64}$/.test(client))return fail(404);
       this.recoverApp();
-      const receipt=this.appInbox.receipt(name,client,mainRef,wantsReplyDraft(request));return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
+      const receipt=this.appInbox.receipt(name,client,mainRef,chatRevision(request));return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
     }
     if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&path.endsWith('/cancel')&&request.method==='POST'){
       const client=path.slice(APP_CHAT_SEND_PATH.length+1,-'/cancel'.length);
@@ -1466,7 +1466,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
         return result;
       },
-      receipt:(ref,clientId,withDraft)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref,withDraft);},
+      receipt:(ref,clientId,revision)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref,revision);},
       cancel:(ref,clientId)=>{
         this.recoverApp();
         const row=this.appInbox.cancel(name,clientId,ref);if(!row)return null;
