@@ -294,6 +294,9 @@ const approvedInApp = (entry: LedgerRow): boolean => {
 };
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
 const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be approved at all.";
+// Asking for a new draft acts on nothing, so the app takes it without the email check; chat hands it over all the same.
+const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
+const NOT_CHANGED_IN_APP = "It can't be changed in the Waldo app either. Ask me for a fresh one instead.";
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
 const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
   const review = appReview(entry);
@@ -521,13 +524,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const changedSend = (entry: LedgerRow): ApprovalDecision => entry.kind === 'email_send'
     ? { toast: 'Email changed', message: `I couldn't confirm the stored email is the one on the card you reviewed, so nothing was sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Ask me again and I'll prepare a fresh one.` }
     : { toast: 'Message changed', message: "I couldn't confirm the stored message is the one on the card you reviewed, so nothing was sent. Ask me again and I'll prepare a fresh one." };
-  const notPresented = (entry: LedgerRow, via: ApprovalVia): ApprovalDecision => {
+  const notPresented = (entry: LedgerRow, via: ApprovalVia, action: 'a' | 'e'): ApprovalDecision => {
     const id = entry.id;
     const shownInApp = appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
-    const why = HANDS_TO_APP.has(via.surface) && approvedInApp(entry) ? HANDED_TO_APP : "That approval wasn't shown in full here, so it can't be approved here.";
-    if (shownInApp && deps.appLink) return { toast: 'Review it in the app', message: `${why} Nothing was done. Review and approve it in the Waldo app: ${deps.appLink(id)}` };
-    if (why !== HANDED_TO_APP) return { toast: 'Not available here', message: `${why} Nothing was done.` };
-    return { toast: 'Review it in the app', message: `${why} Nothing was done. ${shownInApp ? 'Approve it in the Waldo app.' : NOT_IN_APP}` };
+    const handed = HANDS_TO_APP.has(via.surface) && approvedInApp(entry);
+    const change = action === 'e';
+    if (!handed) return shownInApp && deps.appLink
+      ? { toast: 'Review it in the app', message: `That approval wasn't shown in full here, so it can't be ${change ? 'changed' : 'approved'} here. Nothing was done. Review and ${change ? 'change' : 'approve'} it in the Waldo app: ${deps.appLink(id)}` }
+      : { toast: 'Not available here', message: `That approval wasn't shown in full here, so it can't be ${change ? 'changed' : 'approved'} here. Nothing was done.` };
+    const why = change ? CHANGED_IN_APP : HANDED_TO_APP;
+    if (shownInApp && deps.appLink) return { toast: 'Review it in the app', message: `${why} Nothing was done. ${change ? 'Ask for the change' : 'Review and approve it'} in the Waldo app: ${deps.appLink(id)}` };
+    return { toast: 'Review it in the app', message: `${why} Nothing was done. ${shownInApp ? `${change ? 'Ask for the change' : 'Approve it'} in the Waldo app.` : change ? NOT_CHANGED_IN_APP : NOT_IN_APP}` };
   };
   // The app's view of a proposal: its current state, the app review, and only decisions the desk accepts now.
   const project = async (entry: LedgerRow, now: number): Promise<AppApprovalV1> => {
@@ -638,7 +645,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
     if (entry?.status === 'card_unconfirmed' && entry.card_waits_on != null) return { toast: 'Not out yet', message: `That card has not reached you on ${entry.card_waits_on} yet; it goes out there when you next write. Nothing was done.` };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
-    if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry, via);
+    if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry, via, action);
     if (action === 'a' && entry.status === 'open' && (entry.kind === 'email_send' || entry.kind === 'message_send') && !await shownAsStored(entry, via)) {
       setStatus(id, 'failed');
       return changedSend(entry);
