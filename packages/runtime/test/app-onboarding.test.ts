@@ -1,11 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { APP_FINDING_UNCONFIRMED_DAYS_V1, appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema } from '../../contracts/src/app/onboarding';
+import { APP_FINDING_UNCONFIRMED_DAYS_V1, appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema, appSetupAnswersResultV1Schema } from '../../contracts/src/app/onboarding';
 import { PROACTIVE_SURFACES } from '../src/channels/proactive-surface';
 import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
 import { recordSignupName } from '../src/onboarding/first-run';
@@ -156,6 +156,67 @@ describe('first run', () => {
     const reused = await send('/app/v1/onboarding/actions', { ...body, action: 'complete' });
     expect([reused.status, await reused.json()]).toEqual([409, { error: 'request_reused' }]);
   }));
+});
+
+describe('setup answers', () => {
+  // The app's setup conversation, as its store holds it: name, day shape with own words, slips with own words, and the watch.
+  const ANSWERS = { name: 'Asha', day: { shape: 'meetings', own_words: 'Standups start at 8' }, slips: { picked: ['replies', 'breaks'], own_words: 'Invoices too' }, wearable: 'apple' };
+  let request = 0;
+  const save = (send: (path: string, body?: unknown) => Promise<Response>, body: Record<string, unknown>) => send('/app/v1/onboarding/answers', { request_id: `setup-answers-${request++}`, ...body });
+  const held = async (response: Response) => appSetupAnswersResultV1Schema.parse(await response.json()).held;
+  const facts = (storage: DurableObjectStorage) => claimStore(storage.sql, work => storage.transactionSync(work)).claims()
+    .filter(claim => claim.source_ref?.startsWith('owner, first run:')).map(claim => ({ text: claim.text, kind: claim.kind, origin: claim.origin, source: claim.source, grounded: claim.verification_status, pinned: claim.pinned }));
+
+  it('keeps every answer as a pinned owner fact, so the profile Waldo reads on every turn carries them after the name', () => owner(async ({ storage, send }) => {
+    expect(await held(await save(send, ANSWERS))).toEqual({ name: true, day: true, slips: true, wearable: true });
+    const owned = { origin: 'owner', source: 'stated', grounded: 'owner-grounded', pinned: 'profile' };
+    expect(facts(storage)).toEqual(expect.arrayContaining([
+      { text: 'Wants to be called Asha', kind: 'preference', ...owned },
+      { text: 'Most workdays are meetings, often back to back. In their own words: "Standups start at 8"', kind: 'routine', ...owned },
+      { text: 'Things that tend to slip, for Waldo to watch first: replies and follow-ups, breaks and meals. In their own words: "Invoices too"', kind: 'preference', ...owned },
+      { text: 'Wears an Apple Watch.', kind: 'fact', ...owned },
+    ]));
+    expect(facts(storage)).toHaveLength(4);
+    const prompt = turnMemoryPrompt(claimStore(storage.sql, work => storage.transactionSync(work)), 'anything');
+    const profile = prompt.slice(prompt.indexOf('<owner_profile>'), prompt.indexOf('</owner_profile>'));
+    for (const line of ['Wants to be called Asha', 'Most workdays are meetings', 'Things that tend to slip', 'Wears an Apple Watch.']) expect(profile).toContain(line);
+    expect(profile.indexOf('Wants to be called Asha')).toBeLessThan(profile.indexOf('Most workdays are meetings'));
+  }, { agreementsOffered: false }));
+  it('corrects an answer in place, clears one sent as null or empty, and leaves the ones not sent alone', () => owner(async ({ storage, send }) => {
+    await save(send, ANSWERS);
+    expect(await held(await save(send, { day: { shape: 'focus', own_words: '' }, slips: { picked: [], own_words: '' }, wearable: null }))).toEqual({ name: true, day: true, slips: false, wearable: false });
+    expect(facts(storage).map(fact => fact.text)).toEqual(expect.arrayContaining(['Wants to be called Asha', 'Needs long stretches of focus at work, and they are easy to break.']));
+    expect(facts(storage)).toHaveLength(2);
+    expect(await held(await save(send, { day: { shape: null, own_words: 'Night shifts on Fridays' }, slips: { picked: [], own_words: 'Gym' } }))).toMatchObject({ day: true, slips: true });
+    expect(facts(storage).map(fact => fact.text)).toEqual(expect.arrayContaining(['About their workdays, in their own words: "Night shifts on Fridays"', 'Things that tend to slip, in their own words: "Gym"']));
+    expect(await held(await save(send, { name: null, day: null }))).toEqual({ name: false, day: false, slips: true, wearable: false });
+  }, { agreementsOffered: false }));
+  it('answers the name step the run reads, before the run starts and after it finishes', () => owner(async ({ send, act }) => {
+    await save(send, { name: 'Asha' });
+    await act({ action: 'start' });
+    expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.name).toBe('done');
+    expect((await run(await act({ action: 'complete' }))).state).toBe('completed');
+    expect(await held(await save(send, { name: 'Ash', wearable: 'samsung' }))).toMatchObject({ name: true, wearable: true });
+  }, { agreementsOffered: false }));
+  it('stores nothing before the agreements while they are offered', () => owner(async ({ storage, send, act }) => {
+    const early = await save(send, ANSWERS);
+    expect([early.status, await early.json()]).toEqual([409, { error: 'agreements_required' }]);
+    expect(facts(storage)).toEqual([]);
+    await act({ action: 'start' }); await act(agree);
+    expect((await save(send, ANSWERS)).status).toBe(200);
+  }));
+  it('replays a repeated request, refuses a reused id with another body, and refuses what the contract does not hold', () => owner(async ({ storage, send }) => {
+    const body = { request_id: 'setup-answers-replay', name: 'Asha' };
+    const first = await (await send('/app/v1/onboarding/answers', body)).json(), again = await (await send('/app/v1/onboarding/answers', body)).json();
+    expect([first, again]).toEqual([{ request_id: body.request_id, held: { name: true, day: false, slips: false, wearable: false }, replayed: false }, { request_id: body.request_id, held: { name: true, day: false, slips: false, wearable: false }, replayed: true }]);
+    const reused = await send('/app/v1/onboarding/answers', { ...body, name: 'Other' });
+    expect([reused.status, await reused.json()]).toEqual([409, { error: 'request_reused' }]);
+    for (const invalid of [{ request_id: 'setup-answers-bad1' }, { request_id: 'setup-answers-bad2', wearable: 'none' }, { request_id: 'setup-answers-bad3', watch_id: 'paired' }]) {
+      expect((await send('/app/v1/onboarding/answers', invalid)).status).toBe(400);
+    }
+    expect((await send('/app/v1/onboarding/answers')).status).toBe(405);
+    expect(facts(storage).map(fact => fact.text)).toEqual(['Wants to be called Asha']);
+  }, { agreementsOffered: false }));
 });
 
 describe('chat channels in the first run', () => {
