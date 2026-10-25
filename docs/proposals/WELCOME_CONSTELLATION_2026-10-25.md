@@ -1,6 +1,6 @@
 # Welcome constellation: design note (25 October 2026)
 
-Status: **proposed, for gate review before any code.** The ADR draft is [`ADR_DRAFT_WELCOME_CONSTELLATION_2026-10-25.md`](ADR_DRAFT_WELCOME_CONSTELLATION_2026-10-25.md).
+Status: **proposed, for gate review before any code.** Its ADR is the "First producer" section of [`ADR_DRAFT_MEMORY_V2_2026-10-25.md`](ADR_DRAFT_MEMORY_V2_2026-10-25.md), which can be accepted on its own.
 It is the first producer of [Memory v2](MEMORY_V2_2026-10-25.md), and it ships on its own. When v2's *About you* page lands, the
 `<owner_constellation>` block in section 3 retires into the page's *Waldo's read* section.
 
