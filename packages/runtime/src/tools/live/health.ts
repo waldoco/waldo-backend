@@ -73,7 +73,7 @@ export const healthReadBook = (call: SignedCall | null, doName: string | null): 
 type Unit = 'minutes' | 'ms' | 'bpm' | 'minute_of_day';
 type Method = 'asleep' | 'rmssd' | 'sdnn';
 type Fold = 'newest' | 'sum' | 'mean';
-const SIGNALS: Record<HealthReadSignal, Readonly<{ stored: string; unit: Unit; fold: Fold }>> = {
+export const SIGNALS: Record<HealthReadSignal, Readonly<{ stored: string; unit: Unit; fold: Fold }>> = {
   sleep: { stored: 'sleep_duration', unit: 'minutes', fold: 'newest' },
   sleep_midpoint: { stored: 'sleep_midpoint', unit: 'minute_of_day', fold: 'newest' },
   hrv: { stored: 'overnight_hrv', unit: 'ms', fold: 'newest' },
@@ -90,7 +90,7 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 // A reading's instant is when it ended, so a night's sleep ages from waking, not from falling asleep.
 const instantOf = (reading: Reading, timezone: string): number =>
   reading.endAt ? Date.parse(reading.endAt) : reading.startAt ? Date.parse(reading.startAt) : localDayWindow(reading.day, reading.timezone ?? timezone).end;
-const localDayOf = (now: Date, timeZone: string): string => {
+export const localDayOf = (now: Date, timeZone: string): string => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
   return `${get('year')}-${get('month')}-${get('day')}`;
@@ -115,7 +115,7 @@ const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ sour
   return [...groups.values()].sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
 };
 
-const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
+export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
   if (readings.length === 0) return null;
   if (fold === 'sum') return Math.round(readings.reduce((total, reading) => total + reading.value, 0));
   if (fold === 'mean') return round1(readings.reduce((total, reading) => total + reading.value, 0) / readings.length);

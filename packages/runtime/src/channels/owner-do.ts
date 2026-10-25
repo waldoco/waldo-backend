@@ -1,5 +1,7 @@
 import { appControlsRequest } from './app-controls';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { confirmWelcomeNode, correctWelcomeNode, welcomeSupportIds } from '../onboarding/welcome';
+import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
@@ -229,6 +231,7 @@ type OwnerRuntime = Readonly<{
   owner: number;
   listener: TelegramOwnerListener | null;
   control: TurnControl;
+  welcome: OwnerWelcome;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   probeCapture: ProbeCaptureSlot;
@@ -1321,6 +1324,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
+            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);},
             admit:async(client,text)=>{
               this.bindAppSubject(name);
               const result=await this.appInbox.admit(name,hash,client,text,mainRef);
@@ -1346,6 +1350,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
+            welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true}):null,this.ctx.storage.kv.get<string>('origin'))
               :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
@@ -2594,6 +2599,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return runtime.owner>0 && kv.get<string>(`${channel}_subject`)===String(runtime.owner) && kv.get<boolean>(`${channel}_unlinked`)!==true;
   }
 
+  // The owner's one welcome build: started by setup, and taken up again by a constellation read when a run was cut short.
+  private welcomeRun: Promise<void> | null = null;
+  private continueWelcome(runtime: OwnerRuntime): void {
+    if (this.welcomeRun || !runtime.welcome.build().due().length) return;
+    this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); }).finally(() => { this.welcomeRun = null; });
+    this.ctx.waitUntil(this.welcomeRun);
+  }
   // A fixed one-minute window per owner DO: 90 console reads, 20 console actions.
   private consoleRateLimited(kind: 'read' | 'action'): Response | null {
     const key = `console:controls-rate:${kind}`, now = Date.now(), counter = this.ctx.storage.kv.get<{ start: number; count: number }>(key);
@@ -4339,7 +4351,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
+    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthRead, google,
+      findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
+      ask: (stage, text) => this.serial(async () => (await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(`welcome:${stage}`, stage, text)))) });
+    const runtime: OwnerRuntime = { welcome, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
@@ -4452,11 +4468,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
           if (!node) return false;
+          // Waldo's own read behind a welcome node exists only to back it, so it goes too; what the owner said stays.
+          const read = welcomeSupportIds(memory, spotId);
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
-          // The label leaves every store outside the claims table through the job; the spots behind the pattern stay, as the
-          // console tells the owner.
+          // The label leaves every store outside the claims table through the job.
           await this.forgetPurgeJob().track([node.label], 'history');
+          if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
+        } else if (action === 'node.confirm') {
+          if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString()))) return false;
+        } else if (action === 'node.correct') {
+          const corrected = storage.transactionSync(() => correctWelcomeNode(memory, spotId, value ?? '', new Date(now).toISOString()));
+          if (!corrected) return false;
+          if (corrected.purge.length) await this.forgetPurgeJob().track(memory.purge(corrected.purge, new Date(now).toISOString()).texts);
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

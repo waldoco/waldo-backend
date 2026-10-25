@@ -42,6 +42,7 @@ import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
+import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -972,6 +973,13 @@ export const createOwnerResponder = (
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, off ? `${HEALTH_NOTES_OFF}\n\n${input}` : input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, off ? withoutHealthClaims(raw) : raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
+    },
+    // One welcome stage's structured call. The memory_ purpose keeps its text out of every trace: the health stage's input
+    // carries the owner's readings.
+    async welcome(trace, stage, input) {
+      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input));
+      if (asOwner !== undefined) return asOwner;
+      return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     },
     async promote(trace) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));
