@@ -1,4 +1,6 @@
 import { appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
+import { signedInRecently } from '../identity/console-auth';
 import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
@@ -10,6 +12,8 @@ import type { PhoneSmsEnv } from '../identity/phone-sms';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
+  // The session row's created_at: the proof of a recent email code that a gated action needs.
+  signedInAt:string;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
@@ -85,6 +89,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(request.method!=='POST')return reply({error:'method_not_allowed'},405);
   let raw:unknown;try{raw=await request.json();}catch{return reply({error:'invalid_action'},400);}
   const action=appControlActionV1Schema.safeParse(raw);
+  if(action.success&&stepUpGated(appControlStepUpAction(action.data))&&!signedInRecently(host.signedInAt,Date.now()))return appStepUpRefusal();
   // A recorded deletion erases this storage and revokes the session: nothing may write or check currency after it.
   if(action.success&&action.data.action==='account.delete'){
     const form=new FormData();for(const key of ['action','view','revision','request_id','confirmation'] as const)form.set(key,action.data[key]!);form.set('csrf',host.csrf);
