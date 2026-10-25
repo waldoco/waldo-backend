@@ -229,6 +229,25 @@ describe('a calendar change with guests is handed to the app even when a detail 
   });
 });
 
+describe('a request whose stored payload can no longer be classified fails closed in chat', () => {
+  for (const surface of ['whatsapp', 'imessage'] as const) {
+    it(`${surface}: a one-tap task change whose payload no longer reads as one after its card went out is never approved from chat`, async () => {
+      await owner(`chat-to-app-unreadable-${surface}`, async state => {
+        const f = harness(state, surface);
+        const id = await f.desk.proposeGoogleTaskChange(TASK);
+        expect(f.desk.placement(id).hereApprovable).toBe(true);
+        // Still JSON, so the request's identity and expiry read; no longer a task proposal, so the app's rule cannot classify it.
+        state.storage.sql.exec('UPDATE ledger SET payload_json = ? WHERE id = ?', JSON.stringify({ operation_ref: `approval:${id}` }), id);
+        expect(f.desk.placement(id)).toMatchObject({ handsToApp: true });
+        const refused = await f.desk.decide(id, 'a', 'trace', { surface });
+        expect(refused).toEqual({ toast: 'Review it in the app', message: `${HANDED_TO_APP} Nothing was done. It can't be approved in the Waldo app either, so it can't be approved at all.` });
+        await f.reply(`a:${id}`);
+        expect(f.status(id)).toBe('open');
+      });
+    });
+  }
+});
+
 describe('every approval kind is either one tap in chat or handed to the app, by the app\'s own rule', () => {
   for (const surface of ['whatsapp', 'imessage'] as const) {
     for (const kind of Object.keys(STEP_UP_APPROVALS) as (keyof typeof STEP_UP_APPROVALS)[]) {
