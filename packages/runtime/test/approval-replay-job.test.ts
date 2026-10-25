@@ -28,6 +28,8 @@ type Harness = Readonly<{
   // A replay the lane started, still running outside the lane.
   replays: Promise<void>[];
   browser: { gate?: Promise<void>; ms: number };
+  // What the directory answers when the brain asks whether the owner is still admitted.
+  admission: { now: 'admitted' | 'dormant' | 'retry' };
   // The brain host; `restart` swaps in a fresh one, as an evicted owner object gets.
   host(): TaskHost; restart(): void;
   card(args?: Record<string, unknown>): Promise<string>;
@@ -45,6 +47,7 @@ const withReplay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
     let active: RunEffectScope | undefined;
     const browser: Harness['browser'] = { ms: 0 };
+    const admission: Harness['admission'] = { now: 'admitted' };
     const browseAct: ToolHandler<unknown, unknown, ToolDispatcherContext> = {
       name: 'browse_act', description: 'Act in the owner browser.', schema: browseActArgsSchema, trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
       async handle(_args, ctx) {
@@ -78,7 +81,7 @@ const withReplay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
         active = scope;
         try { return await run(); } finally { if (active === scope) active = previous; }
       }),
-      releaseBrowser: () => undefined, log: entry => { log.push(entry); }, wake: async () => undefined,
+      releaseBrowser: () => undefined, log: entry => { log.push(entry); }, wake: async () => undefined, admitted: async () => admission.now,
       replayApproval: (_surface, brief, scope) => approvalJobReplay({
         current: (id, digest) => desk.replayCurrent(id, digest), handlers: () => [browseAct],
         context: () => approvalReplayContext({ authenticatedUserId: 'owner-1', hasApproval: () => true, sanitise, egressAllowlist: ['tables.example.com'] }),
@@ -99,7 +102,7 @@ const withReplay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       tool: 'browse_act', args, args_digest: (await argumentDigest(args))!, reasoning: 'The restaurant email offered the 8pm table.', source: 'external',
     });
     const settle = async () => { await Promise.all(replays.splice(0)); await serial(async () => undefined); };
-    return work({ desk, book, sql, clock, ran, sent, log, serial, replays, browser, host: () => host, restart: () => { host = makeHost(); }, card, pass, settle });
+    return work({ desk, book, sql, clock, ran, sent, log, serial, replays, browser, admission, host: () => host, restart: () => { host = makeHost(); }, card, pass, settle });
   });
 const status = (sql: SqlStorage, id: string) => sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
 const within = <T,>(work: Promise<T>, ms = 2_000): Promise<T> =>
@@ -187,6 +190,44 @@ describe('an approved browser card runs as a replay job', () => {
       await settle();
       expect(ran).toEqual(['browse_act', 'browse_act:done', 'owner_turn', 'browse_act', 'browse_act:done']);
       expect(answered - asked).toBeLessThan(browser.ms * 2);
+    });
+  });
+
+  it('an owner who stops being admitted while the replay waits behind the browser lane: the step never runs and no intent is written', async () => {
+    await withReplay(async ({ desk, ran, serial, card, pass, settle, book, sql, admission, log }) => {
+      const id = await card();
+      await desk.decide(id, 'a', 'tap');
+      let release!: () => void;
+      const ownerTurn = serial(() => new Promise<void>(resolve => { release = resolve; }));
+      await pass();
+      admission.now = 'dormant';
+      release();
+      await ownerTurn;
+      await settle();
+      expect(ran).toEqual([]);
+      const job = book.byKey(replayKey(id))!;
+      expect(job).toMatchObject({ status: 'queued', inflight_json: null });
+      expect(status(sql, id)).toBe('running');
+      expect(log.find(entry => entry.hop === 'task_suspended')).toMatchObject({ ok: false, code: 'owner_not_admitted' });
+    });
+  });
+
+  it('an admission that cannot be read waits and is asked again: nothing runs until the owner is admitted, then the step runs once', async () => {
+    await withReplay(async ({ desk, ran, card, pass, settle, book, admission, clock }) => {
+      const id = await card();
+      await desk.decide(id, 'a', 'tap');
+      admission.now = 'retry';
+      await pass();
+      await settle();
+      expect(ran).toEqual([]);
+      const waiting = book.byKey(replayKey(id))!;
+      expect(waiting).toMatchObject({ status: 'queued', inflight_json: null, deferrals: 1 });
+      expect(waiting.due_at!).toBeGreaterThan(clock.at);
+      admission.now = 'admitted';
+      clock.at = waiting.due_at!;
+      await pass();
+      await settle();
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
     });
   });
 
