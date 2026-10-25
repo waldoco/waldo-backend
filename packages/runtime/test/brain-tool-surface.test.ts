@@ -14,6 +14,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
 import { delegateTaskHandler } from '../src/conversation/subagent';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import { reactToMessageHandler } from '../src/tools/live/react-to-message';
 import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 import config from '../wrangler.jsonc?raw';
@@ -186,6 +187,11 @@ describe('the brain tool surface', () => {
     const openAIBrowse = (await openAIBody(withBrowse)).tools as WireTool[];
     const anthropicBrowse = (await anthropicBody(withBrowse)).tools as WireTool[];
     expect(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => tool.name)).toContain('browse_page');
+    // An iMessage owner turn whose host verified tapbacks also carries react_to_message (core), on top of browsing.
+    const tapback = brainTools(toolDefinitions([reactToMessageHandler({ ready: async () => true, freeze: () => 'queued' })]), true).tools!;
+    const withTapback = { ...withBrowse, tools: [...withBrowse.tools, ...tapback] };
+    const openAITapback = (await openAIBody(withTapback)).tools as WireTool[];
+    const anthropicTapback = (await anthropicBody(withTapback)).tools as WireTool[];
     const report = {
       tools: request.tools!.length,
       before_bytes: bytes(off.tools), before_tokens_est: Math.round(bytes(off.tools) / BYTES_PER_TOKEN_EST),
@@ -194,7 +200,8 @@ describe('the brain tool surface', () => {
       anthropic_visible_bytes: bytes(anthropicVisible(anthropic)), anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropic)) / BYTES_PER_TOKEN_EST),
       browsing_openai_visible_bytes: bytes(openAIVisible(openAIBrowse)), browsing_openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAIBrowse)) / BYTES_PER_TOKEN_EST),
       browsing_anthropic_visible_bytes: bytes(anthropicVisible(anthropicBrowse)), browsing_anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropicBrowse)) / BYTES_PER_TOKEN_EST),
-      core_bytes: Object.fromEntries(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => [tool.name, bytes(tool)])), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
+      tapback_openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAITapback)) / BYTES_PER_TOKEN_EST), tapback_anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropicTapback)) / BYTES_PER_TOKEN_EST),
+      core_bytes: Object.fromEntries(openAITapback.filter((tool) => tool.type === 'function').map((tool) => [tool.name, bytes(tool)])), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
       strict: strict.filter((tool) => tool.strict === true).length, non_strict: strict.filter((tool) => tool.strict !== true).map((tool) => tool.name),
     };
     console.log(`BRAIN_TOOL_SURFACE ${JSON.stringify(report)}`);
@@ -202,6 +209,8 @@ describe('the brain tool surface', () => {
     expect(report.anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
     expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
   });
 

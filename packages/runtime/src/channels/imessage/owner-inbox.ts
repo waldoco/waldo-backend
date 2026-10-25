@@ -25,6 +25,8 @@ export type IMessageInboxRecord = {
   id: string; updateId: number; dedupKey: string; digest: string; text: string; conversationRef: string;
   binding: IMessageBinding; bindingDigest: string; revision: string; environment: string; bridgeDoName: string; ownerDoName: string;
   commandId: string; occurredAt: number; admittedAt: number;
+  /** The owner's message this turn answers: the one message a tapback from Waldo may go on. Absent on older records. */
+  messageRef?: Readonly<{ messageGuid: string; partIndex: number }>;
   /** The message's files as references: the turn fetches the bytes, and they are never stored. */
   media?: IMessageMedia;
   /** Tapback lines taken for this turn when it started; cleared with its text. */

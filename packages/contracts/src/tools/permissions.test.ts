@@ -122,6 +122,7 @@ describe('toolName', () => {
       'cancel_task',
       'record_owner_finding',
       'list_owner_findings',
+      'react_to_message',
     ]);
   });
 
@@ -244,6 +245,7 @@ describe('TOOL_PERMISSIONS', () => {
         'send_console_link',
         'send_progress_note',
         'attach_file',
+        'react_to_message',
         'get_communication',
         'search_communication',
         'search_contacts',

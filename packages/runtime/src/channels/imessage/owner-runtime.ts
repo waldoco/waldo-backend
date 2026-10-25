@@ -1,14 +1,15 @@
-import { iMessageBindingSchema, opaqueIMessageIdSchema } from '@waldo/contracts';
+import { iMessageBindingSchema, opaqueIMessageIdSchema, type IMessageStandardReaction } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
-import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageStandardReaction, type IMessageTurnHandoff } from './bridge-do';
+import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
+import type { TapbackPort } from '../../tools/live/react-to-message';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -45,9 +46,12 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
   if (known === undefined) host.storage.kv.put('do_name', input.ownerDoName);
   const commandId = `wrc_${(await sha256Hex(input.dedupKey)).slice(0, 40)}`;
+  const ref = input.envelope.messageRef;
+  const messageRef = ref && ref.conversationRef === input.envelope.conversationRef && opaqueIMessageIdSchema.safeParse(ref.id).success && Number.isInteger(ref.partIndex) && ref.partIndex! >= 0
+    ? { messageGuid: ref.id, partIndex: ref.partIndex! } : undefined;
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
-    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}),
+    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
   });
   return result.kind;
 };
@@ -118,12 +122,31 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
   return { kind: 'answered' };
 };
 
+const bridges = (host: OwnerHost) => host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
 const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
-  const ns = host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
+  const ns = bridges(host);
   if (!ns) return Promise.resolve({ kind: 'retry' } as const);
   return ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
-    ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
+    ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}),
+    ...(row.reaction ? { reaction: row.reaction } : {}) });
 };
+
+/**
+ * Tapbacks for the running iMessage turn, on the owner's message it answers. Ready asks that turn's bridge each time; a
+ * frozen tapback goes to the bridge with the turn's other messages at the next drain, the one retry owner.
+ */
+export const iMessageTapbacks = (host: OwnerHost, running: () => IMessageInboxRecord | null): TapbackPort => ({
+  ready: async () => {
+    const record = running(), ns = bridges(host);
+    return !!record?.messageRef && !!ns && await ns.get(ns.idFromName(record.bridgeDoName)).tapbacksReady();
+  },
+  freeze: (reaction: IMessageStandardReaction, scope: RunEffectScope) => {
+    const record = running();
+    if (!record || record.id !== scope.runId || record.attempt !== scope.attempt) throw new ClosedRunError();
+    try { scope.commit(() => new IMessageFinalOutbox(host.storage).freezeReaction(record, reaction)); return 'queued'; }
+    catch (error) { if (error instanceof Error && error.message === 'imessage_reply_conflict') return 'conflict'; throw error; }
+  },
+});
 
 // The bridge's one slot frees within a host pull and a send, so a drain polls it for about 4 s before leaving the reply to
 // its retry. A retry runs in the owner's serial queue, where it would wait behind the next turn. The polls are counted

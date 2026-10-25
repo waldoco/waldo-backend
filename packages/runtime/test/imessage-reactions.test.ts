@@ -9,7 +9,7 @@ import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
-import { SimulatedHost } from './helpers/imessage-sim-host';
+import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 
 // tools: each owner model call's tool names. before: work run at the start of the next owner model calls, in order.
 const proof = vi.hoisted(() => ({ turns: [] as string[], tools: [] as string[][], reply: 'Scripted owner reply.', outputs: [] as any[][], before: [] as (() => Promise<unknown>)[] }));
@@ -177,7 +177,8 @@ it('a tapback on the message that carries a pending card changes no approval, ca
 // Outbound: the model's tapback on the owner's message, offered and sent only where the bridge's host verified tapbacks.
 const TAPBACKS = { receive: true, send: true, exactTarget: true, verified: true };
 const tapback = (reaction: string) => [{ type: 'function_call', call_id: `tapback-${reaction}`, name: 'react_to_message', arguments: JSON.stringify({ reaction }) }];
-const toolOutput = (turn: string) => (JSON.parse(turn) as { type?: string; output?: string }[]).filter(item => item.type === 'function_call_output').map(item => JSON.parse(item.output!));
+// What the tool told the model: each function call's result data, from the next model call's input.
+const toolOutput = (turn: string) => (JSON.parse(turn) as { type?: string; output?: string }[]).filter(item => item.type === 'function_call_output').map(item => (JSON.parse(item.output!) as { data?: unknown }).data);
 const outbox = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 
 it('react_to_message is offered on an iMessage turn only while the host reports tapbacks sent, verified and exact', async () => {
@@ -216,12 +217,13 @@ it('a tapback the model sends goes out once, on the owner\'s own message, throug
     bindingDigest: frozen.bindingDigest, subject: SUBJECT, reaction: frozen.reaction! })).toEqual({ kind: 'queued' });
   const result = await w.host.execute(first);
   expect((await w.host.postResult(first, result)).status).toBe(200);
-  await w.pump(2);
-  const reply = (await w.host.pull()).delivery!;
-  expect(JSON.parse(reply.body)).toMatchObject({ operation: 'send', text: proof.reply });
+  // The reply met the mailbox's one slot taken by the tapback, so it goes on its busy retry once the slot frees.
+  let reply: Delivery | null = null;
+  await vi.waitFor(async () => { await w.pump(1); reply = (await w.host.pull()).delivery; expect(reply).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+  expect(JSON.parse(reply!.body)).toMatchObject({ operation: 'send', text: proof.reply });
   expect(w.host.nativeReactions).toEqual([{ commandId: command.commandId, messageGuid: asked.messageGuid, partIndex: 0, type: 'love', action: 'add' }]);
   expect((await outbox(w)).find(row => row.replyRef === frozen.replyRef)).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
-});
+}, 30_000);
 
 it('a capability gone stale before the call fails closed: nothing is frozen and the model hears why', async () => {
   const w = await world();
