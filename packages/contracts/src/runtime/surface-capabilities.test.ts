@@ -37,6 +37,15 @@ describe('surfaceCapabilitiesV1', () => {
     expect([web.approval, web.threads]).toEqual(['native', true]);
   });
 
+  // A surface claims files or voice only when Waldo handles them there today; a renderer that trusts a false claim offers
+  // the owner something that silently does nothing.
+  it('claims files and voice only where Waldo handles them', () => {
+    const { app, imessage } = SURFACE_CAPABILITIES_V1;
+    expect([app.files, app.voice]).toEqual([false, false]);
+    // Photos and files sent over iMessage are held unanswered today, so iMessage claims no files.
+    expect([imessage.files, imessage.voice]).toEqual([false, false]);
+  });
+
   it('rejects unknown surfaces and modes, extra keys, and a text cap a fallback cannot fit', () => {
     const caps = SURFACE_CAPABILITIES_V1.telegram;
     expect(surfaceCapabilitiesV1Schema.safeParse({ ...caps, surface: 'sms' }).success).toBe(false);

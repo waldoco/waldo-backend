@@ -68,13 +68,13 @@ describe('google read tools: connected-but-dead grant asks for reconnect, not a 
     const r = await run(deadGrant(null), 'query_calendar', { include_declined: false, limit: 20 });
     expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
   });
-  it('no serving client and a failing account that does not cover the feature -> not_connected', async () => {
+  it('no serving client and a failing account that does not cover the feature -> scope_missing, never a reconnect for a grant that never held it', async () => {
     const access: GoogleAccess = {
       client: async () => null,
       state: async () => [{ id: 'conn-1', email: 'me@example.com', error: 'google token failed: invalid_grant', calendar: false, mail: false, tasks: false }],
     };
     const r = await run(access, 'query_calendar', { include_declined: false, limit: 20 });
-    expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+    expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing' } });
   });
   it('no serving client and no state seam -> not_connected (unchanged)', async () => {
     const r = await run({ client: async () => null }, 'query_calendar', { include_declined: false, limit: 20 });
