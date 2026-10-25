@@ -1,4 +1,5 @@
 import type { AdminOverview } from '../identity/console-auth';
+import { ADMIN_SPEND_DAYS, type AdminSpend, type AdminSpendSection } from './admin-spend';
 import { CONSOLE_ACTION_PATH, CONSOLE_PATH } from './console';
 
 export const CONSOLE_ADMIN_PATH = `${CONSOLE_PATH}/admin`;
@@ -8,8 +9,18 @@ const when = (iso: string | null) => (iso ? esc(iso.slice(0, 16).replace('T', ' 
 const button = (csrf: string, action: string, label: string, fields: Readonly<Record<string, string>>, extra = '') =>
   `<form method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="action" value="${action}">${Object.entries(fields).map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('')}${extra}<button>${esc(label)}</button></form>`;
 
-// Admin page: who has access, who is invited, and invite or revoke by email.
-export const renderAdmin = (overview: AdminOverview, csrf: string): string => {
+const dollars = (usd: number) => `$${usd.toFixed(2)}`;
+const spendTable = (spend: AdminSpendSection): string => {
+  if ('error' in spend) return '<p>Spend is unavailable right now.</p>';
+  if (spend.total.calls === 0 && spend.total.usd === 0) return `<p>No spend recorded in the last ${ADMIN_SPEND_DAYS} days. The ledger fills only on deployments that sync it (WALDO_COST_LEDGER_SYNC).</p>`;
+  const line = (totals: AdminSpend['total']) => `<td>${dollars(totals.usd)}</td><td>${totals.calls}</td><td>${totals.input_tokens}</td><td>${totals.cached_tokens}</td>`;
+  const owners = spend.owners.map((owner) => `<tr><td>${esc(owner.email ?? '(unknown owner)')}</td>${line(owner)}</tr>`).join('');
+  const cut = spend.truncated ? '<p>Only the newest rows are counted; older days in the window were left out.</p>' : '';
+  return `<p>Model spend estimated from the price table, per owner. No message text.</p>${cut}<table><tr><th>Owner</th><th>USD</th><th>Calls</th><th>Input tokens</th><th>Cached tokens</th></tr>${owners}<tr><th>All owners</th>${line(spend.total)}</tr></table>`;
+};
+
+// Admin page: who has access, who is invited, invite or revoke by email, and spend per owner when it was read.
+export const renderAdmin = (overview: AdminOverview, csrf: string, spend?: AdminSpendSection): string => {
   const owners = overview.owners.map((owner) => `<tr><td>${esc(owner.email ?? '(no email)')}</td><td>${esc(owner.state)}</td><td>${esc(owner.presences.join(', ') || 'none')}</td><td>${when(owner.created_at)}</td></tr>`).join('');
   const invites = overview.invites.map((invite) => {
     const state = invite.used_at ? `used ${when(invite.used_at)}` : invite.revoked_at ? `revoked ${when(invite.revoked_at)}` : invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now() ? 'expired' : 'open';
@@ -17,5 +28,5 @@ export const renderAdmin = (overview: AdminOverview, csrf: string): string => {
     return `<tr><td>${esc(invite.email ?? '')}</td><td>${state}</td><td>${when(invite.created_at)}</td><td>${when(invite.expires_at)}</td><td>${revoke}</td></tr>`;
   }).join('');
   const create = button(csrf, 'invite.create', 'Invite', {}, '<label>Recipient email <input name="value" type="email" autocomplete="email" required placeholder="email@example.com"></label>');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo admin</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:24px}td,th{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}form{display:inline-flex;gap:8px}input,button{font:inherit;padding:6px 10px}</style></head><body><p><a href="${CONSOLE_PATH}">Back to console</a></p><h2>Owners</h2><p>Root invites have no lifetime limit. Each code works once, only for its recipient email, and expires in 14 days. A signup link is shown once after creation; Waldo does not email anyone.</p><table><tr><th>Email</th><th>State</th><th>Linked</th><th>Since</th></tr>${owners}</table><h2>Invites</h2>${create}<table><tr><th>Email</th><th>State</th><th>Created</th><th>Expires</th><th></th></tr>${invites}</table></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo admin</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:24px}td,th{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}form{display:inline-flex;gap:8px}input,button{font:inherit;padding:6px 10px}</style></head><body><p><a href="${CONSOLE_PATH}">Back to console</a></p><h2>Owners</h2><p>Root invites have no lifetime limit. Each code works once, only for its recipient email, and expires in 14 days. A signup link is shown once after creation; Waldo does not email anyone.</p><table><tr><th>Email</th><th>State</th><th>Linked</th><th>Since</th></tr>${owners}</table><h2>Invites</h2>${create}<table><tr><th>Email</th><th>State</th><th>Created</th><th>Expires</th><th></th></tr>${invites}</table>${spend ? `<h2>Spend (last ${ADMIN_SPEND_DAYS} days)</h2>${spendTable(spend)}` : ''}</body></html>`;
 };

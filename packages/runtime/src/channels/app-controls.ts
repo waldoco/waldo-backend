@@ -1,4 +1,5 @@
-import { type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
 import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
@@ -27,12 +28,25 @@ const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
 const withoutLocalId=({local_id:_local,...item}:Item)=>item;
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
-const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>)=>({
+// A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
+// revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
+const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
+  :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins?:ReadonlyMap<number,string>)=>({
   ...rest,memory_view:view,
-  ...(Array.isArray(items)?{items:items.map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(item as Item)}:{}),
+  ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(pinOf(pins)(item as Item))}:{}),
   ...(center?{center:withoutLocalId(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(withoutLocalId)}:{}),
 });
 type Book=Record<string,{receipt:unknown;expires:number}>;
+const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
+const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
+// The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
+const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit'};
+// One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean)=>{
+  const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined)}:{status:paged.status,error:paged.body.error};
+};
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
   if(path.startsWith('/app/v1/actions/')){
@@ -59,10 +73,10 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     if(query.data.view==='constellation'){
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
-      let paged:ReturnType<typeof pageMemoryGraph>;
-      try{paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams(paging));}catch{return reply({error:'projection_unavailable'},503);}
-      if(paged.status!==200)return reply({error:paged.body.error},paged.status);
-      const graph=appMemoryGraph(paged.body),data=graph.memory_view==='summary'&&host.welcome?{...graph,welcome:host.welcome()}:graph,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      let graph:ReturnType<typeof constellationData>;
+      try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
+      if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
+      const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:host.welcome()}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='account'){
@@ -92,12 +106,25 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
   // A node action runs as the console's memory action on the node it names, against the revision of that node's detail read.
-  if(action.success&&action.data.view==='constellation'){
+  if(action.success&&action.data.view==='constellation'&&action.data.action.startsWith('node.')){
     const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
     for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
-    const detail=async()=>{const paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams([['view','detail'],['id',id!]]));return paged.status===200?appMemoryGraph(paged.body) as never:null;};
-    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection:detail,
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request));return detail.status===200?detail.data as never:null;},
       act:async node=>{await host.assertCurrent();return host.act(node);}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // A claim action runs as the console's memory action on the claim it names. It carries the revision of that claim's
+  // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
+  if(action.success&&action.data.view==='constellation'){
+    if(!showsPins(request))return reply({error:'invalid_action'},400);
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true);return detail.status===200?detail.data as never:null;},
+      act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
     const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);

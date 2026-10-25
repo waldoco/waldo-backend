@@ -12,6 +12,13 @@ const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(v
 const memoryCursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/);
 const memoryId = text.min(1).max(256);
 const memoryViews = z.enum(['summary', 'claims', 'interpretations', 'detail', 'pattern']);
+// Controls revision 2 (`x-waldo-app-contract: controls=2`): a constellation claim carries `pinned`, and the constellation
+// view takes the owner's claim actions (claim.pin, claim.unpin, claim.edit). Revision 1 clients never receive the field.
+export const APP_CONTROLS_MEMORY_REVISION = 2;
+// An edited claim's text, trimmed. A pinned line rides every turn, so it stays well inside the profile block's room.
+export const APP_CLAIM_TEXT_MAX_V1 = 1000;
+const claimId = /^memory:claim:[1-9][0-9]{0,15}$/;
+const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit'];
 // The owner's own word on one constellation node: confirm it, replace it with their correction, or forget it. A correction is
 // stored as what the owner said, so it is kept short like a node.
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
@@ -28,7 +35,7 @@ export const appControlQueryV1Schema = z.strictObject({
   if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
 });
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'node.confirm', 'node.correct', 'node.forget']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -44,8 +51,18 @@ export const appControlActionV1Schema = z.strictObject({
   const deletion = action.action === 'account.delete';
   if (deletion !== (action.view === 'account') || deletion !== (action.confirmation === 'DELETE')) ctx.addIssue({ code: 'custom', path: ['confirmation'], message: 'account.delete alone uses the account view, with confirmation DELETE' });
   if (deletion && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume) !== undefined) ctx.addIssue({ code: 'custom', message: 'account.delete carries only its confirmation' });
+  if ((CLAIM_ACTIONS.includes(action.action) || NODE_ACTIONS.includes(action.action)) !== (action.view === 'constellation')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The constellation view takes only the claim and node actions, and they only it' });
+  // The owner's claim actions name one claim from the constellation view: pin it to the profile or facts block, unpin it,
+  // or replace its text with what the owner typed. Each counts as the owner's own word for that claim.
+  const claim = CLAIM_ACTIONS.includes(action.action);
+  if (claim && !claimId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A claim action names one claim, memory:claim:<n>' });
+  if (claim && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A claim action carries only its id and value' });
+  if (action.action === 'claim.pin' && action.value !== 'profile' && action.value !== 'facts') ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.pin names the block, profile or facts' });
+  if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
+  const edited = action.value?.trim() ?? '';
+  if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
+  // The owner's word on one constellation node: confirm it, correct it in their own words, or forget it.
   const node = NODE_ACTIONS.includes(action.action);
-  if (node !== (action.view === 'constellation')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The constellation view takes only the node actions, and they only it' });
   if (node && !nodeId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A node action names one node, memory:node:<n>' });
   if (node && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A node action carries only its id and, for a correction, value' });
   const corrected = action.value?.trim() ?? '';
@@ -129,6 +146,9 @@ const memoryClaim = z.strictObject({
   evidence: z.strictObject({ kind: z.literal('writer_note'), text }),
   source_reference: z.strictObject({ state: z.enum(['unverified', 'unavailable']), link: z.null(), visibility: z.literal('withheld_unverified_pointer'), retrievable: z.literal(false) }),
   recorded_at: text, writer_seen_count: z.int().positive().nullable(),
+  // Controls revision 2: the block this claim is pinned to, shown on every turn, or null. Revision 2 also reads source
+  // waldo_confirmed for a claim the nightly model confirmed, which stays Waldo's read; revision 1 reads it as confirmed.
+  pinned: z.enum(['profile', 'facts']).nullable().optional(),
 });
 // Where a node's support came from, when Waldo read it from a connected source; empty for a node resting on what the owner
 // said. confirmation is confirmed once every supporting claim is the owner's own word, and waldos_read until then.

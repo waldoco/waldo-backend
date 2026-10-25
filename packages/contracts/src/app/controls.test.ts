@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -201,7 +201,7 @@ describe('constellation view', () => {
     ]) expect(appControlQueryV1Schema.safeParse(query).success).toBe(false);
   });
 
-  it('takes only the node actions, and they only it', () => {
+  it('takes the node actions, and they only it', () => {
     expect(appControlActionV1Schema.safeParse({ view: 'constellation', action: 'timezone.set', value: 'UTC', revision, request_id: 'request-0009' }).success).toBe(false);
     const act = (extra: object) => ({ view: 'constellation', revision, request_id: 'request-0010', ...extra });
     for (const valid of [
@@ -236,6 +236,36 @@ describe('constellation view', () => {
       { ...valid[2], items: [{ ...node, sources: ['web'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
       { ...valid[1], welcome },
     ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(false);
+  });
+  it('takes no actions but the claim actions of controls revision 2', () => {
+    expect(APP_CONTROLS_MEMORY_REVISION).toBe(2);
+    for (const action of ['proactivity.set', 'channel.unlink', 'google.connect']) expect(appControlActionV1Schema.safeParse({ view: 'constellation', action, value: 'x', revision, request_id: 'request-0010' }).success).toBe(false);
+  });
+
+  it('shows a claim pinned to a block, unpinned, or without the field for revision 1', () => {
+    for (const pinned of ['profile', 'facts', null, undefined]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...claim, ...(pinned === undefined ? {} : { pinned }) } })).success).toBe(true);
+    for (const pinned of ['', 'top', 1, true]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[1], items: [{ ...claim, pinned }] })).success, String(pinned)).toBe(false);
+  });
+
+  const act = (fields: object) => appControlActionV1Schema.safeParse({ view: 'constellation', revision, request_id: 'claim-0001', ...fields }).success;
+  it('pins a claim to profile or facts, unpins it, and edits its text', () => {
+    for (const valid of [
+      { action: 'claim.pin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.pin', id: 'memory:claim:1', value: 'facts' },
+      { action: 'claim.unpin', id: 'memory:claim:12' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs on Tuesdays' }, { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1) },
+    ]) expect(act(valid), JSON.stringify(valid)).toBe(true);
+  });
+
+  it('refuses a claim action on another view, on an interpretation or a bad id, or with a bad value or extra fields', () => {
+    for (const invalid of [
+      { action: 'claim.pin', id: 'memory:claim:12', value: 'profile', view: 'day' }, { action: 'claim.pin', id: 'memory:node:12', value: 'profile' },
+      { action: 'claim.pin', id: 'memory:claim:0', value: 'profile' }, { action: 'claim.pin', id: 'claim:12', value: 'profile' }, { action: 'claim.pin', value: 'profile' },
+      { action: 'claim.pin', id: 'memory:claim:12' }, { action: 'claim.pin', id: 'memory:claim:12', value: 'top' },
+      { action: 'claim.unpin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.unpin', id: 'memory:claim:12', volume: 'low' },
+      { action: 'claim.edit', id: 'memory:claim:12' }, { action: 'claim.edit', id: 'memory:claim:12', value: '   ' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1 + 1) },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' }, { action: 'claim.forget', id: 'memory:claim:12' },
+    ]) expect(act(invalid), JSON.stringify(invalid)).toBe(false);
   });
 });
 
