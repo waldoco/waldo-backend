@@ -89,6 +89,22 @@ describe('the task brain host', () => {
     });
   });
 
+  // A worker has always read outside content, and it cannot raise a card: a free-form browser step, which may commit, is
+  // refused toward the owner's card before it runs, with no effect intent written.
+  it('an errand worker\'s untyped browser step is refused toward the owner\'s card: nothing runs and no effect intent is written', async () => {
+    await withHost(async ({ host, ticket, ran, book }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      const refused = await host.tool(t, UNTYPED_BROWSE, CANARIES);
+      expect(refused).toMatchObject({ ok: false });
+      expect(JSON.stringify(refused)).toContain('propose_action');
+      expect(ran).toEqual([]);
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+    });
+  });
+
   it('records external taint on the job when a tool returns outside content', async () => {
     await withHost(async ({ host, ticket, book }) => {
       const t = ticket();
