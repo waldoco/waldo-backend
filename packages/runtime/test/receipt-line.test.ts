@@ -50,6 +50,13 @@ describe('receiptLine', () => {
       expect(receiptLine([ev(1, 'workspace_write', false, { receiptStatus: 'unavailable' }, write), ev(2, 'workspace_write', true, {}, write)]))
         .toBe('Receipts: workspace file written a.md (unconfirmed); workspace file written a.md (accepted)');
     });
+    // A forget twice forgets once. Any other effect can land before a later step refuses (an oversize result, a post-call
+    // halt), so its retry may be a second copy: only a tool whose repeat is harmless may make a refusal good.
+    it('still shows for an effect whose repeat is a second copy, whatever the refusal code', () => {
+      const reminder = { text: 'call Ravi', at: '2026-10-27T09:00:00Z' };
+      expect(receiptLine([ev(1, 'set_reminder', false, { code: 'oversize' }, reminder), ev(2, 'set_reminder', true, {}, reminder)]))
+        .toBe('Receipts: reminder set (failed); reminder set (accepted)');
+    });
     it('is left off the typed items too, which the line names', async () => {
       const receipt = await turnReceipt([ev(1, 'forget_memory', false, { code: 'invalid_args' }, forget('Asha')), ev(2, 'forget_memory', true, {}, forget('Asha'))]);
       expect(receipt?.items.map(item => item.outcome)).toEqual(['accepted']);
