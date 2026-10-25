@@ -82,6 +82,7 @@ describe('the numeric health floor', () => {
     '| Step | Owner |\n| 3 | Priya |',
     'Q3 — 45 deals closed',
     'Cardio fitness class 45 min on Tuesdays',
+    'Cardio fitness 45 min on Tuesdays',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });

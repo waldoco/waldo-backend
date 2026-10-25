@@ -112,7 +112,8 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEA
 // What may sit between a metric and its number in a reading: a separator or a reading word ("was", "about", "of").
 // Anything else ("check meeting at", "week") means the number is not that metric's value. A metric whose value is a bare
 // number does not take "at", which before a bare number is mostly a clock time (a meeting with HR at ten).
-const READING_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
+// A trend ("dropped to", "rose from") carries the value too.
+const READING_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to|(?:rose|fell|dropped|dipped|climbed|jumped|increased|decreased|went\s+(?:up|down))(?:\s+(?:to|from|by))?`;
 const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
@@ -147,7 +148,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`(?<!\d\s?)\b(?:hr|pulse)\b${BARE_GAP}${BARE_VALUE}(?!\s*(?:people|staff|employees|members|%))`),
   reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
-  reading(String.raw`\bvo2\s*max\b${BARE_GAP}${BARE_VALUE}`),
+  // Apple names VO2 max "Cardio Fitness", which is also a class with a length.
+  reading(String.raw`\b(?:vo[2₂]\s*max|cardio\s+fitness)\b${BARE_GAP}${BARE_VALUE}(?!\s*${DURATION})`),
+  reading(String.raw`\b${READING_NUMBER}\s*ml\s*\/\s*kg\s*\/\s*min\b`),
   reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${BARE_GAP}${BARE_VALUE}`),
   // A systolic of 60 to 249 over a diastolic of 30 to 149, so a date ("12/10") or "24/7" is not a pressure.
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
@@ -177,7 +180,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // Needs a unit or a minutes metric, and "of" before the signal, so a booked "45 minute workout" is a plan, not a reading.
   reading(String.raw`\b${MINUTE_SIGNAL}(?:\s+(?:time|duration))?\b${READING_GAP}${READING_NUMBER}\s*${DURATION}`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+of\s+${MINUTE_SIGNAL}\b`),
-  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+mindfulness\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+mindfulness\b(?!\s+(?:breaks?|sessions?|class(?:es)?)\b)`),
   reading(String.raw`\b(?:${READING_NUMBER}\s+(?:movement|daylight|workout|mindful)\s+(?:minutes|mins)\b|(?:movement|daylight|workout|mindful)\s+(?:minutes|mins)\b${BARE_GAP}${READING_NUMBER}\b)`),
   reading(String.raw`\b(?:\d{1,3}(?:,\d{3})+|\d{4,}|${READING_NUMBER}\s*k)\s*steps\b`),
   reading(String.raw`\bsteps\b${READING_GAP}(?:\d{1,3}(?:,\d{3})+|\d{4,})\b`),
@@ -211,9 +214,13 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
 // (a quoted `"steps"`, `heartRate=`, `hrv_ms:`); prose readings are OWNER_HEALTH_READINGS' job.
 const SERIALIZED_FIELD = /["'=_]|[a-z][A-Z]/;
 const everyMatch = (pattern: RegExp, text: string): string[] => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].map(([match]) => match);
+// A reply or a summary sets a reading out as "**HRV:** 42", "| HRV | 42 |" or "HRV — 42". The prose readings are matched
+// with that markup blanked, one character for one, so a match's offsets still index the original text.
+const MARKUP = /[*|\u2013\u2014]/g;
+const unmarked = (text: string): string => text.replace(MARKUP, ' ');
 // Each reading in text, as the words the floor matched.
 const numericHealthReadings = (text: string): string[] => [
-  ...OWNER_HEALTH_READINGS.flatMap((pattern) => everyMatch(pattern, text)),
+  ...OWNER_HEALTH_READINGS.flatMap((pattern) => everyMatch(pattern, unmarked(text))),
   ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
 ];
 
@@ -247,8 +254,8 @@ export const redactNumericHealth = (text: string, marker: string): string => {
   const minutesAfter = new RegExp(String.raw`\s*${STAGE_MINUTES}`, 'iy');
   const tail = (end: number): number => { minutesAfter.lastIndex = end; return minutesAfter.exec(text)?.[0].length ?? 0; };
   const head = (start: number): number => HOURS_BEFORE.exec(text.slice(Math.max(0, start - 16), start))?.[0].length ?? 0;
-  const collect = (pattern: RegExp, kept: (match: string) => boolean = () => true) => {
-    for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))) {
+  const collect = (pattern: RegExp, source: string, kept: (match: string) => boolean = () => true) => {
+    for (const match of source.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))) {
       if (!kept(match[0])) continue;
       const end = match.index + match[0].length;
       spans.push([
@@ -257,8 +264,9 @@ export const redactNumericHealth = (text: string, marker: string): string => {
       ]);
     }
   };
-  for (const pattern of OWNER_HEALTH_READINGS) collect(pattern);
-  for (const pattern of RAW_SENSOR_PATTERNS) collect(pattern, (field) => SERIALIZED_FIELD.test(field));
+  const prose = unmarked(text);
+  for (const pattern of OWNER_HEALTH_READINGS) collect(pattern, prose);
+  for (const pattern of RAW_SENSOR_PATTERNS) collect(pattern, text, (field) => SERIALIZED_FIELD.test(field));
   if (spans.length === 0) return text;
   spans.sort((a, b) => a[0] - b[0]);
   let out = '', at = 0;
