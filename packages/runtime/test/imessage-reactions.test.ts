@@ -6,13 +6,16 @@ import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
+import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
-const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', outputs: [] as any[][] }));
+// tools: each owner model call's tool names. before: work run at the start of the next owner model calls, in order.
+const proof = vi.hoisted(() => ({ turns: [] as string[], tools: [] as string[][], reply: 'Scripted owner reply.', outputs: [] as any[][], before: [] as (() => Promise<unknown>)[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
-  if (!format) proof.turns.push(JSON.stringify(input.input ?? ''));
+  if (!format) { await proof.before.shift()?.(); proof.turns.push(JSON.stringify(input.input ?? '')); proof.tools.push((input.tools ?? []).map((tool: { name?: string }) => tool.name ?? '')); }
   if (format === 'progress_note') return { id: 'scripted', output: [], output_text: JSON.stringify({ note: null }), usage: { input_tokens: 1, output_tokens: 1 } };
   return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
@@ -25,7 +28,7 @@ const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const LOVED = '[Owner reacted ❤️ to your message: "Scripted owner reply."]';
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.outputs = []; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.tools = []; proof.outputs = []; proof.before = []; });
 
 async function world() {
   const ownerName = `imsg-reactions-${crypto.randomUUID()}`;
@@ -90,7 +93,7 @@ async function world() {
   // How the bridge settled each tapback it was handed, in order.
   const settled = () => runInDurableObject(bridgeStub(), async (_i, state) =>
     state.storage.sql.exec<{ reason: string }>("SELECT reason FROM events WHERE kind = 'reaction' ORDER BY seq").toArray().map(row => row.reason));
-  return { ownerStub, host, pump, activate, exchange, react, settled };
+  return { ownerStub, bridgeStub, host, pump, activate, exchange, react, settled };
 }
 
 // The owner's message the model read last, as the model saw it.
@@ -169,4 +172,92 @@ it('a tapback on the message that carries a pending card changes no approval, ca
   await w.exchange('ok');
   expect(ownerInput(proof.turns.at(-1)!)).toContain('Owner reacted 👍 to your message');
   expect(await desk()).toEqual(before);
+});
+
+// Outbound: the model's tapback on the owner's message, offered and sent only where the bridge's host verified tapbacks.
+const TAPBACKS = { receive: true, send: true, exactTarget: true, verified: true };
+const tapback = (reaction: string) => [{ type: 'function_call', call_id: `tapback-${reaction}`, name: 'react_to_message', arguments: JSON.stringify({ reaction }) }];
+const toolOutput = (turn: string) => (JSON.parse(turn) as { type?: string; output?: string }[]).filter(item => item.type === 'function_call_output').map(item => JSON.parse(item.output!));
+const outbox = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
+
+it('react_to_message is offered on an iMessage turn only while the host reports tapbacks sent, verified and exact', async () => {
+  const w = await world();
+  await w.activate();
+  const offered = async (flag: Parameters<SimulatedHost['capabilities']>[1]) => {
+    expect((await w.host.capabilities(true, flag)).status).toBe(200);
+    await w.exchange('Hi');
+    return proof.tools.at(-1)!.includes('react_to_message');
+  };
+  expect(await offered(false)).toBe(false);
+  expect(await offered({ ...TAPBACKS, verified: false })).toBe(false);
+  expect(await offered({ ...TAPBACKS, exactTarget: false })).toBe(false);
+  expect(await offered({ ...TAPBACKS, send: false })).toBe(false);
+  expect(await offered(TAPBACKS)).toBe(true);
+  expect(proof.tools.at(-1)!.includes('send_message')).toBe(true);
+});
+
+it('a tapback the model sends goes out once, on the owner\'s own message, through the outbox before the reply', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, TAPBACKS)).status).toBe(200);
+  proof.outputs.push(tapback('love'), []);
+  const asked = w.host.message('Booked the dentist for Friday!');
+  expect((await w.host.send(asked)).status).toBe(200);
+  await w.pump();
+  expect(toolOutput(proof.turns[1]!)).toEqual([{ queued: true }]);
+  const first = (await w.host.pull()).delivery!;
+  const command = JSON.parse(first.body);
+  expect(command).toMatchObject({ operation: 'react', action: 'add', reaction: { kind: 'standard', type: 'love' }, allowSMSFallback: false,
+    target: { chatGuid: CHAT, messageGuid: asked.messageGuid, partIndex: 0 }, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  // The same frozen intent handed to the bridge again is the same command, never a second one.
+  const frozen = (await outbox(w)).find(row => row.replyRef.startsWith('react:'))!;
+  expect(frozen).toMatchObject({ state: 'queued', commandId: command.commandId });
+  expect(await w.bridgeStub().enqueueReply({ replyRef: frozen.replyRef, commandId: frozen.commandId, text: '', ownerDoName: frozen.ownerDoName, revision: frozen.revision,
+    bindingDigest: frozen.bindingDigest, subject: SUBJECT, reaction: frozen.reaction! })).toEqual({ kind: 'queued' });
+  const result = await w.host.execute(first);
+  expect((await w.host.postResult(first, result)).status).toBe(200);
+  await w.pump(2);
+  const reply = (await w.host.pull()).delivery!;
+  expect(JSON.parse(reply.body)).toMatchObject({ operation: 'send', text: proof.reply });
+  expect(w.host.nativeReactions).toEqual([{ commandId: command.commandId, messageGuid: asked.messageGuid, partIndex: 0, type: 'love', action: 'add' }]);
+  expect((await outbox(w)).find(row => row.replyRef === frozen.replyRef)).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
+});
+
+it('a capability gone stale before the call fails closed: nothing is frozen and the model hears why', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, TAPBACKS)).status).toBe(200);
+  proof.outputs.push(tapback('like'), []);
+  // Offered when the turn began; the host withdraws verification before the model's call runs.
+  proof.before.push(async () => expect((await w.host.capabilities(true, { ...TAPBACKS, verified: false })).status).toBe(200));
+  await w.exchange('Running late.');
+  expect(proof.tools[0]).toContain('react_to_message');
+  expect(toolOutput(proof.turns[1]!)).toEqual([{ queued: false, reason: 'unavailable' }]);
+  expect((await outbox(w)).some(row => row.replyRef.startsWith('react:'))).toBe(false);
+  expect(w.host.nativeReactions).toEqual([]);
+});
+
+it('the bridge refuses a frozen tapback once its host no longer verifies them: proved not started, never sent', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, TAPBACKS)).status).toBe(200);
+  proof.outputs.push(tapback('like'), []);
+  // The tapback froze on the first model call; verification is gone before the turn's outbox drains.
+  proof.before.push(async () => undefined, async () => expect((await w.host.capabilities(true, { ...TAPBACKS, verified: false })).status).toBe(200));
+  await w.exchange('Can you check the train?');
+  expect(toolOutput(proof.turns[1]!)).toEqual([{ queued: true }]);
+  expect((await outbox(w)).find(row => row.replyRef.startsWith('react:'))).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'tapbacks_unverified' } });
+  expect(w.host.nativeReactions).toEqual([]);
+});
+
+it('the bridge refuses a tapback on a message outside the bound chat', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, TAPBACKS)).status).toBe(200);
+  await w.exchange('Hello');
+  const record = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
+  const handoff = { replyRef: `react:${record.id}`, commandId: `wrx_love_${record.commandId}`, text: '', ownerDoName: record.ownerDoName, revision: record.revision, bindingDigest: record.bindingDigest, subject: SUBJECT };
+  expect(await w.bridgeStub().enqueueReply({ ...handoff, reaction: { chatGuid: 'iMessage;-;other@example.invalid', messageGuid: 'sim-guid-elsewhere', partIndex: 0, type: 'love' } }))
+    .toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'target_not_in_chat' } });
+  expect((await w.host.pull()).delivery).toBeNull();
 });
