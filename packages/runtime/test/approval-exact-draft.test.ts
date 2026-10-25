@@ -29,7 +29,7 @@ const harness = (state: DurableObjectState) => {
     google: async () => client, newId: () => `draft${++n}`, now: () => Date.now(), timezone: 'UTC', log: entry => { logs.push(entry); },
     canSendMessage: () => true, sendMessage: async (proposal: MessageSendProposal) => { messages.push(proposal); return { provider_id: `m${messages.length}` }; },
   });
-  const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+  const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
   const list = async (header?: string) => (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', { headers: header === undefined ? {} : { 'x-waldo-app-contract': header } }), host)).text();
   const approvals = async (header = 'approvals=3') => appApprovalListV1Schema.parse(JSON.parse(await list(header))).approvals;
   const decide = async (body: Readonly<{ approval_id: string; action: string; expected_digest: string; request_id: string }>) => {

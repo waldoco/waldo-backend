@@ -22,6 +22,8 @@ export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
   chat: ChatChannels;
+  // Whether this app session signed in within the last two hours, as a link code needs.
+  signedInRecently(): Promise<boolean>;
   // The owner's proactive-surface setting (the console's own).
   proactiveSurface(): AppProactiveSurfaceV1;
   now(): number;
@@ -47,7 +49,7 @@ const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['consents']
 
 // An operator sees which step failed by a fixed code, never the error text, which may carry an owner's details.
 const logFailure = (code: 'channel_link_issue' | 'health_consent_list' | 'health_consent_shape') => console.error(JSON.stringify({ hop: 'app_onboarding', ok: false, code }));
-const STATUS = { invalid_request: 400, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, not_offered: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
+const STATUS = { invalid_request: 400, step_up_required: 403, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, not_offered: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
 type Problem = keyof typeof STATUS;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const problem = (error: Problem) => reply({ error }, STATUS[error]);
@@ -88,6 +90,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
+    if (!await host.signedInRecently()) return problem('step_up_required');
     if (!host.consent.stepsOpen()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');
@@ -150,6 +153,7 @@ export type OwnerOnboardingDeps = Readonly<{
   assertCurrent(): Promise<void>;
   // The chat channels the owner can link.
   chat: ChatChannels;
+  signedInRecently(): Promise<boolean>;
   // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
   // discloses it is published.
   agreementsOffered: boolean;
@@ -221,7 +225,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     withdrawLookup,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
+    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
   };
 };
