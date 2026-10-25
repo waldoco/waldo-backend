@@ -378,6 +378,8 @@ export const createOwnerResponder = (
   };
   const composer = context?.composer ?? adapters.contextComposer!;
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
+  // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
+  const compaction = conversationStore?.compaction ?? COMPACTION;
   const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
@@ -656,7 +658,7 @@ export const createOwnerResponder = (
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },
-  }, tree, undefined, pathObservers);
+  }, tree, undefined, pathObservers, compaction);
   const conversationLeaves = new Map<string, string>();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
@@ -808,8 +810,8 @@ export const createOwnerResponder = (
   const compactIfDue = async (conversationRef: string): Promise<void> => {
     const hop = (ok: boolean, code: string, extra: Readonly<{ ms?: number; detail?: string }> = {}) => log({ trace: traceId, hop: 'compaction', ms: extra.ms ?? 0, ok, code, ...(extra.detail ? { detail: extra.detail } : {}) });
     try {
-      if (!COMPACTION.enabled) return;
       if (scopedCompaction) return scopedCompaction(conversationRef);
+      if (!compaction.enabled) return;
       if (!conversationStore?.appendCompaction) return;
       const ref = context?.conversationRef ?? conversationRef;
       const leafId = conversationLeaves.get(ref), stats = lastWindow.get(ref);
@@ -817,10 +819,10 @@ export const createOwnerResponder = (
       const now = Date.now();
       const live = liveCompaction(tree, leafId);
       const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
-      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now })) return;
+      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const plan = compactionPlan(tree, leafId, live);
+      const plan = compactionPlan(tree, leafId, live, compaction);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       if (privateOwner?.compactionFlush) {
@@ -829,9 +831,12 @@ export const createOwnerResponder = (
         privateRunScope?.admit();
       }
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
+      const input = plan.input.filter((message) => !barrier().shows(message.content));
+      if (!input.length) { hop(false, 'held_topic'); return; }
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
-      if (response.truncated || summary.length > COMPACTION.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
+      if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
       // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
       if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }

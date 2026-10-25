@@ -29,7 +29,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
 | `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
-| `WALDO_EVAL_MAX_CALLS` | required for live | `3200`: `pnpm eval:plan` suggests 3000 in split mode and 2100 in joint mode for 3 trials of today's catalogue, and the workflow sets 3200 so a few more scenarios do not exhaust the budget, which fails the gate |
+| `WALDO_EVAL_MAX_CALLS` | required for live | `3300`: `pnpm eval:plan` suggests 3100 in split mode and 2200 in joint mode for 3 trials of today's catalogue, and the workflow sets 3300 so a few more scenarios do not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
 | `WALDO_EVAL_TRIALS` | optional | `3`, which pass^k needs |
@@ -49,7 +49,7 @@ A refused or truncated grade counts as a judge error, never a pass.
 ```bash
 cd packages/runtime
 read -s OPENAI_API_KEY; read -s ANTHROPIC_API_KEY; export OPENAI_API_KEY ANTHROPIC_API_KEY
-WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=3200 WALDO_EVAL_TRIALS=3 \
+WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=3300 WALDO_EVAL_TRIALS=3 \
   WALDO_EVAL_OUT="$PWD/live-scorecard.json" npx -y pnpm@10.34.4 eval:nightly > /dev/null
 WALDO_EVAL_MODE=live npx -y pnpm@10.34.4 exec tsx evals/nightly/report.ts live-scorecard.json live-scorecard.md
 ```
@@ -67,7 +67,7 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 2. **Schedule it from `main`, with the job checking out `beta-mvp` explicitly.** A schedule always runs the default branch's latest commit, so without an explicit checkout it tests `main`'s code.
 3. **Make `beta-mvp` the default branch.**
 
-The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,665 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together. [inference] At 6 s a call the candidate side is at most about 170 minutes; the judges' 249 trial waves at up to 30 s each add about 125 more, so the high estimate is about 295 minutes and 360 still fits.
+The job's timeout is 360 minutes, the most a hosted runner allows. Trials run one after another: up to about 1,755 candidate calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus the judge calls, which for one trial run together. [inference] At 6 s a call the candidate side is at most about 176 minutes; the judges' 255 trial waves at up to 30 s each add about 128 more, so the high estimate is about 304 minutes and 360 still fits.
 
 ## Calls and cost per run
 
@@ -75,12 +75,12 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 
 | | Split (default) | Joint |
 | --- | --- | --- |
-| Owner turns and fired reminders | 333 | 333 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 666 to 1,665 | 666 to 1,665 |
-| Judge calls | 1,311 | 342 |
-| Suggested `WALDO_EVAL_MAX_CALLS` | 3000 | 2100 |
+| Owner turns and fired reminders | 351 | 351 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 702 to 1,755 | 702 to 1,755 |
+| Judge calls | 1,329 | 348 |
+| Suggested `WALDO_EVAL_MAX_CALLS` | 3100 | 2200 |
 
-A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 83 runnable scenarios that is 3200. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
+A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets, with room for four more scenarios, since an exhausted budget fails the gate. For split at 85 runnable scenarios (88 in the catalogue) the plan suggests 3100, and room for four more scenarios takes it to 3300. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
 **Cost estimate.** [inference] This is an estimate, not a measurement.
 
@@ -107,7 +107,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 
 1. **Measure the judge first.** Run `eval:voice-agreement` live (about $2) on the labelled set, after Suyash has reviewed the labels (`reviewed_by` set). Read the false-pass rate. If the voice judge passes more than about 1 in 10 labelled fails, fix the rubric before trusting voice verdicts. [proposed] This 1-in-10 bar is a proposed threshold, not an agreed one.
 2. **Smoke-test one scenario**, as above.
-3. **Do the full run** at 3 trials with a cap of 3200, locally or by dispatch.
+3. **Do the full run** at 3 trials with a cap of 3300, locally or by dispatch.
 4. **Read the scorecard before any rate.** Check these things:
    - Blocked must be 3.
    - Harness errors must be 0.

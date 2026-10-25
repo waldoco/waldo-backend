@@ -4,7 +4,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
-import { COMPACTION, supersededCompaction } from './compaction';
+import { COMPACTION, supersededCompaction, type CompactionSettings } from './compaction';
 import { estimateMessageTokens } from './window';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
@@ -87,11 +87,13 @@ export const turnLinkedEntries = (entries: readonly ConversationEntry[], left: R
 };
 
 // A thread's history is its own chain under the owner's prefix (thread:<thread id>:); main's is the prefix itself.
-export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'> & Partial<Pick<OwnerContextCapability, 'conversationRef'>>, onSkipped?: (skipped: CanonicalSkipped) => void, thread?: string): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
+export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'> & Partial<Pick<OwnerContextCapability, 'conversationRef'>>, onSkipped?: (skipped: CanonicalSkipped) => void, thread?: string, compaction: CompactionSettings = COMPACTION): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
   const principal = context.invocation.verified_authority.principal_ref;
   const tenant = context.invocation.verified_authority.tenant_ref;
   const prefix = `canonical-owner-v1:${principal}:${tenant}:${thread ? `thread:${thread}:` : ''}`;
   const witnessKey = (id: string) => `${prefix}witness:${id}`;
+  // Each chat's live summary, by id: written with the summary itself, so a turn's read knows whether to look for one.
+  const summaryKey = (chat: string) => `${prefix}compaction-live:${chat}`;
   const validate = (entry: ConversationEntry) => {
     if (!entry || entry.ownerId !== principal) throw new Error('canonical history owner mismatch');
     if (shapeFault(entry) !== null) throw new Error('canonical history entry invalid');
@@ -111,9 +113,9 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   // it, in memory only; the page shows each row with its stored parent.
   // A turn reads rows newest first, a page at a time, and stops once the rows read hold the window of the turn's chat and
   // of the stored leaf: the path back from each until it passes the window budget, counted from its newest owner message so
-  // a retried message keeps its own window, or, with compaction on, until the row a live summary covers. Rows are written
-  // after their parents, so every row on that path is in the newest slots. A row read whose parent lies in the older slots
-  // not read hangs on no parent, in memory only. The page reads every row.
+  // a retried message keeps its own window, or, with compaction on and a live summary on that chat, until the row the
+  // summary covers. Rows are written after their parents, so every row on that path is in the newest slots. A row read
+  // whose parent lies in the older slots not read hangs on no parent, in memory only. The page reads every row.
   const read = async (turn: boolean, chat?: string): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;
@@ -123,6 +125,18 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     type Walk = { at: string | null; counted: number; owner: boolean; done: boolean; walked: Set<string> };
     const walks: Walk[] = [];
     const walkFrom = (id: string) => walks.push({ at: id, counted: 0, owner: false, done: false, walked: new Set() });
+    // The row each chat's live summary covers, or null for a chat with none. A summary forget has omitted is none.
+    const coveredBy = new Map<string, string | null>();
+    const findSummaries = async (chats: Iterable<string>) => {
+      const fresh = [...new Set(chats)].filter(chatId => !coveredBy.has(chatId));
+      if (!fresh.length) return;
+      const ids = await storage.get<string>(fresh.map(summaryKey));
+      const receipts = ids.size ? await storage.get<Witness>([...new Set(ids.values())].map(witnessKey)) : new Map<string, Witness>();
+      for (const chatId of fresh) {
+        const id = ids.get(summaryKey(chatId)), summary = id === undefined ? undefined : receipts.get(witnessKey(id))?.entry;
+        coveredBy.set(chatId, summary?.role === 'compaction' && summary.modelProjection.mode !== 'omit' && summary.covers ? summary.covers.to_id : null);
+      }
+    };
     if (storedLeaf !== null) walkFrom(storedLeaf);
     let chatRoot = chat === undefined, exhausted = !turn, end: string | undefined;
     const take = async (page: Map<string, ConversationEntry>) => {
@@ -161,7 +175,8 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         if (!walk.owner && entry.role === 'user') { walk.owner = true; walk.counted = 0; }
         const message = conversationModelMessages([entry])[0];
         walk.counted += message ? estimateMessageTokens(message) : 0;
-        if (COMPACTION.enabled ? covered.has(at) : walk.counted > COMPACTION.budgetTokens) walk.done = true;
+        const until = compaction.enabled ? coveredBy.get(entry.chatId) ?? null : null;
+        if (until !== null ? at === until || covered.has(at) : walk.counted > compaction.budgetTokens) walk.done = true;
         else walk.at = entry.parentId;
       }
     };
@@ -169,6 +184,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     while (!exhausted) {
       const page = await storage.list<ConversationEntry>({ prefix: `${prefix}conv:`, reverse: true, limit: PAGE_ROWS, ...(end === undefined ? {} : { end }) });
       await take(page);
+      if (compaction.enabled) await findSummaries([...page.values()].map(entry => entry.chatId));
       exhausted = page.size < PAGE_ROWS;
       end = [...page.keys()].at(-1);
       walks.forEach(advance);
@@ -202,6 +218,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   };
   const lastSlot = { prefix: `${prefix}conv:`, reverse: true, limit: 1 } as const;
   const store: ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> = {
+    compaction,
     async load() {
       const { entries, leafId, skipped } = await read(true, context.conversationRef);
       if (Object.keys(skipped.checks).length > 0) onSkipped?.(skipped);
@@ -265,7 +282,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       if (entry.role !== 'compaction') throw new Error('canonical history entry invalid');
       const previous = supersededId;
       const writes = (count: number, prior: Readonly<{ key: string; entry: ConversationEntry }> | null) => {
-        const out: Record<string, unknown> = { [`${prefix}count`]: count + 1, [`${prefix}conv:${String(count).padStart(10, '0')}`]: entry, [witnessKey(entry.id)]: witness(entry) };
+        const out: Record<string, unknown> = { [`${prefix}count`]: count + 1, [`${prefix}conv:${String(count).padStart(10, '0')}`]: entry, [witnessKey(entry.id)]: witness(entry), [summaryKey(entry.chatId)]: entry.id };
         if (prior) { const next = validate(supersededCompaction(prior.entry)); out[prior.key] = next; out[witnessKey(next.id)] = witness(next); }
         return out;
       };
