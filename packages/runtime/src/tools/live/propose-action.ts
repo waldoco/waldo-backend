@@ -1,11 +1,11 @@
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import {
-  TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, taintGateNeedsOwnerApproval, toolNameSchema, triggerTypeSchema,
-  type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
+  TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, toolNameSchema, triggerTypeSchema,
+  type CloseLoopArgs, type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
-import { TOOL_ARG_SCHEMAS } from '../../hooks/registry';
+import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 
 export type TaintedActionDesk = Readonly<{
@@ -22,11 +22,13 @@ const OUTCOME_CHARS = 300;
 // What the host can do with an approved call: replayable names the tools in its own handler set, and raisesOwnCard
 // the ones whose handler only raises the owner's card (send_message), which the model calls directly instead.
 // A proposal for any other tool is refused here, so the owner is never shown a card that cannot run.
-// claims reads the owner's memory, so a forget card can show what each id removes.
+// claims reads the owner's memory, so a forget card can show what each id removes; loop reads the loop an id names, when
+// the turn may close it, so a close card names the loop it closes.
 export type ProposeActionHost = Readonly<{
   replayable?(tool: ToolName): boolean;
   raisesOwnCard?(tool: ToolName): boolean;
   claims?(): readonly Readonly<{ id: number; text: string }>[];
+  loop?(id: string, turnId: string | undefined): Readonly<{ title: string; due: string | null; status: string }> | undefined;
 }>;
 // A forget card lists every memory it removes, so the owner can read it before approving.
 export const FORGET_CARD_MAX_IDS = 20;
@@ -44,7 +46,8 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
-    if (!taintGateNeedsOwnerApproval(tool.data, 'external', args.args)) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted.
+    if (!(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {
@@ -71,6 +74,14 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       const unknown = ids.filter((id) => !known.has(id));
       if (unknown.length) return { ok: false, error: `Memory has nothing with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Call read_memory and propose only ids it lists.`, code: 'invalid_args' };
       preview = ids.map((id) => { const text = known.get(id)!; return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS - 3)}...` : text; });
+    }
+    // The reasoning is the model's and can name any loop; the card names the one this id closes, from the store.
+    if (tool.data === 'close_loop' && host.loop) {
+      const { id, outcome } = frozen as CloseLoopArgs;
+      const loop = host.loop(id, ctx.turnId);
+      if (loop === undefined) return { ok: false, error: `There is no loop with the id ${id} that this turn can close. Propose close_loop only with an id from the open loops listed in this turn.`, code: 'invalid_args' };
+      if (loop.status !== 'open') return { ok: false, error: `Loop ${id} is already closed (${loop.status}), so there is nothing to ask the owner. If you meant another loop, propose it with an id from the open loops listed in this turn.`, code: 'rejected' };
+      preview = [`${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}, as ${outcome}`];
     }
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {

@@ -229,7 +229,7 @@ describe('taint gate — hostile path (ADR-0049)', () => {
   });
 
   it('sends every standing change from a tainted turn to the owner, and leaves the untainted turn alone', () => {
-    expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory', 'start_task', 'cancel_task']);
+    expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory', 'start_task', 'cancel_task']);
     for (const tool of STANDING_CHANGE_TOOLS) {
       expect(taintGateNeedsOwnerApproval(tool, 'external', {})).toBe(true);
       expect(taintGateNeedsOwnerApproval(tool, null, {})).toBe(false);
@@ -238,7 +238,16 @@ describe('taint gate — hostile path (ADR-0049)', () => {
       expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(false);
     }
     for (const tool of PRIVILEGED_ACTION_TOOLS) expect(taintGateNeedsOwnerApproval(tool, 'external')).toBe(true);
-    for (const tool of ['get_crs', 'read_memory', 'web_search', 'close_loop', 'track_responsibility'] as const) expect(taintGateNeedsOwnerApproval(tool, 'external')).toBe(false);
+    for (const tool of ['get_crs', 'read_memory', 'web_search', 'track_responsibility'] as const) expect(taintGateNeedsOwnerApproval(tool, 'external')).toBe(false);
+  });
+
+  // close_loop names only an id, so the arguments cannot tell an owner's loop from a mail-bound one: the pure law sends
+  // every tainted close to the card, and only the runtime's loop read admits a mail-bound close.
+  it('sends every tainted loop close to the owner, whatever its arguments say', () => {
+    for (const args of [{ id: 'o1', outcome: 'done' }, { id: 'o1', outcome: 'dropped', source_ref: 'gmail:m1' }, {}, null, undefined]) {
+      expect(taintGateNeedsOwnerApproval('close_loop', 'external', args)).toBe(true);
+    }
+    expect(taintGateNeedsOwnerApproval('close_loop', null, { id: 'o1', outcome: 'done' })).toBe(false);
   });
 
   it('lets a loop bound to an observed source through, and nothing that only looks like one', () => {

@@ -17,3 +17,14 @@ it('shows one fact per section and taps through the rest, escaping text', async 
     expect(card.textContent).toContain('1 of 2');
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
+it('names each stack by its section title, never as "Your <title>"', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ProfileCards sections={[{ title: 'About you', lines: ['Lives in Pune'] }, { title: 'Recent', lines: ['Moved desks', 'New laptop'] }]}/>));
+    expect([...host.querySelectorAll('.pcard-label')].map(label => label.textContent)).toEqual(['About you', 'Recent']);
+    const cards = [...host.querySelectorAll<HTMLButtonElement>('.pcard')];
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['About you: Lives in Pune.', 'Recent: Moved desks. Fact 1 of 2. Show the next one.']);
+    expect(host.textContent).not.toMatch(/Your (about you|recent)/i);
+  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
+});
