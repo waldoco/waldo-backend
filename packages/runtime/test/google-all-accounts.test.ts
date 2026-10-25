@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { getCommunicationArgsSchema, getTasksArgsSchema, queryCalendarArgsSchema, readDriveArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema } from '@waldo/contracts';
 import { googleClient, type GoogleClient, type GoogleFeature } from '../src/connectors/google';
 import { readDriveHandler } from '../src/tools/live/drive';
@@ -64,6 +64,21 @@ describe('a two-account owner gets every account in the first read', () => {
       expect(calls.map(([, account]) => account).sort()).toEqual([HOME.email, WORK.email]);
     });
   }
+
+  it('the google_read_accounts log line counts accounts and failures and carries no address', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const refused = { ...both[HOME.email], allTasksPage: async () => { throw new TypeError('fetch failed'); } };
+      await handler(accessFor([WORK, HOME], { ...both, [HOME.email]: refused }), 'get_tasks').handle(getTasksArgsSchema.parse({}));
+      const lines = log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('google_read_accounts'));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({ hop: 'google_read_accounts', ok: false, code: expect.stringMatching(/^get_tasks:read_1_of_2:transient/) });
+      expect(lines[0]).not.toContain('@');
+      expect(lines[0]).not.toContain('example.test');
+    } finally {
+      log.mockRestore();
+    }
+  });
 
   it('reads the accounts concurrently, not one after the other', async () => {
     let started = 0;
