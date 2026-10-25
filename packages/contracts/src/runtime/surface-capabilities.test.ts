@@ -42,7 +42,9 @@ describe('surfaceCapabilitiesV1', () => {
   it('claims files and voice only where Waldo handles them', () => {
     const { app, imessage } = SURFACE_CAPABILITIES_V1;
     expect([app.files, app.voice]).toEqual([false, false]);
-    expect(imessage.voice).toBe(false);
+    // iMessage opens files only where a deploy sets IMESSAGE_MEDIA=1, and every deploy declares it "0"; a static table
+    // claims files there only once the flag is on everywhere.
+    expect([imessage.files, imessage.voice]).toEqual([false, false]);
   });
 
   it('rejects unknown surfaces and modes, extra keys, and a text cap a fallback cannot fit', () => {

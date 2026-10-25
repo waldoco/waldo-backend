@@ -105,8 +105,14 @@ async function world() {
   };
   const counts = async () => (await bridgeStub().status()).events;
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
-  return { host, photon, pump, media, reply, counts, inbox };
+  const page = async () => (await call(new Request(`${HOST_ORIGIN}/console/imessage`, { headers: { cookie } }))).text();
+  return { host, photon, pump, media, reply, counts, inbox, page };
 }
+
+it('the owner\'s iMessage console page says photos and documents reach Waldo', async () => {
+  const w = await world();
+  expect(await w.page()).toContain('Direct iMessages: text, and photos and documents sent to your Waldo number.');
+});
 
 const photo: File = { id: 'photon-att-photo', name: 'IMG_0001.png', mimeType: 'image/png', bytes: PNG };
 const pdf: File = { id: 'photon-att-pdf', name: 'notes.pdf', mimeType: 'application/pdf', bytes: PDF };

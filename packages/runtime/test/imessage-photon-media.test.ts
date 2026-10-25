@@ -4,6 +4,7 @@ import {
   IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, openIMessageMedia, photonAttachmentSource,
   type IMessageMedia, type PhotonAttachmentSource,
 } from '../src/channels/imessage/photon-media';
+import { renderIMessage } from '../src/channels/imessage/console';
 
 // Every value here is fictional. The secret and token are distinctive so a leak into any output is found by substring.
 const SECRET = 'fictional-photon-project-secret-7f3a9c';
@@ -176,6 +177,13 @@ describe('openIMessageMedia', () => {
     vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
     expect(await openIMessageMedia(media(photo), deps(source))).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
     expect(lines.join('\n')).not.toMatch(/att-photo|IMG_0001|msg-1|owner@/);
+  });
+
+  it('the console says what happens to a photo or file, by the flag, and that reactions are still not supported', () => {
+    const off = renderIMessage([], 'csrf', {}), on = renderIMessage([], 'csrf', { media: true });
+    expect(off).toContain('Direct iMessage text only. Photos and files get a reply asking you to send them in the app. Groups, SMS, voice notes and reactions are not supported.');
+    expect(on).toContain('Direct iMessages: text, and photos and documents sent to your Waldo number. Groups, SMS, voice notes and reactions are not supported.');
+    for (const page of [off, on]) expect(page).not.toContain('files and reactions are not supported');
   });
 
   it('a closed turn stops before and after the fetch', async () => {
