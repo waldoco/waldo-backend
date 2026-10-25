@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { getCommunicationArgsSchema, getTasksArgsSchema, queryCalendarArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, readThreadArgsSchema } from '@waldo/contracts';
+import { getCommunicationArgsSchema, getTasksArgsSchema, queryCalendarArgsSchema, readDriveArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema } from '@waldo/contracts';
 import { googleClient, type GoogleClient, type GoogleFeature } from '../src/connectors/google';
+import { readDriveHandler } from '../src/tools/live/drive';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 // An owner with two Google accounts asks one question; the read covers both accounts in that one call, each result
@@ -22,7 +23,7 @@ const accessFor = (accounts: readonly Known[], clients: Record<string, Partial<G
   },
   state: async () => accounts,
 });
-const handler = (access: GoogleAccess, name: string) => googleHandlers(access, desk, clock).find((h) => h.name === name)!;
+const handler = (access: GoogleAccess, name: string) => googleHandlers(access, desk, clock).find((h) => h.name === name)! as unknown as { handle(args: unknown): Promise<unknown> };
 
 const mail = (known: Known, subject: string) => ({
   mailPage: async (_q: string, limit: number) => ({ messages: [{ id: `${known.id}-m`, thread_id: `${known.id}-t`, from: 'sender@example.test', subject, snippet: 'hello', at: '2026-10-25T07:00:00Z' }].slice(0, limit), next_page_token: null, result_size_estimate: 1 }),
@@ -51,7 +52,7 @@ describe('a two-account owner gets every account in the first read', () => {
   for (const [name, args, list, titles] of READS) {
     it(`${name} reads both accounts in one call, each item under its account`, async () => {
       const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
-      const result = await handler(accessFor([WORK, HOME], both, calls), name).handle(args as never);
+      const result = await handler(accessFor([WORK, HOME], both, calls), name).handle(args);
       expect(result).toMatchObject({ ok: true, source_taint: 'external', data: { accounts: [{ email: WORK.email, read: 'ok' }, { email: HOME.email, read: 'ok' }] } });
       const [work, home] = sections(result);
       expect(work!.account.email).toBe(WORK.email);
@@ -68,10 +69,10 @@ describe('a two-account owner gets every account in the first read', () => {
     let started = 0;
     let release!: () => void;
     const together = new Promise<void>((resolve) => { release = resolve; });
-    const gated = (known: Known) => ({ allTasksPage: async (...args: Parameters<NonNullable<GoogleClient['allTasksPage']>>) => {
+    const gated = (known: Known) => ({ allTasksPage: async () => {
       if (++started === 2) release();
       await together;
-      return tasks(known, 'x').allTasksPage(...args);
+      return tasks(known, 'x').allTasksPage();
     } });
     const read = handler(accessFor([WORK, HOME], { [WORK.email]: gated(WORK), [HOME.email]: gated(HOME) }), 'get_tasks').handle(getTasksArgsSchema.parse({}));
     const timeout = new Promise((resolve) => setTimeout(() => resolve('serial'), 500));
@@ -112,7 +113,7 @@ describe('a two-account owner gets every account in the first read', () => {
     ['read_thread', readThreadArgsSchema.parse({ thread_id: 't' })],
   ])('%s with an id from one account asks which account instead of guessing', async (name, args) => {
     const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
-    const result = await handler(accessFor([WORK, HOME], both, calls), name).handle(args as never);
+    const result = await handler(accessFor([WORK, HOME], both, calls), name).handle(args);
     expect(result).toMatchObject({ ok: false, code: 'rejected' });
     expect((result as { error: string }).error).toContain(WORK.email);
     expect((result as { error: string }).error).toContain(HOME.email);
@@ -197,5 +198,35 @@ describe('a Tasks read that fails on one account still returns the other, and na
   it('a named account whose grant lacks Tasks is reported as not authorized, not as unconnected', async () => {
     const result = await handler(accessFor([WORK, { ...HOME, tasks: false }], both), 'get_tasks').handle(getTasksArgsSchema.parse({ account: HOME.email }));
     expect(result).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'tasks' } });
+  });
+});
+
+describe('free time and Drive cover every account too', () => {
+  const range = { from: '2026-10-25T09:00:00Z', to: '2026-10-25T12:00:00Z' };
+  const busy = (start: string, end: string) => ({ freeBusy: async (from: string, to: string) => ({ from, to, calendars: { primary: { busy: [{ start, end }] } } }) });
+  it("free time without an account is free on every account's primary calendar", async () => {
+    const access = accessFor([WORK, HOME], { [WORK.email]: busy('2026-10-25T09:00:00Z', '2026-10-25T10:00:00Z'), [HOME.email]: busy('2026-10-25T10:00:00Z', '2026-10-25T11:00:00Z') });
+    const result = await handler(access, 'query_availability').handle({ date_range: range, calendar_ids: ['primary'], duration_minutes: 30, work_windows: [] });
+    expect(result).toMatchObject({ ok: true, data: { accounts: [{ email: WORK.email, read: 'ok' }, { email: HOME.email, read: 'ok' }], status: 'complete_provider_coverage', calendar_ids: [WORK.email, HOME.email] } });
+    expect((result as { data: { free_windows: { start: string }[] } }).data.free_windows.map((window) => window.start)).toEqual(['2026-10-25T11:00:00+00:00']);
+  });
+  it('an account that cannot answer leaves its calendar unchecked, so the time is only tentative', async () => {
+    const access = accessFor([WORK, { ...HOME, error: 'google token failed: invalid_grant' }], { [WORK.email]: busy('2026-10-25T09:00:00Z', '2026-10-25T10:00:00Z') });
+    const result = await handler(access, 'query_availability').handle({ date_range: range, calendar_ids: ['primary'], duration_minutes: 30, work_windows: [] });
+    expect(result).toMatchObject({ ok: true, data: { accounts: [{ read: 'ok' }, { email: HOME.email, read: 'failed', reason: 'reauth_needed' }], status: 'partial_provider_coverage', free_windows: [], unavailable_calendar_ids: [HOME.email] } });
+  });
+
+  const drive = (name: string) => ({ driveListFiles: async () => ({ files: [{ id: `${name}-file`, name, mimeType: 'text/plain', modifiedTime: null, webViewLink: null, size: null }], nextPageToken: null, incompleteSearch: false }) });
+  const driveHandler = (access: GoogleAccess) => readDriveHandler(access, true) as unknown as { handle(args: unknown, ctx?: unknown): Promise<unknown> };
+  it('Drive recent files come from every account, each under its account', async () => {
+    const result = await driveHandler(accessFor([WORK, HOME], { [WORK.email]: drive('Deck'), [HOME.email]: drive('Recipes') })).handle(readDriveArgsSchema.parse({ action: 'recent' }));
+    expect(result).toMatchObject({ ok: true, data: { accounts: [{ email: WORK.email, read: 'ok' }, { email: HOME.email, read: 'ok' }], by_account: [{ account: receipt(WORK), files: [{ name: 'Deck' }] }, { account: receipt(HOME), files: [{ name: 'Recipes' }] }] } });
+  });
+  it('a Drive file id asks for its account, and a content read follows its connection', async () => {
+    const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
+    const access = accessFor([WORK, HOME], { [WORK.email]: drive('Deck'), [HOME.email]: drive('Recipes') }, calls);
+    expect(await driveHandler(access).handle(readDriveArgsSchema.parse({ action: 'get', file_id: 'file-0123456789' }))).toMatchObject({ ok: false, code: 'rejected' });
+    await readDriveHandler(access, true, true).handle(readDriveArgsSchema.parse({ action: 'content', file_id: 'file-0123456789', connection_id: HOME.id, expected_modified_time: '2026-10-25T08:00:00Z' }), undefined as never);
+    expect(calls).toEqual([['drive', HOME.email]]);
   });
 });
