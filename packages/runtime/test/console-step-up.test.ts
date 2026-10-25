@@ -340,6 +340,11 @@ describe('every app action and approval decision is classified by the same table
     }
   });
 
+  it('gates approving a kind the table does not name', () => {
+    expect(stepUp.appApprovalStepUp({ kind: 'unlisted_kind' as never, exact: {} }, 'approve')).toBe(true);
+    expect(stepUp.appApprovalStepUp({ kind: 'unlisted_kind' as never, exact: {} }, 'skip')).toBe(false);
+  });
+
   it('keeps a hold on the owner\'s own primary calendar one tap, and gates one with guests or on another calendar', () => {
     const hold = { action: 'create', title: 'Focus', start: '2030-01-02T15:00:00Z', end: '2030-01-02T16:00:00Z' } as const;
     const decide = (changes: Record<string, unknown>) => stepUp.appApprovalStepUp({ kind: 'calendar_change', exact: { changes: { ...hold, ...changes } } }, 'approve');

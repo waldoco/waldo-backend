@@ -2,7 +2,7 @@ import { appApprovalAtRevision, appApprovalDecisionResultV1Schema, appApprovalDe
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { approvalControlReceipt, controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
 import { APP_APPROVAL_DECISIONS_PATH, APP_APPROVALS_PATH } from './app-api';
-import { appApprovalStepUp, appStepUpRefusal } from './console-step-up';
+import { appStepUpRefusal } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
 import type { ApprovalDesk } from './approvals';
 
@@ -11,7 +11,7 @@ export type AppApprovalsHost = Readonly<{
   // The session row's created_at: the proof of a recent email code that approving a send needs.
   signedInAt: string;
   assertCurrent(): Promise<void>; sessions(): Promise<readonly { csrf: string; expires: number }[]>;
-  desk: Pick<ApprovalDesk, 'approvals' | 'decide'>;
+  desk: Pick<ApprovalDesk, 'approvals' | 'decide' | 'stepUp'>;
 }>;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const LETTER = { approve: 'a', skip: 's', edit: 'e', undo: 'u', defer: 'd' } as const;
@@ -45,7 +45,7 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
   // A stale digest records nothing, so retrying it repeats the same answer and the request id stays free.
   if (item.payload_digest !== expected_digest) return reply(result({ state: 'rejected', message: 'That proposal changed since you reviewed it. Review the current version before deciding.' }, 'superseded'), 409);
   // Refused before the receipt book, so a refusal records nothing and the same request can be sent again after signing in.
-  if (appApprovalStepUp(item, action) && !signedInRecently(host.signedInAt, Date.now())) return appStepUpRefusal();
+  if (host.desk.stepUp(id, action) && !signedInRecently(host.signedInAt, Date.now())) return appStepUpRefusal();
   const session = await controlRevision(host.csrf), key = `${session}:${request_id}`, fingerprint = await controlRevision({ approval_id: id, action, expected_digest });
   const book = await loadReceiptBook(host.storage, host.sessions), prior = book[key];
   if (prior) return prior.fingerprint === fingerprint ? reply(result(prior.receipt, (prior.approval_state ?? item.state) as AppApprovalStateV1, true), prior.status) : reply({ error: 'request_reused', code: 'request_reused' }, 409);

@@ -772,7 +772,8 @@ export const createOwnerResponder = (
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
       const notice = fromOwner ? privateOwner?.memoryNotice?.() ?? null : null;
-      const out = [reply, receipt?.line, notice?.line].filter(Boolean).join('\n\n');
+      // The receipt line stays last: the app and the console hide it only where it ends the text.
+      const out = [reply, notice?.line, receipt?.line].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
