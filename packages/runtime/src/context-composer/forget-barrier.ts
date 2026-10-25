@@ -17,7 +17,7 @@ export type BarrierTally = { dropped: number; redacted: number };
 
 export const FORGET_MARKER = '[forgotten]';
 export const WITHHELD_OUTPUT = '[waldo: this tool returned data that mentions a topic the owner asked to forget, so it is withheld. The tool DID return data - do not report it as empty or failed; say that part is withheld.]';
-const OWNER_STORE_TOOLS: ReadonlySet<string> = new Set(['read_owner_context', 'read_memory', 'search_episodes']);
+const OWNER_STORE_TOOLS: ReadonlySet<string> = new Set(['read_memory', 'search_episodes']);
 export const resultOrigin = (tool: string): ResultOrigin => (OWNER_STORE_TOOLS.has(tool) ? 'owner_store' : 'external');
 
 // Every string in a structured value (keys and values), unserialised: JSON.stringify would double a stored backslash and

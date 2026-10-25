@@ -78,7 +78,8 @@ import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
-import { FORGOTTEN, claimStore, profile } from '../memory/claims';
+import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type PinBlock } from '../memory/claims';
+import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { recordSignupName } from '../onboarding/first-run';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -192,10 +193,10 @@ import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandl
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
-import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
+import { approvalReplayContext, proposeActionHandler, replayHost, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { sanitise } from '../scribe/sanitiser';
-import { ownerToolApproval } from './owner-turn';
+import { newSessionCanaryTokens, ownerToolApproval } from './owner-turn';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TURN_TIMEOUT_MS, TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
@@ -2098,7 +2099,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?await this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
-              if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConsoleStart():null,url.origin);
               if(action.action==='mcp.connect')return mcpConnectReceipt(await this.mcp().begin(action.value,url.origin));
               if(action.action==='mcp.disconnect')return mcpDisconnectReceipt(await this.mcp().disconnect(action.id));
@@ -3457,10 +3458,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     // Watch upkeep is infrastructure, not proactive work: every runtime arms it, whatever the owner's preferences and zone state.
     const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => undefined);
-    const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void> }>) => {
+    // A model call opens the store under its live turn's run scope. An approved card replays after that turn has ended, as
+    // the owner's own decision, so it opens the store as the owner's console does, without one.
+    const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void>; approvedTaintedAction?: unknown }>) => {
       const scope = ctx?.runScope;
-      if (!scope) throw new ClosedRunError();
-      scope.admit();
+      if (!scope && ctx?.approvedTaintedAction === undefined) throw new ClosedRunError();
+      scope?.admit();
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
     };
     const workspaceLinks = { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) };
@@ -3617,7 +3620,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true), claims: () => memory.allClaims(), loop: (id, turnId) => closableIn(turnId)?.has(id) === false ? undefined : loops.get(id) }), useMacHandler({ request: async (input, context) => {
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth, this.mcp()), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1', this.mcp()), searchMcpToolsHandler(this.mcp()), sendMessageHandler(desk), proposeActionHandler(desk, { ...replayHost(() => replayHandlers), claims: () => memory.allClaims(), loop: (id, turnId) => closableIn(turnId)?.has(id) === false ? undefined : loops.get(id) }), useMacHandler({ request: async (input, context) => {
         // A Mac is reached only from an owner-initiated turn of this exact owner DO, through that
         // owner's single paired device that declared the requested class. Identity is re-read after
         // every await so an unlink or rebind mid-turn cannot redirect the request.
@@ -4191,7 +4194,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string | null = null;
         if (cardNow && analysisChanges.length) {
           const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await promptLedger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
-          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
+          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_memory', 'search_episodes', 'open_loop'] : undefined)).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
         }
@@ -4204,7 +4207,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
-          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_owner_context', 'search_episodes']); },
+          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_memory', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
@@ -4404,7 +4407,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS, unconfirmed: unconfirmedCards(finalOutbox.records(), day),
           approvals: desk.pending(now), run: latest && latest.status === 'running' && waiting.has(latest.id) ? { ...latest, summary: waiting.get(latest.id)! } : latest, trace: traces.latest(), grants: await google.state() });
       },
-      act: async ({ action, id, value }, assertCurrent) => {
+      act: async ({ action, id, value, made }, assertCurrent) => {
         await assertCurrent?.();
         const now = Date.now();
         const spotId = Number(id);
@@ -4429,6 +4432,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await armOwnJobs(value, now, true);
           // Rebuild runtimes so values captured at build time follow the new zone.
           this.runtimes = {};
+        } else if (action === 'spot.pin' || action === 'spot.unpin') {
+          // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
+          const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);
+          if (!claim) return false;
+          if (action === 'spot.unpin') return memory.unpin(spotId);
+          if ((value !== 'profile' && value !== 'facts') || !PROFILE_KINDS.includes(claim.kind)) return 'spot.pin.failed';
+          const block: PinBlock = value;
+          const last = [...memory.claims(), ...memory.claims('promoted')].filter((row) => row.pinned === block).reduce((most, row) => Math.max(most, row.pin_order ?? 0), -1);
+          // The owner pinning a claim says it is theirs, whoever wrote it: it is grounded first, so the pin always holds.
+          if (!memory.ownerGround(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:spot.pin'}`)
+            || !memory.pin(spotId, block, last + 1)) return 'spot.pin.failed';
+        } else if (action === 'spot.edit') {
+          // The owner's own text replaces the claim: correct() supersedes the old row and keeps its pin. A credential never
+          // enters memory, whoever typed it, so the text crosses the same scribe check a remembered fact does.
+          const claim = memory.claims().find((row) => row.id === spotId);
+          if (!claim) return false;
+          const text = (value ?? '').trim();
+          if (text.length === 0 || text.length > APP_CLAIM_TEXT_MAX_V1) return 'spot.edit.failed';
+          const checked = await sanitise({ payload: { text }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
+          if (!checked.ok) return 'spot.edit.failed';
+          const at = new Date(now).toISOString();
+          const where = `owner, ${made ?? 'console:spot.edit'}`;
+          if (!memory.correct(spotId, { kind: claim.kind, text, source: 'stated', origin: 'owner', evidence: where, source_ref: where }, at)) return 'spot.edit.failed';
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.

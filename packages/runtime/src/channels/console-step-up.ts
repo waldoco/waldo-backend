@@ -24,6 +24,13 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
+  'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  // The app's memory actions, named for themselves so each carries its own reason.
+  'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
+  'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
