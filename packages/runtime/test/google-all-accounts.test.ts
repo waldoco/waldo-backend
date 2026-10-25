@@ -159,13 +159,13 @@ describe('a Tasks read that fails on one account still returns the other, and na
     expect(JSON.stringify(result)).toMatch(/not read.*unknown, not empty/i);
   });
 
-  it('an account whose grant lacks Tasks is named as not authorized, without a Google call', async () => {
+  it('an account whose grant lacks Tasks is not one of the accounts read: the other is read alone, without a Google call to the first', async () => {
     let called = false;
     const never = provider(() => { called = true; return Response.json({}); });
     const result = await handler(accessFor([{ ...WORK, tasks: false }, HOME], realClients(never, tasksProvider)), 'get_tasks').handle(getTasksArgsSchema.parse({}));
-    expect(entries(result)[0]).toMatchObject({ email: WORK.email, read: 'failed', reason: 'scope_missing' });
+    expect(result).toMatchObject({ ok: true, data: { account: receipt(HOME), tasks: [{ title: 'Buy milk' }] } });
+    expect((result as { data: object }).data).not.toHaveProperty('by_account');
     expect(called).toBe(false);
-    expect(sections(result)[0]).toMatchObject({ tasks: [{ title: 'Buy milk' }] });
   });
 
   it('a revoked or expired account is named for reconnect while the other is read', async () => {
@@ -198,6 +198,31 @@ describe('a Tasks read that fails on one account still returns the other, and na
   it('a named account whose grant lacks Tasks is reported as not authorized, not as unconnected', async () => {
     const result = await handler(accessFor([WORK, { ...HOME, tasks: false }], both), 'get_tasks').handle(getTasksArgsSchema.parse({ account: HOME.email }));
     expect(result).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'tasks' } });
+  });
+});
+
+describe('only accounts whose grant holds the feature count as accounts to read', () => {
+  const ONE_GMAIL = [WORK, { ...HOME, mail: false }];
+  it('read_thread without account reads the one Gmail account instead of asking which account', async () => {
+    const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
+    const thread = { threadPage: async () => ({ messages: [], cursor: null }) };
+    const result = await handler(accessFor(ONE_GMAIL, { [WORK.email]: thread }, calls), 'read_thread').handle(readThreadArgsSchema.parse({ thread_id: 't' }));
+    expect(result).toMatchObject({ ok: true, data: { thread_id: 't', account: receipt(WORK) } });
+    expect(calls).toEqual([['mail', undefined]]);
+  });
+  it('get_communication without account reads the one Gmail account alone, with its whole page', async () => {
+    const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
+    const limits: number[] = [];
+    const counting = { mailPage: async (q: string, limit: number) => { limits.push(limit); return mail(WORK, 'Board deck').mailPage(q, limit); } };
+    const result = await handler(accessFor(ONE_GMAIL, { [WORK.email]: counting }, calls), 'get_communication').handle(getCommunicationArgsSchema.parse({ limit: 30 }));
+    expect(result).toMatchObject({ ok: true, data: { account: receipt(WORK), messages: [{ subject: 'Board deck' }] } });
+    expect(calls).toEqual([['mail', undefined]]);
+    expect(limits).toEqual([30]);
+  });
+  it('an account that holds the feature but is failing is still read and named', async () => {
+    const result = await handler(accessFor([{ ...WORK, error: 'google token failed: invalid_grant' }, HOME, { id: 'conn-x', email: 'x@example.test', error: null, calendar: true, mail: false, tasks: false }], both), 'get_tasks').handle(getTasksArgsSchema.parse({}));
+    expect(entries(result).map((entry) => [entry.email, entry.read])).toEqual([[WORK.email, 'failed'], [HOME.email, 'ok']]);
+    expect(entries(result)[0]).toMatchObject({ reason: 'reauth_needed' });
   });
 });
 
