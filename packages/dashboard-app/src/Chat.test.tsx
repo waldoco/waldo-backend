@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ChatLink, ChatPanel } from './Chat';
@@ -65,6 +65,28 @@ describe('console chat page', () => {
     await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); await flush();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); }); await flush();
     expect(page.querySelector('.chat-msg.working .chat-draft')?.textContent).toBe('Here is the plan so far');
+  });
+
+  it('says what the turn is doing while its tools run, and gives way to the reply once it is written', async () => {
+    const receipts = [
+      { message_id: 'app-1', state: 'running' as const, closed_reason: null, effects_unconfirmed: false, activity: { kind: 'mail' as const, since: 1 } },
+      { message_id: 'app-1', state: 'running' as const, closed_reason: null, effects_unconfirmed: false, draft: 'Two invoices', activity: { kind: 'mail' as const, since: 1 } },
+    ];
+    let next = 0;
+    const store = createChatStore(deps(async () => ({ messages: [], next_cursor: null }), {
+      send: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }),
+      receipt: async () => receipts[Math.min(next++, receipts.length - 1)]!,
+      setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: (id) => window.clearTimeout(id),
+    }));
+    const page = await mount(<ChatPanel zone="Asia/Kolkata" store={store}/>);
+    const input = page.querySelector<HTMLTextAreaElement>('#chat-input')!;
+    await type(input, 'Any invoices waiting on me?');
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); await flush();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); }); await flush();
+    expect(page.querySelector('.chat-working')?.textContent).toContain('Checking your email…');
+    await vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); }); expect(page.querySelector('.chat-msg.working .chat-draft')?.textContent).toBe('Two invoices'); }, { timeout: 5_000 });
+    expect(page.querySelector('.chat-working')?.textContent).not.toContain('Checking your email…');
+    expect(page.querySelector('.chat-working')?.textContent).toContain('Working on it');
   });
 
   it('draws a reply with its trace, and quick replies only on the latest reply', async () => {

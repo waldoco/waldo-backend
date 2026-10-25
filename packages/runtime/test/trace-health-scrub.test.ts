@@ -29,7 +29,8 @@ const config = { endpoint: 'https://langfuse.test/api/public/otel/v1/traces', he
 const exportBodies = async (entries: readonly TurnLogEntry[], captureText: boolean): Promise<string> => {
   const bodies: string[] = [];
   const exporter = otlpTurnExporter(config, { environment: 'staging', release: 'test', channel: 'telegram', userId: 'tg:1', sessionId: 's', captureText },
-    async (_url, init) => { bodies.push(String(init.body)); return new Response('{}', { status: 200 }); });
+    // Random span ids and nanosecond times can contain any short number, so they are blanked before the value checks.
+    async (_url, init) => { bodies.push(String(init.body).replace(/"(traceId|spanId|parentSpanId|startTimeUnixNano|endTimeUnixNano)":"[^"]*"/g, '"$1":""')); return new Response('{}', { status: 200 }); });
   for (const entry of entries) await exporter(entry);
   // The exporter sends a trace when its root hop arrives; the channel listener logs that root after the responder's hops.
   for (const trace of new Set(entries.map((entry) => entry.trace))) {

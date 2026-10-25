@@ -1,3 +1,5 @@
+import type { AppChatActivityKind } from '../../../contracts/src/app/core';
+
 // The text of a message the model labels its final answer, as it arrives. retract: the response went on to call a tool,
 // so what it streamed is not the answer.
 export type ReplyDeltaSink = Readonly<{ delta(text: string): void; retract(): void }>;
@@ -11,6 +13,8 @@ export type ReplyDeltaSink = Readonly<{ delta(text: string): void; retract(): vo
 // Where the draft is shown. show('') withdraws it.
 export type ReplyDraftSurface = Readonly<{
   show(text: string): Promise<void>;
+  // What kind of work the turn's tools are on while no draft is shown; null clears it. A surface without it shows none.
+  activity?(kind: AppChatActivityKind | null): void;
   // Telegram limits how often a bot writes to one chat; the app reads drafts by polling.
   minIntervalMs: number;
   maxUpdates: number;
@@ -44,6 +48,8 @@ export type ReplyStream = Readonly<{
   deltas: ReplyDeltaSink;
   // The call failed or went on to call tools: what it showed is withdrawn.
   withdraw(): void;
+  // A tool of this kind started. It shows until the answer's first words do, or the turn settles.
+  activity(kind: AppChatActivityKind): void;
   // The turn ended: `delivered` is the reply the owner gets, null when there is none.
   settle(delivered: string | null): Promise<StreamOutcome>;
 }>;
@@ -54,14 +60,21 @@ export const createReplyStream = (surface: ReplyDraftSurface, clock: Readonly<{ 
   let check: ReplyCheck | undefined, stopped: StopReason | undefined, firstShownAt: number | undefined;
   let closed = false, dirty = false, lastShownAt = Number.NEGATIVE_INFINITY;
   let pumping: Promise<void> | null = null;
+  let active = false;
   // Settling cuts short the wait between drafts.
   let wake = () => {};
   // Every write to the surface goes through this one chain, so a withdrawal never overtakes the draft it withdraws.
   let writes: Promise<void> = Promise.resolve();
   const write = (text: string) => {
+    if (text !== '') clearActivity();
     writes = writes.then(() => surface.show(text)).catch(() => { stopped ??= 'surface_failed'; });
     return writes;
   };
+  const showActivity = (kind: AppChatActivityKind | null) => {
+    active = kind !== null;
+    writes = writes.then(() => surface.activity?.(kind)).catch(() => { stopped ??= 'surface_failed'; });
+  };
+  const clearActivity = () => { if (active) showActivity(null); };
   const step = async () => {
     const current = generation;
     if (!check) return;
@@ -100,10 +113,12 @@ export const createReplyStream = (surface: ReplyDraftSurface, clock: Readonly<{ 
       retract: withdraw,
     },
     withdraw,
+    activity: (kind) => { if (!closed) showActivity(kind); },
     settle: async (delivered) => {
       closed = true;
       wake();
       await pumping;
+      clearActivity();
       await writes;
       const outcome = released === '' ? 'none' : delivered === null ? 'failed' : delivered.startsWith(released) ? 'matched' : 'diverged';
       return { outcome, released: released.length, updates, withdrawals, ...(stopped ? { stopped } : {}), ...(firstShownAt === undefined ? {} : { firstShownMs: firstShownAt - startedAt }) };
