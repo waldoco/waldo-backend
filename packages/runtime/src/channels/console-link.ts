@@ -2,7 +2,8 @@ import type { SendConsoleLinkResult } from '@waldo/contracts';
 import { consoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { ConsoleLinkSend, ConsoleLinkTurn } from '../tools/live/console-link';
-import { consoleAccess } from './console';
+import { consoleAccess, LINK_MS } from './console';
+import { ClosedRunError } from './run-effect-scope';
 import type { TurnLogEntry } from './owner-turn-types';
 
 export const consoleLinkText = (link: string): string => `Console (link works once, for 10 minutes): ${link}`;
@@ -18,7 +19,7 @@ export const mintConsoleLink = async (storage: DurableObjectStorage, env: OwnerD
 // How a turn's own surface carries the link, or why it cannot. `sent` reads an earlier send this turn already made
 // durable, so a retried turn never mints a second link.
 export type ConsoleLinkRoute =
-  | Readonly<{ surface: 'telegram' | 'imessage'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>
+  | Readonly<{ surface: 'telegram' | 'imessage' | 'app'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>
   | Readonly<{ unsupported: 'app_unsupported' | 'surface_unsupported' }>;
 
 export const consoleLinkSender = (deps: Readonly<{
@@ -94,3 +95,37 @@ export const telegramConsoleRoute = (send: (body: Readonly<{ text: string; link_
     return true;
   },
 });
+
+// The app shows the link under the reply to the message that asked for it, added when the transcript is read. The stored
+// conversation, the search index and every later prompt hold only the reply, so the credential is never in anything the model
+// or a search reads. The links are kept here by the message they answer: a new one voids the ones before it, as a new mint
+// voids the earlier grant, and one past its ten minutes reads as a fixed note.
+const APP_CONSOLE_LINKS_KEY = 'app_console_links_v1';
+const APP_CONSOLE_LINKS_MAX = 32;
+export const APP_CONSOLE_LINK_GONE = 'Console sign-in link: expired. Ask me for a new one.';
+type AppConsoleLink = Readonly<{ run: string; text: string | null; expires: number }>;
+type AppConsoleKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
+const appLinks = (kv: AppConsoleKv) => kv.get<AppConsoleLink[]>(APP_CONSOLE_LINKS_KEY) ?? [];
+
+export const appConsoleRoute = (kv: AppConsoleKv, now: () => number = Date.now): ConsoleLinkRoute => {
+  const run = (turn: ConsoleLinkTurn) => { if (!turn.runScope) throw new ClosedRunError(); return turn.runScope.runId; };
+  return {
+    surface: 'app',
+    sent: (turn) => appLinks(kv).some((link) => link.run === run(turn)),
+    async deliver(text, turn) {
+      const answers = run(turn);
+      turn.runScope!.commit(() => kv.put(APP_CONSOLE_LINKS_KEY,
+        [...appLinks(kv).map((link) => ({ ...link, text: null })), { run: answers, text, expires: now() + LINK_MS }].slice(-APP_CONSOLE_LINKS_MAX)));
+      return true;
+    },
+  };
+};
+
+// What the transcript adds under the newest reply to a message: its link while it works, the fixed note after, else nothing.
+export const appConsoleLinks = (kv: AppConsoleKv, now: () => number = Date.now) => {
+  const links = appLinks(kv);
+  return (run: string): string | null => {
+    const link = links.find((candidate) => candidate.run === run);
+    return !link ? null : link.text !== null && link.expires > now() ? link.text : APP_CONSOLE_LINK_GONE;
+  };
+};

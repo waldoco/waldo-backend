@@ -52,26 +52,22 @@ const SLIP_TEXT = { replies: 'replies and follow-ups', overlaps: 'meetings runni
 const WEARABLE_TEXT = { apple: 'an Apple Watch', samsung: 'a Samsung Galaxy Watch', oura: 'an Oura Ring', whoop: 'a WHOOP', garmin: 'a Garmin watch' } as const;
 const quoted = (words: string) => `"${words}"`;
 type SetupFact = Readonly<{ kind: string; text: string; evidence: string }>;
-// null clears the answer: an empty choice with no words of the owner's own says nothing to keep.
-const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>): SetupFact | null => {
-  const request = { [answer]: value } as AppSetupAnswersRequestV1;
-  if (request.name) return { kind: 'preference', text: calledText(request.name), evidence: request.name };
-  if (request.wearable) return { kind: 'fact', text: `Wears ${WEARABLE_TEXT[request.wearable]}.`, evidence: `Setup answer: ${request.wearable}` };
-  if (request.day) {
-    const { shape, own_words: own } = request.day;
-    if (!shape && !own) return null;
-    const text = shape ? `${DAY_TEXT[shape]}${own ? ` In their own words: ${quoted(own)}` : ''}` : `About their workdays, in their own words: ${quoted(own)}`;
-    return { kind: 'routine', text, evidence: `Setup answer: ${[shape, own].filter(Boolean).join('; ')}` };
-  }
-  if (request.slips) {
-    const { picked, own_words: own } = request.slips;
-    if (!picked.length && !own) return null;
-    const listed = picked.map(slip => SLIP_TEXT[slip]).join(', ');
-    const text = picked.length ? `Things that tend to slip, for Waldo to watch first: ${listed}.${own ? ` In their own words: ${quoted(own)}` : ''}` : `Things that tend to slip, in their own words: ${quoted(own)}`;
-    return { kind: 'preference', text, evidence: `Setup answer: ${[...picked, own].filter(Boolean).join('; ')}` };
-  }
-  return null;
+// An empty choice with no words of the owner's own says nothing to keep, so it clears the answer as null does.
+const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null } = {
+  name: name => ({ kind: 'preference', text: calledText(name), evidence: name }),
+  day: ({ shape, own_words: own }) => !shape && !own ? null : {
+    kind: 'routine', evidence: `Setup answer: ${[shape, own].filter(Boolean).join('; ')}`,
+    text: shape ? `${DAY_TEXT[shape]}${own ? ` In their own words: ${quoted(own)}` : ''}` : `About their workdays, in their own words: ${quoted(own)}`,
+  },
+  slips: ({ picked, own_words: own }) => !picked.length && !own ? null : {
+    kind: 'preference', evidence: `Setup answer: ${[...picked, own].filter(Boolean).join('; ')}`,
+    text: picked.length ? `Things that tend to slip, for Waldo to watch first: ${picked.map(slip => SLIP_TEXT[slip]).join(', ')}.${own ? ` In their own words: ${quoted(own)}` : ''}`
+      : `Things that tend to slip, in their own words: ${quoted(own)}`,
+  },
+  wearable: wearable => ({ kind: 'fact', text: `Wears ${WEARABLE_TEXT[wearable]}.`, evidence: `Setup answer: ${wearable}` }),
 };
+const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>): SetupFact | null =>
+  (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null)(value);
 
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.
