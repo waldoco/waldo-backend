@@ -125,7 +125,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&action.data.action==='google.connect')))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&(action.data.action==='google.connect'||action.data.action==='session.revoke'))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
   const phone=action.data.view==='phone';

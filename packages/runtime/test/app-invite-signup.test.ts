@@ -23,7 +23,7 @@ const directory = async (options: { inviteLive?: boolean; member?: string } = {}
     const signed: Record<string, string> = {
       console_auth_throttle: `throttle.${a.p_key}.${a.p_limit}.${a.p_window_seconds}`, signin_allowed: `signin.${a.p_email}.${a.p_code_hash}`,
       owner_for_auth: `owner.${a.p_auth_user}.${a.p_email}.${a.p_phone}.${a.p_code_hash}`, signup_owner_for_auth: `signup.owner.${a.p_auth_user}.${a.p_email}.${a.p_phone}.${a.p_code_hash}`,
-      console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`, console_session_list: `consolesess.list.${a.p_do_name}`,
+      console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`, console_session_inventory: `consolesess.inventory.${a.p_do_name}`,
     };
     expect(signed[fn], `unlisted fixture RPC ${fn}`).toBeDefined();
     expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, signed[fn]!));
@@ -38,7 +38,7 @@ const directory = async (options: { inviteLive?: boolean; member?: string } = {}
       return Response.json(joined);
     }
     if (fn === 'console_session_open') { state.live.add(`${a.p_do_name}:${a.p_session_hash}`); return Response.json(true); }
-    return Response.json([...state.live].filter(row => row.startsWith(`${a.p_do_name}:`)).map(row => ({ session: row.split(':')[1], created_at: new Date().toISOString(), last_seen_at: new Date().toISOString() })));
+    return Response.json([...state.live].filter(row => row.startsWith(`${a.p_do_name}:`)).map(row => ({ session: row.split(':')[1], created_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), expires_at: new Date(Date.now() + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: new Date().toISOString() })));
   });
   const settings = { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } };
   const auth = consoleAuth(settings, fetcher as typeof fetch)!;

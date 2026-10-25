@@ -50,6 +50,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
+  'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
   'google.connect': { gated: true, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
   'mcp.connect': { gated: true, why: 'Connects a tool server Waldo keeps calling after this session.' },

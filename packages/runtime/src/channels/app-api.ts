@@ -2,7 +2,7 @@ import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
 import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
-import { consoleAuth, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
 import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -79,14 +79,18 @@ const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'se
   } catch { return 'unavailable'; }
 };
 
-const sessionView = async (auth: ConsoleAuth, doName: string, credential: string) => {
+// The app renews a day into a 30-day session and halfway through a shorter one. Only /auth/renew says so: installed apps
+// read GET /session and /auth/verify with a strict parser that refuses any key they were not built with.
+const renewAfter = (created: number, expires: number) => created + Math.min(24 * 60 * 60_000, Math.floor((expires - created) / 2));
+const sessionView = async (auth: ConsoleAuth, doName: string, credential: string, renewal = false) => {
   const sessionId = sessionIdOf(credential);
   if (!sessionId) throw new Error('invalid session');
   const hash = await linkCodeHash(sessionId);
   const row = (await auth.listSessions(doName)).find(value => value.session === hash);
-  const created = row ? Date.parse(row.created_at) : NaN;
-  if (!Number.isFinite(created) || created + 12 * 60 * 60_000 <= Date.now()) throw new Error('expired session');
-  return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
+  const created = row ? Date.parse(row.created_at) : NaN, expires = row ? Date.parse(row.expires_at) : NaN;
+  if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= Date.now()) throw new Error('expired session');
+  return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app',
+    absolute_expires_at: expires, ...(renewal ? { renew_after: renewAfter(created, expires) } : {}) });
 };
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
@@ -124,6 +128,11 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
     if (!credential) return fail(503);
+    // A new credential opens a 12-hour session; renewing it at once makes it a 30-day one. A directory that cannot renew
+    // yet leaves the 12-hour credential.
+    const sessionId = sessionIdOf(credential);
+    try { credential = (sessionId ? await auth.renewAppCredential(doName, sessionId) : null) ?? credential; }
+    catch { console.error(JSON.stringify({ hop: 'app_session_renew', ok: false, code: 'renew_unavailable' })); }
     try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
   }
 
@@ -133,7 +142,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
   // A link code or a provider connection outlives this session, so it needs a sign-in from the last two hours. Throws when
   // the directory cannot list the sessions.
-  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.created_at, Date.now()); };
+  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.signed_in_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
@@ -148,7 +157,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : 'app-chat-send';
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -176,9 +185,29 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== 'POST') return fail(405);
     const sessionId = sessionIdOf(who.credential);
     if (!sessionId) return fail(401);
-    let revoked: boolean;
-    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); await fenceSession(env,owners,who.doName,hash); } catch { return fail(503); }
+    let revoked = false;
+    // The device's sessions are the one in hand and those a renewal links to it: a turn admitted before a renewal still
+    // runs under the earlier one, and a renewal whose answer was lost left a later one holding the device's push.
+    try {
+      const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503);
+      const family=sessionFamily(await auth.listSessions(who.doName),hash);
+      for(const session of family) if(!(await fenceSession(env,owners,who.doName,session))) return fail(503);
+      for(const session of family){ const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${session}`, {p_do_name:who.doName,p_session_hash:session}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); }
+      for(const session of family) revoked=await auth.revokeSession(who.doName,session)||revoked;
+      if((await auth.listSessions(who.doName)).some(row=>family.includes(row.session)))return fail(503);
+      for(const session of family) await fenceSession(env,owners,who.doName,session);
+    } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
+  }
+
+  if (url.pathname === `${APP_PATH}/auth/renew`) {
+    if (request.method !== 'POST') return fail(405);
+    const sessionId = sessionIdOf(who.credential);
+    if (!sessionId) return fail(401);
+    let credential: string | null;
+    try { credential = await auth.renewAppCredential(who.doName, sessionId); } catch { return fail(503); }
+    if (!credential) return fail(401);
+    try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
   if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || onboarding) {
