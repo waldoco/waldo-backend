@@ -40,6 +40,8 @@ type Harness = Readonly<{
   health: InMemoryCircuitBreaker;
   // What the directory says of the owner when a worker call asks.
   admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws'; waiting?: Promise<void> };
+  // Topics the owner is forgetting whose purge has not settled.
+  topics: string[];
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -56,6 +58,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const handler: Harness['handler'] = {};
     const health = new InMemoryCircuitBreaker({ now: () => clock.at });
     const admission: Harness['admission'] = { now: 'admitted' };
+    const topics: string[] = [];
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -68,12 +71,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
       admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
+      heldTopics: () => topics,
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics });
   });
 
 describe('the task brain host', () => {
@@ -204,6 +208,33 @@ describe('the task brain host', () => {
       expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ ok: false, code: 'uncertain_effect' });
       expect(released).toHaveLength(1);
       expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+    });
+  });
+
+  // P2c: the forget found no row carrying the text, but the worker read it and holds it in memory. Its next checkpoint
+  // would write the text back after the forget: the job is cancelled as forgotten instead, and nothing is written.
+  it('a checkpoint carrying a topic the owner is forgetting cancels the job as forgotten and writes nothing', async () => {
+    await withHost(async ({ host, ticket, book, topics, released, withdrawn, sql }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      topics.push('Project Falcon');
+      const turns = [{ call: call('search_communication'), output: '{"ok":true,"data":"Mail about project falcon, page 1"}' }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', checkpoint_json: null, lease_token: null });
+      expect(JSON.stringify(sql.exec('SELECT * FROM task_jobs').toArray())).not.toMatch(/project falcon/i);
+      expect(released).toHaveLength(1);
+      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+    });
+  });
+
+  it('a checkpoint clear of the held topics is written as usual', async () => {
+    await withHost(async ({ host, ticket, book, topics }) => {
+      const t = ticket();
+      await host.claim(t);
+      topics.push('Project Falcon');
+      expect(await host.checkpoint(t, 1, [{ call: call('search_communication'), output: 'page 1' }], [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'running', checkpoint_seq: 1 });
     });
   });
 

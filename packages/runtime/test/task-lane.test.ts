@@ -182,6 +182,20 @@ describe('the jobs lane', () => {
     });
   });
 
+  it('a running task whose progress carries a topic the owner is forgetting is cancelled and fenced, not only due ones', async () => {
+    await withLane(async ({ book, fenced, deps }) => {
+      const carrying = book.create(task('k1')).job.id;
+      const other = book.create(task('k2')).job.id;
+      await runJobsLane(deps());
+      const ticket = { jobId: carrying, attempt: 1, token: book.get(carrying)!.lease_token! };
+      expect(book.checkpoint(ticket, 1, { turns: [{ call: { call_id: 'c1', name: 'search_communication', arguments: '{}' }, output: 'Mail about the Lisbon trip' }] }, { rounds: 1, costUsd: 0 })).toBe('ok');
+      await runJobsLane(deps({ heldTopics: () => ['Lisbon trip'] }));
+      expect(book.get(carrying)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(book.get(other)!.status).toBe('running');
+      expect(fenced).toEqual([carrying]);
+    });
+  });
+
   it('a long task sends a progress note after two minutes, then every ten, each once', async () => {
     await withLane(async ({ book, sent, clock, deps }) => {
       const id = book.create(task('k1')).job.id;
