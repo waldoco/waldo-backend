@@ -24,6 +24,7 @@ export type ConnectionsRecord = Base<'connections', {
 export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
+  | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
 export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
 export type ActivityCursors = { trace_before?: number | null; runs_before?: number | null };
@@ -82,6 +83,7 @@ function readProposalReview(value: unknown): ProposalReview | null {
   if (value.kind === 'email_send' && (value.account === undefined || string(value.account)) && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body) && (value.earlier_unknown_at === undefined || string(value.earlier_unknown_at)))
     return { kind: value.kind, ...(value.account === undefined ? {} : { account: value.account }), to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body, ...(value.earlier_unknown_at === undefined ? {} : { earlier_unknown_at: value.earlier_unknown_at }) };
   if (value.kind === 'message_send' && string(value.channel) && string(value.content)) return { kind: value.kind, channel: value.channel, content: value.content };
+  if ((value.kind === 'mcp_call' || value.kind === 'tainted_action' || value.kind === 'browser_submit') && string(value.text)) return { kind: value.kind, text: value.text };
   if (value.kind === 'calendar_change' && ['create', 'move', 'cancel'].includes(String(value.action)) && [value.title, value.event_id, value.start, value.end].every(optionalString) && string(value.reason)) return { kind: value.kind, action: value.action as 'create' | 'move' | 'cancel', title: value.title as string | null, event_id: value.event_id as string | null, start: value.start as string | null, end: value.end as string | null, reason: value.reason };
   throw shapeError();
 }
