@@ -81,7 +81,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `WALDO_RELEASE` | restamped by the deploy wrapper | same | same |
 | `WALDO_OWNER_TELEGRAM_ID` | the owner's Telegram id | `""` | `""`. The single-owner fallback stays off. |
 | `LANGFUSE_CAPTURE_TEXT` | `true` | `false` | `false` (code forces it off in any case) |
-| `WHATSAPP_DEBUG_LOG` | `true` (#1398 commits `false`) | `false` | `false` |
+| `WHATSAPP_DEBUG_LOG` | `false` (#1398; on only by explicit owner choice) | `false` | `false` |
 | `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
 | `WALDO_COMPACTION` | `off` | `off` | `off`. Only `on` turns it on, and only for the app chat. It waits for the compaction eval (`WALDO_EVAL_COMPACTION=on`, ADR draft §6) and a post-reply trigger; `off` is the rollback. |
 | `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
@@ -431,7 +431,7 @@ P9 replaces steps 1 and 2 with an in-product path.
 | Item | Where it is tracked | Blocks |
 | --- | --- | --- |
 | Privacy Policy and Terms (draft, unpublished, ECOFRESH GREENSYNC LLP) | owner's private Claude Doc (privacy-terms draft, 19 Oct); open rows: grievance officer, fees, DPAs, retention, effective date | Google branding (S7), Meta, first invite |
-| Diagnostic recording agreement (staging only) | #1398 | publishing the privacy draft |
+| Diagnostic recording agreement (staging only), and enforcing its approved retention (Langfuse Pro retention policy or a deletion job; owner decision) | #1398 | publishing the privacy draft |
 | ADR-0073 §1: DPIA, DPA inventory with zero retention (Anthropic and OpenAI), retention schedule, breach plan, crisis pack per geography, 18+ gate, data export, privacy copy | `Pin4sf/waldo-brain` ADR-0073; `docs/planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md:99-101` | first invite (ADR text: "before any external user") |
 | ADR-0055: the deletion cascade walked on a test user, per-store latency, tombstone ledger | `Pin4sf/waldo-brain` ADR-0055 | first invite |
 | Beta geography: ADR-0073 §2 excludes EU/EEA/UK at beta; BUILD_DIRECTION says global-first | both documents | decision D8 |
