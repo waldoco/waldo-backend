@@ -8,6 +8,8 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { updateBook } from '../src/channels/update-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { presenceAuthority } from './helpers/directory-presence';
+import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
+import { updateSweepTools } from '../src/channels/update-sweep';
 
 const UPDATE_TEXT = 'Synthetic update text.';
 const fixture = vi.hoisted(() => ({ changes: [] as CalendarChange[], requests: [] as string[], sent: [] as string[] }));
@@ -82,10 +84,19 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
       await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: at - 1000, dueAt: at - 1000 });
       state.storage.kv.put('owner_alarm_last_v1', 0);
       await owner.alarm();
+      // The sweep wrote a reader job, whose worker never sees the health logs; it reports (stood in for here), and the apply
+      // turn writes the card with them as turn context.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await applyAndSend(owner, state.storage.kv);
       expect(state.storage.sql.exec('SELECT pushed FROM update_cards').toArray()).toEqual([{ pushed: 1 }]);
       const update = fixture.requests.find(request => request.includes('Changed event'));
       expect(update).toContain('~640 kcal, estimate');
       expect(update).toContain('run, 37 min');
+      // The apply turn holds the sweep's tools (here without source follow-ups: read, and ask on a card), never the owner's
+      // apply list.
+      const offered = ((JSON.parse(update!) as { tools?: { name: string }[] }).tools ?? []).map(tool => tool.name);
+      expect(offered).toContain('propose_action');
+      for (const tool of offered) expect(updateSweepTools(false)).toContain(tool);
       const stored = storedText(state);
       expect(stored).toContain('Changed event');
       expect(stored).not.toContain('640 kcal');

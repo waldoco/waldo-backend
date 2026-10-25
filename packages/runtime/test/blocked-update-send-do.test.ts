@@ -7,9 +7,11 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { updateBook } from '../src/channels/update-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
-// The update card is stored as pushed only once Telegram acknowledged the send; a blocked send (unlinked or
-// rebound owner) returns no message.
+// The update card is stored as pushed only once Telegram acknowledged the send, never when it was queued; a blocked send
+// (unlinked or rebound owner) returns no message.
 const fixture = vi.hoisted(() => ({ sends: 0, blocked: true, changes: [] as CalendarChange[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -60,6 +62,15 @@ it.each([true, false])('update card pushed state follows the send: blocked=%s', 
       const scheduler = new Scheduler(state.storage.sql, state.storage, { now: () => at, newRunId: () => 'r', newOutboxId: () => 'o', sha256Hex: async () => 's' });
       await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: at - 1000, dueAt: at - 1000 });
       state.storage.kv.put('owner_alarm_last_v1', 0);
+      await owner.alarm();
+      // The sweep wrote a reader job; its worker reports (stood in for here), the next pass applies it and queues the card,
+      // and the pass after sends it once it falls due.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await owner.alarm();
+      const rows = state.storage.kv.get<{ dueAt: number }[]>(FINAL_OUTBOX_KEY) ?? [];
+      expect(rows).toHaveLength(1);
+      expect(state.storage.sql.exec('SELECT pushed FROM update_cards').toArray()).toEqual([{ pushed: 0 }]);
+      state.storage.kv.put(FINAL_OUTBOX_KEY, rows.map(row => ({ ...row, dueAt: at - 1 })));
       await owner.alarm();
       expect(fixture.sends).toBe(1);
       expect(state.storage.sql.exec('SELECT pushed FROM update_cards').toArray()).toEqual([{ pushed: blocked ? 0 : 1 }]);

@@ -1,5 +1,6 @@
 import type { ToolName } from '@waldo/contracts';
 import { CHILD_READ_TOOLS } from '../conversation/subagent';
+import { EGRESS_READ_TOOLS } from '../tasks/profiles';
 import { SKIP_UPDATE } from '../prompt/update-cards';
 import type { Loop } from './loops';
 
@@ -7,10 +8,12 @@ import type { Loop } from './loops';
 // read tools only, so a check-back can look but never act; a loop check-back may also close the loops it was given. Once
 // it has read outside text, closing a loop the owner made is the owner's call, so it can put that close on their card.
 export const CHECK_BACK_TOOLS: readonly ToolName[] = CHILD_READ_TOOLS;
-export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'close_loop', 'propose_action'];
+// Turns that start on outside text hold no egress reads (tasks/profiles EGRESS_READ_TOOLS).
+const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
+export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action'];
 // A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
-export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'propose_action'];
+export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'propose_action'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Say what you checked and what you found, and ask at most one question.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;

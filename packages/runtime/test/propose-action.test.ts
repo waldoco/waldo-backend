@@ -23,6 +23,8 @@ import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalReplayContext, FORGET_CARD_MAX_IDS, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { claimStore } from '../src/memory/claims';
+import { jobBook, taskBrief } from '../src/tasks/jobs';
+import { taskToolHandlers } from '../src/tasks/tools';
 import { loopBook, loopHandlers } from '../src/channels/loops';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -235,6 +237,55 @@ describe('taint goes to a card', () => {
       // The owner's own untainted turn sets it directly, with no approval line consulted: standing changes are not privileged.
       expect(await dispatchTool({ id: 'c2', name: 'set_reminder', args }, context({ hasApproval: undefined }), { handlers })).toMatchObject({ ok: true });
       expect(set).toHaveLength(2);
+    });
+  });
+
+  it('a background task from a tainted turn goes to the card and starts once on approval; untainted, it starts directly', async () => {
+    await runInDurableObject(stub('task'), async (_instance, state) => {
+      let n = 0;
+      const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+      const handlers = taskToolHandlers({ book, now: () => 1_800_000_000_000, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const args = { profile: 'reader', title: 'Vendor invoices', goal: 'Collect every invoice the vendor sent.', context: '', done_when: 'A list of invoices.' };
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const tasks = () => book.open().filter((row) => row.kind === 'task');
+
+      expect(await dispatchTool({ id: 'c1', name: 'start_task', args }, tainted({ toolCallId: 'c1' }), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
+      expect(tasks()).toEqual([]);
+      expect(await proposeActionHandler(desk).handle({ tool: 'start_task', args, reasoning: 'A vendor mail asked for it.' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({ ok: true, data: { executed: false } });
+      const [row] = rows('tainted_action');
+      expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
+      expect(tasks()).toHaveLength(1);
+      // Started from words someone else wrote: its report is applied as tainted and its title is not repeated to the owner.
+      expect(tasks()[0]).toMatchObject({ taint: 'external' });
+      expect(taskBrief(tasks()[0]!)).toMatchObject({ title: 'Vendor invoices', outside_text: true });
+
+      expect(await dispatchTool({ id: 'c2', name: 'start_task', args }, context({ hasApproval: undefined, toolCallId: 'c2' }), { handlers })).toMatchObject({ ok: true });
+      expect(tasks()).toHaveLength(2);
+    });
+  });
+
+  it('cancelling a background task from a tainted turn goes to the card and cancels on approval; untainted, it cancels directly', async () => {
+    await runInDurableObject(stub('cancel-task'), async (_instance, state) => {
+      let n = 0;
+      const book = jobBook(state.storage.sql, { now: () => 1_800_000_000_000, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+      const fenced: string[] = [];
+      const handlers = taskToolHandlers({ book, now: () => 1_800_000_000_000, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: (id) => { fenced.push(id); }, log: () => undefined });
+      const start = { profile: 'reader', title: 'Vendor invoices', goal: 'Collect every invoice the vendor sent.', context: '', done_when: 'A list of invoices.' };
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+      const started = async (id: string) => ((await dispatchTool({ id, name: 'start_task', args: start }, context({ hasApproval: undefined, toolCallId: id }), { handlers })) as { data: { job_id: string } }).data.job_id;
+      const first = await started('s1'), second = await started('s2');
+
+      expect(await dispatchTool({ id: 'c1', name: 'cancel_task', args: { job_id: first } }, tainted({ toolCallId: 'c1' }), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
+      expect(book.get(first)!.status).toBe('queued');
+      expect(fenced).toEqual([]);
+      expect(await proposeActionHandler(desk).handle({ tool: 'cancel_task', args: { job_id: first }, reasoning: 'A vendor mail asked for it.' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({ ok: true, data: { executed: false } });
+      const [row] = rows('tainted_action');
+      expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
+      expect(book.get(first)).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+      expect(fenced).toEqual([first]);
+
+      expect(await dispatchTool({ id: 'c2', name: 'cancel_task', args: { job_id: second } }, context({ hasApproval: undefined, toolCallId: 'c2' }), { handlers })).toMatchObject({ ok: true });
+      expect(book.get(second)!.status).toBe('cancelled');
     });
   });
 

@@ -35,12 +35,13 @@ import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDea
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
-import { brainTools, toolsWhere } from '../tools/records';
+import { brainTools, toolActivity, toolsWhere } from '../tools/records';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { sha256Hex } from '../context-composer/canonical';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
@@ -178,6 +179,7 @@ export const createOwnerResponder = (
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
+  let backgroundOwnerModel = false;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   // Before an effect or a published reply: authority read now, never a recent match.
   const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await skills?.admission?.assertFresh(); await backgroundCurrent?.(); privateRunScope?.admit(); };
@@ -227,6 +229,21 @@ export const createOwnerResponder = (
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
+  let ownerTurnStartedAt = 0;
+  // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
+  let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined;
+  // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
+  // out), else the plain line.
+  const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
+    if (typeof floor !== 'object' || !activeOwnerTurn) return MODEL_UNREACHABLE_REPLY;
+    const turn = activeOwnerTurn;
+    // The same view and taint the live turn had when its providers failed: others' words stay in their labelled blocks, and
+    // a turn that read someone else's words, from the start or in a round before the floor, keeps its retry tainted.
+    const tainted = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
+    return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: renderForModel(turn.parts).text,
+      taint: tainted ? 'external' : null,
+      ...(turn.messageRef ? { messageRef: turn.messageRef.id } : {}), receivedAt: ownerTurnStartedAt });
+  };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
@@ -287,7 +304,7 @@ export const createOwnerResponder = (
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
-      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => MODEL_UNREACHABLE_REPLY } : {}),
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
     await assertCurrent();
     privateRunScope?.admit();
@@ -501,13 +518,17 @@ export const createOwnerResponder = (
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
       type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
+      const loopCtx = { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
         ...(access.toolSearch ? { stableMenu: true } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
-        ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
+        onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
+        ctx: loopCtx,
         step: async (tools, turns) => {
           const added = await consumeRound();
           if (added === null) return { text: STOPPED_REPLY };
@@ -622,7 +643,8 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
-          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
+          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
+          // to it, gets the chat model.
           return complete(trace, 'reply',
           { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections },
           entries,
@@ -630,7 +652,7 @@ export const createOwnerResponder = (
           attachments.length ? attachments : undefined,
           tools,
           cut.turns,
-          ownerTurnActive ? undefined : auxiliaryModel,
+          ownerTurnActive || backgroundOwnerModel ? undefined : auxiliaryModel,
           );
         },
         onTool: (event) => {
@@ -772,7 +794,8 @@ export const createOwnerResponder = (
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
       const notice = fromOwner ? privateOwner?.memoryNotice?.() ?? null : null;
-      const out = [reply, receipt?.line, notice?.line].filter(Boolean).join('\n\n');
+      // The receipt line stays last: the app and the console hide it only where it ends the text.
+      const out = [reply, notice?.line, receipt?.line].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
@@ -792,7 +815,7 @@ export const createOwnerResponder = (
       try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
       throw error;
-    } finally { activeOwnerTurn = undefined; }
+    } finally { activeOwnerTurn = undefined; turnLoopCtx = undefined; }
   };
   // What the owner said in conversation about to leave the window, kept as memory first: the same admission gate as the
   // nightly pass, in this turn's scope, never forgetting or pinning. Returns the claims it wrote.
@@ -897,6 +920,7 @@ export const createOwnerResponder = (
       try {
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };
+        ownerTurnStartedAt = Date.now();
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const received = receivedView(turn.parts);
@@ -916,10 +940,11 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, reminderCheckBackText(note), time, false, surface, CHECK_BACK_TOOLS);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), conversationRef);
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
+      backgroundOwnerModel = ownerModel === true;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const messageChars = deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
       const said = fitPromptToBudget(jobText, Math.floor(messageChars / 2));
@@ -955,7 +980,7 @@ export const createOwnerResponder = (
         promptContext = turnContext ?? '';
         // Default-deny for a job over outside text: with no tools named, it gets the read-and-card ceiling, never every tool.
         return await converse(id, conversationRef, said, time, false, surface, toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined));
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
@@ -985,19 +1010,26 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     },
-    async promote(trace) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace));
+    async promote(trace, gate) {
+      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
       const visible = promptMemory()!;
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(visible), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const input = promotionInput(visible);
+      if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
+      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
-      return applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
+      const detail = applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
         code: receipt.reason ?? receipt.outcome,
         detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
       }));
+      // The memory this promotion left. The nightly pass runs on the owner's serial chain with every memory writer, so nothing
+      // else writes between the apply and this read.
+      const left = promotionInput(promptMemory()!);
+      if (gate) gate.promoted(await sha256Hex(left));
+      return detail;
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))

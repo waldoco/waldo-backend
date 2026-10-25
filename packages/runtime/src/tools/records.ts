@@ -1,4 +1,5 @@
 import type { LLMRequest, LLMTool, ToolName } from '@waldo/contracts';
+import type { AppChatActivityKind } from '../../../contracts/src/app/core';
 
 // Where a tool sits on the brain's surface. Core tools are loaded every round. Every other tool sits in a namespace the
 // model loads through the provider's tool search when a task needs it, so a round carries the core definitions and one
@@ -10,7 +11,7 @@ export const BRAIN_NAMESPACES = {
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, read_tool_output for stored tool output, and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
-  reminders: 'Follow-ups: list or cancel reminders, close_loop when an open loop is done, and tracked responsibilities.',
+  reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
   skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
@@ -151,6 +152,11 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
   call_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown') },
+  // reminders, beside cancel_task: the core tool budget has no room for it, so the namespace line names it for the search.
+  // scope deny: its worker reads mail, files and the web for the brief. Started is not done: the owner hears the result
+  // from the apply turn.
+  start_task: { brain: 'reminders', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'task_started', replay: { replay: 'provider_idempotent', basis: 'the job key is turn+toolCall and the job book keeps one job per key; a replay returns the job already made', evidence: { file: 'tasks/tools.ts', needle: 'idempotencyKey: key' } } },
+  cancel_task: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'task_cancelled', replay: { replay: 'provider_idempotent', basis: 'cancels by job id; a second cancel finds the job settled and changes nothing', evidence: { file: 'tasks/jobs.ts', needle: 'WHERE id = ? AND status IN (${placeholders(OPEN)})' } } },
   // scope allow: the source guard is applied to the child's handlers too. claim null: it runs a read-only subagent.
   delegate_task: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
   remember: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'memory_stored', tainted: { exempt: 'honest_origin', reason: 'under outside text it saves the owner\'s quoted words as Waldo\'s inference until the owner confirms them, and never changes what the owner told Waldo' }, replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },
@@ -192,3 +198,25 @@ export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick
   const used = [...new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []))];
   return { tools: placed, tool_search: { namespaces: Object.fromEntries(used.map((name) => [name, BRAIN_NAMESPACES[name]])) } };
 };
+
+// The kind of work the owner sees a running tool doing (app chat=3 `activity`). Not the brain placement: most of the
+// slow reads (mail search, calendar, web, health) sit in core. Every tool is named so a new one fails the build here too.
+const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
+  search_communication: 'mail', read_thread: 'mail', get_communication: 'mail', search_contacts: 'mail', send_email: 'mail', draft_email: 'mail', archive_thread: 'mail', delete_message: 'mail', restore_message: 'mail',
+  query_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_schedule: 'calendar',
+  get_tasks: 'tasks', propose_google_task_change: 'tasks', write_task: 'tasks', update_task: 'tasks',
+  web_search: 'web', browse_page: 'web', browse_act: 'web',
+  // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.
+  read_mcp_tool: 'working', search_mcp_tools: 'working', call_mcp_tool: 'working', search_connector: 'working',
+  read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files',
+  get_health: 'health', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health',
+  read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory',
+  set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
+  create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
+  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings',
+  search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
+};
+// From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.
+export const toolActivity = (name: string): AppChatActivityKind => (TOOL_ACTIVITY as Partial<Record<string, AppChatActivityKind>>)[name] ?? 'working';

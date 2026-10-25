@@ -62,6 +62,8 @@ it('forget my favourite coffee returns a tool receipt and removes history recall
     seen.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'coffee', scope_note: 'favourite coffee' }) }], []);
     const reply = await responder.respond(ownerTyped({ traceId: 'tg-forget', conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }), timer);
     expect(reply).toContain('memory forgotten');
+    // The model reads how to confirm before it writes the reply, which the forget barrier would otherwise mask.
+    expect(seen.inputs.find(input => input.includes('removed_ids'))).toContain('without repeating the forgotten words');
     expect(historyCleaned).toBe(true);
     expect(store.claims()).toEqual([]);
     await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'What is my favourite coffee?' }), timer);
@@ -176,5 +178,18 @@ it('duplicate remember is not receipted as a new save', async () => {
     expect(reply).not.toContain('memory stored');
     expect(store.claims()).toHaveLength(1);
     expect(seen.inputs.at(-1)).toContain('duplicate');
+  });
+});
+// The app and the console hide the receipt line only where it ends the reply's text, so a memory notice goes above it.
+it('a reply carrying a memory notice keeps its receipt line last', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-notice-order')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, store, undefined, undefined, tools];
+    const notice = 'Saved to memory from our earlier chat: "Prefers window seats" (c9).';
+    args[21] = { memoryNotice: () => ({ line: notice, taken: () => undefined }) };
+    seen.outputs.push([{ type: 'function_call', call_id: 'tea', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }) }], []);
+    const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'tg-notice', conversationRef: 'owner', surface: 'app', text: 'I prefer tea' }), timer);
+    expect(reply).toBe(`Done\n\n${notice}\n\nDone: memory stored`);
   });
 });

@@ -5,6 +5,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -57,6 +58,10 @@ it('actual default owner mail followup', async () => {
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
       await incoming('/fire fetch');
+      // The held mail becomes a sweep job: its worker reports (stood in for here) and the jobs lane's update-card turn opens
+      // the source loop. Only that lane runs here, so no other scheduled work moves.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');
       expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);

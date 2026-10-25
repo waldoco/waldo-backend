@@ -14,6 +14,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const FOLLOWUP_TEXT = 'Have you handled the deck review? Pat asked for it by 10.';
@@ -107,6 +108,13 @@ const dueSweep = (state: DurableObjectState) => new Scheduler(state.storage.sql,
 // One alarm pass over the scheduled work, then one over the delivery outbox.
 const sweepPass = async (owner: Owner, state: DurableObjectState) => { state.storage.kv.put('owner_alarm_last_v1', 1); await owner.alarm(); };
 const outboxPass = async (owner: Owner, state: DurableObjectState, ctx: Ctx) => { ctx.now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
+// The sweep wrote a reader job: its worker reports (stood in for here), the next pass queues the card, and the outbox sends it.
+const cardPasses = async (owner: Owner, state: DurableObjectState, ctx: Ctx) => {
+  expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+  await sweepPass(owner, state);
+  await outboxPass(owner, state, ctx);
+  await outboxPass(owner, state, ctx);
+};
 const appChat = async (owner: Owner, name: string) => {
   const response = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64) } }));
   expect(response.status).toBe(200);
@@ -134,7 +142,7 @@ const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]
 
 describe('event-brief work for an owner who only uses the app', () => {
   it('an update card reaches the app chat without feedback buttons, written with the owner\'s health logs but never storing them', async () => {
-    await withAppOwner('app-briefs-update-card', true, async (owner, state) => {
+    await withAppOwner('app-briefs-update-card', true, async (owner, state, ctx) => {
       dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
       const updates = updateBook(state.storage.sql);
       updates.mark('calendar_since', AT - 3_600_000);
@@ -142,6 +150,7 @@ describe('event-brief work for an owner who only uses the app', () => {
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await sweepPass(owner, state);
+      await cardPasses(owner, state, ctx);
       expect(await appChat(owner, 'app-briefs-update-card')).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
       expect(state.storage.sql.exec('SELECT pushed, text FROM update_cards').toArray()).toEqual([{ pushed: 1, text: UPDATE_TEXT }]);
       expectHealthOnlyInTheRequest(state, 'Changed event');
@@ -189,7 +198,7 @@ describe('event-brief work for an owner who only uses the app', () => {
   // Production runs with grounded prep off. The legacy sweep sends straight to the chat with no outbox, so it never runs on
   // the app; the update check after it still does.
   it('with grounded prep off, no event brief is sent on the app, and the update card still reaches the app chat', async () => {
-    await withAppOwner('app-briefs-legacy-off', true, async (owner, state) => {
+    await withAppOwner('app-briefs-legacy-off', true, async (owner, state, ctx) => {
       fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
         description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
       dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
@@ -198,6 +207,7 @@ describe('event-brief work for an owner who only uses the app', () => {
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await sweepPass(owner, state);
+      await cardPasses(owner, state, ctx);
       expect(await appChat(owner, 'app-briefs-legacy-off')).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
       expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM event_briefs').one().n).toBe(0);
       expect(fixture.requests.filter(sent => sent.includes('Design review'))).toEqual([]);

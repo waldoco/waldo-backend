@@ -104,7 +104,7 @@ export const browsePageHandler = (
   providers: BrowserPageProviders = { allowBrowserbase: true },
 ): ToolHandler<BrowsePageArgs, Readonly<{ url: string; data: unknown }>, ToolDispatcherContext> => ({
   name: 'browse_page',
-  description: 'Open a public web page in a real browser and read information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
+  description: 'Read a public web page in a real browser when web_search snippets are not enough: a dynamic page, or one to read in full. Read-only: it never clicks, fills or submits.',
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,

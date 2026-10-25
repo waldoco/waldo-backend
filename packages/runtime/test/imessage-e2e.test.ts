@@ -23,10 +23,13 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { reminderDue, remindInTwoHours, scheduleNext } from './helpers/reminder-wake';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
+import { armTaskJobsWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { jobBook } from '../src/tasks/jobs';
 import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
@@ -327,18 +330,26 @@ const expectNotice = (delivery: Delivery) => {
   expect(text).not.toContain('upstream-detail-9f2');
   expect(text).not.toContain('Plan my afternoon');
 };
+// A turn no model answers (all failed, or one wrote nothing) gets the floor: a time the retry job keeps (R-4), never the error.
+const expectFloor = (delivery: Delivery) => {
+  const text = JSON.parse(delivery.body).text as string;
+  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+  expect(text).not.toContain('upstream-detail-9f2');
+};
 
-it('an iMessage turn the model fails tells the owner once, with a fixed notice and no error text; a replay sends nothing more', async () => {
+it('an iMessage turn the model fails tells the owner once, with the floor\'s promised time and no error text; a replay sends nothing more', async () => {
   const w = await world();
   await w.pairAndActivate();
   modelDown();
   const event = w.host.message('Plan my afternoon');
   expect((await w.host.send(event)).status).toBe(200);
   await w.pump();
-  expectNotice(await sendNext(w));
+  expectFloor(await sendNext(w));
   await w.pump(2);
-  expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed, r.text])).toEqual([['interrupted', true, '']]);
-  expect((await failureRows(w)).map(r => [r.state, r.result?.state])).toEqual([['settled', 'local_recorded']]);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
+  expect((await outbox(w.ownerStub)).map(r => [r.replyRef.split(':')[0], r.state])).toEqual([['reply', 'settled']]);
+  expect(await failureRows(w)).toEqual([]);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['queued']);
   // The bridge hands the same event again and the owner drains again: no second turn, no second notice.
   expect((await w.host.send(event)).status).toBe(200);
   await w.pump(3);
@@ -349,29 +360,31 @@ it('an iMessage turn the model fails tells the owner once, with a fixed notice a
   await replyFor(w, 'What time is it?');
   await sendNext(w);
   expect(sentTexts(w).slice(1)).toEqual(['Scripted owner reply.']);
-  expect(await failureRows(w)).toHaveLength(1);
+  expect(await failureRows(w)).toEqual([]);
+  expect((await retryRows(w))).toHaveLength(1);
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
 
-it('an iMessage turn whose model writes nothing tells the owner once', async () => {
+it('an iMessage turn whose model writes nothing tells the owner once, with the floor\'s promised time', async () => {
   const w = await world();
   await w.pairAndActivate();
   const reply = proof.reply;
   proof.reply = '   ';
   try {
     await replyFor(w, 'Plan my afternoon');
-    expectNotice(await sendNext(w));
+    expectFloor(await sendNext(w));
   } finally { proof.reply = reply; }
   await w.pump(2);
-  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
-  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['failure']);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['queued']);
   expect(w.host.nativeSends).toHaveLength(1);
 }, 30_000);
 
 // The claimed turn's deadline is `offsetMs` from its claim instead of the full window.
 const shortDeadline = (offsetMs: number) => {
   const claim = IMessageOwnerInbox.prototype.claim;
-  vi.spyOn(IMessageOwnerInbox.prototype, 'claim').mockImplementation(function (this: IMessageOwnerInbox, id: string, current: boolean) {
+  return vi.spyOn(IMessageOwnerInbox.prototype, 'claim').mockImplementation(function (this: IMessageOwnerInbox, id: string, current: boolean) {
     return claim.call(this, id, current, Date.now() + offsetMs);
   });
 };
@@ -405,15 +418,16 @@ it('an iMessage turn whose deadline passes before it can run tells the owner onc
 it('an iMessage turn whose owner object was evicted mid-turn tells the owner once, when the next drain recovers it', async () => {
   const w = await world();
   await w.pairAndActivate();
-  modelDown();
-  // The instance dies before it can close the row: the row stays running under an attempt nobody holds any more.
+  // The model answers, but the instance dies before it can commit the reply or close the row: the row stays running under an
+  // attempt nobody holds any more. (A turn no model answers now ends with the floor's reply, so it is not the way in.)
+  const close = vi.spyOn(IMessageOwnerInbox.prototype, 'closeFinal').mockImplementation(() => { throw new Error('instance gone'); });
   const settle = vi.spyOn(IMessageOwnerInbox.prototype, 'settle').mockImplementation(() => { throw new Error('instance gone'); });
   expect((await w.host.send(w.host.message('Plan my afternoon'))).status).toBe(200);
   await runDurableObjectAlarm(w.bridgeStub()); await w.settle();
   await vi.waitFor(() => expect(settle).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 50 });
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['running']);
   expect(await failureRows(w)).toEqual([]);
-  settle.mockRestore();
+  settle.mockRestore(); close.mockRestore();
   const calls = proof.turns.length;
   await evictDurableObject(w.ownerStub);
   await w.pump(2);
@@ -427,7 +441,9 @@ it('an iMessage turn whose owner object was evicted mid-turn tells the owner onc
 it('a failure notice that cannot be queued still settles the turn, loops nowhere, and the next message runs', async () => {
   const w = await world();
   await w.pairAndActivate();
-  modelDown();
+  // A turn whose deadline passed before it ran is interrupted and owes the notice. (A turn no model answers ends with the
+  // floor's reply instead, so it owes none.)
+  const late = shortDeadline(-1);
   const freeze = vi.spyOn(IMessageFinalOutbox.prototype, 'freezeFailure').mockImplementation(() => { throw new Error('imessage_outbox_capacity'); });
   await replyFor(w, 'Plan my afternoon');
   const calls = proof.turns.length;
@@ -436,7 +452,7 @@ it('a failure notice that cannot be queued still settles the turn, loops nowhere
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
   expect(await outbox(w.ownerStub)).toEqual([]);
   expect(proof.turns).toHaveLength(calls);
-  proof.hold = null; freeze.mockRestore();
+  late.mockRestore(); freeze.mockRestore();
   await replyFor(w, 'What time is it?');
   await sendNext(w);
   expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
@@ -1231,14 +1247,14 @@ it('an iMessage-only owner\'s two-part reminder whose second part never went say
 it('an iMessage-only owner\'s two-part follow-up whose second part never went says it was partly sent', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   await inTwoParts(w, 'heartbeat', ['sent', 'not_started']);
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(deliveryRecords(state).filter((row) => row.heartbeat)).toMatchObject([{ status: 'blocked', reason: 'provider_failed', arrived: [true, false] }]);
-    expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat'").toArray())
-      .toEqual([{ status: 'failed', summary: 'heartbeat partly sent; the rest was not sent' }]);
+    expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray())
+      .toEqual([TICK_RUN, { status: 'failed', summary: 'heartbeat partly sent; the rest was not sent' }]);
   });
-});
+}, 15_000);
 
 it('an iMessage-only owner\'s morning brief goes out on iMessage and counts as sent only once the bridge reports it', async () => {
   const w = await world();
@@ -1264,25 +1280,32 @@ const dueFollowUp = async (state: DurableObjectState) => {
   await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID },
     occurrenceAt: due, dueAt: due, recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: due % HEARTBEAT_EVERY_MS } });
 };
+// The follow-up tick writes a reader job; its worker reports (stood in for here), and the owner's next alarm applies it.
+const tickedFollowUp = async (w: Awaited<ReturnType<typeof world>>) => {
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await runDurableObjectAlarm(w.ownerStub); await w.settle();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { expect(reportMachineJobs(state.storage.sql)).toHaveLength(1); });
+};
+const TICK_RUN = { status: 'completed', summary: 'check-back handed to a reader job' };
 it('an iMessage-only owner\'s follow-up on a loop past its date goes out on iMessage and settles on the bridge\'s report', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   const followUp = 'Did the invoice go out?';
   const delivery = await scheduledOnIMessage(w, followUp);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['running']));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed', 'running']));
   await hostReports(w, delivery);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed']));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(runsOf(state, 'heartbeat')).toEqual(['completed', 'completed']));
 });
 
 it('an iMessage-only owner\'s follow-up the bridge proves it never sent fails, saying it could not be delivered', async () => {
   const w = await world();
   await iMessageOnly(w);
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await dueFollowUp(state); });
+  await tickedFollowUp(w);
   const delivery = await scheduledOnIMessage(w, 'Did the invoice go out?');
   await hostReports(w, delivery, Date.now() + 24 * 3_600_000);
-  await runInDurableObject(w.ownerStub, async (_i, state) => expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat'").toArray())
-    .toEqual([{ status: 'failed', summary: 'heartbeat could not be delivered' }]));
+  await runInDurableObject(w.ownerStub, async (_i, state) => expect(state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray())
+    .toEqual([TICK_RUN, { status: 'failed', summary: 'heartbeat could not be delivered' }]));
 });
 
 // An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only
@@ -1759,6 +1782,87 @@ it('a note whose handoff threw is settled as possibly sent, never retried, and t
   expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
   expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
 }, 20_000);
+
+it('an iMessage-only owner\'s background task reports on iMessage, and its worker\'s hops are logged on that surface', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  type Rpc = { taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0001', newToken: () => 'tok-imsg' });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-1', origin: 'imsg-turn', surface: 'imessage',
+      brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    expect(await (instance as unknown as Rpc).taskClaim(ticket)).not.toBe('fenced');
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Asha waits on the quote.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    return job.id;
+  });
+  const report = 'Asha is still waiting on the quote you promised her.';
+  const delivery = await scheduledOnIMessage(w, report);
+  await hostReports(w, delivery);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => 'unused' }).get(jobId)).toMatchObject({ status: 'applied' });
+    // The brain's hops (the worker's report) and the lane's (the report applied) are logged under the same owner surface.
+    const owners = state.storage.sql.exec<{ hop: string; owner: string | null }>("SELECT hop, owner FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray();
+    expect(owners.map(row => row.hop)).toEqual(['task_reported', 'task_applied']);
+    expect(owners[0]!.owner).toBe(owners[1]!.owner);
+  });
+});
+
+// R-4 on iMessage. When no model answers an iMessage-only owner, the floor reply promises a time in the owner's own zone, and
+// the retried turn's late answer comes back on iMessage. If the retry finds no model either, the owner is still told.
+const OWNER_ZONE = 'Asia/Kolkata';
+const zoneTime = (at: number, timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+type RetryRow = { id: string; status: string; park_reason: string | null; brief_json: string };
+const retryRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
+  state.storage.sql.exec<RetryRow>("SELECT id, status, park_reason, brief_json FROM task_jobs WHERE kind = 'retry_turn'").toArray());
+// The retry is due two minutes after the floor; the test brings that time to now rather than moving the clock. `promisedBy`
+// moves the promised time too, so this try is the last one.
+const retryDueNow = (w: Awaited<ReturnType<typeof world>>, promisedBy?: number) => runInDurableObject(w.ownerStub, async (_i, state) => {
+  const now = Date.now();
+  if (promisedBy === undefined) state.storage.sql.exec("UPDATE task_jobs SET due_at = ? WHERE kind = 'retry_turn'", now);
+  else state.storage.sql.exec("UPDATE task_jobs SET due_at = ?, deadline_at = ?, brief_json = json_set(brief_json, '$.promised_by', ?) WHERE kind = 'retry_turn'", now, promisedBy, promisedBy);
+  await armTaskJobsWake(state.storage, now);
+});
+const modelDownOnIMessage = async (w: Awaited<ReturnType<typeof world>>) => {
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', OWNER_ZONE); });
+  modelDown();
+  await replyFor(w, 'Move my 3pm to Friday');
+  const floor = JSON.parse((await sendNext(w)).body).text as string;
+  const [job] = await retryRows(w);
+  return { floor, job: job! };
+};
+
+it('R-4 on iMessage: the floor promises a time in the owner\'s zone, and the retried turn\'s late answer comes back on iMessage', async () => {
+  const w = await world();
+  const { floor, job } = await modelDownOnIMessage(w);
+  const promised = (JSON.parse(job.brief_json) as { promised_by: number }).promised_by;
+  expect(floor).toBe(`I can't answer properly right now. I'll come back to you by ${zoneTime(promised, OWNER_ZONE)}.`);
+  expect(zoneTime(promised, OWNER_ZONE)).not.toBe(zoneTime(promised, 'UTC'));
+  expect(job.status).toBe('queued');
+  proof.hold = null;
+  await retryDueNow(w);
+  const late = 'Done late: your 3pm is now on Friday.';
+  const delivery = await scheduledOnIMessage(w, late);
+  await hostReports(w, delivery);
+  expect(sentTexts(w).slice(-2)).toEqual([floor, late]);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['applied']);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+it('R-4 on iMessage: a retry that finds no model either still tells the owner, on iMessage, once', async () => {
+  const w = await world();
+  const { job } = await modelDownOnIMessage(w);
+  const said = zoneTime(Date.now(), OWNER_ZONE);
+  await retryDueNow(w, Date.now() - 1_000);
+  const notice = `I still can't reach my model, so I couldn't answer your message from ${said}. Could you send it again in a little while?`;
+  const delivery = await scheduledOnIMessage(w, notice);
+  await hostReports(w, delivery);
+  expect(sentTexts(w).filter(text => text === notice)).toHaveLength(1);
+  expect((await retryRows(w)).map(row => [row.id, row.status, row.park_reason])).toEqual([[job.id, 'parked', 'provider_unavailable']]);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
 
 // A Mac result reaches the owner where their proactive work goes: on iMessage for an owner whose only surface it is, and in
 // the app with one iMessage copy for an owner who chose both. The device directory answers for the owner's paired Mac.

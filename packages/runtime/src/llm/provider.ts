@@ -317,6 +317,8 @@ type CircuitState = {
   failures: number;
   opened_at: number | null;
 };
+// A breaker's state as data, so a breaker in another object can carry on from it.
+export type BreakerSnapshot = readonly Readonly<CircuitState & { provider: Provider }>[];
 
 type PostLlmHookResult =
   | { ok: true; response: LLMResponse }
@@ -394,6 +396,16 @@ export class InMemoryCircuitBreaker implements CircuitBreaker {
 
   recordSuccess(provider: Provider): void {
     this.state.delete(provider);
+  }
+
+  snapshot(): BreakerSnapshot {
+    return [...this.state].map(([provider, state]) => ({ provider, ...state }));
+  }
+
+  // Replaces this breaker's state with the snapshot's. An open time is kept as it was, so the cooldown runs from the opening.
+  restore(snapshot: BreakerSnapshot): void {
+    this.state.clear();
+    for (const { provider, failures, opened_at } of snapshot) this.state.set(provider, { failures, opened_at });
   }
 
   recordFailure(provider: Provider): void {
@@ -1480,6 +1492,10 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
 // An outside tool result the health filter denies is replaced by this, so the model knows the page was read and why
 // it cannot see it.
 const HEALTH_WITHHELD_OUTPUT = JSON.stringify({ ok: false, code: 'withheld', error: "This page's text was withheld by the health-data filter. Try another source or a different page." });
+// A tool result holding the owner's own health number never sits beside an outside tool result, where the model could
+// carry the number into an outgoing tool call. It is replaced by this in that request, and the turn goes on with the
+// health zones the system prompt already gives.
+const OWNER_HEALTH_HIDDEN_OUTPUT = JSON.stringify({ ok: false, code: 'withheld', error: "The owner's health readings were read, but their numbers are hidden because outside content was read in this turn. Reading them again in this turn returns the same. Answer now from the shared health zones in your context, if any, and do not state or estimate the numbers." });
 
 async function sanitiseRequest(
   request: LLMRequest,
@@ -1748,6 +1764,23 @@ async function sanitiseRequest(
     const batchTaint: SourceTaint = kept.some((turn) => turnTaint(turn) === 'external')
       ? 'external'
       : sourceTaint.data;
+    // The owner's own health passes its own scan, but not beside outside content: each owner-side turn the scribe denies
+    // health at external taint is withheld whole, call arguments included, and the turn goes on. Every other denial is
+    // left to the batch pass below, which still fails the request closed on a hard one.
+    if (batchTaint === 'external') {
+      for (let i = 0; i < kept.length; i += 1) {
+        const turn = kept[i]!;
+        if (turnTaint(turn) === 'external' || receipts.has(turn)) continue;
+        const outside = await sanitiseValue([turn], 'internal_context', 'external');
+        if (outside.ok || outside.error.reason !== 'scribe:health_value_leak') continue;
+        const hidden = await sanitiseValue([{ call: { ...turn.call, arguments: '{}' }, output: OWNER_HEALTH_HIDDEN_OUTPUT }], 'internal_context', 'external');
+        if (!hidden.ok || !Array.isArray(hidden.payload) || hidden.payload.length !== 1) {
+          return { ok: false, error: hidden.ok ? new HookHaltError('llm_provider', 'withheld turn invalid', 'transient') : hidden.error, scribeDestination: 'internal_context' };
+        }
+        receipts.add(hidden.payload[0] as LLMToolTurn);
+        kept[i] = hidden.payload[0] as LLMToolTurn;
+      }
+    }
     const COMPACT_HEAD = 4_000;
     const omittedTurns = new Set<number>();
     let batch = await sanitiseValue(kept, 'internal_context', batchTaint);

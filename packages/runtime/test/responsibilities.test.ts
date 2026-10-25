@@ -65,25 +65,10 @@ describe('responsibilities', () => {
     });
   });
 
-  it('cancel fences a background child so its late result is not applied', async () => {
-    await withSql(async (sql) => {
-      const book = mk(sql);
-      const { items } = book.track(trackResponsibilityArgsSchema.parse({ title: 'r', intent: 'i', items: [{ title: 'a' }] }), 'user_message');
-      const id = items[0]!.id;
-      let job: { revision: number } | null = null;
-      const delegate = delegateTaskHandler(async () => ({ exit: 'completed', text: '' }), { book, startBackground: async (j) => { job = j; return true; } });
-      expect(await delegate.handle(delegateArgs('long', { item_id: id, background: true }), ctx)).toMatchObject({ ok: true, data: { status: 'started' } });
-      expect(book.running().map((entry) => entry.id)).toEqual([id]);
-      book.cancel(id);
-      expect(book.finishWorker(id, job!.revision, { status: 'done', result: 'late' })).toBe('superseded');
-      expect(book.item(id)!.status).toBe('cancelled');
-    });
-  });
-
-  it('background needs a step and a starter; children cannot hold effect tools', async () => {
+  it('delegation has no background arm (start_task owns work that outlives the reply); children cannot hold effect tools', async () => {
     await withSql(async (sql) => {
       const delegate = delegateTaskHandler(async () => ({ exit: 'completed', text: '' }), { book: mk(sql) });
-      expect(await delegate.handle(delegateArgs('x', { background: true }), ctx)).toMatchObject({ ok: false });
+      expect(delegateTaskArgsSchema.safeParse({ task: 'x', background: true }).success).toBe(false);
       expect(await delegate.handle(delegateArgs('x', { tools: ['send_email'] }), ctx)).toMatchObject({ ok: false });
       expect(CHILD_READ_TOOLS).toContain('read_document');
       expect(CHILD_READ_TOOLS).not.toContain('send_email');

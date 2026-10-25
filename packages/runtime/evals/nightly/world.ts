@@ -19,6 +19,8 @@ import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
 import { claimStore, FORGOTTEN } from '../../src/memory/claims';
+import { taskToolHandlers } from '../../src/tasks/tools';
+import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
 import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
 import { webSearchHandler } from '../../src/tools/live/web-search';
@@ -279,6 +281,26 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
+  // The production task tools over a job book that only records what the owner object would write: whether and how the
+  // model hands work to a background worker is graded; no worker runs in a trial.
+  const tasks: JobRow[] = [];
+  const jobs = {
+    create: (input: Parameters<JobBook['create']>[0]) => {
+      const known = tasks.find((row) => row.idempotency_key === input.idempotencyKey);
+      if (known) return { job: known, created: false };
+      effect('task.start', { profile: input.profile, ...input.brief });
+      const row = {
+        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey, origin: input.origin,
+        brief_json: JSON.stringify(input.brief), taint: input.taint ?? null, status: 'queued',
+      } as JobRow;
+      tasks.push(row);
+      return { job: row, created: true };
+    },
+    get: (id: string) => tasks.find((row) => row.id === id) ?? null,
+    byKey: (key: string) => tasks.find((row) => row.idempotency_key === key) ?? null,
+    taskCounts: (origin: string) => ({ open: tasks.length, fromTurn: tasks.filter((row) => row.origin === origin).length }),
+    cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
+  } as unknown as JobBook;
   // The look-up as an owner reaches it: the server offers it, and the owner accepted the notice before saying yes to it.
   const consent = consentLedger(sql, { agreementsOffered: true, lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent, now);
   if (seed.lookup?.consent) for (const purpose of ['terms', 'privacy_notice', 'owner_lookup'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], now());
@@ -294,6 +316,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
   })();
   const handlers = [
+    ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
     searchEpisodesHandler(episodes), ...search,

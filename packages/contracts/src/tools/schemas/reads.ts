@@ -11,15 +11,13 @@ import { connectIntentSchema } from '../connect-intent';
 // a smuggled extra argument a parse failure, not a silent pass-through (ADR-0029).
 
 // Instants, not strings: iso8601 admits non-UTC offsets, so lexicographic order can lie.
-const isoInstant = iso8601Schema.describe(
-  'ISO 8601 datetime with seconds and an explicit UTC offset, e.g. 2026-09-26T00:00:00+05:30',
-);
 const dateRangeSchema = z
-  .strictObject({ from: isoInstant, to: isoInstant })
+  .strictObject({ from: iso8601Schema, to: iso8601Schema })
   .refine((r) => Date.parse(r.from) <= Date.parse(r.to), {
     error: 'date_range must not end before it starts',
     path: ['to'],
-  });
+  })
+  .describe('from and to with seconds and a UTC offset, e.g. 2026-09-26T00:00:00+05:30');
 
 export const getCrsArgsSchema = z.strictObject({
   range_days: z.int().min(1).max(90).default(1),
@@ -297,8 +295,8 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
-  retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
-  session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
+  retain_session: z.boolean().optional().describe('true to start an interactive journey: returns the page state and a session_handle for browse_act. Omit for a one-shot read.'),
+  session_handle: z.string().min(1).max(80).optional().describe('From a prior observation, to continue that exact session; never a provider ID.'),
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),

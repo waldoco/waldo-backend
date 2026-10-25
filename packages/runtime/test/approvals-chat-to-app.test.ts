@@ -76,6 +76,7 @@ const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDe
   tainted_action: async desk => desk.proposeTaintedAction(await tainted()),
 };
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
+const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
 
 describe('a send proposed in a chat surface is handed to the app', () => {
   for (const surface of ['whatsapp', 'imessage'] as const) {
@@ -161,6 +162,30 @@ describe('no chat reply approves a gated kind', () => {
         expect((await f.desk.decide(id, 'a', 'trace', via)).toast).toBe('Review it in the app');
       }
       expect(f.sent).toEqual([]);
+      expect(f.status(id)).toBe('open');
+    });
+  });
+
+  it('a typed Modify for a send says the change is asked for in the app, not that approving needs an email check', async () => {
+    await owner('chat-to-app-modify', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeSendMessage(message());
+      await f.reply(`e:${id}`);
+      expect(f.cards.at(-1)!.text).toBe(`${CHANGED_IN_APP} Nothing was done. Ask for the change in the Waldo app: waldo://approvals/${id}`);
+      expect(f.status(id)).toBe('open');
+      const noLink = harness(state, 'imessage', { appLink: false });
+      expect((await noLink.desk.decide(id, 'e', 'trace', { surface: 'imessage' })).message).toBe(`${CHANGED_IN_APP} Nothing was done. Ask for the change in the Waldo app.`);
+      expect(f.status(id)).toBe('open');
+    });
+  });
+
+  it('a typed Modify for a kind the app cannot change keeps the approve wording', async () => {
+    await owner('chat-to-app-modify-unchangeable', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await PROPOSE.mcp_call(f.desk);
+      expect((await f.desk.approvals(NOW, { id }))[0]!.actions).not.toContain('edit');
+      await f.reply(`e:${id}`);
+      expect(f.cards.at(-1)!.text).toBe(`${HANDED_TO_APP} Nothing was done. Review and approve it in the Waldo app: waldo://approvals/${id}`);
       expect(f.status(id)).toBe('open');
     });
   });

@@ -9,7 +9,7 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
+import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -56,14 +56,7 @@ const connectorAnswer = <T>(schema: Readonly<{ safeParse(value: unknown): { succ
 async function withGoogle<T extends object>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, account?: string): Promise<ToolResult<T>> {
   try {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
-  if (client === null) {
-    // No serving client while a connected account is failing (invalid_grant recorded, circuit
-    // open) asks for a reconnect, not a fresh connect. Accounts without the feature stay a
-    // connection gap.
-    const accounts = google.state ? await google.state() : undefined;
-    const dead = (feature === 'calendar' || feature === 'mail' || feature === 'tasks') && (accounts?.some((known) => (!account || known.email.toLowerCase() === account.toLowerCase()) && known.error !== null && known[feature]) ?? false);
-    return authFailed(dead ? 'reauth_needed' : 'not_connected', feature);
-  }
+  if (client === null) return authFailed(await missingClientReason(google, feature, account), feature);
     if (account && client.account?.email?.toLowerCase() !== account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
     const data = await work(taskSourceClient(client, ctx));
     return { ok: true, data: { ...data, account: client.account ?? {connection_id:null,email:null} }, source_taint: 'external' };
@@ -80,6 +73,93 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
+
+type KnownAccount = Awaited<ReturnType<NonNullable<GoogleAccess['state']>>>[number];
+const flagged = (feature: GoogleFeature): feature is 'calendar' | 'mail' | 'tasks' => feature === 'calendar' || feature === 'mail' || feature === 'tasks';
+
+// Why no client serves a read. A connected account whose grant is failing (invalid_grant recorded, circuit open) needs a
+// reconnect. A connected, healthy account that still gets no client has a grant without the feature: state() reports
+// calendar, mail and tasks, and for the other features nothing else keeps a healthy grant from serving. Otherwise the
+// account is not connected.
+export const missingClientReason = async (google: GoogleAccess, feature: GoogleFeature, account?: string): Promise<ConnectIntent['reason']> => {
+  const known = (google.state ? await google.state() : []).filter((candidate) => !account || candidate.email.toLowerCase() === account.toLowerCase());
+  if (known.some((candidate) => candidate.error !== null && (!flagged(feature) || candidate[feature]))) return 'reauth_needed';
+  if (known.length && known.every((candidate) => flagged(feature) ? !candidate[feature] : candidate.error === null)) return 'scope_missing';
+  return 'not_connected';
+};
+
+// The accounts a read covers when none is named: every connected one whose grant holds the feature. state() reports only
+// calendar, mail and tasks, so for the other features every account counts and a missing grant is named by its read.
+export const accountsToRead = async (google: GoogleAccess, feature: GoogleFeature, named?: string): Promise<readonly KnownAccount[]> =>
+  !named && google.state ? (await google.state()).filter((known) => !flagged(feature) || known[feature]) : [];
+
+// An id from one account's result (a continuation, a list, a thread, a calendar) means nothing in another account.
+export const nameTheAccount = (accounts: readonly KnownAccount[], what: string): ToolResult<never> => ({
+  ok: false, code: 'rejected', source_taint: 'external',
+  error: `${what} belongs to one Google account, and ${accounts.length} are connected: ${accounts.map((known) => known.email).join(', ')}. Pass account with the one it came from.`,
+});
+
+// One call reads at most this many accounts, all at once; the rest are named as not read. Each account's read costs
+// several provider requests (token, list, per-item reads) against the turn's request budget, and five still leaves every
+// account at least two items of the smallest page (search_contacts, 10).
+export const MAX_ACCOUNTS_PER_READ = 5;
+
+// Each account reads its share of the tool's page bound, so the combined result stays inside what one page may hold.
+export const accountShare = (limit: number, max: number, accounts: number): number => Math.min(limit, Math.max(1, Math.floor(max / Math.min(accounts, MAX_ACCOUNTS_PER_READ))));
+
+const FEATURE_NAMES: Readonly<Record<GoogleFeature, string>> = {
+  calendar: 'Google Calendar', availability: 'Google Calendar', calendar_list: 'Google Calendar', mail: 'Gmail', tasks: 'Google Tasks',
+  contacts: 'Google Contacts', drive: 'Google Drive', docs: 'Google Docs', sheets: 'Google Sheets', slides: 'Google Slides',
+};
+type Failed = Extract<ToolResult<unknown>, { ok: false }>;
+const accountFix = (email: string, feature: GoogleFeature, failed: Failed): string | undefined =>
+  failed.connect?.reason === 'scope_missing' ? `Reconnect ${email} and allow ${FEATURE_NAMES[feature]} when Google asks.`
+    : failed.connect?.reason === 'reauth_needed' ? `Reconnect ${email}: Google no longer accepts its sign-in.`
+      : failed.connect ? `Connect ${email} again.`
+        : failed.code === 'transient' ? 'Try this account again.' : undefined;
+const NOT_READ = 'An account that was not read is unknown, not empty.';
+const ACCOUNT_ERROR_CHARS = 300;
+
+// The first MAX_ACCOUNTS_PER_READ accounts are read at once. Each result keeps its own account receipt, and an account that
+// fails is named with its reason and fix while the others still come back; an account past the cap is named as not read.
+// The per-account summary comes first, so it stays in view when a long result is shown only in part.
+export const readEveryAccount = async <T>(tool: ToolName, feature: GoogleFeature, accounts: readonly KnownAccount[], read: (email: string) => Promise<ToolResult<T>>): Promise<ToolResult<Readonly<{ accounts: readonly unknown[]; note: string; by_account: readonly T[] }>>> => {
+  const reading = accounts.slice(0, MAX_ACCOUNTS_PER_READ);
+  const leftOut = accounts.slice(MAX_ACCOUNTS_PER_READ);
+  const results = await Promise.all(reading.map((known) => read(known.email)));
+  const summary = [...reading.map((known, index) => {
+    const result = results[index]!;
+    if (result.ok) return { email: known.email, read: 'ok' as const };
+    const fix = accountFix(known.email, feature, result);
+    return { email: known.email, read: 'failed' as const, code: result.code, ...(result.connect ? { reason: result.connect.reason } : {}), error: result.error.slice(0, ACCOUNT_ERROR_CHARS), ...(fix ? { fix } : {}) };
+  }), ...leftOut.map((known) => ({ email: known.email, read: 'not_read' as const, fix: `One call reads at most ${MAX_ACCOUNTS_PER_READ} accounts. Pass account ${known.email} to read this one.` }))];
+  const failed = results.filter((result): result is Failed => !result.ok);
+  // Content-free: how many accounts were read and how each failure failed, never an address.
+  console.log(JSON.stringify({ hop: 'google_read_accounts', ok: failed.length === 0 && leftOut.length === 0, code: `${tool}:read_${results.length - failed.length}_of_${accounts.length}${failed.map((result) => `:${result.code}${result.connect ? `_${result.connect.reason}` : ''}`).join('')}`.slice(0, 64) }));
+  if (failed.length === results.length) {
+    const auth = failed.every((result) => result.connect);
+    return {
+      ok: false, code: auth ? 'auth_failed' : failed.some((result) => result.code === 'transient') ? 'transient' : 'rejected', source_taint: 'external',
+      error: [`No connected Google account could be read. ${NOT_READ}`, ...summary.map((entry) => `${entry.email}: ${'error' in entry ? entry.error : ''}${'fix' in entry && entry.fix ? ` Fix: ${entry.fix}` : ''}`)].join('\n'),
+      ...(auth ? { connect: failed[0]!.connect! } : {}),
+    };
+  }
+  return { ok: true, source_taint: 'external', data: {
+    accounts: summary,
+    note: `${leftOut.length ? `The first ${MAX_ACCOUNTS_PER_READ} of ${accounts.length} connected Google accounts were` : 'Every connected Google account was'} read at once: accounts says how each went, by_account holds each account's result under its account.${failed.length || leftOut.length ? ` ${NOT_READ}` : ''} To continue one account, pass that account with its own page token and page_limit.`,
+    by_account: results.flatMap((result) => result.ok ? [result.data] : []),
+  } };
+};
+
+// A read without a named account covers every connected account. bound names an id in the call that belongs to one account;
+// with more than one account connected, that id must come with its account.
+const readAccounts = async <T extends object>(google: GoogleAccess, tool: ToolName, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, args: Readonly<{ account?: string | undefined; limit: number }>, max: number, bound: string | null, work: (client: GoogleClient, limit: number) => Promise<T>): Promise<ToolResult<unknown>> => {
+  const accounts = await accountsToRead(google, feature, args.account);
+  if (accounts.length < 2) return withGoogle(google, feature, ctx, (client) => work(client, args.limit), args.account);
+  if (bound) return nameTheAccount(accounts, bound);
+  const limit = accountShare(args.limit, max, accounts.length);
+  return readEveryAccount(tool, feature, accounts, (email) => withGoogle(google, feature, ctx, (client) => work(client, limit), email));
+};
 
 // Eligibility reads granted scopes, never the recorded error: a failing grant keeps its tools so the call asks for a
 // reconnect. One in-flight state read serves every handler's check in a turn and is dropped when it settles.
@@ -249,13 +329,14 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
-    description: "Read a bounded page from one connected Google account and calendar (primary by default), now through the next 24 hours by default. Use operation list_calendars first to discover the account's other calendars (id, name, access role, time zone; visible ones unless include_hidden), then read one with its exact calendar_id. Inspect coverage and next_page_token. Continue with the exact explicit date_range, calendar_id, limit and include_declined. Each result contains only its current page: an exhausted continuation does not make that result a complete window. Legacy adapters report unknown account and incomplete coverage. This is event enumeration, not availability.",
+    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'calendar'),
-    handle: async ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => loggedCalendarRead(operation, await withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
+    handle: async ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => loggedCalendarRead(operation, await readAccounts(google, 'query_calendar', operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, { account, limit }, 50,
+      page_token ? 'A page_token' : operation !== 'list_calendars' && calendar_id !== 'primary' ? 'A calendar_id other than primary' : null, async (client, limit) => {
       if (operation === 'list_calendars') {
         if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
         const page = connectorAnswer(googleCalendarListPageSchema, await client.calendarListsPage(limit, include_hidden, page_token));
@@ -294,17 +375,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           limitation:page?'One account and calendar. Each result contains only its current page. A local null connection_id means host canonical mapping is unavailable; email is grant metadata, not permission.':'Legacy sampled primary-calendar read; account and pagination are unknown. Empty does not prove absence.',
         },
       };
-    }, account)),
+    })),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
-    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. A page of up to 30 messages with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. A message whose from differs from account.email was sent by someone else, even when it is about the owner's own tasks. Pass the same date_range with page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
+    description: "Read a sampled page from the Gmail Primary inbox category, not the entire inbox. Defaults to a rolling 24-hour window, not today. A page with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. A message whose from differs from its account.email was sent by someone else, even when it is about the owner's own tasks. Pass that account and the same date_range with its page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'mail'),
-    handle: ({ date_range,limit=10,page_token, account }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ date_range,limit=10,page_token, account }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'get_communication', 'mail', ctx, { account, limit }, 30, page_token ? 'A page_token' : null, async (client, limit) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
@@ -334,17 +415,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         upper_bound_applied_after_page: !paged, complete: paged&&page!.next_page_token===null&&page_token===undefined&&fetched.length===messages.length,
         limitation: paged?'Primary inbox category from one adapter account. Provider cursor is opaque and not authenticated to this supplied query/window. Result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
       } };
-    }, account),
+    }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Space-separated Gmail terms must all match; do not paste a full natural-language ask as the query. Start with distinctive sender/repository/topic terms. An empty match is not absence: try a narrower-term query while preserving the same account, date range and result limit, then report the search limit. Never rewrite a quoted or operator query silently. Use get_communication for 'what is new' instead, and read_thread to read one thread in full. Continue search pages with cursor and the same query/date range/account.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match's thread in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'mail'),
-    handle: ({ query, date_range, limit, cursor, account }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ query, date_range, limit, cursor, account }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'search_communication', 'mail', ctx, { account, limit }, 20, cursor ? 'A cursor' : null, async (client, limit) => {
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
       if (date_range?.to) clauses.push(`before:${Math.floor(Date.parse(date_range.to) / 1000)}`);
@@ -357,7 +438,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           next_step: 'Use fewer distinctive terms or a known sender/repository only when this preserves the request. Keep the same account, date range and result limit. Preserve explicit exact phrases, sender restrictions and operators; do not drop them to find unrelated mail. Read returned subjects/snippets to check relevance. Empty still means no matches for this query, not no mail.',
         } } : {}),
       };
-    }, account),
+    }),
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_contacts',
@@ -366,7 +447,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('search_contacts'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'contacts', ctx, async (client) => {
+    handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'search_contacts', 'contacts', ctx, { account, limit }, 10, null, async (client, limit) => {
       if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
       // Only the contract's fields are picked, so a phone, organisation or photo can never ride along. The contract's
       // address check runs before an address is kept or counted: a refused address never takes one of a person's three
@@ -389,17 +470,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         matching: 'name_or_address_prefix', sources: ['contacts', 'other_contacts'],
         limitation: 'Names and addresses only, from one account. Empty means no saved or emailed person starts with this text, not that the person does not exist.',
       } };
-    }, account),
+    }),
   } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces the thread, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's short preview was readable, so say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication lists the thread, with its account, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's preview was readable; say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'mail'),
-    handle: ({ thread_id, limit, cursor, account, body_message_id, body_offset }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ thread_id, limit, cursor, account, body_message_id, body_offset }: ReadThreadArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'read_thread', 'mail', ctx, { account, limit }, 20, 'A thread_id', async (client, limit) => {
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
       const canaries = ctx?.session?.canary_tokens ?? freshCanaries();
       if (body_message_id !== undefined) {
@@ -408,17 +489,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       }
       const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true, bodyChunks: true });
       return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries })};
-    }, account),
+    }),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
-    description: "Read a bounded page of the owner's Google Tasks across all authorized lists by default, preserving each task_list_id. Use operation list_task_lists to discover list names, or task_list_id to select one list. Continue next_page_token with the same account/status/limit/operation/list. Inspect coverage: a continuation contains only its current page. Defaults to open tasks; completed/all reads include hidden completed tasks and assigned tasks. Google Tasks has no in-progress state; that filter returns open tasks with a note. Legacy adapters provide only a sampled default list with incomplete coverage.",
+    description: "Read a bounded page of the owner's Google Tasks across all authorized lists by default, preserving each task_list_id. Use operation list_task_lists to discover list names, or task_list_id with its account to select one list. Continue next_page_token with that account and the same status/limit (coverage.page_limit)/operation/list. Inspect coverage: a continuation contains only its current page. Defaults to open tasks; completed/all reads include hidden completed tasks and assigned tasks. Google Tasks has no in-progress state; that filter returns open tasks with a note. Legacy adapters provide only a sampled default list with incomplete coverage.",
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'tasks'),
-    handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => {
+    handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'get_tasks', 'tasks', ctx, { account, limit }, 100, page_token ? 'A page_token' : task_list_id ? 'A task_list_id' : null, async (client, limit) => {
       if (operation === 'list_task_lists') {
         if (!client.taskListsPage) throw new Error('Task-list discovery adapter unavailable');
         const page = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(limit, page_token));
@@ -444,7 +525,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         coverage: { scope: page ? task_list_id ? 'selected_task_list' : 'all_task_lists' : 'legacy_default_list_sample', task_list_ids: page?.task_list_ids ?? ['@default'], result_scope: 'current_page', page_limit: limit, fetched_count: page?.fetched_count ?? null, returned_count: tasks.length, page_exhausted: page ? page.next_page_token === null : null, complete: Boolean(page && !page_token && page.next_page_token === null), limitation: page ? 'One account. Each result contains its current page only; continue to cover further tasks/lists. Task due dates are provider date semantics, not scheduled times.' : 'Legacy default-list sample with unknown pagination; empty does not prove absence across lists.' },
         ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
       };
-    }, account),
+    }),
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
@@ -549,24 +630,42 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
   {
-    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Read-only, no booking.",
+    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Without account, primary means every connected account's primary calendar. Read-only, no booking.",
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
     // state() does not report the freebusy scope; calendar is its superset here, and a missing scope still returns a connect intent.
     eligible:granted(google,'calendar'),
-    handle:(args:QueryAvailabilityArgs, ctx?: ToolDispatcherContext)=>withGoogle(google,'availability',ctx,async client=>{
+    handle:async(args:QueryAvailabilityArgs, ctx?: ToolDispatcherContext)=>{
       const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
-      const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
-      if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
-      const unavailable=ids.filter(id=>!validFreeBusyCalendar(observed.calendars?.[id])||Boolean(observed.calendars[id]!.errors?.length));
-      const answered=ids.filter(id=>!unavailable.includes(id));
-      if(!answered.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
-      // An unreadable calendar is never free. The answered calendars' free time is kept apart from free_windows,
-      // so the owner can still be offered a tentative slot instead of nothing.
-      if(unavailable.length)return {status:'partial_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,answered_calendar_ids:answered,unavailable_calendar_ids:unavailable,free_windows:[],
-        windows_free_on_answered_calendars:ownerWindows(availabilityWindows(range,answered.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),
-        qualification:`Free only on the calendars that answered. ${unavailable.join(', ')} could not be read and may be busy; offer these as tentative and say which calendar was not checked.`};
-      return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
-    },args.account),
+      const observe=async(client:GoogleClient)=>{
+        const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
+        if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
+        return observed.calendars??{};
+      };
+      const freeTime=(ids:readonly string[],calendars:FreeBusyResult['calendars'])=>{
+        const unavailable=ids.filter(id=>!validFreeBusyCalendar(calendars[id])||Boolean(calendars[id]!.errors?.length));
+        const answered=ids.filter(id=>!unavailable.includes(id));
+        if(!answered.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
+        // An unreadable calendar is never free. The answered calendars' free time is kept apart from free_windows,
+        // so the owner can still be offered a tentative slot instead of nothing.
+        if(unavailable.length)return {status:'partial_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,answered_calendar_ids:answered,unavailable_calendar_ids:unavailable,free_windows:[],
+          windows_free_on_answered_calendars:ownerWindows(availabilityWindows(range,answered.flatMap(id=>calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),
+          qualification:`Free only on the calendars that answered. ${unavailable.join(', ')} could not be read and may be busy; offer these as tentative and say which calendar was not checked.`};
+        return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
+      };
+      const accounts=await accountsToRead(google,'availability',args.account);
+      if(accounts.length<2)return withGoogle(google,'availability',ctx,async client=>freeTime(ids,await observe(client)),args.account);
+      const read=await readEveryAccount('query_availability','availability',accounts,email=>withGoogle(google,'availability',ctx,async client=>({email,calendars:await observe(client)}),email));
+      if(!read.ok)return read;
+      // 'primary' is each account's own calendar, whose id is the account's address. Any other id takes the first account
+      // that answered it cleanly: an account that cannot see a calendar answers it with an error.
+      const clean=(answer:unknown)=>validFreeBusyCalendar(answer)&&!answer.errors?.length;
+      const calendars:Record<string,FreeBusyResult['calendars'][string]>={};
+      for(const {email,calendars:answers} of read.data.by_account)for(const [id,answer] of Object.entries(answers)){
+        const key=id==='primary'?email:id;
+        if(!clean(calendars[key]))calendars[key]=answer;
+      }
+      return {ok:true,source_taint:'external',data:{accounts:read.data.accounts,...freeTime([...new Set(ids.flatMap(id=>id==='primary'?accounts.map(known=>known.email):[id]))],calendars)}};
+    },
   } satisfies ToolHandler<QueryAvailabilityArgs,unknown,ToolDispatcherContext>,
 
 ];
@@ -575,7 +674,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Pass feature to offer one that is not granted yet. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The result says whether a connect button reached the owner or where else they connect; never quote or transcribe a link.',
+  description: 'Read connected Google accounts with their granted features and health status, or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,
