@@ -58,7 +58,7 @@ beforeEach(() => { model.sourceDecision = '{"decision":"retain","sources":[]}'; 
 async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
   enqueue(text: string, id?: number, subject?: string, doName?: string, entities?: readonly { type: string; offset: number; length: number }[]): Promise<{ response: Response; id: number }>;
-  send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
+  send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; approve(proposalId: string): Promise<void>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
   workspace(): ReturnType<typeof workspaceOwnerHost>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
@@ -146,13 +146,23 @@ async function proof(work: (h: {
       throw new Error(`authenticated fixture update did not close within three real alarms: ${JSON.stringify({ row: row()?.state, held: kv.get(ALARM_FAILED_LANE_KEY),
         retryInMs: retryDue === undefined ? undefined : retryDue - Date.now(), streak: kv.get('owner_alarm_failures_v1') })}`);
     };
+    // The owner taps Do it on an approval card: an authenticated callback through the same inbox and alarm.
+    const approve = async (proposalId: string) => {
+      const id = ++sequence;
+      const response = await instance.fetch(new Request('https://local.invalid/enqueue', {
+        method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': '81101', 'x-waldo-do-name': name },
+        body: JSON.stringify({ update_id: id, callback_query: { id: `approve-${id}`, from: { id: 81101, is_bot: false }, data: `a:${proposalId}`, message: { message_id: 1, chat: { id: 81101, type: 'private' } } } }),
+      }));
+      expect(response.status).toBe(200);
+      for (let i = 0; i < 3; i++) await instance.alarm();
+    };
     const manifest = () => {
       const exists = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_manifest'").toArray().length;
       if (!exists) return null;
       const row = state.storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton=1').toArray()[0];
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
-    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new OwnerDO(state, fixtureEnv); }, manifest, mapping,
+    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, approve, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new OwnerDO(state, fixtureEnv); }, manifest, mapping,
       workspace: () => workspaceOwnerHost(fixtureEnv, state.storage, state.id.toString(), name),
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches,
@@ -536,49 +546,59 @@ it.each([undefined, 0])('default MD and TXT writes return authenticated download
  }, numericIdsAfter);
 });
 
-it('external list then initial creation preserves exact private contact bytes through revision, guarded read and authenticated download', async () => {
+// Reading the workspace reads text that can quote someone else, so an edit made after a read goes to the owner's card,
+// and the owner's tap writes exactly the frozen edit. The bytes survive the card as they survive a direct write.
+it('a create in the owner\'s own turn and an edit approved on its card preserve exact private contact bytes through revision, guarded read and authenticated download', async () => {
   await proof(async h => {
     await h.state.storage.put('origin', 'https://local.invalid');
     const initial = 'To: demo@example.test\nPhone: +1 415 555 0100\nAddress: 123 Main Street\nDemo at 13:00\nThanks.';
     const revised = initial.replace('13:00', '14:00').replace('Thanks.', 'Thanks so much. Looking forward to seeing you!');
     const digest = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const edit = { path: 'docs/contact.md', edits: [{ before: '13:00', after: '14:00' }, { before: 'Thanks.', after: 'Thanks so much. Looking forward to seeing you!' }], mime: 'text/markdown', expected_revision: 1 };
     model.reply = request => {
       const done = outputs(request);
-      if (!done.beforeCreate) return [call('workspace_list', {}, 'beforeCreate')];
       if (!done.createContact) return [call('workspace_write', { path: 'docs/contact.md', text: initial, mime: 'text/markdown', expected_revision: 0 }, 'createContact')];
       if (!done.initialRead) return [call('workspace_read', { file_id: done.createContact.data.file_id, revision: 1 }, 'initialRead')];
-      if (!done.reviseContact) return [call('workspace_write', { path: 'docs/contact.md', edits: [{ before: '13:00', after: '14:00' }, { before: 'Thanks.', after: 'Thanks so much. Looking forward to seeing you!' }], mime: 'text/markdown', expected_revision: 1 }, 'reviseContact')];
-      if (!done.revisedRead) return [call('workspace_read', { file_id: done.createContact.data.file_id, revision: 2 }, 'revisedRead')];
-      return 'Private contact fixture revised.';
+      if (!done.reviseContact) return [call('workspace_write', edit, 'reviseContact')];
+      if (!done.proposeRevision) return [call('propose_action', { tool: 'workspace_write', args: edit, reasoning: 'Change the time and tone as asked.' }, 'proposeRevision')];
+      return 'Saved. The edit is on a card for you to approve.';
     };
     await h.send(`Save these exact private document fields, then change the time and tone: ${initial}`);
     const result = allOutputs();
-    expect(result.beforeCreate).toMatchObject({ ok: true, source_taint: 'external', data: { count: 0 } });
-    expect(h.dispatches.mock.calls.find(([c]) => c.id === 'createContact')?.[1].toolArgSourceTaint).toBe('external');
     expect(result.createContact).toMatchObject({ ok: true, data: { revision: 1, byte_size: new TextEncoder().encode(initial).length, sha256: await digest(initial) } });
     expect(h.bytes.get(h.puts[0]!)).toEqual(new TextEncoder().encode(initial));
-    expect(result.reviseContact).toMatchObject({ ok: true, data: { file_id: result.createContact!.data.file_id, revision: 2, byte_size: new TextEncoder().encode(revised).length, sha256: await digest(revised) } });
-    expect(h.bytes.get(h.puts[1]!)).toEqual(new TextEncoder().encode(revised));
+    expect(result.initialRead).toMatchObject({ ok: true, source_taint: 'external' });
+    // Owner direction 2026-10-04: model-bound reads keep the owner's own contact details readable.
+    expect(result.initialRead!.data.text).toContain('demo@example.test');
+    expect(result.initialRead!.data.text).not.toContain('[REDACTED_EMAIL]');
+    expect(result.reviseContact).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+    expect(result.proposeRevision).toMatchObject({ ok: true, data: { executed: false } });
+    expect(h.puts).toHaveLength(1);
+
+    const [card] = h.state.storage.sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'tainted_action' AND status = 'open'").toArray();
+    await h.approve(card!.id);
+    expect(h.state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card!.id).one().status).toBe('done');
     expect(h.puts).toHaveLength(2);
-    for (const name of ['initialRead', 'revisedRead']) {
-      expect(result[name]).toMatchObject({ ok: true, source_taint: 'external' });
-      // Owner direction 2026-10-04: model-bound reads keep the owner's own contact details readable.
-      expect(result[name]!.data.text).toContain('demo@example.test');
-      expect(result[name]!.data.text).not.toContain('[REDACTED_EMAIL]');
-    }
-    expect(result.revisedRead!.data.text).toContain('Demo at 14:00');
-    expect(h.dispatches.mock.calls.find(([c]) => c.id === 'reviseContact')?.[1].toolArgSourceTaint).toBe('external');
+    expect(h.bytes.get(h.puts[1]!)).toEqual(new TextEncoder().encode(revised));
+
+    model.reply = request => outputs(request).revisedRead ? 'Revised.' : [call('workspace_read', { file_id: result.createContact!.data.file_id, revision: 2 }, 'revisedRead')];
+    await h.send('Show me the revised contact note.');
+    const revisedRead = allOutputs().revisedRead;
+    expect(revisedRead).toMatchObject({ ok: true, source_taint: 'external', data: { text: expect.stringContaining('Demo at 14:00') } });
+    expect(revisedRead!.data.text).toContain('demo@example.test');
+
     const access = consoleAccess(h.state.storage);
     const session = await access.grant();
     const headers = { cookie: `${CONSOLE_COOKIE}=${session}` };
     h.restart();
-    for (const [name, text] of [['createContact', initial], ['reviseContact', revised]] as const) {
-      const download = await h.request(new Request(result[name]!.data.delivery.url, { headers }));
+    const created = result.createContact!.data.delivery.url as string;
+    for (const [url, text] of [[created, initial], [created.replace('revision=1', 'revision=2'), revised]] as const) {
+      const download = await h.request(new Request(url, { headers }));
       expect(download.status).toBe(200);
       const bytes = new Uint8Array(await download.arrayBuffer());
       expect(bytes).toEqual(new TextEncoder().encode(text));
-      expect([...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('')).toBe(result[name]!.data.sha256);
-      expect((await h.request(new Request(result[name]!.data.delivery.url))).status).toBe(401);
+      expect([...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('')).toBe(await digest(text));
+      expect((await h.request(new Request(url))).status).toBe(401);
     }
     expect(h.manifest()).toMatchObject({ binding: { ownerId: OWNER, doName: h.name }, files: [{ file_id: result.createContact!.data.file_id, revision: 2 }], operations: [{ status: 'committed' }, { status: 'committed' }] });
   });

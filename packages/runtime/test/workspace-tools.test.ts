@@ -2,7 +2,7 @@ import { buildSessionState, PRIVILEGED_ACTION_TOOLS, TOOL_PERMISSIONS } from '@w
 import { workspaceStore, type WorkspaceState } from '@waldo/workspace';
 import { describe, expect, it } from 'vitest';
 import { sanitise } from '../src/scribe/sanitiser';
-import { dispatchTool } from '../src/tools/dispatcher';
+import { argumentDigest, dispatchTool } from '../src/tools/dispatcher';
 import { workspaceToolHandlers } from '../src/tools/live/workspace';
 
 // Ids carry hex letters: the argument sanitiser redacts all-digit runs shaped like card numbers.
@@ -17,6 +17,9 @@ const context = (trigger: 'user_message' | 'handoff_explore' = 'user_message', w
   session: buildSessionState({ trigger, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }),
   hasApproval: () => false, sourceTaint: null as 'external' | null, toolArgSourceTaint: null as 'external' | null, sanitise,
 });
+// A turn that has read outside text writes only through the owner's card: the approved replay carries the token for exactly
+// these arguments, and the write's argument checks run on that replay as on any call.
+const approved = async (args: unknown) => ({ ...context(), toolArgSourceTaint: 'external' as const, approvedTaintedAction: { tool: 'workspace_write' as const, args_digest: (await argumentDigest(args))! } });
 const setup = async () => { const w = await fresh(); const handlers = workspaceToolHandlers(async () => w.store); return { ...w, call: (name: string, args: unknown, callId: string, ctx = context()) => dispatchTool({ id: callId, name: name as never, args }, ctx as never, { handlers }) }; };
 
 describe('workspace tools through the real dispatcher', () => {
@@ -97,8 +100,9 @@ describe('workspace tools through the real dispatcher', () => {
 
 it('workspace revision arguments are checked without silently rewriting owner-supplied exact edit fields',async()=>{
  const {call,state,store}=await setup();await call('workspace_write',{path:'recipient.md',text:'To: demo@example.test\nDemo at noon',mime:'text/markdown',expected_revision:0},'owner-create');
- const tainted={...context(),toolArgSourceTaint:'external' as const};
- const revised=await call('workspace_write',{path:'recipient.md',edits:[{before:'demo@example.test',after:'changed@example.test'}],mime:'text/markdown',expected_revision:1},'owner-revise',tainted);
+ const edit={path:'recipient.md',edits:[{before:'demo@example.test',after:'changed@example.test'}],mime:'text/markdown',expected_revision:1};
+ expect(await call('workspace_write',edit,'tainted-revise',{...context(),toolArgSourceTaint:'external' as const})).toMatchObject({ok:false,error_code:'taint_needs_approval'});
+ const revised=await call('workspace_write',edit,'owner-revise',await approved(edit));
  expect(revised).toMatchObject({ok:true,data:{revision:2}});
  const file=state().files[0]!;expect((await store.read(file.file_id,2,0,8000)).text).toBe('To: changed@example.test\nDemo at noon');
  const read=await call('workspace_read',{file_id:file.file_id,revision:2},'owner-read');
@@ -110,8 +114,7 @@ it('workspace revision arguments are checked without silently rewriting owner-su
 it('exact edits retain mandatory newly introduced secret/health/card checks and preserve untouched private fields',async()=>{
  const {call,state,store}=await setup();
  const saved=await store.write({path:'private.md',bytes:new TextEncoder().encode('To: demo@example.test\nOwner note: blood pressure 160/100\nHeading'),mime:'text/markdown',expected_revision:0,operation_id:id(501),provenance:'owner_upload'});
- const ctx={...context(),toolArgSourceTaint:'external' as const};
- const write=(after:string,callId:string)=>call('workspace_write',{path:'private.md',edits:[{before:'Heading',after}],mime:'text/markdown',expected_revision:1},callId,ctx);
+ const write=async(after:string,callId:string)=>{const args={path:'private.md',edits:[{before:'Heading',after}],mime:'text/markdown',expected_revision:1};return call('workspace_write',args,callId,await approved(args));};
  for(const [value,name] of [['api_key: sk-abcdefghijklmnopqrstuvwxyz12345','secret'],['blood pressure 170/110','health'],['Card: 4242424242424242','card']] as const)expect(await write(value,name)).toMatchObject({ok:false});
  expect(state().files[0]!.revision).toBe(1);
  expect(await write('Updated heading','ordinary-heading')).toMatchObject({ok:true,data:{revision:2}});
@@ -121,13 +124,15 @@ it('exact edits retain mandatory newly introduced secret/health/card checks and 
 it.each([null, 'external'] as const)('full private writes preserve contact bytes at %s taint but model reads remain guarded', async taint => {
   const { call, state, store } = await setup();
   const ctx = { ...context(), toolArgSourceTaint: taint };
+  const as = (args: unknown) => taint === 'external' ? approved(args) : Promise.resolve(ctx);
   const text = 'To: demo@example.test\nPhone: +1 415 555 0100\nAddress: 123 Main Street';
   const args = { path: 'contact.md', text, mime: 'text/markdown', expected_revision: 0 };
-  expect(await call('workspace_write', args, 'create-contact', ctx)).toMatchObject({ ok: true, data: { revision: 1 } });
+  expect(await call('workspace_write', args, 'create-contact', await as(args))).toMatchObject({ ok: true, data: { revision: 1 } });
   const file = state().files[0]!;
   expect((await store.read(file.file_id, 1, 0, 8000)).text).toBe(text);
   const replacement = text.replace('demo@example.test', 'changed@example.test');
-  expect(await call('workspace_write', { ...args, text: replacement, expected_revision: 1 }, 'replace-contact', ctx)).toMatchObject({ ok: true, data: { file_id: file.file_id, revision: 2 } });
+  const replace = { ...args, text: replacement, expected_revision: 1 };
+  expect(await call('workspace_write', replace, 'replace-contact', await as(replace))).toMatchObject({ ok: true, data: { file_id: file.file_id, revision: 2 } });
   expect((await store.read(file.file_id, 2, 0, 8000)).text).toBe(replacement);
   const read = await call('workspace_read', { file_id: file.file_id, revision: 2 }, 'guarded-read', ctx);
   expect(read).toMatchObject({ ok: true, source_taint: 'external' });
@@ -139,16 +144,22 @@ it.each([null, 'external'] as const)('full private writes preserve contact bytes
 it.each([null, 'external'] as const)('full private writes at %s taint refuse mandatory rewrites and hard denials before storing', async taint => {
   const { call, state } = await setup();
   const ctx = { ...context(), toolArgSourceTaint: taint };
+  const as = (args: unknown) => taint === 'external' ? approved(args) : Promise.resolve(ctx);
+  // Under taint the refusal must come from the argument checks on the approved replay, not from the gate.
+  const refused = async (text: string, name: string) => {
+    const args = { path: 'guard.md', text, mime: 'text/markdown', expected_revision: 0 };
+    const result = await call('workspace_write', args, name, await as(args));
+    expect(result, name).toMatchObject({ ok: false });
+    expect(result, name).not.toMatchObject({ error_code: 'taint_needs_approval' });
+  };
   for (const [text, name] of [
     ['api_key: sk-abcdefghijklmnopqrstuvwxyz12345', 'secret'],
     ['Card: 4242424242424242', 'card'],
     ['1111111111111111', 'canary'],
-  ] as const) {
-    expect(await call('workspace_write', { path: 'guard.md', text, mime: 'text/markdown', expected_revision: 0 }, name, ctx)).toMatchObject({ ok: false });
-  }
+  ] as const) await refused(text, name);
   // Existing health policy rejects external payload values, while owner-authored values
   // at null taint retain their existing admission policy.
-  if (taint === 'external') expect(await call('workspace_write', { path: 'guard.md', text: 'blood pressure 170/110', mime: 'text/markdown', expected_revision: 0 }, 'health', ctx)).toMatchObject({ ok: false });
+  if (taint === 'external') await refused('blood pressure 170/110', 'health');
   expect(state().files).toEqual([]);
   expect(state().bodies).toEqual([]);
   expect(state().operations).toEqual([]);
