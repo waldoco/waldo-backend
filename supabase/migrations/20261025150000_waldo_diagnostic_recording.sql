@@ -1,12 +1,12 @@
 -- Beta diagnostic recording: whether staging may keep this owner's chat text in the diagnostic tool (Langfuse).
--- One row per agreement, carrying the wording version the owner saw and where they agreed (signup or the console);
+-- One row per agreement, carrying the wording version the owner saw and where they agreed (signup, the console or the app);
 -- withdrawn_at closes it. At most one agreement is live per owner, so the history of agreeing and withdrawing survives.
 -- No row means not agreed. Only the two signed router functions below read or write this table.
 create table waldo.diagnostic_recording_agreements (
   id bigint generated always as identity primary key,
   owner_id uuid not null references waldo.owners (id) on delete cascade,
   wording_version text not null check (wording_version ~ '^[a-z0-9][a-z0-9.-]{0,39}$'),
-  source text not null check (source in ('signup', 'console')),
+  source text not null check (source in ('signup', 'console', 'app')),
   agreed_at timestamptz not null default now(),
   withdrawn_at timestamptz,
   check (withdrawn_at is null or withdrawn_at >= agreed_at)
@@ -27,7 +27,7 @@ begin
     or waldo.router_signed('diagnostic.set.' || p_do_name || '.' || case when p_agreed then 'on' else 'off' end || '.' || p_version || '.' || p_source, p_at, p_sig) is distinct from true then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
-  if length(p_do_name) not between 1 and 240 or p_version !~ '^[a-z0-9][a-z0-9.-]{0,39}$' or p_source not in ('signup', 'console') then return false; end if;
+  if length(p_do_name) not between 1 and 240 or p_version !~ '^[a-z0-9][a-z0-9.-]{0,39}$' or p_source not in ('signup', 'console', 'app') then return false; end if;
   select id, state into v_owner, v_state from waldo.owners where do_name = p_do_name for update;
   if v_owner is null then return false; end if;
   select wording_version into v_live from waldo.diagnostic_recording_agreements where owner_id = v_owner and withdrawn_at is null;

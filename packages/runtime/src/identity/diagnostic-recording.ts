@@ -13,7 +13,7 @@ export const DIAGNOSTIC_RECORDING_WORDING = Object.freeze({
 });
 
 export type DiagnosticAgreement = Readonly<{ agreed: boolean; version: string | null }>;
-export type DiagnosticRecordingSource = 'signup' | 'console';
+export type DiagnosticRecordingSource = 'signup' | 'console' | 'app';
 export type DiagnosticRecordingDirectory = Readonly<{
   /** The owner's live agreement; null when the directory has no active owner for this DO. Throws when unreachable. */
   read(doName: string): Promise<DiagnosticAgreement | null>;

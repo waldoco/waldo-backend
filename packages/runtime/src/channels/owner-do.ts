@@ -1,5 +1,5 @@
 import { appControlsRequest } from './app-controls';
-import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost, type AppDiagnosticRecording } from './app-onboarding';
 import { chatChannelLinks } from './chat-channel-links';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
@@ -108,7 +108,7 @@ import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { gateTraceEntry, resolveCaptureText, resolveOwnerCapture } from '../observability/trace-privacy';
-import { DIAGNOSTIC_RECORDING_WORDING, diagnosticRecordingDirectory, readDiagnosticAgreement } from '../identity/diagnostic-recording';
+import { DIAGNOSTIC_RECORDING_WORDING, diagnosticRecordingDirectory, readDiagnosticAgreement, type DiagnosticRecordingSource } from '../identity/diagnostic-recording';
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
 import { productionDeps } from '../seams/deps';
@@ -1179,21 +1179,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The directory's answer, shown as it is: an unreadable record is unknown, never off. recorded_here says whether this
   // environment records text at all, whatever the owner chose.
   private async diagnosticRecordingControl() {
-    const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
-    if (!directory || !doName) return undefined;
-    let state: 'on' | 'off' | 'unknown' = 'unknown';
-    try { const agreement = await directory.read(doName); state = agreement?.agreed === true && agreement.version === DIAGNOSTIC_RECORDING_WORDING.version ? 'on' : 'off'; } catch { /* unknown */ }
-    return { state, recorded_here: resolveCaptureText(this.env), ...DIAGNOSTIC_RECORDING_WORDING };
+    if (!diagnosticRecordingDirectory(this.env) || !this.ctx.storage.kv.get<string>('do_name')) return undefined;
+    return { state: await this.diagnosticRecordingState(), recorded_here: resolveCaptureText(this.env), ...DIAGNOSTIC_RECORDING_WORDING };
   }
-  // Recording stops in this object at once; the next turn reads whatever the directory now holds.
-  private async setDiagnosticRecording(value: string) {
-    if (value !== 'on' && value !== 'off') return diagnosticRecordingReceipt(value, 'refused');
+  private async diagnosticRecordingState(): Promise<'on' | 'off' | 'unknown'> {
     const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
-    if (!directory || !doName) return diagnosticRecordingReceipt(value, 'unconfigured');
+    if (!directory || !doName) return 'unknown';
+    try { const agreement = await directory.read(doName); return agreement?.agreed === true && agreement.version === DIAGNOSTIC_RECORDING_WORDING.version ? 'on' : 'off'; }
+    catch { return 'unknown'; }
+  }
+  // The owner's own change, from the console or the app. Recording stops in this object before the directory is asked, so
+  // neither a failed change nor a read already under way leaves it on; the next turn reads whatever the directory now holds.
+  private async changeDiagnosticRecording(agreed: boolean, source: DiagnosticRecordingSource): Promise<'done' | 'refused' | 'unconfirmed' | 'unconfigured'> {
+    const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    if (!directory || !doName) return 'unconfigured';
     this.diagnosticGeneration++;
     this.diagnosticAgreed = false;
-    try { return diagnosticRecordingReceipt(value, await directory.set(doName, value === 'on', 'console') ? 'done' : 'refused', resolveCaptureText(this.env)); }
-    catch { return diagnosticRecordingReceipt(value, 'unconfirmed'); }
+    try { return await directory.set(doName, agreed, source) ? 'done' : 'refused'; } catch { return 'unconfirmed'; }
+  }
+  private async setDiagnosticRecording(value: string) {
+    if (value !== 'on' && value !== 'off') return diagnosticRecordingReceipt(value, 'refused');
+    return diagnosticRecordingReceipt(value, await this.changeDiagnosticRecording(value === 'on', 'console'), resolveCaptureText(this.env));
+  }
+  private appDiagnosticRecording(): AppDiagnosticRecording | null {
+    return diagnosticRecordingDirectory(this.env) ? { recordedHere: resolveCaptureText(this.env), state: () => this.diagnosticRecordingState(), change: agreed => this.changeDiagnosticRecording(agreed, 'app') } : null;
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1339,6 +1348,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
+            diagnostics:this.appDiagnosticRecording(),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.created_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{

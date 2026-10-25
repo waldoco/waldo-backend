@@ -1,10 +1,13 @@
 import {
+  APP_CONSENTS_DIAGNOSTIC_REVISION_V1, appDiagnosticRecordingChangeV1Schema, appDiagnosticRecordingGrantV1Schema, appDiagnosticRecordingWithdrawV1Schema,
   APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
   appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
 } from '../../../contracts/src/app/onboarding';
-import type { AppConsentStateV1 } from '../../../contracts/src/app/onboarding';
+import type { AppConsentStateV1, AppDiagnosticRecordingStateV1 } from '../../../contracts/src/app/onboarding';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { DIAGNOSTIC_RECORDING_WORDING } from '../identity/diagnostic-recording';
 import type { ChatChannels } from './chat-channel-links';
 import { z } from 'zod';
 import { claimStore } from '../memory/claims';
@@ -19,9 +22,20 @@ import { proactiveSurface, setProactiveSurface } from './proactive-surface';
 const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link', ANSWERS_PATH = '/app/v1/onboarding/answers';
 export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', ANSWERS_PATH, CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
 
+// Beta diagnostic recording, as the owner object holds it: the owner directory's answer now (unknown when it cannot say), and
+// a change written through the directory's signed function, which stops capture in the owner object before it is asked.
+// recordedHere is whether this environment records chat text at all.
+export type AppDiagnosticRecording = Readonly<{
+  recordedHere: boolean;
+  state(): Promise<AppDiagnosticRecordingStateV1['state']>;
+  change(agreed: boolean): Promise<'done' | 'refused' | 'unconfirmed' | 'unconfigured'>;
+}>;
+
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
   chat: ChatChannels;
+  // null where no owner directory backs this deploy, so nothing can hold the agreement.
+  diagnostics: AppDiagnosticRecording | null;
   // Whether this app session signed in within the last two hours, as a link code needs.
   signedInRecently(): Promise<boolean>;
   // The owner's proactive-surface setting (the console's own).
@@ -54,6 +68,10 @@ type Problem = keyof typeof STATUS;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const problem = (error: Problem) => reply({ error }, STATUS[error]);
 
+const diagnosticPurpose = (raw: unknown) => !!raw && typeof raw === 'object' && (raw as { purpose?: unknown }).purpose === 'diagnostic_recording';
+const diagnosticRecording = (diagnostics: AppDiagnosticRecording, state: AppDiagnosticRecordingStateV1['state']): AppDiagnosticRecordingStateV1 =>
+  ({ state, recorded_here: diagnostics.recordedHere, ...DIAGNOSTIC_RECORDING_WORDING });
+
 const readBody = async (request: Request): Promise<unknown> => {
   const text = await request.text();
   if (new TextEncoder().encode(text).byteLength > APP_ONBOARDING_MAX_REQUEST_BYTES_V1) return undefined;
@@ -74,7 +92,11 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
         ({ provider, state: await host.chat.offered(provider).then(offered => offered ? host.chat.linked(provider) : 'not_offered' as const, () => 'unknown' as const) })));
       return answer(appOnboardingChannelsV1Schema.parse({ surface: host.proactiveSurface(), channels } satisfies AppOnboardingChannelsV1));
     }
-    if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(host.consent.list()));
+    if (path === '/app/v1/consents' && !url.search) {
+      const diagnostics = host.diagnostics && appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'consents') >= APP_CONSENTS_DIAGNOSTIC_REVISION_V1
+        ? { diagnostic_recording: diagnosticRecording(host.diagnostics, await host.diagnostics.state().catch(() => 'unknown' as const)) } : {};
+      return answer(appConsentListV1Schema.parse({ ...host.consent.list(), ...diagnostics }));
+    }
     if (path === '/app/v1/findings') {
       if ([...url.searchParams.keys()].some(key => url.searchParams.getAll(key).length !== 1)) return problem('invalid_request');
       const query = appFindingListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams));
@@ -100,8 +122,8 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   }
   const parsed = path === '/app/v1/onboarding/actions' ? appOnboardingActionV1Schema.safeParse(raw)
     : path === ANSWERS_PATH ? appSetupAnswersRequestV1Schema.safeParse(raw)
-    : path === '/app/v1/consents' ? appConsentGrantV1Schema.safeParse(raw)
-    : path === '/app/v1/consents/withdraw' ? appConsentWithdrawV1Schema.safeParse(raw)
+    : path === '/app/v1/consents' ? (diagnosticPurpose(raw) ? appDiagnosticRecordingGrantV1Schema : appConsentGrantV1Schema).safeParse(raw)
+    : path === '/app/v1/consents/withdraw' ? (diagnosticPurpose(raw) ? appDiagnosticRecordingWithdrawV1Schema : appConsentWithdrawV1Schema).safeParse(raw)
     : appFindingActionV1Schema.safeParse(raw);
   if (!parsed.success) return problem('invalid_request');
   const body = parsed.data, digest = await bodyDigest(body);
@@ -122,6 +144,14 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const answers = appSetupAnswersRequestV1Schema.parse(body);
     const held = host.transaction(() => host.firstRun.saveAnswers(answers));
     return record(appSetupAnswersResultV1Schema.parse({ request_id: answers.request_id, held, replayed: false }));
+  }
+  if ((path === '/app/v1/consents' || path === '/app/v1/consents/withdraw') && 'purpose' in body && body.purpose === 'diagnostic_recording') {
+    if (!host.diagnostics) return problem('not_offered');
+    const agreed = path === '/app/v1/consents';
+    if (agreed && appDiagnosticRecordingGrantV1Schema.parse(body).version !== DIAGNOSTIC_RECORDING_WORDING.version) return problem('stale_version');
+    // Only a change the directory recorded is kept for replay; anything else is tried again under the same request_id.
+    if (await host.diagnostics.change(agreed) !== 'done') return problem('unavailable');
+    return record(appDiagnosticRecordingChangeV1Schema.parse({ diagnostic_recording: diagnosticRecording(host.diagnostics, agreed ? 'on' : 'off'), replayed: false }));
   }
   if (path === '/app/v1/consents') {
     const grant = appConsentGrantV1Schema.parse(body);
@@ -161,6 +191,7 @@ export type OwnerOnboardingDeps = Readonly<{
   assertCurrent(): Promise<void>;
   // The chat channels the owner can link.
   chat: ChatChannels;
+  diagnostics: AppDiagnosticRecording | null;
   signedInRecently(): Promise<boolean>;
   // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
   // discloses it is published.
@@ -233,7 +264,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     withdrawLookup,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
+    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, diagnostics: deps.diagnostics, signedInRecently: deps.signedInRecently, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
   };
 };

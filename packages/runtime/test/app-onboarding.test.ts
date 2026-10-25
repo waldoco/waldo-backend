@@ -599,7 +599,7 @@ describe('diagnostic recording on the app consent routes', () => {
   it('refuses a yes to older wording and records nothing', async () => {
     const { world, diagnostics } = directory();
     await owner(async ({ send }) => {
-      const stale = await send('/app/v1/consents', grant('diagnostic-grant-3', 'beta-2026-10-22'));
+      const stale = await send('/app/v1/consents', grant('diagnostic-grant-3', 'beta-2026-01-01'));
       expect([stale.status, await stale.json()]).toEqual([409, { error: 'stale_version' }]);
       expect(world.changes).toEqual([]);
     }, { diagnostics });
