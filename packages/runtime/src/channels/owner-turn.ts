@@ -35,12 +35,13 @@ import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDea
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
-import { brainTools, toolsWhere } from '../tools/records';
+import { brainTools, toolActivity, toolsWhere } from '../tools/records';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { sha256Hex } from '../context-composer/canonical';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
@@ -525,6 +526,8 @@ export const createOwnerResponder = (
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
+        // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
+        onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
         step: async (tools, turns) => {
           const added = await consumeRound();
@@ -1007,19 +1010,26 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     },
-    async promote(trace) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace));
+    async promote(trace, gate) {
+      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
       const visible = promptMemory()!;
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(visible), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const input = promotionInput(visible);
+      if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
+      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
-      return applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
+      const detail = applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
         code: receipt.reason ?? receipt.outcome,
         detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
       }));
+      // The memory this promotion left. The nightly pass runs on the owner's serial chain with every memory writer, so nothing
+      // else writes between the apply and this read.
+      const left = promotionInput(promptMemory()!);
+      if (gate) gate.promoted(await sha256Hex(left));
+      return detail;
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))

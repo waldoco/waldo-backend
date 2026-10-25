@@ -273,6 +273,21 @@ describe('the task brain host', () => {
     });
   });
 
+  it('a machine job\'s checkpoint carrying a held topic is cancelled the same way: machine rows take the same check', async () => {
+    await withHost(async ({ host, book, topics, sql }) => {
+      const machine = { job: 'heartbeat' as const, input_digest: 'd1', scope: 'owner', refs: ['loop-1'] };
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'machine:heartbeat:tick:1', origin: 'machine:heartbeat', surface: 'app',
+        brief: { ...brief, title: 'Loop check-back', machine }, dueAt: T0, deadlineAt: T0 + 3_600_000, taint: 'external' });
+      const t = book.startAttempt(job.id)!;
+      await host.claim(t);
+      topics.push('Project Falcon');
+      const turns = [{ call: call('search_communication'), output: '{"ok":true,"data":"Mail about project falcon, page 1"}' }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+      expect(book.get(job.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', checkpoint_json: null, lease_token: null });
+      expect(JSON.stringify(sql.exec('SELECT * FROM task_jobs').toArray())).not.toMatch(/project falcon/i);
+    });
+  });
+
   it('a checkpoint clear of the held topics is written as usual', async () => {
     await withHost(async ({ host, ticket, book, topics }) => {
       const t = ticket();

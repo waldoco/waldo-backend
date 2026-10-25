@@ -91,12 +91,12 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
 };
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
 
-// What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, meeting prep, a
-// pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
+// What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, an update card,
+// meeting prep, a pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
 // since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote. So does a
 // message WhatsApp took any part of: it is on the owner's phone in part, and the app would get only the rest.
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
-  !!(record.reminder || record.heartbeat || record.mailFollowup || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
+  !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
 // A day card that reaches the app through this route links the app message it became, as a card sent straight to the app does.

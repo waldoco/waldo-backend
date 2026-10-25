@@ -1,5 +1,6 @@
 import type { TaskProfile, ToolName } from '@waldo/contracts';
 import { TOOL_REPLAY_CLASS } from '../hooks/tool-replay-class';
+import { isMachine, type JobRow } from './jobs';
 
 // What each worker profile may call. The brain enforces this on every call a worker sends; the worker never holds a
 // handler or a credential. No profile carries memory, send, approve, delegation or start_task (a worker cannot act for
@@ -10,6 +11,11 @@ const READER: readonly ToolName[] = [
   'get_context', 'query_calendar', 'query_availability', 'get_communication', 'search_communication', 'read_thread', 'search_contacts', 'get_tasks',
   'read_drive', 'read_mcp_tool', 'web_search', 'browse_page', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
 ];
+// The reads whose arguments leave the account: a search query, an MCP call. Nothing cards a read, so a turn that starts on
+// text nobody asked Waldo to read, with no owner in the loop, could be steered into carrying private data out in them.
+// A machine job's worker and every unattended outside-text turn (channels/check-back) go without; the owner's own turns keep them.
+export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'read_mcp_tool'];
+export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
 // The browser host serves one active run scope per owner, so these run in the brain's serial lane under the job's scope.
 export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'browse_act']);
 
@@ -36,3 +42,7 @@ export const unreplayable = (name: string): boolean => {
   const row = TOOL_REPLAY_CLASS[name as ToolName];
   return row === undefined || (row.replay !== 'safe_read' && row.replay !== 'provider_idempotent');
 };
+
+// The tools a job's worker may call: its profile's, or the machine reader's for a job the brain started itself.
+export const jobTools = (row: Pick<JobRow, 'profile' | 'origin'>): readonly ToolName[] =>
+  isMachine(row) ? MACHINE_READER : row.profile === null ? [] : TASK_PROFILE_SPECS[row.profile].tools;

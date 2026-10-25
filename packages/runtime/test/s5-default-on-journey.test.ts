@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', event: false, sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -65,6 +66,10 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
         expect(fixture.sent.filter(text => text.includes('Design review'))).toEqual([]);
         return;
       }
+      // The held mail becomes a sweep job: its worker reports (stood in for here) and the jobs lane's update-card turn opens
+      // the source loop.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
       expect(loops.list(), 'default-on: a deadline mail must open a follow-up loop with MAIL_SOURCE_FOLLOWUPS unset').toHaveLength(1);
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');
