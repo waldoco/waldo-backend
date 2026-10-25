@@ -420,7 +420,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     let latest = authority;
     const grant: IMessageAdmissionGrant = { binding, revision: authority.revision, doName: authority.doName };
     try {
-      const handoff = await admitIMessageOwnerTurn(event, {
+      // No bytes cross here: a host's files go to the owner as references beside the admitted words.
+      const media = event.kind === 'message' ? iMessageMediaOf(event) : undefined;
+      const handoff = await admitIMessageOwnerTurn(event.kind === 'message' ? { ...event, attachments: [] } : event, {
         authority: {
           // Unknown senders and other chats resolve to no grant: no directory lookup, no owner context.
           resolve: (e) => e.senderHandle === binding.subject && e.chatGuid === binding.chatGuid && e.bridgeId === binding.bridgeId && e.accountId === binding.accountId ? grant : null,
@@ -437,15 +439,12 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
             return route;
           },
         },
-      }, (_route, { attachmentRefs: _files, ...envelope }): IMessageTurnHandoff => {
-        const media = event.kind === 'message' ? iMessageMediaOf(event) : undefined;
-        return {
-          dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
-          digest, envelope, binding, revision: grant.revision, environment,
-          bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
-          ...(media ? { media } : {}),
-        };
-      });
+      }, (_route, turn): IMessageTurnHandoff => ({
+        dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
+        digest, envelope: turn, binding, revision: grant.revision, environment,
+        bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
+        ...(media ? { media } : {}),
+      }));
       const admitted = await this.owner(authority.doName).admitIMessageTurn(handoff);
       if (admitted === 'admitted' || admitted === 'duplicate') return 'handed';
       if (admitted === 'capacity') return 'retry';

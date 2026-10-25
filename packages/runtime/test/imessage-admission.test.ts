@@ -178,11 +178,9 @@ it('account replacement while reading media invalidates the old grant before adm
   await expect(admitIMessageOwnerTurn(f.event, f, f.admitted)).rejects.toThrow('not admitted');
   expect(f.media.content).not.toHaveBeenCalled(); expect(f.admitted).not.toHaveBeenCalled();
 });
-// The live bridge passes no media store: files go on as references for the owner to answer, and never throw into a retry.
-it('without a media store, files stay references and admission still hands the turn on', async () => {
+// The relay's hold policy reads this refusal; the bridge carries a host's files as references and admits the words alone.
+it('without a media store, files are refused as media unavailable, never dropped', async () => {
   const f = fixture();
-  const files = Array.from({ length: 5 }, (_, i) => ({ ...syntheticIMessageEvents.multipleFiles.attachments[0], reference: `fixture-file-${i}` }));
-  await admitIMessageOwnerTurn({ ...syntheticIMessageEvents.multipleFiles, attachments: files }, f, f.admitted);
-  expect(f.admitted).toHaveBeenCalledWith(expect.objectContaining({ doName: grant.doName }), expect.objectContaining({ text: 'In this order' }), []);
-  expect(f.admitted.mock.calls[0]![1]).not.toHaveProperty('attachments');
+  await expect(admitIMessageOwnerTurn(syntheticIMessageEvents.multipleFiles, f, f.admitted)).rejects.toThrow('iMessage media unavailable');
+  expect(f.admitted).not.toHaveBeenCalled();
 });
