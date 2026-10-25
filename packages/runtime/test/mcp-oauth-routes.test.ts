@@ -73,9 +73,9 @@ describe('MCP OAuth routes', () => {
 describe('the MCP callback is bound to the browser that started the connect', () => {
   const OWNER = 'mcp-bind-owner';
   const callbackFor = (query: string, cookie?: string) => new Request(`https://waldo.example${MCP_CALLBACK_PATH}?${query}`, cookie ? { headers: { cookie } } : {});
-  const fakeOwner = () => {
+  const fakeOwner = (outcome: Record<string, unknown> = { kind: 'linked', id: 'c1', name: 'notion' }) => {
     const calls: unknown[] = [];
-    return { calls, env: { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json({ kind: 'linked', id: 'c1', name: 'notion' }); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
+    return { calls, env: { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json(outcome); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
   };
   const bound = async (nonce: string, at = Date.now()) => (await bindBrowser(SECRET, 'mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
 
@@ -93,6 +93,16 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     const linked = await handleMcpCallback(callbackFor(query.replace('attacker-code', 'c'), await bound(nonce)), owner.env);
     expect(linked.status).toBe(200);
     expect(owner.calls).toHaveLength(1);
+  });
+
+  it('tells a Granola owner what Waldo does with it, not that each tool asks first', async () => {
+    const nonce = 'E'.repeat(43), query = `code=c&state=${encodeURIComponent(await mcpState(SECRET, OWNER, nonce))}`;
+    const granola = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c2', name: 'granola', reviewed: true }).env)).text();
+    expect(granola).toContain('Granola connected');
+    expect(granola).toContain('never changes your notes');
+    expect(granola).not.toContain('asks you first');
+    const other = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner().env)).text();
+    expect(other).toContain('asks you first');
   });
 
   it('sets the binding on the console start link, leaves the attempt to that browser, and refuses a replay once it is spent', async () => {

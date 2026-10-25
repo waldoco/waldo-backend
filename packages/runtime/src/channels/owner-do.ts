@@ -43,7 +43,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,granolaConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
@@ -164,6 +164,7 @@ import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
 import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
+import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { ownerPush } from './expo-push';
@@ -222,6 +223,7 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 // The surface that issued a connect ticket; it decides where the consent page sends the owner back.
 type ConnectChannel = 'telegram' | 'console' | 'app';
+type ConnectProvider = 'google' | 'granola';
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
 type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null; profile?: GoogleProfile }>;
@@ -268,6 +270,7 @@ type OwnerRuntime = Readonly<{
   act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
   googleConsoleStart(): Promise<string | null>;
+  connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
   calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
@@ -383,6 +386,60 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       reserved: () => mcpServers(this.env.WALDO_MCP_SERVERS).map((server) => server.name),
       log: (entry) => console.log(JSON.stringify({ trace: 'mcp', ...entry })),
     });
+  }
+  // The owner's Granola connection: the reviewed one when there is one, else any on a Granola host.
+  private granolaConnection() {
+    const servers = this.mcp().list();
+    return servers.find((server) => isReviewedGranola(server.server_url, server.issuer)) ?? servers.find((server) => isGranolaHost(server.server_url));
+  }
+  // Granola as the app shows it. Connecting needs the OAuth edge, the state secret and this deployment's origin.
+  private granolaState(): NonNullable<ConsoleView['granola']> {
+    const connection = this.granolaConnection();
+    const configured = !!oauthProxy(this.env) && !!oauthStateSecret(this.env) && !!signedRpc(this.env) && !!this.ctx.storage.kv.get<string>('origin');
+    return { connectAvailable: configured, connection: connection ? { status: connection.status, connected_at: connection.connected_at } : null };
+  }
+  // Granola from the app: a first-party /c/<ticket> link. Granola's discovery and the sign-in attempt start when the owner
+  // presses Continue there (beginGranola), so the attempt's 15 minutes run from that press.
+  private async granolaConnect(runtime: OwnerRuntime): Promise<ControlReceipt> {
+    return granolaConnectReceipt(await runtime.connectLink('granola', 'app', { handoff: true }), this.ctx.storage.kv.get<string>('origin'));
+  }
+  // Continue on a Granola ticket: discover Granola, record the attempt, and hand back its authorize address. Discovery is
+  // network only, so it runs off the owner's turn queue; the attempt is started on it. The ticket is remembered under the
+  // attempt so a linked sign-in can close it; entries left by abandoned sign-ins are swept here.
+  private async beginGranola(ticketHash: string): Promise<Readonly<{ url: string | null; nonce: string | null; already?: true }>> {
+    const origin = this.ctx.storage.kv.get<string>('origin');
+    if (!origin) return { url: null, nonce: null };
+    const begun = await this.mcp().begin(GRANOLA_MCP_URL, origin);
+    if (begun.kind !== 'redirect') {
+      console.log(JSON.stringify({ trace: `connect:${ticketHash.slice(0, 8)}`, hop: 'connect_begin', ok: begun.kind === 'already', detail: `granola ${begun.kind === 'failed' ? begun.reason : begun.kind}` }));
+      return begun.kind === 'already' ? { url: null, nonce: null, already: true } : { url: null, nonce: null };
+    }
+    return this.serial(() => this.startGranola(ticketHash, begun.path.slice(MCP_START_PATH.length)));
+  }
+  private async startGranola(ticketHash: string, nonce: string): Promise<Readonly<{ url: string | null; nonce: string | null }>> {
+    const now = Date.now();
+    const kept = await this.ctx.storage.list<Readonly<{ ticket: string; at: number }>>({ prefix: 'connect_mcp_ticket:' });
+    const stale = [...kept].filter(([, entry]) => now - entry.at > 24 * 60 * 60_000).map(([key]) => key);
+    if (stale.length) await this.ctx.storage.delete(stale);
+    await this.ctx.storage.put(`connect_mcp_ticket:${nonce}`, { ticket: ticketHash, at: now });
+    const url = await this.mcp().start(nonce);
+    if (url === null) await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
+    return { url, nonce: url ? nonce : null };
+  }
+  private async granolaDisconnect(): Promise<ControlReceipt> {
+    const connection = this.granolaConnection();
+    return mcpDisconnectReceipt(connection ? await this.mcp().disconnect(connection.id) : { ok: false, provider: 'not_needed' });
+  }
+  // A sign-in that began on a connect ticket closes that ticket once it links. Bookkeeping only: the ticket was spent at
+  // Continue, so a failed close changes nothing the owner can reach.
+  private async completeConnectTicket(nonce: string, linked: boolean): Promise<void> {
+    const ticket = (await this.ctx.storage.get<Readonly<{ ticket: string; at: number }>>(`connect_mcp_ticket:${nonce}`))?.ticket;
+    if (ticket === undefined) return;
+    await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
+    const call = signedRpc(this.env);
+    if (!linked || !call) return;
+    const done = await call('connect_session_complete', `connsess.complete.${ticket}`, { p_ticket_hash: ticket }).catch(() => null);
+    console.log(JSON.stringify({ trace: `connect:${ticket.slice(0, 8)}`, hop: 'connect_completed', ok: done === true, detail: 'granola' }));
   }
   // Model provider health for every channel and turn of this owner, so provider misses add up across turns.
   private readonly providerHealth = new InMemoryCircuitBreaker();
@@ -1349,11 +1406,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true}):null,this.ctx.storage.kv.get<string>('origin'))
+              :action.action==='granola.connect'?this.granolaConnect(runtime)
+              :action.action==='granola.disconnect'?this.granolaDisconnect()
               :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
               :runtime.act(action,current),
           };
@@ -1463,10 +1522,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (new URL(request.url).pathname === MCP_FINISH_PATH && request.method === 'POST') {
       const { nonce, query } = JSON.parse(body) as { nonce: string; query: string };
-      return Response.json(await this.serial(() => this.mcp().finish(nonce, new URLSearchParams(query))));
+      const outcome = await this.serial(() => this.mcp().finish(nonce, new URLSearchParams(query)));
+      await this.completeConnectTicket(nonce, outcome.kind === 'linked');
+      return Response.json(outcome);
     }
     if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
-      const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
+      const { ticket_hash, provider } = JSON.parse(body) as { ticket_hash: string; provider?: string };
+      // The ticket names its provider; Continue on a Granola ticket starts Granola's sign-in once (the ticket is already spent).
+      if (provider === 'granola') {
+        const begun = await this.beginGranola(ticket_hash);
+        console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begun.url !== null, detail: 'granola' }));
+        return Response.json(begun);
+      }
       // A ticket the app issued is begun on the app runtime, so an owner without Telegram can connect.
       const issuer = await this.ctx.storage.get<string>(`connect_channel:${ticket_hash}`);
       const begin = await this.serial(() => this.setup(issuer === 'app' ? 'app' : 'telegram').google.beginSession(ticket_hash));
@@ -3092,6 +3159,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return null;
       }
     };
+    // Connect links are short and first-party: /c/<ticket>, for Google or Granola. The provider URL is minted at click time
+    // (BEGIN_SESSION_PATH) and never passes through model-visible text. A link for a surface that holds the owner's session
+    // also carries a one-time handoff code, so only the browser that surface opens it in can take the hop.
+    const connectLink = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null> => {
+      const origin = await storage.get<string>('origin');
+      const callRpc = signedRpc(env);
+      const doName = vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
+      if (!origin || !callRpc) return null;
+      const ticket = newTicket();
+      const hash = await ticketHash(ticket);
+      const handoff = opts?.handoff ? await newHandoff() : null;
+      const sessionId = handoff
+        ? await callRpc('connect_session_issue_handoff', `connsess.issue_handoff.${doName}.${provider}.${channel}.${hash}.${handoff.hash}`, {
+          p_do_name: doName, p_provider: provider, p_channel: channel, p_ticket_hash: hash, p_handoff_hash: handoff.hash,
+        })
+        : await callRpc('connect_session_issue', `connsess.issue.${doName}.${provider}.${channel}.${hash}`, {
+          p_do_name: doName, p_provider: provider, p_channel: channel, p_ticket_hash: hash,
+        });
+      if (!sessionId) return null;
+      // The channel that issued the link decides where the completion page routes back to.
+      await storage.put(`connect_channel:${hash}`, channel);
+      log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
+      return handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`;
+    };
     const googleEnvironment = this.env;
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
@@ -3196,30 +3287,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return `${CONSOLE_GOOGLE_START_PATH}${nonce}`;
       },
       takeStart: (nonce: string) => takeStart(consentDeps, nonce),
-      // Chat links are short and first-party: /c/<ticket>. The consent URL is minted at click time
-      // (beginSession) and never passes through model-visible text. A link for a surface that holds the owner's session
-      // also carries a one-time handoff code, so only the browser that surface opens it in can take the hop.
       async connectUrl(_feature: GoogleFeature, channel: ConnectChannel = 'telegram', opts?: Readonly<{ handoff?: boolean }>) {
-        if (!google.configured()) return null;
-        const origin = await storage.get<string>('origin');
-        const callRpc = signedRpc(env);
-        const doName = vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
-        if (!origin || !callRpc) return null;
-        const ticket = newTicket();
-        const hash = await ticketHash(ticket);
-        const handoff = opts?.handoff ? await newHandoff() : null;
-        const sessionId = handoff
-          ? await callRpc('connect_session_issue_handoff', `connsess.issue_handoff.${doName}.google.${channel}.${hash}.${handoff.hash}`, {
-            p_do_name: doName, p_provider: 'google', p_channel: channel, p_ticket_hash: hash, p_handoff_hash: handoff.hash,
-          })
-          : await callRpc('connect_session_issue', `connsess.issue.${doName}.google.${channel}.${hash}`, {
-            p_do_name: doName, p_provider: 'google', p_channel: channel, p_ticket_hash: hash,
-          });
-        if (!sessionId) return null;
-        // The channel that issued the link decides where the completion page routes back to.
-        await storage.put(`connect_channel:${hash}`, channel);
-        log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
-        return handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`;
+        return google.configured() ? connectLink('google', channel, opts) : null;
       },
       async beginSession(ticketHash: string) {
         const app = await googleApp();
@@ -4521,6 +4590,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       googleConnectUrl: (feature, channel, opts) => google.connectUrl(feature, channel, opts),
       googleConsoleStart: () => google.consoleStart(),
+      connectLink,
       calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
         accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
         client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
