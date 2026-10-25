@@ -1,6 +1,7 @@
 import { Parser } from 'htmlparser2';
-import { constantTimeEqual } from './constant-time';
+import { constantTimeEqual } from './constant-time.ts';
 import { extractArtifacts } from '../security/artifact-hygiene.ts';
+import { withRequestTimeout } from '../identity/request-timeout.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -181,6 +182,12 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 
+// The kind of a block of protected time Waldo created, kept in a private property on the event in the calendar Waldo
+// wrote it to: calendar demand leaves rest out of Weight and counts deep work.
+export type CalendarBlock = 'rest' | 'deep_work';
+// Waldo's rest blocks on one calendar, and the other events inside their windows that keep that time busy. All-day
+// events keep their dates.
+export type RestBlocks = Readonly<{ blocks: readonly Readonly<{ start: string; end: string }>[]; others: readonly Readonly<{ start: string; end: string; all_day: boolean }>[] }>;
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
@@ -401,8 +408,9 @@ export type GoogleClient = Readonly<{
   driveListFiles?(input: Readonly<{ pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveSearchFiles?(input: Readonly<{ nameContains: string; pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
-  driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
+  driveReadFileContent?(input: import('./drive-rest.ts').DriveContentArgs): Promise<import('./drive-rest.ts').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
+  restBlocks?(calendarId: string, from: string, to: string): Promise<RestBlocks>;
   calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
   tasksPage?(taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
@@ -422,7 +430,7 @@ export type GoogleClient = Readonly<{
   // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string, calendarId?: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; block?: CalendarBlock; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
@@ -439,7 +447,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','restBlocks','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -559,6 +567,28 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
   health?.('');
   return result.access_token;
 }
+
+// A disconnect asks Google to revoke the grant, which removes every scope the owner gave Waldo's project. Its answer is
+// one word: revoked, already_invalid (Google's invalid_token: the grant had lapsed, as a Testing-mode grant does after
+// seven days, or was revoked elsewhere) or failed; the connector-proxy adds not_held when it holds no live secret. The
+// token goes in the form body (RFC 7009), not in the query string Google's guide shows: a failed fetch quotes its URL.
+// A disconnect waits on the answer, so one that does not come within the request bound is failed.
+export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+export const GOOGLE_REVOKE_OUTCOMES = ['revoked', 'already_invalid', 'failed', 'not_held'] as const;
+export type GoogleRevokeOutcome = typeof GOOGLE_REVOKE_OUTCOMES[number];
+export const revokeGoogleGrant = async (fetcher: Fetch, token: string): Promise<Exclude<GoogleRevokeOutcome, 'not_held'>> => {
+  if (!token) return 'failed';
+  try {
+    return await withRequestTimeout(async (signal) => {
+      const response = await fetcher(GOOGLE_REVOKE_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token }).toString(), signal });
+      if (response.status === 200) { void response.body?.cancel(); return 'revoked'; }
+      const answer = await response.json().catch(() => null) as { error?: unknown } | null;
+      return response.status === 400 && answer?.error === 'invalid_token' ? 'already_invalid' : 'failed';
+    });
+  } catch {
+    return 'failed';
+  }
+};
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
 // calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
@@ -828,9 +858,9 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
     // A Meet request is keyed to the event id, so a retried create cannot ask for a second link.
-    createEvent: async ({ title, start, end, id, operationMarker, calendarId, attendees, description, location, meet, sendUpdates }) => send(
+    createEvent: async ({ title, start, end, id, operationMarker, block, calendarId, attendees, description, location, meet, sendUpdates }) => send(
       events(calendarId, undefined, { sendUpdates, conferenceDataVersion: meet ? '1' : undefined }), 'POST', {
-        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker),
+        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarTags(operationMarker, block),
         ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
         ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
       }),
@@ -885,6 +915,39 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         continuation = `${payload}.${await signature(payload)}`;
       }
       return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(item).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};
+    },
+    // One query finds the calendar's rest blocks by their private kind; only their own windows are read again, for the
+    // other events that keep that time busy (free, declined and cancelled ones do not). A listing that does not end is
+    // an error, never a partial answer.
+    async restBlocks(calendarId, from, to) {
+      if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from, to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to)) throw new Error('invalid Calendar block request');
+      const listed = async (query: Readonly<Record<string, string>>): Promise<GoogleEvent[]> => {
+        const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+        url.search = new URLSearchParams({ singleEvents: 'true', maxResults: String(REST_LISTING_MAX), ...query }).toString();
+        const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+        if (data.kind !== 'calendar#events' || (data.items !== undefined && !Array.isArray(data.items)) || !((data.items ?? []) as unknown[]).every(validCalendarEvent)) throw new Error('invalid Calendar page response');
+        if (data.nextPageToken) throw new Error('Calendar listing did not end');
+        return ((data.items ?? []) as GoogleEvent[]).filter(event => event.status !== 'cancelled');
+      };
+      const found = (await listed({ timeMin: from, timeMax: to, privateExtendedProperty: 'waldoBlock=rest' }))
+        .filter(event => event.extendedProperties?.private?.waldoBlock === 'rest' && event.start?.dateTime !== undefined && event.end?.dateTime !== undefined);
+      const blocks = found.map(event => ({ start: event.start.dateTime!, end: event.end.dateTime! }));
+      const windows: [number, number][] = [];
+      for (const [start, end] of blocks.map(block => [Date.parse(block.start), Date.parse(block.end)] as const).sort((a, b) => a[0] - b[0])) {
+        const last = windows.at(-1);
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else windows.push([start, end]);
+      }
+      if (windows.length > REST_WINDOWS_MAX) throw new Error('too many rest blocks to read');
+      const ids = new Set(found.map(event => event.id));
+      const others: { start: string; end: string; all_day: boolean }[] = [];
+      for (const [start, end] of windows) {
+        for (const event of await listed({ timeMin: new Date(start).toISOString(), timeMax: new Date(end).toISOString() })) {
+          if (ids.has(event.id) || event.transparency === 'transparent' || event.attendees?.find(a => a.self)?.responseStatus === 'declined') continue;
+          others.push({ start: event.start.dateTime ?? event.start.date!, end: event.end.dateTime ?? event.end.date!, all_day: event.start.dateTime === undefined });
+        }
+      }
+      return { blocks, others };
     },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
@@ -1021,7 +1084,12 @@ const calendarSourceUrl = (value: string | undefined): string | undefined => {
       && value.length <= 2048 && url.href.length <= 2048 ? url.href : undefined;
   } catch { return undefined; }
 };
+const REST_LISTING_MAX = 250;
+const REST_WINDOWS_MAX = 20;
 const calendarMarker = (operationMarker?: string) => operationMarker ? { extendedProperties: { private: { waldoOperation: operationMarker } } } : {};
+// Only a create names the kind. A move or cancel patches the marker alone, and a patch leaves the keys it does not name.
+const calendarTags = (operationMarker?: string, block?: CalendarBlock) => operationMarker || block
+  ? { extendedProperties: { private: { ...(operationMarker ? { waldoOperation: operationMarker } : {}), ...(block ? { waldoBlock: block } : {}) } } } : {};
 const calendarTimes = (start: string, end: string) => {
   const date = (v: string) => /^\d{4}-\d\d-\d\d$/.test(v) && new Date(v).toISOString().slice(0,10) === v;
   const allDay = date(start) && date(end);
@@ -1061,7 +1129,7 @@ const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | '
 });
 
 type GoogleEvent = {
-  id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
+  id: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];

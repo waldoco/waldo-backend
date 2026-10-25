@@ -124,6 +124,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',
+  // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
+  'list_owner_findings',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
@@ -221,6 +223,9 @@ export interface ToolHandler<Args, Result, Ctx> {
   // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
   // from the handler it routes to, so a tool name alone never earns it.
   proposal_only?: true;
+  // turn_bound marks a handler that runs only inside the live turn that called it (its run scope, an open browser session,
+  // a selection for that turn). An approval runs after the turn has ended, so such a call is never put on an approval card.
+  turn_bound?: true;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;

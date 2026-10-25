@@ -17,6 +17,7 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
+import { HEALTH_MEMORY_KEY } from '../src/channels/health-memory';
 import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
 import { standingOrderBook } from '../src/channels/standing-orders';
@@ -30,6 +31,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
 const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
@@ -84,7 +86,7 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
-    if (fn === 'console_session_list') return Response.json([{ session: HASH, created_at: new Date(AT - 60_000).toISOString(), last_seen_at: new Date(AT).toISOString() }]);
+    if (fn === 'console_session_inventory') return Response.json([{ session: HASH, created_at: new Date(AT - 60_000).toISOString(), last_seen_at: new Date(AT).toISOString(), expires_at: new Date(AT - 60_000 + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: new Date(AT - 60_000).toISOString() }]);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') {
@@ -247,6 +249,11 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await schedulePass(owner, state);
+      // The sweep wrote a reader job; its worker reports (stood in for here), the next pass queues the card, and the outbox
+      // sends it to WhatsApp.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toHaveLength(1);
       expect(wire.whatsapp[0]!.startsWith(`text:${UPDATE_TEXT}`)).toBe(true);
       expect(await said(owner, ctx)).toEqual([]);
@@ -272,6 +279,8 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
   it('a check-back queued for the app before the owner chose WhatsApp still reaches the app, and only there', async () => {
     await withOwner('surface-whatsapp-switched', async (owner, state, ctx) => {
       await dueCheckBack(state);
+      await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       expect(outbox(state).map(record => [record.payload.chat_id, record.status])).toEqual([[ctx.appSubject, 'pending']]);
       state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
@@ -319,6 +328,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     await withOwner('surface-both-check-back', async (owner, state, ctx) => {
       await dueCheckBack(state);
       await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
+      await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       expect(heartbeat.payload.chat_id).toBe(ctx.appSubject);
       await outboxPass(owner, state, ctx);
@@ -339,9 +350,31 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both' });
   });
 
+  it('an update card from the outbox reaches the app and WhatsApp gets one copy', async () => {
+    await withOwner('surface-both-update', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      const update = outbox(state).find(record => record.update)!;
+      expect(update.payload.chat_id).toBe(ctx.appSubject);
+      await outboxPass(owner, state, ctx);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
+      expect(copies(state).map(record => record.id)).toEqual([`${WHATSAPP_COPY_PREFIX}${update.id}`]);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
+    }, { surface: 'both' });
+  });
+
   it('a check-back the app could not write gets no WhatsApp copy', async () => {
     await withOwner('surface-both-check-back-failed', async (owner, state, ctx) => {
       await dueCheckBack(state);
+      await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
       await schedulePass(owner, state);
       const heartbeat = outbox(state).find(record => record.heartbeat)!;
       vi.spyOn(OwnerDO.prototype as unknown as { appAssistantRow(): Promise<unknown> }, 'appAssistantRow').mockRejectedValueOnce(new Error('transcript write failed'));
@@ -623,7 +656,7 @@ describe('the console control', () => {
   it('reads the setting with what the owner can be reached on, and saves a new value against a fresh read', async () => {
     await withConsole('surface-console-save', async (stub, token) => {
       const before = await read(stub, token);
-      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, telegram_linked: false });
+      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, imessage_linked: false, telegram_linked: false });
       const saved = await post(stub, token, before, { value: 'both', request_id: 'surface-request-01' });
       expect(saved.status).toBe(200);
       expect(await saved.json()).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false });
@@ -634,6 +667,20 @@ describe('the console control', () => {
       // A request against the read before the change is stale.
       expect((await post(stub, token, before, { value: 'whatsapp', request_id: 'surface-request-02' })).status).toBe(409);
       expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'both' });
+    });
+  });
+
+  // Health notes in memory Waldo keeps on its own: on until the owner turns them off, in one action on the same read.
+  it('reads health notes as on, turns them off in one action, and refuses anything but on or off', async () => {
+    await withConsole('health-memory-console', async (stub, token) => {
+      const before = await read(stub, token) as Read & { data: { health_memory?: unknown } };
+      expect(before.data.health_memory).toBe(true);
+      const odd = await post(stub, token, before, { action: 'health_memory.set', value: 'later', request_id: 'health-request-01' });
+      expect(await odd.json()).toMatchObject({ receipt: { state: 'rejected' } });
+      const off = await post(stub, token, before, { action: 'health_memory.set', value: 'off', request_id: 'health-request-02' });
+      expect(await off.json()).toMatchObject({ receipt: { state: 'recorded' } });
+      expect(((await read(stub, token)) as Read & { data: { health_memory?: unknown } }).data.health_memory).toBe(false);
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(HEALTH_MEMORY_KEY)).toBe(false));
     });
   });
 

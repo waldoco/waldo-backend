@@ -1,4 +1,4 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { literalTextRedactor, type ConversationEntry } from '@waldo/contracts';
 import type { ConversationStore } from './conversation-store';
 import type { RunEffectScope } from './run-effect-scope';
 import { localIso, localToEpoch, nextAfter } from './reminders';
@@ -14,8 +14,9 @@ export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
 // or by a build that does not), so it is never the owner's own words. The mark is on the row, not inferred from its time.
 export const OWNER_SAID = 'owner_said';
 type StoredSpeaker = Speaker | typeof OWNER_SAID;
-type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string }>;
-export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean }>;
+type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string; row?: number }>;
+// row is the index row's id, where a reader needs to come back to exactly that row.
+export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; row?: number }>;
 const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => (speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true } : { ...row, speaker });
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
@@ -30,6 +31,8 @@ export type EpisodeIndex = Readonly<{
   search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
   since(at: number, maxChars: number): readonly Episode[];
   after(at: number, maxChars: number): readonly Episode[];
+  // The rows stored for these entries, oldest first; the newest are the ones left out past maxChars.
+  of(entryIds: readonly string[], maxChars: number): readonly Episode[];
 }>;
 
 export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
@@ -87,10 +90,27 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     after(at, maxChars) {
       const kept: Episode[] = [];
       let total = 0;
-      for (const row of sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
+      for (const row of sql.exec<StoredEpisode>('SELECT rowid AS row, entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
         const last = kept.at(-1);
         if (last && row.at !== last.at && total + row.text.length > maxChars) break;
         kept.push(episodeOf(row)); total += row.text.length;
+      }
+      return kept;
+    },
+    of(entryIds, maxChars) {
+      const ids = [...new Set(entryIds)];
+      const rows: (StoredEpisode & { rid: number })[] = [];
+      // Bound parameters per statement are limited, so the lookup goes in batches.
+      for (let start = 0; start < ids.length; start += 50) {
+        const batch = ids.slice(start, start + 50);
+        rows.push(...sql.exec<StoredEpisode & { rid: number }>(`SELECT rowid AS rid, entry_id, speaker, at, text FROM episodes WHERE entry_id IN (${batch.map(() => '?').join(',')})`, ...batch).toArray());
+      }
+      const kept: Episode[] = [];
+      let total = 0;
+      for (const { rid: _rid, ...row } of rows.sort((a, b) => a.rid - b.rid)) {
+        total += row.text.length;
+        if (total > maxChars) break;
+        kept.push(episodeOf(row));
       }
       return kept;
     },
@@ -179,15 +199,34 @@ export const consolidationSides = (day: readonly Episode[]) => {
   };
 };
 
+// A forget's texts out of the episode index, by the shared whole-word rule. The index mirrors the transcript, so it is
+// rewritten in step with it.
+export const scrubEpisodeTexts = (sql: Pick<SqlStorage, 'exec'>, texts: readonly string[], marker: string): void => {
+  const redact = literalTextRedactor(texts, marker);
+  for (const row of sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
+    const text = redact(row.text);
+    if (text !== row.text) sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
+  }
+};
+
 export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
 // A one-off pass that only consolidates, armed when a night could not finish its backlog.
 export const NIGHTLY_CATCH_UP_ID = 'nightly-memory-catch-up';
 export const NIGHTLY_CATCH_UP_DELAY_MS = 15 * 60_000;
-// The time of the last episode a finished pass consolidated. A pass looks back at most a week and reads at most three chunks.
+// The time of the last episode a finished pass consolidated. A pass makes at most NIGHTLY_CHUNKS consolidation calls, each
+// reading at most NIGHTLY_CHUNK_CHARS (turns sharing a time are never split, so one long group can read more); a backlog it
+// leaves is caught up by further passes, each armed NIGHTLY_CATCH_UP_DELAY_MS after the last, until the owner's local day
+// has spent NIGHTLY_DAILY_CALLS calls, and the next night resumes. Nothing is skipped except one time group that has failed
+// NIGHTLY_CHUNK_ATTEMPTS times alone and for longer than NIGHTLY_QUARANTINE_AFTER_MS, which an outage of under a day never is.
 export const NIGHTLY_THROUGH_KEY = 'nightly_consolidated_through_v1';
-export const NIGHTLY_BACKLOG_DAYS = 7;
+// The digest of the memory the nightly promotion last read in full and applied.
+export const CONSTELLATION_DIGEST_KEY = 'constellation_digest_v1';
 export const NIGHTLY_CHUNKS = 3;
+export const NIGHTLY_CHUNK_CHARS = 40_000;
+export const NIGHTLY_DAILY_CALLS = 30;
+export const NIGHTLY_CHUNK_ATTEMPTS = 2;
+export const NIGHTLY_QUARANTINE_AFTER_MS = 20 * 60 * 60_000;
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
   const found = scheduler.lookup(NIGHTLY_ID);

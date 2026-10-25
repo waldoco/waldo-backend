@@ -22,7 +22,6 @@ export const toolNameSchema = z.enum([
   'get_master_metrics',
   'get_context',
   'query_availability',
-  'read_owner_context',
   'read_memory',
   'remember',
   'forget_memory',
@@ -109,6 +108,10 @@ export const toolNameSchema = z.enum([
   // start_task/cancel_task: hand long, parallel or untrusted work to a task worker that holds no authority, and stop one.
   'start_task',
   'cancel_task',
+  // record_owner_finding/list_owner_findings: the owner look-up skill keeps what it found about the owner on the public web,
+  // each finding with its source, unconfirmed until the owner keeps or corrects it. Owner chat turns only.
+  'record_owner_finding',
+  'list_owner_findings',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -129,7 +132,6 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_master_metrics',
     'get_context',
     'query_availability',
-    'read_owner_context',
     'read_memory',
     'search_episodes',
     'search_connector',
@@ -150,7 +152,6 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_master_metrics',
     'get_context',
     'query_availability',
-    'read_owner_context',
     'read_memory',
     'search_episodes',
     'search_connector',
@@ -167,7 +168,6 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_master_metrics',
     'get_context',
     'query_availability',
-    'read_owner_context',
     'read_memory',
     'search_episodes',
     'search_connector',
@@ -221,7 +221,6 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_master_metrics',
     'get_context',
     'query_availability',
-    'read_owner_context',
     'read_memory',
     'remember',
     'forget_memory',
@@ -286,6 +285,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_load',
     'start_task',
     'cancel_task',
+    'record_owner_finding',
+    'list_owner_findings',
   ],
   dreaming_mode: ['read_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { SignInRequired } from './model';
+import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
 import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
 import { ActivityControls, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
-import { DevicesControls, IMessageControls, RevealedValue } from './ChannelSetup';
+import { DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
 
 type ActionProps = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 export type ControlsState = { kind: 'loading' } | { kind: 'ready'; data: ControlRecord } | { kind: 'error'; message: string; signedOut: boolean };
@@ -29,10 +29,11 @@ function CardTiming({ card, busy, onAction }: { card: DayRecord['data']['cards']
   </details>;
 }
 
-const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp' };
+const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp', app_imessage: 'The app and iMessage' };
 // Each note says what the choice does today, given where the owner can be reached.
-function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: ProactiveSurface): string[] {
+function surfaceNotes({ value, app_linked, whatsapp_linked, imessage_linked, telegram_linked }: ProactiveSurface): string[] {
   if (telegram_linked) return ['While Telegram is linked, Waldo keeps writing to you as it does now. This choice applies once Telegram is unlinked.'];
+  if (value === 'app_imessage') return imessage_linked === true ? ['The app keeps each one, and iMessage gets a copy. If the Mac that sends your iMessages can’t take a copy within 10 minutes, because it is asleep or offline, that copy isn’t sent; the app still has the message. Approval cards come to the app.'] : ['Write to Waldo on iMessage first, so it knows where to reach you. Until then these come to the app only.'];
   if (!whatsapp_linked) return value === 'app' ? [] : ['WhatsApp isn’t connected, so these come to the app for now.'];
   if (!app_linked && value !== 'whatsapp') return ['You haven’t written to Waldo in the app yet, so these come to WhatsApp for now.'];
   if (value === 'app') return [];
@@ -49,6 +50,13 @@ function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: Proacti
       <label>Send them to<select value={choice} disabled={busy} onChange={event => setChoice(event.target.value as typeof choice)}>{(Object.keys(SURFACES) as ProactiveSurface['value'][]).map(value => <option key={value} value={value}>{SURFACES[value]}</option>)}</select></label>
       <button className="primary" disabled={busy}>Save where Waldo writes</button>
     </form>
+  </div></details>;
+}
+
+// One tap either way. What the owner asks Waldo to remember is kept whatever this says.
+function HealthMemorySetting({ on, busy, onAction }: { on: boolean } & ActionProps) {
+  return <details name="day-settings" className="disclosure"><summary><Icon name="memory"/><span className="label key">Health notes</span><span className="value">{on ? 'On' : 'Off'}</span></summary><div className="disclosure-body"><p>When older chat leaves Waldo’s view, and each night, Waldo keeps what you said that stays true. With this on, that includes what you tell Waldo about your health: how you feel, your goals, and readings you mention, each kept with the day you said it. Readings from your wearable are never copied into memory. A note kept as older chat leaves its view is named in its next reply to you. Every note shows in Profile, where you can correct or forget it.</p>
+    <button className="primary" disabled={busy} onClick={() => onAction('health_memory.set', { value: on ? 'off' : 'on' })}>{on ? 'Turn off health notes' : 'Turn on health notes'}</button>
   </div></details>;
 }
 
@@ -85,6 +93,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
       </form>
     </div></details>
     {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
+    {record.data.health_memory !== undefined && <HealthMemorySetting on={record.data.health_memory} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
   </>;
@@ -121,7 +130,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
             <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li>
           <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
             <div className="disclosure-body"><p>Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code.</p>
-              <div className="control-actions"><a className="quiet-link" href="#/connections/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a></div></div></details></li>
+              <div className="control-actions"><a className="quiet-link" href="#/connections/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a><a className="quiet-link" href="#/connections/phone">Your phone</a></div></div></details></li>
           <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
             <div className="disclosure-body"><p>Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number.</p>
               <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>Get a WhatsApp link code</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}</div></div></details></li>
@@ -137,8 +146,8 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
       <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
       <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>
     </section>}
-    {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This session is valid until {sessions.until}.</p>
-      <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, valid until {item.until}</li>)}</ul>
+    {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This browser stays signed in while you use it; left unused, it signs out at {sessions.until}.</p>
+      <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, signs out {item.until} if unused</li>)}</ul>
       <p className="meta">Device names are not recorded, only when each browser signed in. Signing out of one browser isn’t offered here.</p>
       <div className="control-actions"><button disabled={busy} onClick={() => onAction('session.signout')}>Sign out of this browser</button><button disabled={busy} onClick={() => { if (window.confirm('Sign out of every browser and the app?')) onAction('session.signout.all'); }}>Sign out everywhere</button></div>
     </section>}
@@ -147,7 +156,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
 
 export function ControlsFeedback({ state, onRefresh }: { state: Exclude<ControlsState, { kind: 'ready' }>; onRefresh: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-block"><span className="visually-hidden">Loading your controls…</span><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
-  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href="/console/signin">Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
+  return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
 // Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
@@ -191,7 +200,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
     {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
-    {receipt.signed_out ? <a href="/console/signin">Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
+    {receipt.signed_out ? <a href={signInHref()}>Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }
 
@@ -206,6 +215,7 @@ const headings: Record<ControlsView, { title: string; description: string }> = {
   usage: { title: 'Usage.', description: 'Model calls and their recorded cost estimates.' },
   files: { title: 'Files.', description: 'What you’ve sent Waldo.' },
   imessage: { title: 'iMessage.', description: 'Text your Waldo from your own iPhone.' },
+  phone: { title: 'Your phone.', description: 'The number on file, and how to verify it.' },
   devices: { title: 'Devices.', description: 'The Macs paired with your Waldo through Kennel.' },
 };
 export function ControlsPanel({ view, embedded=false, section }: { view: ControlsView; embedded?:boolean; section?: 'connections'|'sessions' }) {
@@ -213,7 +223,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ActionResult | null>(null);
-  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean } | null>(null);
+  const [error, setError] = useState<{ message: string; uncertain: boolean; signedOut: boolean; stepUp?: boolean } | null>(null);
   const [page, setPage] = useState<ActivityCursors>({});
   const attempt = useRef<Attempt | null>(null);
   const inFlight = useRef(false);
@@ -239,7 +249,7 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
       if (!uncertain) attempt.current = null;
       if (e instanceof SignInRequired) {
         setResult(null); setError(null); setState({ kind: 'error', message: e.message, signedOut: true });
-      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false });
+      } else setError({ message: e instanceof Error ? e.message : 'The outcome is unavailable.', uncertain, signedOut: false, stepUp: e instanceof StepUpRequired });
     } finally { inFlight.current = false; setBusy(false); }
   };
   const act = (action: ControlAction, fields: ControlFields = {}) => {
@@ -260,12 +270,13 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
               : state.data.view === 'usage' ? <UsageControls record={state.data}/>
                 : state.data.view === 'imessage' ? <IMessageControls record={state.data} busy={disabled} onAction={act}/>
                   : state.data.view === 'devices' ? <DevicesControls record={state.data} busy={disabled} onAction={act}/>
+                  : state.data.view === 'phone' ? <PhoneControls record={state.data} busy={disabled} onAction={act}/>
                     : <FilesControls record={state.data} busy={disabled} onAction={act}/> : null;
   return <>
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}
     <div className="tools"><button className="quiet" disabled={busy} onClick={refresh}>Refresh</button></div>
     {result && <ControlReceipt result={result} onCheck={result.receipt.state === 'unconfirmed' ? check : undefined} onRefresh={refresh} busy={busy}/>}
-    {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href="/console/signin">Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
+    {error && <section className="panel" role="alert"><h2>{error.stepUp ? 'Confirm it\'s you.' : error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href={signInHref()}>Sign in</a> : <div className="control-actions">{error.stepUp && <a className="button" href={confirmHref()}>Get an email code</a>}{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
     {state.kind !== 'ready' ? <ControlsFeedback state={state} onRefresh={refresh}/> : <div className="controls-stack" key={`${state.data.view}:${state.data.revision}`}>{content}</div>}
   </>;
 }

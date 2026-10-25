@@ -6,13 +6,14 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { HEALTH_TRIGGER_FORMAT } from '../../src/health/trigger';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
+import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { FloorTurn } from '../../src/llm/owner-routes';
 import type { JobBook, RetryBrief } from '../../src/tasks/jobs';
 import { promiseRetry, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -33,6 +34,9 @@ export type TrialRecord = Readonly<{
   tools: JudgeInput['tools'];
   // Kept for a local look at one scenario; never written to the scorecard.
   toolOutputs: readonly Readonly<{ name: string; output: string }>[];
+  // Every request the model was sent, by the owner message it served (0 before the first), for receipts that read what
+  // the model was shown. Kept in memory for the trial; never written to the scorecard.
+  model_inputs: readonly Readonly<{ turn: number; text: string }>[];
   effects: readonly Effect[];
   final_state: unknown;
 }>;
@@ -49,30 +53,35 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget, outage: { down: b
   },
 });
 
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; memory?: MemoryMode }>): Promise<TrialRecord> => {
+// The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule.
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
+  let turn = 0;
+  const modelInputs: { turn: number; text: string }[] = [];
+  const shown: LLMGatewayAdapter = { complete: (request) => { modelInputs.push({ turn, text: JSON.stringify(request.request) }); return deps.gateway.complete(request); } };
   // The floor promise goes through the production promiseRetry, over a book that only keeps the retry brief it writes.
   const outage = { down: false };
   let retry: RetryBrief | undefined;
   const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
   const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
-  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
-    world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget, outage), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+    world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage), undefined, undefined, undefined, undefined,
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items' });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
   let error: string | undefined;
-  let turn = 0;
   try {
     for (const step of scenario.steps) {
       if ('say' in step) {
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        // The post-reply compaction hook; a store built with compaction off makes it a no-op.
+        await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
@@ -120,6 +129,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     status, ...(error ? { error } : {}), transcript,
     tools: tools.map((entry) => ({ name: entry.hop.slice(5), ok: entry.ok })),
     toolOutputs: tools.map((entry) => ({ name: entry.hop.slice(5), output: entry.text?.output ?? '' })),
+    model_inputs: modelInputs,
     effects: world.effects(),
     final_state: world.finalState(),
   };

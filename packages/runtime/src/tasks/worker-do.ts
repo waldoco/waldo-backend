@@ -5,7 +5,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import type { LoopToolResult } from '../conversation/tool-loop';
 import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
-import { runTaskAttempt, taskModel, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // A task worker: one object per job attempt, holding nothing but the ticket it was started with. It runs the attempt from
 // its own alarm and calls the owner's object for everything else. Its alarm never throws, so the platform's alarm retry
@@ -15,8 +15,8 @@ import { runTaskAttempt, taskModel, type TaskBrainPort, type TaskClaim, type Tas
 export type OwnerTaskRpc = Readonly<{
   taskClaim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'>;
   taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'>;
-  taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'>;
-  taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
+  taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'>;
+  taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   taskHeartbeat(ticket: TaskTicket): Promise<boolean>;
 }>;
 type Held = Readonly<{ owner: string; ticket: TaskTicket }>;
@@ -28,15 +28,13 @@ export const TASK_ALARM_SLICE_MS = 10 * 60_000;
 export const taskWorkerName = (ownerDoId: string, ticket: TaskTicket): string => `job:${ownerDoId}:${ticket.jobId}:${ticket.attempt}`;
 
 export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
+  // One provider breaker for the attempt's slices, seeded from the owner's breaker at each claim.
+  private readonly health = new TaskBreaker();
+
   // Idempotent: a second start of the same attempt changes nothing; the alarm runs it once.
   async start(input: Held): Promise<void> {
     if (!this.ctx.storage.kv.get<Held>(HELD_KEY)) this.ctx.storage.kv.put(HELD_KEY, input);
     await armAlarm(this.ctx.storage, Date.now());
-  }
-
-  async stop(): Promise<void> {
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
   }
 
   override async alarm(): Promise<void> {
@@ -48,12 +46,12 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
       const brain: TaskBrainPort = {
         claim: (ticket) => owner.taskClaim(ticket),
         tool: (ticket, call, canaries) => owner.taskTool(ticket, call, canaries),
-        checkpoint: (ticket, seq, turns, events, spend) => owner.taskCheckpoint(ticket, seq, turns, events, spend),
-        report: (ticket, result, events, spend) => owner.taskReport(ticket, result, events, spend),
+        checkpoint: (ticket, seq, turns, events, spend, outcomes) => owner.taskCheckpoint(ticket, seq, turns, events, spend, outcomes),
+        report: (ticket, result, events, spend, outcomes) => owner.taskReport(ticket, result, events, spend, outcomes),
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
       };
-      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }) };
-      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
+      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.health };
+      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';
     }

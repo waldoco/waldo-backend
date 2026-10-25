@@ -90,9 +90,10 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(new URL(toOwner[0]!.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     const fns = rpcs.map(r => r.fn);
     expect(fns[0]).toBe('health_ingest');
-    expect(fns[1]).toBe('health_series_read');
+    // The scores' read of the month, and beside it the read of the night's vital signals.
+    expect(fns.slice(1, 3)).toEqual(['health_series_read', 'health_series_read']);
     // Each write is preceded by a read of the row it replaces, so its zones can hold through a steady move.
-    expect(fns.slice(2).every(fn => fn === 'health_context_write' || fn === 'health_scores_read')).toBe(true);
+    expect(fns.slice(3).every(fn => fn === 'health_context_write' || fn === 'health_scores_read')).toBe(true);
     expect(fns.filter(fn => fn === 'health_context_write')).toHaveLength(2);
   });
 
@@ -121,9 +122,13 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
   it('does not run for a replayed batch, an empty one, a refused one or a caller with no way to defer', async () => {
     for (const answer of [{ ...receipt, replayed: true }, { ...receipt, accepted: 0, deleted: 0, ignored: 1 }, { error: 'epoch_conflict' }, { error: 'consent_required' }]) {
       answers.health_ingest = answer;
+      rpcs.length = 0; toOwner.length = 0;
       const d = deferrals();
       await ingest(batch, d.defer);
-      expect(d.work).toHaveLength(0);
+      await Promise.all(d.work);
+      // A refusal defers only its count; nothing is recomputed and the owner's object is not told.
+      expect(rpcs.map(r => r.fn)).toEqual('error' in answer ? ['health_ingest', 'health_refusal_note'] : ['health_ingest']);
+      expect(toOwner).toEqual([]);
     }
     answers.health_ingest = receipt;
     rpcs.length = 0;
@@ -159,6 +164,6 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     const d = deferrals();
     await ingest(batch, d.defer);
     await Promise.all(d.work);
-    expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read']);
+    expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read', 'health_series_read']);
   });
 });

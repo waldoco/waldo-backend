@@ -108,19 +108,18 @@ it('a forget whose topic sits inside a stored quote the owner repeats completes 
   });
 });
 
-it('a forget whose cleanup cannot be verified completes the turn and hands the model that answer', async () => {
+it('a derived row the redactor could not rewrite is deleted, and the forget completes', async () => {
   directory();
   const name = 'app-forget-incomplete';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const owner = await ownerFor(name, state);
-    // A derived row the purge cannot prove clean: JSON that is not canonical is never rewritten, so the readback still finds the topic.
+    // JSON that is not canonical is never rewritten in place; Waldo's own derived row is deleted instead.
     state.storage.sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
     const at = new Date().toISOString();
     state.storage.sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)', 'patrol-1', OWNER_ID, at, 'note', '{ "note": "zebra stripes" }', at);
     expect(await turn(owner, state, name, 'Forget zebra stripes', { name: 'forget_memory', args: { topic: 'zebra stripes', scope_note: 'zebras' } })).toBe('completed');
-    const receipt = receiptOf('forget_memory');
-    expect(receipt).toContain('"ok":false');
-    expect(receipt).toContain('Memory cleanup could not be verified');
+    expect(receiptOf('forget_memory')).toContain('"ok":true');
+    expect(state.storage.sql.exec('SELECT id FROM patrol_log').toArray()).toEqual([]);
     const next = await nextTurn(owner, state, name);
     expect(next).toContain('Forget [forgotten]');
     expect(next).not.toContain('zebra stripes');

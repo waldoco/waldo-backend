@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { COMPACTION_SUMMARY_CLOSE, ConversationTree, compactionSummaryOpen, type ConversationEntry } from '@waldo/contracts';
-import { COMPACTION, COMPACTION_SUPERSEDED_MARKER, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction } from '../src/conversation/compaction';
+import { COMPACTION, COMPACTION_SUPERSEDED_MARKER, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction } from '../src/conversation/compaction';
 import { estimateMessageTokens, windowModelMessages } from '../src/conversation/window';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { DERIVED_SCORE_PATTERNS, RAW_SENSOR_PATTERNS } from '@waldo/contracts';
@@ -91,6 +91,26 @@ describe('compaction', () => {
     expect(whole).toMatchObject({ gap: 0, covers: { from_id: 'u1', to_id: 'a7', rows: 14 } });
   });
 
+  it('a plan without the inputs a held topic drops counts only the rows the summary is still made from', () => {
+    const settings = { ...COMPACTION, budgetTokens: 120 };
+    const tree = chain(8);
+    const first = compactionPlan(tree, leafOf(8), null, settings)!;
+    const live = compactionRow(first, 'earlier summary', 'owner', 99);
+    tree.append(live);
+    tree.append(row('u9', 'a8', 'user', `question 9 ${'q'.repeat(100)}`, 90));
+    tree.append(row('a9', 'u9', 'assistant', `answer 9 ${'a'.repeat(100)}`, 91));
+    const second = compactionPlan(tree, 'a9', live, settings)!;
+    expect(second.sources.map((source) => source.id)).toEqual([live.id, 'u8', 'a8']);
+    const withoutReply = planWithout(second, (message) => message.content.startsWith('answer 8'))!;
+    expect(withoutReply.input).toEqual([second.input[0], second.input[1]]);
+    expect(withoutReply.sources.map((source) => source.id)).toEqual([live.id, 'u8']);
+    expect(withoutReply.covers).toEqual({ ...second.covers, rows: first.covers.rows + 1 });
+    // The previous summary left out takes the rows it counted with it.
+    expect(planWithout(second, (message) => message.content.includes('earlier summary'))!.covers.rows).toBe(2);
+    expect(planWithout(second, () => false)).toEqual(second);
+    expect(planWithout(second, () => true)).toBeNull();
+  });
+
   it('no owner instruction is lost when the span outgrows the summarizer input: replies give way first, and the summary view stays within budget', () => {
     const settings = { ...COMPACTION, enabled: true, budgetTokens: 2_000 };
     const tree = new ConversationTree();
@@ -152,8 +172,8 @@ describe('compaction', () => {
     expect(numericHealthIn('recovery score 71')).toBe(true);
     expect(numericHealthIn('The owner has been sleeping badly this week and wants quieter mornings.')).toBe(false);
     expect(numericHealthIn('circadian rhythm is off')).toBe(false);
-    // the floor also rejects an ordinary numbered list, which is why the instruction asks for plain bullets
-    expect(numericHealthIn('Next steps: 1. Book the flights')).toBe(true);
+    // a numbered list in prose is not a payload field, so a summary that numbers its items is not held
+    expect(numericHealthIn('Next steps: 1. Book the flights')).toBe(false);
   });
 
   it('the floor never reads or moves the shared global patterns\' lastIndex', () => {

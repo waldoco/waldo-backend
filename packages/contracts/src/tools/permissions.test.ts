@@ -46,7 +46,6 @@ describe('toolName', () => {
       'get_master_metrics',
       'get_context',
       'query_availability',
-      'read_owner_context',
       'read_memory',
       'remember',
       'forget_memory',
@@ -121,6 +120,8 @@ describe('toolName', () => {
       'attach_file',
       'start_task',
       'cancel_task',
+      'record_owner_finding',
+      'list_owner_findings',
     ]);
   });
 
@@ -165,7 +166,6 @@ describe('TOOL_PERMISSIONS', () => {
         'get_master_metrics',
         'get_context',
         'query_availability',
-        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -186,7 +186,6 @@ describe('TOOL_PERMISSIONS', () => {
         'get_master_metrics',
         'get_context',
         'query_availability',
-        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -203,7 +202,6 @@ describe('TOOL_PERMISSIONS', () => {
         'get_master_metrics',
         'get_context',
         'query_availability',
-        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -254,7 +252,6 @@ describe('TOOL_PERMISSIONS', () => {
         'get_master_metrics',
         'get_context',
         'query_availability',
-        'read_owner_context',
         'read_memory',
         'remember',
         'forget_memory',
@@ -319,6 +316,8 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_load',
       'start_task',
       'cancel_task',
+      'record_owner_finding',
+      'list_owner_findings',
       ],
       dreaming_mode: ['read_memory', 'search_episodes'],
       pre_activity_spot: [

@@ -1,0 +1,76 @@
+import type { CompactionFlush } from '../conversation/compaction';
+import type { Claim } from '../memory/claims';
+import { consolidationDay, consolidationSides, transcript, type EpisodeIndex } from './episodes';
+
+type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): boolean }>;
+
+// Whether memory Waldo writes on its own (the flush before older chat leaves its view, the nightly pass and the notes-file
+// migration) keeps health notes: what the owner says about their health, readings and goals included. On unless the owner
+// turns it off; a note the owner asks Waldo to remember is theirs to ask for either way.
+export const HEALTH_MEMORY_KEY = 'health_memory_v1';
+export const healthMemoryOn = (kv: Pick<Kv, 'get'>): boolean => kv.get<boolean>(HEALTH_MEMORY_KEY) !== false;
+export const setHealthMemory = (kv: Kv, value: string): boolean => {
+  if (value !== 'on' && value !== 'off') return false;
+  kv.put(HEALTH_MEMORY_KEY, value === 'on');
+  return true;
+};
+
+// Health notes saved on Waldo's own since the owner last heard about them. Ids only: the next reply reads each note from
+// memory then, so a note forgotten or corrected in between is never named in its old words.
+export const HEALTH_SAVED_KEY = 'health_memory_saved_v1';
+const KEPT = 50;
+const NAMED = 5;
+export const noteHealthSaved = (kv: Kv, ids: readonly number[]): void => {
+  if (!ids.length) return;
+  const waiting = kv.get<number[]>(HEALTH_SAVED_KEY) ?? [];
+  kv.put(HEALTH_SAVED_KEY, [...new Set([...waiting, ...ids])].slice(-KEPT));
+};
+
+// One line naming up to five waiting notes that are still in memory, and how to correct, forget or stop them; null when
+// nothing that waits is still there. The notes it names stop waiting only when taken, once the reply carrying the line is
+// saved, so a run that closes first names them next time. A note the line only counts, or one saved after it was read,
+// keeps waiting to be named; one no longer in memory stops waiting.
+export type HealthNotice = Readonly<{ line: string; taken(): void }>;
+export const healthNotice = (kv: Kv, active: () => readonly Pick<Claim, 'id' | 'text'>[]): HealthNotice | null => {
+  const waiting = kv.get<number[]>(HEALTH_SAVED_KEY);
+  if (!waiting?.length) return null;
+  const byId = new Map(active().map((claim) => [claim.id, claim.text]));
+  const saved = waiting.filter((id) => byId.has(id));
+  const named = saved.slice(0, NAMED);
+  const done = waiting.filter((id) => !byId.has(id) || named.includes(id));
+  const taken = () => {
+    const rest = (kv.get<number[]>(HEALTH_SAVED_KEY) ?? []).filter((id) => !done.includes(id));
+    if (rest.length) kv.put(HEALTH_SAVED_KEY, rest);
+    else kv.delete(HEALTH_SAVED_KEY);
+  };
+  if (!named.length) { taken(); return null; }
+  const more = saved.length > NAMED ? `; and ${saved.length - NAMED} more` : '';
+  return { line: `Saved to memory from our earlier chat: ${named.map((id) => `"${byId.get(id)}" (c${id})`).join('; ')}${more}. Tell me to correct or forget any of it, or turn health notes off in your settings.`, taken };
+};
+
+// Before older chat leaves the model's view, what the owner said there is kept as memory, read from the episode rows of the
+// span: the owner's own words split from what they quoted, as the nightly pass reads them. The rows are bounded like a
+// nightly chunk; rows past it wait for the nightly pass, which reads the same rows. Health notes kept this way are named
+// to the owner in their next reply.
+// A span whose summary is refused stays in the window and is offered again, grown by any newer rows. Each row is flushed
+// once: the conversation's flushed-through mark is the last row of the last span flushed, and only rows after it are saved.
+// The mark is written once the save returns, so a flush that fails is tried again.
+export const FLUSH_SPAN_CHARS = 40_000;
+const FLUSHED_THROUGH_PREFIX = 'memory_flushed_through_v1:';
+export const memoryFlushHooks = (deps: Readonly<{ kv: Kv; episodes: Pick<EpisodeIndex, 'of'>; claims: () => readonly Pick<Claim, 'id' | 'text'>[]; timezone: () => string }>) => ({
+  compactionFlush: (async (span, keep) => {
+    const day = consolidationDay(deps.episodes.of(span.entryIds, FLUSH_SPAN_CHARS));
+    if (!day.length) return;
+    const sides = consolidationSides(day);
+    const mark = FLUSHED_THROUGH_PREFIX + span.conversationRef;
+    const fresh = new Set(span.entryIds.slice(span.entryIds.indexOf(deps.kv.get<string>(mark) ?? '') + 1));
+    const unsaved = day.filter((episode) => fresh.has(episode.entry_id));
+    if (unsaved.length) {
+      const saved = await keep.save(transcript(unsaved, deps.timezone()), consolidationSides(unsaved), { health: healthMemoryOn(deps.kv) });
+      deps.kv.put(mark, span.covers.to_id);
+      noteHealthSaved(deps.kv, saved.filter((claim) => claim.kind === 'health').map((claim) => claim.id));
+    }
+    return { owner: sides.owner };
+  }) satisfies CompactionFlush,
+  memoryNotice: () => healthNotice(deps.kv, deps.claims),
+});

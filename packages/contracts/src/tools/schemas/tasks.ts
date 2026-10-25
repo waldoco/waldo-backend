@@ -10,13 +10,13 @@ export type TaskProfile = z.infer<typeof taskProfileSchema>;
 export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
 export const startTaskArgsSchema = z.strictObject({
-  profile: taskProfileSchema.describe('reader: mail, calendar, contacts, tasks, Drive, web. errand: reader plus a browser; submits become approval cards. code: unavailable.'),
-  title: z.string().min(1).describe('Short name for progress notes.'),
-  goal: z.string().min(1).describe('What to find or do.'),
-  context: z.string().describe('All it needs from this chat: names, dates, addresses, links, decisions.'),
-  constraints: z.string().optional().describe('What to avoid or respect.'),
-  done_when: z.string().min(1).describe('What a good result looks like.'),
-  effort: z.enum(['standard', 'deep']).optional().describe('deep: careful work across many sources.'),
+  profile: taskProfileSchema.describe('reader: mail, calendar, Drive, web. errand: also a browser; submits need approval. code: unavailable.'),
+  // A label the owner and later turns read: one short line, so it cannot run on or start a line of its own.
+  title: z.string().min(1).max(80).regex(/^[^\r\n\u2028\u2029]*$/, 'One line.'),
+  goal: z.string().min(1),
+  context: z.string().describe('All it needs from this chat: names, dates, links, decisions, what to avoid.'),
+  done_when: z.string().min(1),
+  effort: z.enum(['standard', 'deep']).optional(),
 });
 export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;
 

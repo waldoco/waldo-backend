@@ -6,6 +6,7 @@ import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName, LINK_REPLIES, onboardingReply, SYSTEM_OWNER_ID } from '../src/channels/imessage/bridge-do';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { handOffIMessageProgress } from '../src/channels/imessage/owner-runtime';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 
@@ -61,7 +62,7 @@ async function world() {
     const action = (actionName: string, fields: Record<string, string> = {}) => {
       const form = new FormData(); form.set('action', actionName); form.set('csrf', csrf);
       for (const [k, v] of Object.entries(fields)) form.set(k, v);
-      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
+      return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie, origin: HOST_ORIGIN }, redirect: 'manual' }));
     };
     const controls = async () => (await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }))).json() as Promise<{ data: { actions: string[]; linked_hint: string | null } }>;
     return { stub, action, controls, name };
@@ -89,10 +90,9 @@ async function world() {
   const sharedLive = async () => {
     const code = (await (await op.action('imessage.pair_shared')).text()).split('\n')[0]!;
     expect(code).toMatch(/^wim_[a-f0-9]{48}$/);
-    expect((await host.redeem(code)).status).toBe(200);
-    const challenge = (await (await op.action('imessage.verify', { id: host.bridgeId, subject: OP, chat: `iMessage;-;${OP}` })).text()).split('\n')[0]!;
-    expect((await host.send(host.message(challenge, { senderHandle: OP }))).status).toBe(200);
-    expect((await op.action('imessage.activate_shared', { id: host.bridgeId, subject: OP, chat: `iMessage;-;${OP}` })).status).toBe(303);
+    const redeemed = await host.redeem(code);
+    expect(redeemed.status).toBe(200);
+    expect((await redeemed.json() as { state: string }).state).toBe('active'); // a shared host is live at redemption
     expect((await host.heartbeat()).status).toBe(200);
     expect((await host.capabilities()).status).toBe(200);
   };
@@ -322,3 +322,46 @@ it('a forged unlink form naming another owner only ever unlinks the signed-in ow
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
 });
+
+// Turn ids are each owner's own sequence, so two owners on the shared number reuse them: one owner's old reply never refuses
+// another owner's note. Notes come last in the shared one-slot mailbox: any owner's reply takes the slot from a note the
+// host has not pulled, and while a reply waits for the slot no note takes it.
+it('on the shared number a note yields to every owner\'s reply, and turn ids that repeat across owners refuse nothing', async () => {
+  const w = await world();
+  await w.sharedLive();
+  for (const [o, handle] of [[w.alice, ALICE], [w.bob, BOB]] as const) expect(await w.linkVia(o, handle)).toMatchObject({ chatGuid: `iMessage;-;${handle}` });
+  const turn = async (handle: string, text: string) => { await w.host.send(w.host.message(text, { senderHandle: handle })); await w.pump(); };
+  await turn(ALICE, 'Alice one'); await w.deliverNext();
+  await turn(ALICE, 'Alice two'); await w.deliverNext();
+  await turn(BOB, 'Bob one'); await w.deliverNext();
+  const [bobOne] = await w.inbox(w.bob);
+  expect((await w.inbox(w.alice)).map(r => r.id)).toEqual(['imsg-9000000000001', 'imsg-9000000000002']);
+  // Bob's notes, frozen and handed over through his own Waldo's outbox, under turn ids Alice has already used.
+  const bobNote = (id: string) => runInDurableObject(w.bob.stub, async (_i, state) => {
+    new IMessageFinalOutbox(state.storage).freezeProgress({ ...bobOne!, id, commandId: `wrc_bob_${id}` }, 1, `Bob's note for ${id}.`);
+    return handOffIMessageProgress({ storage: state.storage, id: state.id, env: env as never, ownerNamespace: env.OWNER_DO }, `progress:${id}:1`);
+  });
+  const bobNotes = async () => (await w.outbox(w.bob)).filter(r => r.replyRef.startsWith('progress:')).map(r => [r.replyRef, r.result?.state, r.result && 'reason' in r.result ? r.result.reason : undefined]);
+  // Alice's reply:imsg-9000000000002 does not refuse Bob's note for his own imsg-9000000000002.
+  expect(await bobNote('imsg-9000000000002')).toBe(true);
+  // Alice's third reply takes the slot from that note before the host pulls it; Bob's Waldo hears it was preempted.
+  await turn(ALICE, 'Alice three');
+  expect(await w.deliverNext()).toMatchObject({ text: 'Scripted owner reply.', chatGuid: `iMessage;-;${ALICE}` });
+  expect(await bobNotes()).toEqual([['progress:imsg-9000000000002:1', 'rejected', 'progress_preempted']]);
+  // A note the host has already pulled goes out first; Alice's fourth reply waits for it, and meanwhile no note takes the slot.
+  expect(await bobNote('imsg-9000000000003')).toBe(true);
+  const pulled = (await w.host.pull()).delivery!;
+  await turn(ALICE, 'Alice four');
+  await w.host.postResult(pulled, await w.host.execute(pulled));
+  expect(await bobNote('imsg-9000000000004')).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ text: 'Scripted owner reply.', chatGuid: `iMessage;-;${ALICE}` });
+  expect(w.host.nativeSends.map(send => send.text).filter(text => text.startsWith('Bob\'s note'))).toEqual(['Bob\'s note for imsg-9000000000003.']);
+  expect(await bobNotes()).toEqual([
+    ['progress:imsg-9000000000002:1', 'rejected', 'progress_preempted'],
+    ['progress:imsg-9000000000003:1', 'local_recorded', undefined],
+    ['progress:imsg-9000000000004:1', 'rejected', 'progress_yields'],
+  ]);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);

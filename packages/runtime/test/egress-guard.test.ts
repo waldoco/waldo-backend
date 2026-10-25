@@ -49,4 +49,11 @@ describe('egressGuardedCaller', () => {
     await guarded('editMessageText', { chat_id: 1, message_id: 2, text: 'see https://example.com/page', link_preview_options: { is_disabled: false, url: 'https://example.com/page' } });
     expect(call).toHaveBeenCalledWith('editMessageText', { chat_id: 1, message_id: 2, text: 'see https://example.com/page', link_preview_options: { is_disabled: true } });
   });
+  it('scrubs a reply draft as it scrubs the reply, and adds no preview option the draft method does not take', async () => {
+    const call = vi.fn(async () => true);
+    const onRedact = vi.fn();
+    await egressGuardedCaller(call, onRedact)('sendMessageDraft', { chat_id: 1, draft_id: 7, text: 'tap https://accounts.google.com/o/oauth2/v2/auth?state=x now' });
+    expect(call).toHaveBeenCalledWith('sendMessageDraft', { chat_id: 1, draft_id: 7, text: 'tap [link removed] now' });
+    expect(onRedact).toHaveBeenCalledWith(1, 'sendMessageDraft');
+  });
 });

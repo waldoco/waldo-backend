@@ -12,10 +12,14 @@ import { claimStore } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { episodeIndex, indexedConversationStore } from '../src/channels/episodes';
 import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
+import { healthLogHandlers, type HealthLogBook } from '../src/channels/health-log';
+import { workspaceToolHandlers } from '../src/tools/live/workspace';
+import { workspaceStore, type WorkspaceState } from '@waldo/workspace';
 import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import type { OwnerClock } from '../src/tools/live/get-context';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
+import { updateSweepTools } from '../src/channels/update-sweep';
 import { durableConversationStore } from '../src/channels/conversation-store';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import type { ModelInputAssert, Scenario } from './types';
@@ -60,6 +64,8 @@ export type ScenarioRun = Readonly<{
   entries: readonly TurnLogEntry[];
   tools: readonly string[];
   reminders: readonly StubReminder[];
+  healthLogs: number;
+  workspaceFiles: number;
   connectOffers: readonly ConnectIntent[];
   // Reply-bearing model requests grouped by owner turn (1-based index = turn - 1); claim_ops excluded.
   modelRequests: readonly (readonly LLMGatewayRequest[])[];
@@ -95,6 +101,17 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     fired: () => undefined,
     unreadable: () => 0,
   } satisfies ReminderBook;
+
+  // The owner's health log and private workspace, in memory: a scenario counts what landed in each.
+  let healthLogs = 0;
+  const healthLogBook: HealthLogBook = { linked: () => true, log: async () => ({ id: ++healthLogs, at: '2026-09-24T09:00' }), recent: async () => [] };
+  let workspace: WorkspaceState = { binding: null, files: [], bodies: [], operations: [] };
+  const blobs = new Map<string, Uint8Array>();
+  let blobSeq = 0;
+  const files = workspaceStore({ binding: { ownerId: 'abcdefab-cdef-4abc-8abc-abcdefabcdef', environment: 'staging', namespace: 'scenario', doName: 'scenario', doId: 'scenario', stateVersion: 1, mappingVersion: 1 }, admit: async () => ({ status: 'ok' }),
+    metadata: { transaction(work) { const draft = structuredClone(workspace); const result = work(draft); workspace = draft; return result; } },
+    bodies: { put: async (blob, value) => { blobs.set(blob.blob_id, value); }, get: async (blob) => blobs.get(blob.blob_id) ?? null, remove: async (blob) => { blobs.delete(blob.blob_id); } },
+    now: () => CLOCK.now().getTime(), newId: () => `abcdefab-cdef-4abc-8abc-${(++blobSeq).toString(16).padStart(12, 'a')}` });
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
   const freeBusy = scenario.fixtures?.freeBusy;
@@ -137,7 +154,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   const integration = spentUsd === undefined ? undefined : { spend: () => ({ spentUsd, ceilingUsd: MONTHLY_SPEND_CEILING_USD }) };
   // Every saved turn is indexed, as the owner DO does, so recall and search_episodes see earlier turns.
   const episodes = episodeIndex(sql);
-  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web, ...(scenario.fixtures?.browse ? [browse] : [])];
+  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), ...healthLogHandlers(healthLogBook), ...workspaceToolHandlers(() => files), searchEpisodesHandler(episodes), web, ...(scenario.fixtures?.browse ? [browse] : [])];
   const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
   const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway,
     // A blocked-browse fixture admits its read, so the block comes from the site rather than the egress check.
@@ -154,6 +171,8 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     const turnText = async () => {
       if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
       if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
+      if (turn.startsWith('@job ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(5), time, undefined, undefined, undefined, undefined, 'external');
+      if (turn.startsWith('@sweep ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(7), time, updateSweepTools(true), undefined, undefined, undefined, 'external');
       if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       return responder.respond(inboundTurn({ updateId: n, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(turn) }), time);
     };
@@ -167,7 +186,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   }
   // All memory effects settle within the tool loop before assertions run.
   const tools = entries.filter((entry) => entry.hop.startsWith('tool_')).map((entry) => entry.hop.slice(5));
-  return { replies, entries, tools, reminders: reminderRows, connectOffers, modelRequests };
+  return { replies, entries, tools, reminders: reminderRows, healthLogs, workspaceFiles: workspace.files.length, connectOffers, modelRequests };
 };
 
 export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly string[] => {
@@ -225,6 +244,8 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
     if (state.kind === 'reminder_note' && !run.reminders.some((reminder) => state.matches.test(reminder.note))) {
       failures.push(`no reminder note matched ${state.matches}`);
     }
+    if (state.kind === 'health_log_count' && run.healthLogs !== state.equals) failures.push(`expected ${state.equals} health logs, have ${run.healthLogs}`);
+    if (state.kind === 'workspace_file_count' && run.workspaceFiles !== state.equals) failures.push(`expected ${state.equals} workspace files, have ${run.workspaceFiles}`);
   }
   return failures;
 };

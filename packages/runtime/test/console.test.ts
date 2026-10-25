@@ -2,6 +2,7 @@ import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS } from '../src/identity/console-auth';
 
 const memoryStore = () => {
   const data = new Map<string, unknown>();
@@ -56,25 +57,29 @@ describe('owner console', () => {
     await access.signOut(cookie!);
     expect(await access.session(cookie)).toBeNull();
     const again = await access.redeem(new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!);
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.session(again)).toBeNull();
     const late = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     now += 11 * 60_000;
     expect(await access.redeem(late)).toBeNull();
   });
 
-  it('redeeming on a browser that already holds a live session refreshes it instead of stacking', async () => {
+  it('redeeming on a browser that already holds a live session replaces it, and the old one runs out instead of stacking', async () => {
     let now = 1_000;
     const access = consoleAccess(memoryStore(), () => now);
     const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     const cookie = (await access.redeem(await mint()))!;
     now += 60_000;
-    const again = await access.redeem(await mint(), cookie);
-    expect(again).toBe(cookie);
-    const refreshed = await access.session(cookie);
-    expect(refreshed?.expires).toBe(now + 12 * 60 * 60_000);
-    now += 11 * 60 * 60_000;
-    expect(await access.session(cookie)).not.toBeNull();
+    const again = (await access.redeem(await mint(), cookie))!;
+    expect(again).not.toBe(cookie);
+    expect((await access.session(again))?.expires).toBe(now + CONSOLE_SESSION_IDLE_MS);
+    expect((await access.session(cookie))?.expires).toBe(now + CONSOLE_REPLACED_SESSION_MS);
+    const signedIn = now;
+    now += CONSOLE_REPLACED_SESSION_MS + 1;
+    expect(await access.session(cookie)).toBeNull();
+    expect(await access.list()).toHaveLength(1);
+    now = signedIn + CONSOLE_SESSION_IDLE_MS - 1;
+    expect(await access.session(again)).not.toBeNull();
   });
 
   it('keeps sessions per browser: a second browser gets its own, sign-out kills only that one', async () => {
@@ -94,7 +99,7 @@ describe('owner console', () => {
     const timed = consoleAccess(store, () => clock);
     const mintTimed = async () => new URL(await timed.mintLink('https://waldo.example')).searchParams.get('t')!;
     const old = (await timed.redeem(await mintTimed()))!;
-    clock += 13 * 60 * 60_000;
+    clock += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await timed.session(old)).toBeNull();
     const fresh = (await timed.redeem(await mintTimed(), old))!;
     expect(fresh).not.toBe(old);
@@ -109,7 +114,7 @@ describe('owner console', () => {
     const a = (await access.redeem(await mint()))!;
     const b = (await access.redeem(await mint()))!;
     expect((await access.list()).map((session) => session.token).sort()).toEqual([a, b].sort());
-    now += 13 * 60 * 60_000;
+    now += CONSOLE_SESSION_IDLE_MS + 1;
     expect(await access.list()).toEqual([]);
     const c = (await access.redeem(await mint()))!;
     const d = (await access.redeem(await mint()))!;
@@ -254,11 +259,12 @@ describe('owner console', () => {
     expect(none).not.toContain('Held at the gate');
   });
 
-  it('distinguishes stored evidence notes from original-source links and does not fake a correction action', () => {
+  it('distinguishes stored evidence notes from original-source links, and corrects only through the owner\'s edit', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Evidence note:');
     expect(html).toContain('not a link to the original message');
-    expect(html).toContain('tell Waldo the correction in chat');
+    expect(html).toContain('edit it here or tell Waldo in chat');
+    expect(html).toContain('name="action" value="spot.edit"');
     expect(html).not.toContain('name="action" value="spot.correct"');
     const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] }, 'spots');
     expect(unknown).toContain('Source unverified');
@@ -295,8 +301,8 @@ describe('owner console', () => {
 
   it('renders chips from the semantic taxonomy, every state backed by view data', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
-    // danger: a failed removal must stand out, not render as a default sand chip
-    expect(html).toContain('chip danger">Removal incomplete');
+    // muted: a forget still clearing storage is in hand, not a failure the owner must act on
+    expect(html).toContain('chip muted">Clearing');
     // good: settled positive states only (a promoted spot, a sent card)
     expect(html).toContain('chip good">In constellation');
     // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
@@ -380,6 +386,13 @@ describe('owner console', () => {
     expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
   });
 
+  it('names a job the scheduler paused and when it tries again, and shows nothing when none is paused', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'day');
+    expect(html).toContain('<b>My overnight memory pass</b>');
+    expect(html).toContain('Waldo tries again around Sat 2 Nov, 03:00.');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [] }, 'day')).not.toContain('tries again around');
+  });
+
   it('accepts only known actions carrying the session csrf token', () => {
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'good' }), 'good')).toEqual({ action: 'spot.dismiss', id: '4', value: '' });
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'bad' }), 'good')).toBeNull();
@@ -395,7 +408,7 @@ describe('owner console', () => {
     expect(spots).not.toContain('<zz>');
     expect(spots).toContain('value="spot.forget"');
     const connections = renderConsole(view, 'connections');
-    // S5: connect is a CSRF-checked POST that 303s to a /c/<ticket>; no GET link that a preview could mint from.
+    // S5: connect is a CSRF-checked POST that 303s to the console start path; no GET link that a preview could mint from.
     expect(connections).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
     expect(connections).not.toContain('href="/console/google');
     expect(connections).toContain(`name="csrf" value="${view.csrf}"`);
@@ -424,14 +437,13 @@ describe('owner console', () => {
     }
   });
 
-  it('a spot stuck mid-forget stays visible with a working Retry action', () => {
+  it('a topic still clearing stays visible, masked, with what is left and a working Retry action', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
-    expect(html).toContain('Forget in progress (1)');
-    expect(html).toContain('Old phone number ending 4123');
-    expect(html).toContain('Retry forget');
-    // The Retry form posts the same spot.forget action with the purging row's id, which
-    // act() selects from claims('purging').
-    expect(html).toMatch(/name="id" value="7"/);
-    expect(html).toContain('Removal incomplete');
+    expect(html).toContain('Forgetting (1)');
+    expect(html).toContain('p·········· (12)');
+    expect(html).toContain('1 of 2 stores clear · waiting on imessage');
+    // The page never repeats the forgotten words, neither the purging claim's text nor the topic.
+    expect(html).not.toContain('Old phone number ending 4123');
+    expect(html).toMatch(/name="action" value="forget\.retry"><input type="hidden" name="id" value="fnv1a:5e1c0a2b"/);
   });
 });

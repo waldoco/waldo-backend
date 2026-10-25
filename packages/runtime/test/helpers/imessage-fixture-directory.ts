@@ -11,7 +11,7 @@ export type FixtureBridge = {
   expected_subject: string | null; expected_chat_guid: string | null; challenge_hash: string | null; challenge_expires_at: number | null;
   observed: { subject: string; chat: string; at: number } | null; presence_id: string | null; kind: 'owner' | 'shared';
 };
-export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean; email?: string; phone?: string };
+export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean; email?: string; phone?: string; phone_verified?: boolean };
 
 class ClaimedElsewhere extends Error { constructor() { super('presence already linked to another owner'); } }
 
@@ -52,7 +52,8 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
   const handlers: Record<string, (a: Record<string, any>) => unknown> = {
     imessage_throttle: () => true,
     imessage_issue_invitation: (a) => { const o = owner(a.p_do_name); if (!o || o.state !== 'active') return false; invitations.set(a.p_code_hash, { owner: a.p_do_name, environment: a.p_environment, expires: Date.now() + a.p_lifetime_seconds * 1000, used: false, kind: 'owner' }); return true; },
-    imessage_issue_shared_invitation: (a) => { const o = owner(a.p_do_name); if (!o || o.state !== 'active' || !o.admin) return false; invitations.set(a.p_code_hash, { owner: a.p_do_name, environment: a.p_environment, expires: Date.now() + a.p_lifetime_seconds * 1000, used: false, kind: 'shared' }); return true; },
+    imessage_issue_shared_invitation: (a) => { const o = owner(a.p_do_name); if (!o || o.state !== 'active' || !o.admin) return false;
+      if ([...bridges.values()].some((x) => x.kind === 'shared' && x.environment === a.p_environment && x.state === 'active')) return false; invitations.set(a.p_code_hash, { owner: a.p_do_name, environment: a.p_environment, expires: Date.now() + a.p_lifetime_seconds * 1000, used: false, kind: 'shared' }); return true; },
     imessage_sender_authority: (a) => { const b = bridges.get(a.p_bridge_id); return b && b.account_id === a.p_account_id && b.environment === a.p_environment ? senderAuthority(b, a.p_subject) : null; },
     imessage_onboarding_allowed: (a) => {
       const b = bridges.get(a.p_bridge_id), now = Date.now();
@@ -81,15 +82,22 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
       if (taken && taken.owner !== c.owner) throw new ClaimedElsewhere();
       c.used = true;
       for (const p of presences.values()) if (p.active && (p.provider ?? 'imessage') === a.p_provider && p.owner === c.owner) p.active = false;
+      // As the database does: a code arriving from the number on file verifies it, unless another active owner already has.
+      const number = a.p_provider === 'whatsapp' ? `+${a.p_subject}` : a.p_provider === 'imessage' ? a.p_subject : null, holder = owner(c.owner)!;
+      if (number && /^\+[1-9]\d{6,14}$/.test(number) && holder.phone === number && !holder.phone_verified
+        && !input.owners.some((other) => other.do_name !== holder.do_name && other.state === 'active' && other.phone === number && other.phone_verified)) holder.phone_verified = true;
       const id = crypto.randomUUID(); presences.set(id, { id, owner: c.owner, subject: a.p_subject, active: true, provider: a.p_provider });
-      return owner(c.owner)!.owner_id;
+      return holder.owner_id;
     },
     imessage_redeem_invitation: (a) => {
       const i = invitations.get(a.p_code_hash); if (!i || i.used || i.expires <= Date.now() || i.environment !== a.p_environment) return null;
+      // A shared host goes live at redemption, refused while another shared host is active (as the SQL does).
+      const shared = i.kind === 'shared';
+      if (shared && [...bridges.values()].some((x) => x.kind === 'shared' && x.environment === a.p_environment && x.state === 'active')) return null;
       i.used = true; const exp = Date.now() + a.p_pending_seconds * 1000;
-      bridges.set(a.p_bridge_id, { bridge_id: a.p_bridge_id, account_id: a.p_account_id, owner: i.owner, environment: a.p_environment, state: 'pending', wrapped_credential: a.p_wrapped_credential,
+      bridges.set(a.p_bridge_id, { bridge_id: a.p_bridge_id, account_id: a.p_account_id, owner: i.owner, environment: a.p_environment, state: shared ? 'active' : 'pending', wrapped_credential: a.p_wrapped_credential,
         revision: seq++, pending_expires_at: exp, host_version: a.p_host_version, expected_subject: null, expected_chat_guid: null, challenge_hash: null, challenge_expires_at: null, observed: null, presence_id: null, kind: i.kind });
-      return { bridge_id: a.p_bridge_id, account_id: a.p_account_id, do_name: i.owner, expires_at_ms: exp };
+      return { bridge_id: a.p_bridge_id, account_id: a.p_account_id, do_name: i.owner, state: shared ? 'active' : 'pending', expires_at_ms: exp };
     },
     imessage_bridge_authority: (a) => { const b = bridges.get(a.p_bridge_id); return b && b.account_id === a.p_account_id && b.environment === a.p_environment ? authority(b) : null; },
     imessage_set_expected_scope: (a) => {
@@ -125,6 +133,10 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
       for (const p of presences.values()) if (p.active && p.owner === a.p_do_name && (p.provider ?? 'imessage') === a.p_provider) { p.active = false; found = true; }
       return found;
     },
+    assert_channel_presence: (a) => {
+      const o = owner(a.p_do_name);
+      return !!o && o.state === 'active' && [...presences.values()].some((p) => p.active && p.owner === a.p_do_name && (p.provider ?? 'imessage') === a.p_provider && p.subject === a.p_subject);
+    },
     presence_hint: (a) => {
       const o = owner(a.p_do_name), p = [...presences.values()].find((x) => x.active && x.owner === a.p_do_name && (x.provider ?? 'imessage') === a.p_provider);
       return o && o.state === 'active' && p ? p.subject.slice(p.subject.length >= 8 ? -4 : -2) : null;
@@ -132,7 +144,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     imessage_enrollment_read: (a) => {
       const o = owner(a.p_do_name); if (!o || o.state !== 'active') return null;
       const e = enrollments.get(o.do_name);
-      return { email: o.email ?? `${o.do_name}@fixture.invalid`, phone: o.phone ?? null,
+      return { email: o.email ?? `${o.do_name}@fixture.invalid`, phone: o.phone ?? null, phone_verified: o.phone_verified === true,
         enrollment: e && e.environment === a.p_environment ? { phone: e.phone, photon_user_id: e.photon_user_id, assigned_number: e.assigned_number } : null };
     },
     imessage_enrollment_record: (a) => {
@@ -158,6 +170,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     if (fn === 'issue_provider_link_code') return `link.${a.p_provider}.${a.p_do_name}.${a.p_code_hash}`;
     if (fn === 'unlink_presence') return `unlink.${a.p_do_name}.${a.p_provider}`;
     if (fn === 'presence_hint') return `presencehint.${a.p_do_name}.${a.p_provider}`;
+    if (fn === 'assert_channel_presence') return `presence.${a.p_do_name}.${a.p_provider}.${a.p_subject}`;
     const op = ({ imessage_throttle: 'throttle', imessage_issue_invitation: 'invite', imessage_redeem_invitation: 'redeem', imessage_bridge_authority: 'authority',
       imessage_set_expected_scope: 'scope', imessage_record_challenge: 'challenge', imessage_activate: 'activate', imessage_revoke: 'revoke', imessage_list: 'list',
       imessage_issue_shared_invitation: 'invite_shared', imessage_sender_authority: 'sender', imessage_onboarding_allowed: 'onboard', imessage_activate_shared: 'activate_shared',

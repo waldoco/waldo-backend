@@ -27,6 +27,12 @@ describe('health providers: connect and disconnect', () => {
     rejected(healthProviderConnectResultV1Schema, [{ provider: 'whoop', authorize_url: 'http://api.prod.whoop.com/auth', expires_at: 1 }, { provider: 'whoop', authorize_url: 'javascript:alert(1)', expires_at: 1 }, { provider: 'whoop', authorize_url: 'https://x.example/', expires_at: 0 }, { provider: 'whoop', authorize_url: 'https://x.example/' }]);
   });
 
+  it('carries Waldo\'s start link with its one-time handoff code in the address the app opens, and still only over https', () => {
+    const coded = 'https://waldo.example/oauth/whoop/start/AbCd1234?handoff=AAAAAAAAAAAAAAAAAAAAAA';
+    expect(healthProviderConnectResultV1Schema.safeParse({ provider: 'whoop', authorize_url: coded, expires_at: 1_790_000_000 }).success).toBe(true);
+    rejected(healthProviderConnectResultV1Schema, [{ provider: 'whoop', authorize_url: coded.replace('https:', 'http:'), expires_at: 1_790_000_000 }, { provider: 'whoop', authorize_url: coded, handoff: 'AAAAAAAAAAAAAAAAAAAAAA', expires_at: 1_790_000_000 }]);
+  });
+
   it('answers a disconnect with the state and whether the provider confirmed', () => {
     expect(healthProviderDisconnectV1Schema.safeParse(connect).success).toBe(true);
     for (const revoked_at_provider of [true, false]) expect(healthProviderDisconnectResultV1Schema.safeParse({ provider: 'whoop', state: 'not_connected', revoked_at_provider }).success).toBe(true);
@@ -34,7 +40,7 @@ describe('health providers: connect and disconnect', () => {
   });
 
   it('names closed error codes', () => {
-    for (const error of ['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable']) expect(healthProviderErrorV1Schema.safeParse({ error }).success, error).toBe(true);
+    for (const error of ['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable', 'step_up_required']) expect(healthProviderErrorV1Schema.safeParse({ error }).success, error).toBe(true);
     rejected(healthProviderErrorV1Schema, [{ error: 'teapot' }, { error: 'unavailable', detail: 'x' }, {}]);
   });
 

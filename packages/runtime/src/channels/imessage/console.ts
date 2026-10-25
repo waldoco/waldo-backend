@@ -166,7 +166,7 @@ export async function iMessageConsoleAction(form: FormData, csrf: string, owner:
     case 'done': return new Response(null, { status: 303, headers: { location: CONSOLE_IMESSAGE_PATH } });
     case 'link_code': return new Response(iMessageLinkPage(outcome.code, outcome.address ?? undefined), { headers: HEADERS });
     case 'enroll_refused': return new Response(ENROLL_REFUSED[outcome.reason], { status: 400, headers: TEXT });
-    case 'host_code': return new Response(`${outcome.code}\nEnter this on ${outcome.shared ? "the shared Waldo number's Mac host" : 'your Mac host'}. Single use, expires in ${outcome.minutes} minutes.`, { headers: TEXT });
+    case 'host_code': return new Response(`${outcome.code}\n${outcome.shared ? "Give this to the shared Waldo number's host; it goes live as soon as the host uses it" : 'Enter this on your Mac host'}. Single use, expires in ${outcome.minutes} minutes.`, { headers: TEXT });
     case 'challenge': return new Response(`${outcome.challenge}\nSend exactly this text from ${outcome.subject} to your Mac's Messages account, in that direct chat. Then confirm it here.`, { headers: TEXT });
     default: return new Response('Unable to complete iMessage request.', { status: 400, headers: TEXT });
   }

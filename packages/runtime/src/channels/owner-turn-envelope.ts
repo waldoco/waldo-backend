@@ -3,6 +3,7 @@ import type { InboundPart } from './owner-inbound-turn';
 import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
+import type { ReplyStream } from '../conversation/reply-stream';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
@@ -41,6 +42,8 @@ export type OwnerTurnEnvelope = Readonly<{
   // Set by the channel host. When false, memory write tools are not admitted on this turn. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
   runScope?: RunEffectScope;
+  // Set by a channel that shows the reply while it is written; absent, the reply is delivered whole as before.
+  replyStream?: ReplyStream;
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
@@ -51,9 +54,14 @@ export type OwnerResponder = Readonly<{
   // answers the owner's own message late, never for one Waldo starts itself.
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
-  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
-  migrate(trace: string, input: string): Promise<string>;
-  promote(trace: string): Promise<string>;
+  // policy.health false keeps no health notes from this pass, or from the migration.
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
+  // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
+  // the memory it leaves to `promoted` once a promotion is applied.
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
+  // One welcome-build stage's structured answer; its input and output never reach a trace.
+  welcome?(trace: string, stage: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
@@ -61,6 +69,8 @@ export type OwnerResponder = Readonly<{
   // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract. The scope
   // is the call's own: its deadline bounds every attempt and its signal aborts the request in flight.
   threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
+  // The model's raw answer writing one progress note for a turn still running; the scope is the note's own, as above.
+  progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 

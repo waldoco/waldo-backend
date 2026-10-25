@@ -12,6 +12,7 @@ import {
   type AdapterResult,
   type HookHandler,
   type LLMResponse,
+  type LLMToolTurn,
   type ModelName,
   type TriggerType,
   MODEL_CONTEXT_MAX_CHARS,
@@ -813,6 +814,29 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests.at(-2)?.step.provider).toBe('workers_ai');
   });
 
+  it('a breaker restored from another one\'s snapshot carries on its failure counts and its cooldown', () => {
+    let now = 1_000;
+    const source = new InMemoryCircuitBreaker({ failureThreshold: 3, cooldownMs: 5_000, now: () => now });
+    for (let failure = 0; failure < 3; failure += 1) source.recordFailure('openai');
+    source.recordFailure('anthropic');
+    const snapshot = source.snapshot();
+    expect(snapshot).toEqual([{ provider: 'openai', failures: 3, opened_at: 1_000 }, { provider: 'anthropic', failures: 1, opened_at: null }]);
+
+    now = 3_000;
+    const restored = new InMemoryCircuitBreaker({ failureThreshold: 3, cooldownMs: 5_000, now: () => now });
+    restored.recordFailure('workers_ai');
+    restored.restore(snapshot);
+    expect(restored.isOpen('openai')).toBe(true);
+    // The restored state replaces what the breaker held.
+    expect(restored.snapshot()).toEqual(snapshot);
+    restored.recordFailure('anthropic');
+    restored.recordFailure('anthropic');
+    expect(restored.isOpen('anthropic')).toBe(true);
+    // The cooldown runs from when the source opened, not from the restore.
+    now = 6_000;
+    expect(restored.isOpen('openai')).toBe(false);
+  });
+
   it('falls to a deterministic template without another gateway call when every route is unavailable', async () => {
     const gateway = new ScriptedGateway(() => ({
       ok: false,
@@ -899,6 +923,68 @@ describe('RuntimeLLMProvider', () => {
       ],
     });
     expect(gateway.requests).toHaveLength(1);
+  });
+
+  describe('a model that refuses the tool search request shape', () => {
+    const searchTurn = {
+      trigger: 'brief' as const,
+      renderRequest: () => ({
+        system: 'brief', messages: [{ role: 'user' as const, content: 'brief' }], max_tokens: 512, temperature: 0.3,
+        tools: [
+          { name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } },
+          { name: 'query_availability', description: 'Free and busy time', parameters: { type: 'object', properties: {} }, namespace: 'calendar', defer_loading: true },
+        ],
+        tool_search: { namespaces: { calendar: 'Calendar changes and free time.' } },
+      }),
+      renderTemplate: () => 'template fallback',
+    };
+
+    it('resends the same step once without tool search, with every tool still offered', async () => {
+      const gateway = new ScriptedGateway((request) => request.request.tool_search
+        ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
+        : { ok: true, data: response(request.request.model, 'answered') });
+      const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(result.ok).toBe(true);
+      expect(gateway.requests).toHaveLength(2);
+      expect(gateway.requests[1]!.step).toEqual(gateway.requests[0]!.step);
+      expect(gateway.requests[1]!.request.tool_search).toBeUndefined();
+      expect(gateway.requests[1]!.request.tools!.map((tool) => tool.name)).toEqual(['get_context', 'query_availability']);
+      if (result.ok) expect(result.attempts.map((attempt) => attempt.outcome)).toEqual(['failure', 'success']);
+    });
+
+    it('marks the answer as degraded when the resend is what answered, and not otherwise', async () => {
+      const refused = new ScriptedGateway((request) => request.request.tool_search
+        ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
+        : { ok: true, data: response(request.request.model, 'answered') });
+      const degraded = await new RuntimeLLMProvider({ gateway: refused }).complete(searchTurn, runtimeCtx());
+      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true });
+      const accepted = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model, 'answered') }));
+      const clean = await new RuntimeLLMProvider({ gateway: accepted }).complete(searchTurn, runtimeCtx());
+      expect(clean).toMatchObject({ ok: true, degraded: false });
+      if (clean.ok) expect(clean.tool_search_degraded).toBeUndefined();
+    });
+
+    it('fails as before when the resend is refused too, after one resend only', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
+      const result = await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(gateway.requests).toHaveLength(2);
+    });
+
+    it('keeps tool search on a request that failed for another reason', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'transient', error: 'synthetic outage' }));
+      await new RuntimeLLMProvider({ gateway }).complete(searchTurn, runtimeCtx());
+      expect(gateway.requests.length).toBeGreaterThan(0);
+      expect(gateway.requests.every((request) => request.request.tool_search !== undefined)).toBe(true);
+    });
+
+    it('does not resend a refused request that carried no tool search', async () => {
+      const gateway = new ScriptedGateway(() => ({ ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }));
+      const { tool_search: _none, ...plain } = searchTurn.renderRequest();
+      const result = await new RuntimeLLMProvider({ gateway }).complete({ ...searchTurn, renderRequest: () => plain }, runtimeCtx());
+      expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+      expect(gateway.requests).toHaveLength(1);
+    });
   });
 
   it('clamps a capped route to the primary before L1 and excludes cross-provider fallback', async () => {
@@ -2003,6 +2089,49 @@ describe('sanitiseRequest structural degradation', () => {
     expect(turns[1]!.output).toContain('Deluxe Twin');
   });
 
+  // The owner's own readings (synthetic) beside an outside read in one request: the turn goes on, and no reading reaches
+  // the model once outside content is in the same request.
+  const ownerReadings = JSON.stringify({ ok: true, data: { state: 'available', timezone: 'UTC', from: '2026-10-12', to: '2026-10-12', read_at: '2026-10-13T06:00:00.000Z', signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-12', value: 67.4 }] }, { signal: 'sleep', unit: 'minutes', source: 'apple', method: 'asleep', days: [{ day: '2026-10-12', value: 431 }] }], freshness: 'fresh', coverage: 1 } });
+  const healthTurn = { call: { call_id: 'h1', name: 'get_health', arguments: '{"signals":["hrv","sleep"],"from":"2026-10-12","to":"2026-10-12"}' }, output: ownerReadings };
+  const calendarTurn = { call: { call_id: 'c1', name: 'query_calendar', arguments: '{}' }, output: JSON.stringify({ ok: true, data: { events: [{ title: 'Board call', start: '2026-10-14T09:00:00Z' }] } }) };
+  const planWith = async (tool_turns: readonly LLMToolTurn[]) => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(
+      { trigger: 'brief', renderRequest: () => ({ messages: [{ role: 'user' as const, content: 'Plan tomorrow around my energy' }], tool_turns: [...tool_turns], max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    return { result, sent: gateway.requests.at(-1)?.request.tool_turns };
+  };
+
+  it('withholds the owner\'s own readings when an outside read shares the request, and the turn goes on', async () => {
+    for (const order of [[healthTurn, calendarTurn], [calendarTurn, healthTurn]]) {
+      const { result, sent } = await planWith(order);
+      expect(result).toMatchObject({ ok: true });
+      expect(sent).toHaveLength(2);
+      const health = sent!.find((turn) => turn.call.call_id === 'h1')!;
+      expect(health.call).toEqual({ call_id: 'h1', name: 'get_health', arguments: '{}' });
+      expect(health.output).toContain('hidden because outside content was read');
+      expect(health.output).not.toMatch(/\d/);
+      expect(JSON.stringify(sent)).not.toMatch(/67\.4|431|hrv/i);
+      expect(sent!.find((turn) => turn.call.call_id === 'c1')!.output).toContain('Board call');
+    }
+  });
+
+  it('keeps the owner\'s own readings when nothing outside was read in the request', async () => {
+    const { result, sent } = await planWith([healthTurn]);
+    expect(result.ok).toBe(true);
+    expect(sent).toEqual([healthTurn]);
+  });
+
+  it('still denies raw readings at external taint, so an outside result carrying one is withheld whole', async () => {
+    const denied = await sanitise({ payload: [healthTurn], destination: 'internal_context', source_taint: 'external', canary_tokens: canaryTokens });
+    expect(denied).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    const { result, sent } = await planWith([{ call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: ownerReadings }, healthTurn]);
+    expect(result.ok).toBe(true);
+    expect(sent!.find((turn) => turn.call.call_id === 'c2')!.output).toContain('withheld by the health-data filter');
+    expect(JSON.stringify(sent)).not.toMatch(/67\.4|431/);
+  });
+
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
     // Regression for the live break: two populated reads overflowed the 32,768-char
     // internal_context batch policy as a SET, and the all-or-nothing degrade dropped both -
@@ -2332,7 +2461,9 @@ describe('sanitiseRequest structural degradation', () => {
       runtimeCtx({ sanitise: recording as never }),
     );
     expect(result.ok).toBe(true);
-    expect(seenTaints).toEqual(['external', null]);
+    // The third pass checks the owner-side turn for health at external taint because outside content shares the request;
+    // its result is used only to withhold, never as the turn's own provenance.
+    expect(seenTaints).toEqual(['external', null, 'external']);
   });
 
   it('still fails the whole request closed when one tool turn carries a hard scribe deny', async () => {

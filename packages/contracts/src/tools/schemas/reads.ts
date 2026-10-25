@@ -11,15 +11,13 @@ import { connectIntentSchema } from '../connect-intent';
 // a smuggled extra argument a parse failure, not a silent pass-through (ADR-0029).
 
 // Instants, not strings: iso8601 admits non-UTC offsets, so lexicographic order can lie.
-const isoInstant = iso8601Schema.describe(
-  'ISO 8601 datetime with seconds and an explicit UTC offset, e.g. 2026-09-26T00:00:00+05:30',
-);
 const dateRangeSchema = z
-  .strictObject({ from: isoInstant, to: isoInstant })
+  .strictObject({ from: iso8601Schema, to: iso8601Schema })
   .refine((r) => Date.parse(r.from) <= Date.parse(r.to), {
     error: 'date_range must not end before it starts',
     path: ['to'],
-  });
+  })
+  .describe('from and to with seconds and a UTC offset, e.g. 2026-09-26T00:00:00+05:30');
 
 export const getCrsArgsSchema = z.strictObject({
   range_days: z.int().min(1).max(90).default(1),
@@ -29,14 +27,18 @@ export type GetCrsArgs = z.infer<typeof getCrsArgsSchema>;
 // The owner's own readings from the health plane, by local day, for the owner's own model context (the beta ruling
 // lets them reach the model and owner-channel replies, never storage or egress). Days are the owner's local days,
 // inclusive, at most 31, ending no later than today; the handler checks "today" in the owner's zone.
-export const healthReadSignalSchema = z.enum(['sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts']);
+export const healthReadSignalSchema = z.enum([
+  'sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts',
+  'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
+  'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
+]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
 export const HEALTH_READ_MAX_DAYS = 31;
 const dayOrdinal = (day: string): number => Math.round(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
 export const getHealthArgsSchema = z
   .strictObject({
-    signals: z.array(healthReadSignalSchema).min(1).max(8),
+    signals: z.array(healthReadSignalSchema).min(1).max(healthReadSignalSchema.options.length),
     from: healthReadDaySchema,
     to: healthReadDaySchema,
     aggregation: z.enum(['daily', 'summary']).default('daily'),
@@ -45,7 +47,7 @@ export const getHealthArgsSchema = z
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal']);
 export const healthReadUnavailableReasonSchema = z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_readings', 'read_failed']);
 export const getHealthResultSchema = z.discriminatedUnion('state', [
   z.strictObject({
@@ -58,11 +60,12 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
       signal: healthReadSignalSchema,
       unit: healthReadUnitSchema,
       source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
-      method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
+      // A wrist temperature is absolute or a delta against the platform's own baseline, never the two blended.
+      method: z.enum(['asleep', 'rmssd', 'sdnn', 'absolute', 'baseline_delta']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.
       summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
-    })).max(8),
+    })).max(healthReadSignalSchema.options.length),
     // From the newest reading used: fresh within 36 hours, stale within 72, expired after (the source-data bounds of
     // ADR-0081 section 2).
     freshness: z.enum(['fresh', 'stale', 'expired']),
@@ -225,6 +228,27 @@ export const readMemoryArgsSchema = z.strictObject({
   query: z.string().min(1).max(500).optional(),
 });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
+// A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
+// return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.
+export const readMemoryClaimSchema = z.strictObject({
+  id: z.int().positive(),
+  kind: z.string().min(1),
+  text: z.string(),
+  evidence: z.string(),
+  source: z.string(),
+  origin: z.string().refine(origin => origin !== 'untrusted').nullable(),
+  source_ref: z.string().nullable(),
+  verification_status: z.string(),
+  supersedes_id: z.int().positive().nullable(),
+  last_seen_at: z.string(),
+});
+export const readMemoryResultSchema = z.strictObject({
+  claims: z.array(readMemoryClaimSchema),
+  omitted_claim_ids: z.array(z.int().positive()),
+  complete: z.boolean(),
+  authority: z.literal('context_only_not_action_approval'),
+}).refine(result => result.complete === (result.omitted_claim_ids.length === 0), 'complete means no claim was omitted');
+export type ReadMemoryResult = z.infer<typeof readMemoryResultSchema>;
 
 // The model-facing bound of the episode FTS5 leg — episodeSearchArgsSchema (memory/episode)
 // is the internal gateway shape; this seam additionally caps what the model may request.
@@ -271,8 +295,8 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
-  retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
-  session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
+  retain_session: z.boolean().optional().describe('true to start an interactive journey: returns the page state and a session_handle for browse_act. Omit for a one-shot read.'),
+  session_handle: z.string().min(1).max(80).optional().describe('From a prior observation, to continue that exact session; never a provider ID.'),
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
@@ -399,5 +423,3 @@ export const queryAvailabilityArgsSchema=z.strictObject({
  work_windows:z.array(z.strictObject({start:iso8601Schema,end:iso8601Schema}).refine(w=>Date.parse(w.start)<Date.parse(w.end),'window must advance')).max(100).default([]),
 });
 export type QueryAvailabilityArgs=z.infer<typeof queryAvailabilityArgsSchema>;
-export const readOwnerContextArgsSchema=z.strictObject({topic:z.string().min(1).max(200),limit:z.int().min(1).max(12).default(8)});
-export type ReadOwnerContextArgs=z.infer<typeof readOwnerContextArgsSchema>;

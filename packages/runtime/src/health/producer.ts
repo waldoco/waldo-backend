@@ -1,9 +1,9 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { shiftDay } from './scores/time';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
-import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, HrvMethod, Span } from './scores/types';
+import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
 
-// The producer turns an owner's stored readings into the derived row the app and the prompt read. It reads one 31-day
+// The producer turns an owner's stored readings into the derived row the app and the prompt read. It reads a 31-day
 // series, computes today and yesterday by the owner's own clock with an injected pure function, and writes each row
 // through waldo.health_context_write, the only writer of that read model. It never throws: it runs after the response.
 export type ProducerOutcome = 'written' | 'stale' | 'refused' | 'no_consent' | 'no_readings' | 'failed';
@@ -26,7 +26,13 @@ const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
-const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
+const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'workout'];
+// The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
+// such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
+const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
+const NIGHT_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature'];
+const RESTING_METHODS: readonly string[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown'];
+const STAGES = ['light', 'deep', 'rem', 'unspecified', 'awake'] as const;
 // ADR-0081's confidence order for whole sources (Apple > Oura > WHOOP), then the phone transports. Ranked, not counted:
 // a phone's hourly windows outnumber a ring's nightly records, and a choice that flips by count would re-base the owner
 // on another wearable from one day to the next.
@@ -34,13 +40,19 @@ const SOURCE_RANK = ['apple', 'oura', 'whoop', 'health_connect', 'samsung'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null }>;
-type Source = Readonly<{ source: string; epoch: number; readings: readonly Reading[] }>;
+export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null }>;
+type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 const instant = (value: unknown): string | null => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)).toISOString() : null);
 
+// A night's stage totals, or none: a total that is not a finite, non-negative number makes the whole set unreadable.
+const stagesOf = (raw: unknown): SleepStages | null => {
+  const r = asRecord(raw);
+  return r && STAGES.every(stage => typeof r[stage] === 'number' && Number.isFinite(r[stage]) && r[stage] >= 0) ? Object.fromEntries(STAGES.map(stage => [stage, r[stage]])) as SleepStages : null;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -48,6 +60,7 @@ const reading = (raw: unknown): Reading | null => {
   return {
     signal: r.signal, day: r.day, value: r.value, startAt: instant(r.start_at), endAt: instant(r.end_at),
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
+    stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
   };
 };
 
@@ -62,36 +75,71 @@ export const parseSeries = (raw: unknown): Parsed => {
   for (const entry of body.sources) {
     const s = asRecord(entry);
     if (!s || typeof s.source !== 'string' || !Number.isSafeInteger(s.consent_epoch) || !Array.isArray(s.samples)) return { kind: 'failed' };
-    sources.push({ source: s.source, epoch: s.consent_epoch as number, readings: s.samples.map(reading).filter((r): r is Reading => r !== null) });
+    sources.push({ source: s.source, epoch: s.consent_epoch as number, truncated: s.truncated === true, readings: s.samples.map(reading).filter((r): r is Reading => r !== null) });
   }
   return { kind: 'series', series: { readAt: body.read_at, sources } };
 };
 
+// A read that reached its row cap returned the newest rows, so the oldest day it holds may be partial. That day is
+// dropped, never computed from part of its readings.
+export const untruncated = (series: Series, code: string): Series => {
+  if (!series.sources.some(source => source.truncated)) return series;
+  console.log(JSON.stringify({ hop: 'health_series', ok: true, code }));
+  return {
+    ...series,
+    sources: series.sources.map(source => {
+      if (!source.truncated || !source.readings.length) return source;
+      const oldest = source.readings.reduce((min, r) => (r.day < min ? r.day : min), source.readings[0]!.day);
+      return { ...source, readings: source.readings.filter(r => r.day !== oldest) };
+    }),
+  };
+};
+// A source takes the vital readings read under the same consent epoch as its scores' readings only, so a withdrawal and
+// regrant between the two reads never mixes readings of two grants.
+const withVitals = (series: Series, vitals: Series | null): Series => (!vitals ? series : {
+  ...series,
+  sources: series.sources.map(source => {
+    const same = vitals.sources.find(other => other.source === source.source && other.epoch === source.epoch);
+    return same ? { ...source, readings: [...source.readings, ...same.readings.filter(r => VITAL_SIGNALS.includes(r.signal))] } : source;
+  }),
+});
+
 const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
   readings.reduce<T | undefined>((best, r) => (!best || (r.startAt ?? '') >= (best.startAt ?? '') ? r : best), undefined);
 const hrvMethod = (method: string | null): HrvMethod | null => (method === 'rmssd' || method === 'sdnn' ? method : null);
+// The contract leaves a resting reading's method optional; an unlabelled one is unknown, never another method.
+const restingMethod = (method: string | null): RestingMethod | null => (method === null ? 'unknown' : RESTING_METHODS.includes(method) ? method as RestingMethod : null);
+const temperatureMethod = (method: string | null): TemperatureMethod | null => (method === 'absolute' || method === 'baseline_delta' ? method : null);
+// The newest reading of each method.
+const perMethod = <Method extends string>(readings: readonly Reading[], methodOf: (method: string | null) => Method | null): MethodReading<Method>[] => {
+  const byMethod = new Map<Method, Reading[]>();
+  for (const r of readings) { const method = methodOf(r.method); if (method !== null) byMethod.set(method, [...(byMethod.get(method) ?? []), r]); }
+  return [...byMethod].map(([method, rs]) => ({ value: newest(rs)!.value, method }));
+};
 const span = (r: Reading): Span | null => (r.startAt && r.endAt ? { startAt: r.startAt, endAt: r.endAt } : null);
 
 // The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled duration is
 // time asleep by the contract; a duration labelled time in bed or unknown is not taken for it.
+const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
 const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
-  const asleep = newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
+  const asleep = asleepOf(readings);
   const midpoint = newest(readings.filter(r => r.signal === 'sleep_midpoint'));
   const when = asleep && span(asleep);
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
-const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window'];
 
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) { bucket.hrv = r.value; bucket.hrvMethod = hrvMethod(r.method); }
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
+    else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
     buckets.set(r.startAt, bucket);
   }
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));
@@ -115,6 +163,37 @@ const overlappingWindowDays = (readings: readonly Reading[]): ReadonlySet<string
   return days;
 };
 
+const midpointOf = (r: Reading): number | null => (r.startAt && r.endAt ? (Date.parse(r.startAt) + Date.parse(r.endAt)) / 2 : null);
+const meanOf = (values: readonly number[]): number | null => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null);
+// A night's vital readings are those whose middle falls inside its asleep span, whatever date they carry, so a reading
+// before midnight counts toward the night it falls in, and a daytime reading toward none. A day without a night has none.
+const vitalsOf = (rs: readonly Reading[], night: readonly Reading[], sleep: DayRecord['sleep']): DayVitals => {
+  const inNight = sleep ? night.filter(r => { const at = midpointOf(r); return at !== null && at >= Date.parse(sleep.startAt) && at <= Date.parse(sleep.endAt); }) : [];
+  const valuesOf = (signal: string) => inNight.filter(r => r.signal === signal).map(r => r.value);
+  return {
+    breathingRate: meanOf(valuesOf('respiratory_rate')), bloodOxygen: meanOf(valuesOf('spo2')),
+    wristTemperature: perMethod(inNight.filter(r => r.signal === 'wrist_temperature'), temperatureMethod),
+    awakeMinutes: asleepOf(rs)?.stages?.awake ?? null,
+    walkingHeartRate: newest(rs.filter(r => r.signal === 'walking_heart_rate_average'))?.value ?? null,
+  };
+};
+
+const MIN_ASLEEP_HOURS = 3;
+const LOW_HOURS = 2;
+// A night with no measured resting heart rate takes one from its own heart-rate hours: the mean of the two lowest hour means
+// among the hours wholly inside the sleep's span (its time-asleep reading's start to end), from at least three such hours. A
+// resting rate lies at the night's low, and it takes two hours, not one, because the read returns each hour's mean without
+// its number of readings, so one sparsely read hour must not set it alone. An hour partly outside the span is left out. The
+// span decides, not the date, so the hour before midnight, dated the day before, counts. A night touching a day with an
+// overlapping window, or begun before the first hour the read holds, was not read whole and takes none.
+const asleepLow = (sleep: DayRecord['sleep'], hours: readonly Reading[], overlapped: ReadonlySet<string>, firstHourMs: number): MethodReading<RestingMethod>[] => {
+  if (!sleep || Date.parse(sleep.startAt) < firstHourMs) return [];
+  const from = Date.parse(sleep.startAt), to = Date.parse(sleep.endAt);
+  const asleep = hours.filter(r => Date.parse(r.startAt!) >= from && Date.parse(r.endAt!) <= to);
+  if (asleep.length < MIN_ASLEEP_HOURS || asleep.some(r => overlapped.has(r.day))) return [];
+  return [{ value: meanOf(asleep.map(r => r.value).sort((a, b) => a - b).slice(0, LOW_HOURS))!, method: 'asleep_hours_low' }];
+};
+
 // Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged. A day
 // holding an overlapping window keeps no hourly windows, so its window-based parts read as unknown, never doubled.
 const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
@@ -122,16 +201,20 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
   for (const r of readings) byDay.set(r.day, [...(byDay.get(r.day) ?? []), r]);
   const zoneChanged = new Set<string>();
   const overlapped = overlappingWindowDays(readings);
+  const night = readings.filter(r => NIGHT_SIGNALS.includes(r.signal));
+  // One reading per hour, the later of a repeat, as the hourly buckets take it.
+  const heartHours = [...new Map(readings.filter(r => r.signal === 'heart_rate_window' && r.startAt && r.endAt).map(r => [r.startAt, r])).values()];
+  const firstHourMs = Math.min(...heartHours.map(r => Date.parse(r.startAt!)));
   const days = [...byDay].map(([day, rs]): DayRecord => {
     const zones = new Set(rs.flatMap(r => (r.timezone ? [r.timezone] : [])));
     if (zones.size > 1) zoneChanged.add(day);
-    const hrv = newest(rs.filter(r => r.signal === 'overnight_hrv' && hrvMethod(r.method)));
-    const resting = newest(rs.filter(r => r.signal === 'resting_heart_rate'));
+    const sleep = sleepOf(rs);
+    const measured = perMethod(rs.filter(r => r.signal === 'resting_heart_rate'), restingMethod);
     return {
-      day, timezone: newest(rs.filter(r => r.timezone))?.timezone ?? fallbackZone, sleep: sleepOf(rs),
-      overnightHrv: hrv ? { value: hrv.value, method: hrvMethod(hrv.method)! } : null,
-      restingHeartRate: resting?.value ?? null, hourly: overlapped.has(day) ? [] : hourlyOf(rs),
-      workouts: rs.filter(r => r.signal === 'workout').flatMap(r => span(r) ?? []), demand: null,
+      day, timezone: newest(rs.filter(r => r.timezone))?.timezone ?? fallbackZone, sleep,
+      overnightHrv: perMethod(rs.filter(r => r.signal === 'overnight_hrv'), hrvMethod),
+      restingHeartRate: measured.length ? measured : asleepLow(sleep, heartHours, overlapped, firstHourMs), hourly: overlapped.has(day) ? [] : hourlyOf(rs),
+      workouts: rs.filter(r => r.signal === 'workout').flatMap(r => span(r) ?? []), demand: null, vitals: vitalsOf(rs, night, sleep),
     };
   });
   return { days, zoneChanged, overlapped };
@@ -175,6 +258,13 @@ const within = (read: Promise<unknown>, graceMs: number): Promise<DemandRead> =>
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
+// Sleep debt in the shape the app reads. A window with a missing night is partial and carries no figure.
+const sleepDebtOf = (debt: DailyScores['sleep_debt']): object => {
+  if (debt.state === 'unavailable') return { state: 'unavailable', reason: debt.reason };
+  const version = { algorithm_version: debt.algorithm_version, activation: debt.activation };
+  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
+};
+
 const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, tags: readonly string[]): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
@@ -187,6 +277,7 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason)
       : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
     ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
+    sleep_debt: sleepDebtOf(scores.sleep_debt), drivers: scores.drivers,
     freshness: 'fresh', tags,
   };
 };
@@ -233,11 +324,17 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // Started beside the series read and bounded, so a slow calendar costs Weight, never the Recovery and Form writes.
     pending = deps.readDemand?.({ ...range, timezone: at.timezone });
     const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
-    const parsed = parseSeries(await deps.readSeries({ ...range, signals: SIGNALS }));
+    const scoresRead = deps.readSeries({ ...range, signals: SIGNALS });
+    const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
+    const parsed = parseSeries(await scoresRead);
     if (parsed.kind !== 'series') return parsed.kind;
+    // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
+    const vitals = await vitalsRead;
+    if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
+    const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
     // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
     // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
-    const present = [...parsed.series.sources].filter(s => s.readings.length > 0);
+    const present = [...series.sources].filter(s => s.readings.length > 0);
     if (!present.length) return 'no_readings';
     const rank = (source: string) => { const at = SOURCE_RANK.indexOf(source); return at < 0 ? SOURCE_RANK.length : at; };
     const sleptOn = (s: Source, day: string) => s.readings.some(r => r.signal === 'sleep_duration' && r.day === day);
@@ -251,7 +348,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       // A day the calendar reports and the phone sent nothing for still counts toward Weight. It carries no health reading,
       // so Recovery, Form and sleep debt read it as missing, and its physical load is unknown.
       for (const [day, { minutes }] of busy) {
-        if (!days.some(d => d.day === day)) days.push({ day, timezone: at.timezone, sleep: null, overnightHrv: null, restingHeartRate: null, hourly: [], workouts: [], demand: { meetingMinutes: minutes, messageCount: null, openTaskMinutes: null, physicalLoad: null } });
+        if (!days.some(d => d.day === day)) days.push({ day, timezone: at.timezone, sleep: null, overnightHrv: [], restingHeartRate: [], hourly: [], workouts: [], demand: { meetingMinutes: minutes, messageCount: null, openTaskMinutes: null, physicalLoad: null } });
       }
       return { readingDays, travelled, days };
     };
@@ -259,12 +356,12 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), chosen, parsed.series.readAt, at.timezone, tags);
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), chosen, series.readAt, at.timezone, tags);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));

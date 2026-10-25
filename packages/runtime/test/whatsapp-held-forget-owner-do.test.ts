@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
@@ -15,12 +16,13 @@ import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { runBook } from '../src/channels/background-runs';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { jobBook } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 // The forgotten literal comes only from what the model wrote, never from the loop title or the reminder note: a loop whose
 // title carried it would be dropped by the purge, and the outbox would then refuse the check-back for that reason instead.
@@ -114,6 +116,14 @@ type Steps = Readonly<{
   // A background task whose brief carries the text, and the status of every task.
   task(text: string): void;
   tasks(): { status: string; cancel_reason: string | null }[];
+  // Every task row's brief, progress and result, as one string.
+  taskColumns(): string;
+  // A text taken into the forget purge job's custody as the forget tool takes it, then one pass of the job: the pass a turn
+  // start runs and the console's retry arms.
+  purgePass(text: string): Promise<void>;
+  // A browser card that task's errand raised, waiting for the owner; returns its ledger id.
+  taskCard(): Promise<string>;
+  cardStatus(id: string): string;
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -154,10 +164,13 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           await internals.serial(async () => undefined);
           runTurn = false;
         },
+        // The tick writes a check-back job on the first pass; its worker reports (stood in for here) for the passes after.
         heartbeat: async () => {
           loops.open({ title: 'Send the quarterly numbers', due: new Date(Date.now() - HOUR).toISOString().slice(0, 16) });
           await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000,
             recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: 0 } });
+          await owner.alarm(); await state.storage.deleteAlarm();
+          expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
         },
         reminder: async repeat => {
           const clock = { timezone: 'UTC', now: () => new Date(Date.now() - HOUR) };
@@ -217,6 +230,15 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
             .create({ kind: 'task', profile: 'reader', idempotencyKey: 'forget-task', origin: 'turn', surface: 'whatsapp', brief, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR });
         },
         tasks: () => state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray(),
+        taskColumns: () => JSON.stringify(state.storage.sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray()),
+        purgePass: async text => {
+          state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(text), text, new Date().toISOString());
+          await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+        },
+        taskCard: () => approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
+          currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
+          .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
+        cardStatus: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -233,7 +255,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await alarms(3);
       expect(model.checkBacks).toBe(1);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
-      expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:heartbeat-tick:\d+$/), status: 'pending', payload: { text: CHECK_BACK } }]);
+      expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:job_/), status: 'pending', payload: { text: CHECK_BACK } }]);
 
       expect(await forget(kind, SECRET)).toBe(true);
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
@@ -243,7 +265,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await alarms(1);
       expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
       // The tick ran and its check-back was cancelled by the owner, which is neither a failure nor a failed delivery.
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
       // Nothing writes that occurrence's check-back again.
       await alarms(3);
       expect(model.checkBacks).toBe(1);
@@ -266,7 +288,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events.filter(event => event.includes(SECRET) || event === `text:${CHECK_BACK}`)).toEqual([]);
-      expect(job('heartbeat').run).toEqual([{ status: 'stopped', summary: STOPPED_HEARTBEAT }]);
+      expect(job('heartbeat').run).toEqual([{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }]);
     });
   });
 
@@ -300,7 +322,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await report('delivered');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'delivered' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'heartbeat sent' }], scheduled: [{ outcome: 'ok', delivery: 'sent' }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'completed', summary: 'heartbeat sent' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 
@@ -313,7 +335,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await report('refused');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 
@@ -326,7 +348,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       age(31 * 24 * HOUR);
       await alarms(2);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'lapsed' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: 'heartbeat not sent; your WhatsApp window stayed closed for 30 days' }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: 'heartbeat not sent; your WhatsApp window stayed closed for 30 days' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 });
@@ -430,15 +452,37 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
 
 describe('owner forget reaches an open background task', { timeout: 30_000 }, () => {
   it.each(['node', 'spot'] as const)('cancels it from the console (%s), so its worker cannot report the text back', async kind => {
-    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, forget }) => {
+    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, taskColumns, forget }) => {
       task(SECRET);
       expect(await forget(kind, SECRET)).toBe(true);
       expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+    });
+  });
+
+  it('the forget purge job\'s pass cancels a task that carries a held text and leaves no copy in it', async () => {
+    await owned('wa-forget-task-pass', async ({ task, tasks, taskColumns, purgePass, heldTopics }) => {
+      task(SECRET);
+      await purgePass(SECRET);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+      expect(heldTopics()).toEqual([]);
+    });
+  });
+
+  it('withdraws the card the forgotten task\'s errand raised: the owner is not asked to finish work they stopped', async () => {
+    await owned('wa-forget-task-card', async ({ task, tasks, taskCard, cardStatus, forget }) => {
+      task(SECRET);
+      const card = await taskCard();
+      expect(cardStatus(card)).not.toBe('skipped');
+      expect(await forget('spot', SECRET)).toBe(true);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(cardStatus(card)).toBe('skipped');
     });
   });
 });
 
-describe('the job-report redactor covers heartbeat check-backs and reminders', () => {
+describe('the job-report redactor covers heartbeat check-backs, reminders and update cards', () => {
   it('cancels waiting ones, scrubs delivered ones, leaves replies and notices alone, and counts what it could not scrub', async () => {
     const { TelegramFinalOutbox, redactJobReportEntries, FINAL_OUTBOX_KEY } = await import('../src/channels/telegram-final-outbox');
     const values = new Map<string, unknown>();
@@ -452,33 +496,38 @@ describe('the job-report redactor covers heartbeat check-backs and reminders', (
     await outbox.enqueue({ ...base, id: 'delivered-heartbeat', heartbeat: { ...heartbeat, occurrence: 800 } });
     await outbox.enqueue({ ...base, id: 'reply' });
     await outbox.enqueue({ ...base, id: 'notice', scheduleNotice: { scheduleId: 'job', until: 5000 } });
+    // An update card now waits in the outbox too (up to half an hour), so forget reaches it like any job's report.
+    await outbox.enqueue({ ...base, id: 'update', update: { recordId: 7 } });
     const rows = outbox.records(); rows[2]!.status = 'delivered'; rows[2]!.settled = true; kv.put(FINAL_OUTBOX_KEY, rows);
 
-    expect(redactJobReportEntries(kv, [SECRET], FORGOTTEN)).toEqual({ rewritten: 3, remaining: 0 });
+    expect(redactJobReportEntries(kv, [SECRET], FORGOTTEN)).toEqual({ rewritten: 4, remaining: 0 });
     expect(new TelegramFinalOutbox(kv).records().map(({ id, status, reason, payload }) => ({ id, status, reason, text: payload.text }))).toEqual([
       { id: 'heartbeat', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
       { id: 'reminder', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
       { id: 'delivered-heartbeat', status: 'delivered', reason: undefined, text: `Still open: the ${FORGOTTEN}.` },
       { id: 'reply', status: 'pending', reason: undefined, text: `Still open: the ${SECRET}.` },
       { id: 'notice', status: 'pending', reason: undefined, text: `Still open: the ${SECRET}.` },
+      { id: 'update', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
     ]);
   });
 
-  // The redactor folds case as a non-Unicode regex does and the remaining check as toLowerCase does, so the Kelvin sign
-  // (U+212A, which lowercases to "k") survives the scrub. The forget must count that copy, not report itself complete.
-  it('counts a waiting check-back the scrub could not clean', async () => {
+  // The redactor and the remaining check share one pattern: a Unicode case variant (the Kelvin sign folds to "k") is scrubbed,
+  // and a copy the scrub cannot clean, where the marker itself carries the topic, is counted, never reported complete.
+  it('scrubs a Unicode case variant and counts a waiting check-back the scrub could not clean', async () => {
     const { TelegramFinalOutbox, redactJobReportEntries } = await import('../src/channels/telegram-final-outbox');
     const values = new Map<string, unknown>();
     const kv = { get: <T>(key: string) => structuredClone(values.get(key)) as T | undefined, put: (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
-    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: 'Your Kite lesson is still open.' }, ownerSubject: '42', doName: 'owner',
+    await new TelegramFinalOutbox(kv, () => 1000).enqueue({ id: 'heartbeat', trace: 'fixture', payload: { chat_id: 42, text: `Your ${String.fromCharCode(0x212a)}ite lesson is still open.` }, ownerSubject: '42', doName: 'owner',
       heartbeat: { id: HEARTBEAT_ID, occurrence: 900, schedulerRunId: 'run', loops: [{ id: 'o1', due: '2026-10-18T08:00', status: 'open' }] } });
-    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 0, remaining: 1 });
+    expect(redactJobReportEntries(kv, ['kite'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 0 });
+    expect(new TelegramFinalOutbox(kv).records()[0]!.payload.text).toBe(`Your ${FORGOTTEN} lesson is still open.`);
+    expect(redactJobReportEntries(kv, ['forgotten'], FORGOTTEN)).toEqual({ rewritten: 1, remaining: 1 });
   });
 });
 
 // A job whose message waits for WhatsApp keeps its run open, with no summary yet, for as long as the message waits.
 describe('a forget while a job\'s run is still open', () => {
-  it('scrubs finished runs and settles, instead of failing on the open run\'s empty summary', async () => {
+  it('clears finished runs\' summaries and settles, instead of failing on the open run\'s empty summary', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-open-run')), async (_instance, state) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
       const runs = runBook(state.storage.sql, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
@@ -487,8 +536,9 @@ describe('a forget while a job\'s run is still open', () => {
       memory.add({ kind: 'fact', text: SECRET, source: 'stated', evidence: `"${SECRET}"`, origin: 'owner' }, new Date().toISOString());
       const purge = memory.purge([memory.claims()[0]!.id], new Date().toISOString());
       expect({ ready: purge.ready, failed: purge.failed, remaining: purge.remaining }).toEqual({ ready: true, failed: [], remaining: {} });
-      expect(state.storage.sql.exec<{ summary: string | null }>('SELECT summary FROM background_runs ORDER BY started_at, kind').toArray().map(row => row.summary).sort())
-        .toEqual([`Checked the ${FORGOTTEN}`, null].sort());
+      // A run's summary is Waldo's own derived text, so one that carries the topic is cleared, not redacted.
+      expect(state.storage.sql.exec<{ summary: string | null }>('SELECT summary FROM background_runs ORDER BY started_at, kind').toArray().map(row => row.summary))
+        .toEqual([null, null]);
     });
   });
 });

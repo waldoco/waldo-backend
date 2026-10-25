@@ -16,6 +16,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
 
 const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
@@ -506,16 +507,30 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       state.storage.kv.put('wa_last_inbound_ms', Date.now() - wrote);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'fixture', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
+      // The directory says WhatsApp is the owner's surface, so the alarm runs their jobs lane and outbox there.
+      const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
         GOOGLE_CLIENT_ID: 'held-fixture', GOOGLE_CLIENT_SECRET: 'fixture' });
       const runtime = (owner as unknown as { setup(channel: string): { updateCheck(trace: string): Promise<void> } }).setup('whatsapp');
       try {
         await runtime.updateCheck('seed');
         calendar.changed = true;
         await runtime.updateCheck('changed');
+        // Only an open window writes a sweep job. Its worker reports (stood in for here), the next pass's apply queues the
+        // card, and the pass after sends it.
+        expect(reportMachineJobs(state.storage.sql)).toHaveLength(sent);
+        await applyAndSend(owner as unknown as { alarm(): Promise<void> }, state.storage.kv);
         expect(model.updates).toBe(sent);
         expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(sent ? [expect.stringContaining(UPDATE)] : []);
-        // The change is kept either way; only a card that reached the owner is recorded as pushed.
+        // The change is kept either way; only a card that reached the owner is recorded as pushed, which on WhatsApp is once
+        // Meta reports it arrived.
+        expect(state.storage.sql.exec<{ pushed: number }>('SELECT pushed FROM update_cards ORDER BY id').toArray()).toEqual([{ pushed: 0 }]);
+        if (sent) {
+          const ids = (state.storage.kv.get<{ providerMessageIds?: (string | null)[] }[]>('telegram_final_outbox_v1') ?? []).flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
+            body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        }
         expect(state.storage.sql.exec<{ pushed: number }>('SELECT pushed FROM update_cards ORDER BY id').toArray()).toEqual([{ pushed: sent }]);
       } finally { await state.storage.deleteAlarm(); }
     });

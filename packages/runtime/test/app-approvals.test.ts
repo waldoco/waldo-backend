@@ -5,7 +5,8 @@ import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../.
 import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const CSRF = 'c'.repeat(64);
 
@@ -22,11 +23,10 @@ it('lists app approvals and decides them once against the reviewed digest, with 
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `app${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0001' });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => { current++; }, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => { current++; }, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const get = (query = '') => appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host);
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
-    const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nSee you at four.';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>' }));
 
     const listed = await get();
     expect(listed.status).toBe(200);
@@ -76,6 +76,63 @@ it('lists app approvals and decides them once against the reviewed digest, with 
   });
 });
 
+it('approving a send, or a calendar change that reaches guests, needs a sign-in from the last two hours; a hold on the owner\'s own calendar and declining do not', async () => {
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-step-up-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0, sends = 0, events = 0, moves = 0, seen: Record<string, unknown> = {};
+    const client = {
+      sendRaw: async () => { sends++; return { message_id: 'g1' }; },
+      findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }),
+      createEvent: async () => { events++; return { id: `ev${events}`, etag: 'e1' }; },
+      event: async () => seen,
+      moveEvent: async () => { moves++; return { ...seen, etag: 'v2' }; },
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_003, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `stepup${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0003' });
+    const host = (signedInAgo: number) => ({ csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date(Date.now() - signedInAgo).toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk });
+    const old = host(3 * 60 * 60_000), fresh = host(60_000);
+    const decide = (on: typeof old, body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), on);
+    const digest = async (id: string) => (await desk.approvals(Date.now(), { id }))[0]!.payload_digest;
+    const later = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString() as never;
+
+    const email = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<stepup@waldo-send>' }));
+    const send = { approval_id: email, action: 'approve', expected_digest: await digest(email), request_id: 'step-up-send-0001' };
+    const refused = await decide(old, send);
+    expect([refused.status, await refused.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(sends).toBe(0);
+    expect(await state.storage.get('console:control-receipts') ?? {}).toEqual({});
+
+    const invite = await desk.propose({ action: 'create', title: 'Design review', start: later(1), end: later(2), reason: 'Sam asked', attendees: ['sam@example.test'], send_updates: 'all' });
+    const shared = await decide(old, { approval_id: invite, action: 'approve', expected_digest: await digest(invite), request_id: 'step-up-invite-0001' });
+    expect([shared.status, await shared.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(events).toBe(0);
+
+    const hold = await desk.propose({ action: 'create', title: 'Focus', start: later(3), end: later(4), reason: 'deep work' });
+    const held = await decide(old, { approval_id: hold, action: 'approve', expected_digest: await digest(hold), request_id: 'step-up-hold-0001' });
+    expect(appApprovalDecisionResultV1Schema.parse(await held.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
+    expect(events).toBe(1);
+    const skipped = await decide(old, { approval_id: invite, action: 'skip', expected_digest: await digest(invite), request_id: 'step-up-skip-0001' });
+    expect(appApprovalDecisionResultV1Schema.parse(await skipped.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'skipped' });
+
+    // Google gave the guest event's time without an offset, a detail the app's card schema drops; its guests still gate it.
+    const offsetless = (at: string) => at.slice(0, 19);
+    seen = { id: 'e9', title: 'Standup', start: offsetless(later(5)), end: offsetless(later(6)), all_day: false, etag: 'v1', attendees: 3 };
+    const move = await desk.propose({ action: 'move', event_id: 'e9', title: 'Standup', start: later(7), end: later(8), reason: 'clash' });
+    const [card] = await desk.approvals(Date.now(), { id: move });
+    expect(card!.exact.changes?.guests ?? card!.exact.changes?.emails_guests).toBeUndefined();
+    expect(card!.actions).toContain('approve');
+    const moved = await decide(old, { approval_id: move, action: 'approve', expected_digest: await digest(move), request_id: 'step-up-move-0001' });
+    expect([moved.status, await moved.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(moves).toBe(0);
+
+    // The refusal recorded nothing, so the same request from a fresh sign-in sends exactly once.
+    const sent = await decide(fresh, send);
+    expect(sent.status).toBe(200);
+    expect(appApprovalDecisionResultV1Schema.parse(await sent.json())).toMatchObject({ request_id: 'step-up-send-0001', receipt: { state: 'recorded' }, duplicate: false, approval_state: 'done' });
+    expect(sends).toBe(1);
+  });
+});
+
 it('app receipts carry fixed text, never provider errors or the desk message', async () => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-receipts-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
@@ -83,10 +140,10 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
     const client = { sendRaw: async () => ({ message_id: 'g1' }), findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), newId: () => `rcpt${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {},
       google: async () => { if (providerDown) throw new Error('PROVIDER-SECRET invalid_grant for owner@example.test'); return client; } });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const decide = async (body: unknown) => { const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host); return { status: response.status, text: await response.text() }; };
     const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nPRIVATE-BODY-TEXT';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>' }));
     const [item] = await desk.approvals(Date.now(), { id });
     const failed = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'receipt-0001' });
     expect(failed.status).toBe(409);
@@ -105,11 +162,11 @@ it('Not now keeps the approval open and its cards live, leaves it out of the def
     const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_002, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `defer${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0002' });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
     const list = async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals;
     const raw = 'To: b@x.test\r\nSubject: Later\r\n\r\nNot today.';
-    const id = await desk.proposeSendEmail({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>' }));
     const [item] = await list();
     expect(item).toMatchObject({ approval_id: id, state: 'open' });
     expect(item!.actions).toContain('defer');
@@ -142,10 +199,10 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_004, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `refused${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0004' });
     // A decision that raced this one: the desk answers that the row was already handled.
-    const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
+    const raced = { approvals: desk.approvals, stepUp: desk.stepUp, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
     const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
-    const id = await desk.proposeSendEmail({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>' }));
     const list = async () => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
     const [item] = await list();
     const answer = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -166,13 +223,12 @@ const deferDesk = async <T>(name: string, run: (tools: Readonly<{ desk: ReturnTy
     const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_006, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0006' });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     return run({ desk, clock, sql: state.storage.sql,
       decide: body => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host),
       list: async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals,
       propose: async (subject, body) => {
-        const raw = `To: e@x.test\r\nSubject: ${subject}\r\n\r\n${body}`;
-        return desk.proposeSendEmail({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>`, raw, digest: await sha256Hex(raw) });
+        return desk.proposeSendEmail(await emailProposal({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>` }));
       },
       deferredAt: id => state.storage.sql.exec<{ deferred_at: number | null }>('SELECT deferred_at FROM ledger WHERE id = ?', id).one().deferred_at });
   });
@@ -246,7 +302,7 @@ it('a calendar approval carries the details its frozen review states, only to a 
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `cal${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const list = async (contract?: string) => {
       const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host);
       return { text: await response.clone().text(), approvals: appApprovalListV1Schema.parse(await response.json()).approvals };
@@ -288,7 +344,7 @@ it('a calendar detail that fails its schema drops the details, not the card, so 
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `fb${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const list = async (contract?: string) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host)).json()).approvals;
     const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
     const move = await desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: `${day}T18:30:00+05:30` as never, end: `${day}T18:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });

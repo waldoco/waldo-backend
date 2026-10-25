@@ -1,15 +1,25 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import type { ScheduleEntry } from '@waldo/contracts';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 import type { TestStorageDO } from './support/worker-entry';
 import { TelegramFinalOutbox, standingOrderFinalId } from '../src/channels/telegram-final-outbox';
-import { heartbeatEligible, heartbeatTick, settleHeartbeat } from '../src/channels/heartbeat';
-import { loopBook } from '../src/channels/loops';
-import { dayPlanBook } from '../src/channels/day-cards';
-// Stands in for the check-back turn: reports which loops it was given.
-const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
+import { heartbeatEligible, settleHeartbeat } from '../src/channels/heartbeat';
+import { loopBook, type LoopBook } from '../src/channels/loops';
+// A producer that queues a heartbeat-receipt final and leaves its delivery pending, the way a check-back send does, so these
+// cases drive the scheduler's delivery_pending path. Once the loop holds its cooldown it decides quiet.
+const pendingCheckBack = (scheduler: Scheduler, sql: SqlStorage, loops: LoopBook, outbox: TelegramFinalOutbox, now: () => number) => async (entry: ScheduleEntry): Promise<void | 'delivery_pending'> => {
+  const runId = scheduler.runningRunId(entry.id, entry.occurrence_at)!;
+  const due = loops.list().filter(loop => loop.due !== null && heartbeatEligible({ heartbeat: { id: entry.id, occurrence: 0, schedulerRunId: runId, loops: [{ id: loop.id, due: loop.due! }] } } as never, sql, loops, 'Etc/UTC', now()));
+  if (!due.length) { scheduler.markHeartbeatDecision(runId, 'quiet'); return; }
+  scheduler.markHeartbeatDecision(runId, 'acted');
+  scheduler.markDelivery(runId, 'pending');
+  await outbox.enqueue({ id: `final:${entry.id}:${entry.occurrence_at}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text: `Checked ${due.map(loop => loop.title).join(', ')}` },
+    ownerSubject: 'owner', doName: 'owner-do', heartbeat: { id: entry.id, occurrence: entry.occurrence_at, schedulerRunId: runId, loops: due.map(loop => ({ id: loop.id, due: loop.due!, status: 'open' })) } });
+  return 'delivery_pending';
+};
 
 let seq = 0;
 const stub = () => env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TestStorageDO>;
@@ -119,11 +129,7 @@ describe('run decision + delivery lifecycle (owner shape call)', () => {
       const loops = loopBook(state.storage.sql, { newId: () => 'due-loop', now: () => now });
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
-      const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
-          id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
-          ownerSubject: 'owner', doName: 'owner-do', heartbeat,
-        }) });
+      const tick = pendingCheckBack(scheduler, state.storage.sql, loops, outbox, () => now);
       await scheduler.schedule({ id: 'postcommit-heartbeat', kind: 'heartbeat', occurrenceAt: now, dueAt: now,
         recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
       const dispatched = await scheduler.dispatchDue({ heartbeat: async entry => {
@@ -418,11 +424,7 @@ describe('C3 dedupe + missed-run policy', () => {
       const loops = loopBook(state.storage.sql, { newId: () => 'due-loop', now: () => now });
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
-      const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
-          id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
-          ownerSubject: 'owner', doName: 'owner-do', heartbeat,
-        }) });
+      const tick = pendingCheckBack(scheduler, state.storage.sql, loops, outbox, () => now);
       await scheduler.schedule({ id: scheduleId, kind: 'heartbeat', occurrenceAt: occurrence, dueAt: occurrence,
         recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
       for (let attempt = 0; attempt < 9; attempt += 1) {

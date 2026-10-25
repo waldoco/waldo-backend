@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { presenceAuthority } from './helpers/directory-presence';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -76,6 +77,10 @@ it('a mail follow-up is written with the owner\'s health logs, but no stored cop
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
       await incoming('/fire fetch');
+      // The held mail becomes a sweep job: its worker reports (stood in for here) and the jobs lane's update-card turn opens
+      // the source loop.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
       expect(loops.list()[0]?.source_ref).toBe('mail:mail-thread-1');
       now += 300_000;
       await incoming('/fire fetch');

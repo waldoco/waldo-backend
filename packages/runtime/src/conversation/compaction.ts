@@ -1,9 +1,10 @@
 import { compactionMessage, conversationModelMessages, type ConversationCovers, type ConversationEntry, type ConversationModelMessage, type ConversationTree } from '@waldo/contracts';
+import type { ClaimGrounding } from '../memory/claims';
 import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, windowModelMessages, type ConversationWindowStats } from './window';
 
 // A compaction row summarises the oldest part of a chain so the model's view becomes [summary] + [a verbatim tail]; the
-// transcript the owner sees keeps every row. Production never writes this object: the flip changes `enabled` in source
-// after the eval meets its bar, and off means no trigger and no view rule, the plain window exactly as before.
+// transcript the owner sees keeps every row. These are the defaults, off: a deploy turns compaction on with
+// WALDO_COMPACTION=on, and off means no trigger and no view rule, the plain window exactly as before.
 export const COMPACTION = {
   enabled: false,
   budgetTokens: CONVERSATION_INPUT_BUDGET_TOKENS,
@@ -14,12 +15,14 @@ export const COMPACTION = {
   maxOutputTokens: 2_000,
 };
 export type CompactionSettings = typeof COMPACTION;
+// Only the exact value "on" turns it on, so an unset or mistyped deploy var keeps the plain window.
+export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string }>): CompactionSettings => ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on' });
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
 export const compactionId = (toId: string): string => `${toId}-compaction`;
 // The summary has fixed sections, so what the owner asked for survives each re-compaction in the same place instead of
-// thinning out of free prose. Headings carry no numbers: the numeric health floor rejects a numbered list.
+// thinning out of free prose.
 export const COMPACTION_INSTRUCTION = [
   'Summarise the earlier part of this conversation between the owner and Waldo for Waldo\'s own later use. The conversation is in the owner\'s language; write in it.',
   'Write these sections, in this order, each a heading line followed by plain bullets, and leave a section with no bullets out:',
@@ -34,8 +37,17 @@ export const COMPACTION_INSTRUCTION = [
 // A span about to leave the model's window, handed to the memory flush before its summary replaces it. The flush may
 // keep what the owner said as memory; it writes nothing to the chain. A flush that throws defers the compaction, so no
 // span leaves the window before its flush has run.
-export type CompactionSpan = Readonly<{ conversationRef: string; covers: ConversationCovers; messages: readonly ConversationModelMessage[] }>;
-export type CompactionFlush = (span: CompactionSpan) => Promise<void>;
+// entryIds names every row leaving the window, oldest first, including rows the summary had no room for.
+export type CompactionSpan = Readonly<{ conversationRef: string; covers: ConversationCovers; messages: readonly ConversationModelMessage[]; entryIds: readonly string[] }>;
+// What the flush can keep: save writes, through memory's admission gate in the compacting turn's scope, what the owner said
+// in this transcript of the span (the sides say whose words are whose), and returns the claims it wrote. policy.health
+// false keeps no health notes.
+export type SpanMemory = Readonly<{
+  save(span: string, sides: ClaimGrounding, policy: Readonly<{ health: boolean }>): Promise<readonly Readonly<{ id: number; kind: string }>[]>;
+}>;
+// It returns the owner's own words in the span as it read them (none when it read no rows), so the summary floor can tell
+// a reading the owner wrote from one Waldo relayed or someone else sent.
+export type CompactionFlush = (span: CompactionSpan, memory: SpanMemory) => Promise<Readonly<{ owner: string }> | void>;
 
 export type CompactedStats = ConversationWindowStats & Readonly<{ compacted: 0 | 1 }>;
 
@@ -85,7 +97,9 @@ export const compactionDue = (input: Readonly<{ stats: Pick<ConversationWindowSt
   && input.ownerRows >= settings.minOwnerRows
   && (input.lastAttemptAt === null || input.now - input.lastAttemptAt >= settings.minIntervalMs);
 
-export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage[]; covers: ConversationCovers; gap: number; toEntry: ConversationEntry }>;
+// sources[i] is the row input[i] was made from: the live summary's row first when there is one, then the span rows carried.
+// entryIds names every row leaving the window, whether or not the summary reads it.
+export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage[]; sources: readonly ConversationEntry[]; covers: ConversationCovers; gap: number; toEntry: ConversationEntry; entryIds: readonly string[] }>;
 
 // What the next compaction covers: every row on the chain older than a verbatim tail of whole rounds at or under the tail
 // fraction of the budget, so the tail starts with an owner message. The call's input is the live summary first, then the
@@ -127,10 +141,27 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
   const first = Math.min(...kept);
   return {
     input: [...(summary ? [summary] : []), ...carried.map((row) => row.message!)],
-    covers: { from_id: live ? live.covers!.from_id : span[first]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
+    sources: [...(live ? [live] : []), ...carried.map((row) => row.entry)],
+    covers:{ from_id: live ? live.covers!.from_id : span[first]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
     gap: span.filter((row) => row.message !== null).length - carried.length,
     toEntry: span[span.length - 1]!.entry,
+    entryIds: span.map((row) => row.entry.id),
   };
+};
+
+// What a summary was made from, checked again in the commit that writes it, after the model call: each source row must
+// still be stored as the summary read it, and admits() must pass, reading what is held at that moment. A forget that
+// landed while the summary was being written rewrites a source row or holds a topic, and the summary is not written.
+export type CompactionFence = Readonly<{ sources: readonly ConversationEntry[]; admits: () => boolean }>;
+
+// The plan without the inputs `drop` selects, as a held topic's rows are left out: covers.rows counts only the original
+// rows the summary is still made from, the previous summary's count among them only while that summary is kept. Null when
+// nothing is left.
+export const planWithout = (plan: CompactionPlan, drop: (message: ConversationModelMessage) => boolean): CompactionPlan | null => {
+  const kept = plan.input.flatMap((message, index) => (drop(message) ? [] : [{ message, source: plan.sources[index]! }]));
+  if (!kept.length) return null;
+  const rows = kept.reduce((count, { source }) => count + (source.role === 'compaction' ? source.covers!.rows : 1), 0);
+  return { ...plan, input: kept.map(({ message }) => message), sources: kept.map(({ source }) => source), covers: { ...plan.covers, rows } };
 };
 
 // The row itself: a child of the last row it covers, beside the first row it does not, on the same thread, so no stored

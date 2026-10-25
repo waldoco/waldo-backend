@@ -13,6 +13,7 @@ import { liveVoiceJudge, VOICE_ANCHORS, VOICE_TESTS, voicePacket, type VoiceJudg
 import { labelInput, loadVoiceLabels, parseVoiceLabels, voiceAgreement, type LabelledVerdict, type VoiceLabel } from '../evals/nightly/voice-labels';
 import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
 import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
+import { PERSONALITY_SCENARIOS } from '../evals/nightly/personality-scenarios';
 import { STATE_MEMORY_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
 import { evalWorld } from '../evals/nightly/world';
 
@@ -342,13 +343,16 @@ describe('the nightly catalogue', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
-    // (h1-health-change-card), these sets and the two worker scenarios (background task, late answer), so it holds
-    // whether or not other scenarios land beside them.
+    // (h1-health-change-card), the stale health reading case (h2-stale-health-reading), the look-up case (k1-owner-lookup),
+    // these sets and the two worker scenarios (background task, late answer), so it holds whether or not other scenarios
+    // land beside them.
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'c1-connected-tracker')).toBe(true);
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
+    expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h2-stale-health-reading')).toBe(true);
+    expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'k1-owner-lookup')).toBe(true);
     const worker = NIGHTLY_SCENARIOS.filter((entry) => /^w\d+-/.test(entry.id));
     expect(worker.map((entry) => entry.id)).toEqual(['w1-long-read-in-background', 'w2-late-answer-keeps-promise']);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + worker.length);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + 1 + 1 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length + PERSONALITY_SCENARIOS.length + worker.length + 1);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {

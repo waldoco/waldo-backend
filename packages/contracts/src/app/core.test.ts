@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
@@ -59,8 +60,9 @@ describe('app problem envelope', () => {
   });
 
   it('adds an optional closed code to non-generic errors only', () => {
-    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'client_message_id_reused' }).success).toBe(true);
+    expect(appProblemV1Schema.safeParse({ error: 'step_up_required', code: 'step_up_required' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'stale_read', code: 'stale_read', message: 'Refresh.' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'unavailable', code: 'inbox_full' }).success).toBe(false);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'approval_superseded' }).success).toBe(false);
@@ -77,6 +79,14 @@ describe('app sign-in requests', () => {
       expect(schema.safeParse({ ...body, invite: 'ABCDEFGHJKMNPQRSTUVW' }).success).toBe(true);
       expect(schema.safeParse({ ...body, invite: 'XYZ23456789ABCDEFGHJ' }).success).toBe(true);
     }
+  });
+
+  it('verify accepts an optional phone in E.164, the number a new member joins with; nothing else is a phone', () => {
+    const body = { email: 'new@example.test', code: '123456', invite: 'ABCDEFGHJKMNPQRSTUVW' };
+    expect(appVerifyRequestV1Schema.safeParse({ ...body, phone: '+919876543210' }).success).toBe(true);
+    for (const phone of ['919876543210', '+91 98765 43210', '+0123456789', '+123456', '+1234567890123456', '', null, 9198765432])
+      expect({ phone, ok: appVerifyRequestV1Schema.safeParse({ ...body, phone }).success }).toEqual({ phone, ok: false });
+    expect(appCodeRequestSchema.safeParse({ email: 'new@example.test', phone: '+919876543210' }).success).toBe(false);
   });
 
   it('refuse an invite code outside that alphabet or length; the app upper-cases and trims before sending', () => {
@@ -109,6 +119,24 @@ describe('message times, cancel and ratings', () => {
     expect(routes).toContain('PUT /app/v1/chat/main/messages/{message_id}/rating');
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', closed_reason: 'cancelled', effects_unconfirmed: true }).success).toBe(true);
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', steps: [] }).success).toBe(false);
+  });
+});
+
+describe('chat revision 2: the reply draft on a running receipt', () => {
+  const running = { accepted: true, message_id: 'm', state: 'running' } as const;
+  it('is declared by chat=2 and absent from revision 1', () => {
+    expect(APP_CHAT_DRAFT_REVISION).toBe(2);
+    expect(appContractRevision('chat=2', 'chat')).toBe(APP_CHAT_DRAFT_REVISION);
+    for (const header of [null, 'chat=1', 'approvals=2']) expect(appContractRevision(header, 'chat')).toBeLessThan(APP_CHAT_DRAFT_REVISION);
+  });
+
+  it('accepts a non-empty draft up to the reply text bound', () => {
+    for (const draft of ['Here is the plan', 'x'.repeat(REPLY_TEXT_MAX_CHARS)]) expect(appMessageReceiptV1Schema.safeParse({ ...running, draft }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse(running).success).toBe(true);
+  });
+
+  it('rejects an empty, oversized or non-string draft', () => {
+    for (const draft of ['', 'x'.repeat(REPLY_TEXT_MAX_CHARS + 1), 42, null, ['Here']]) expect([draft, appMessageReceiptV1Schema.safeParse({ ...running, draft }).success]).toEqual([draft, false]);
   });
 });
 

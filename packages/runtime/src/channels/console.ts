@@ -1,34 +1,54 @@
+import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
+import { PROFILE_KINDS } from '../memory/claims';
 import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
 import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
-import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
+import { awaitsOwnerConfirm, type Claim, type ConstellationEdge, type ConstellationNode, type profile } from '../memory/claims';
+import type { ForgetHold } from '../memory/forget-purge';
 import type { Proactivity } from './loops';
 import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
+import { CONSOLE_REPLACED_SESSION_MS, CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS } from '../identity/console-auth';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_PATH}/google`;
+// Behind the console session, like the MCP start link: only the signed-in owner's browser turns it into a Google redirect.
+export const CONSOLE_GOOGLE_START_PATH = `${CONSOLE_GOOGLE_PATH}/start/`;
 export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
 // B9: the background task list as a first-class read-only JSON endpoint (same console session).
 export const CONSOLE_RUNS_PATH = `${CONSOLE_PATH}/runs`;
 export const CONSOLE_COOKIE = 'waldo_console';
-const LINK_MS = 10 * 60_000;
-const SESSION_MS = 12 * 60 * 60_000;
+export const LINK_MS = 10 * 60_000;
+// A session granted before the lifetime change has no signed_in and keeps its fixed 12 hours.
+const LEGACY_SESSION_MS = 12 * 60 * 60_000;
+// A used session renews at most this often, so a page that polls does not write storage on every request.
+const RENEW_STEP_MS = 60 * 60_000;
+
+// Both console cookies share one policy. Lax lets a link from mail, a website or a chat app open the console signed in;
+// a cross-site write, or a cross-site start of a flow a GET begins, is refused before any handler (console-cross-site.ts).
+// The cookie lives the absolute lifetime; the server ends the session sooner when it goes unused.
+export const consoleCookie = (name: string, value: string): string =>
+  `${name}=${value}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${CONSOLE_SESSION_LIFETIME_MS / 1000}`;
+export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
-export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number }>;
+// expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
+// signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
+export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number; ends?: number }>;
 
-// One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
-// signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
-export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+// One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
+// name is recorded. Tokens never leave this function.
+// ref names a directory-held session, so the app can sign that device out; browser rows from this store have none.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string }>;
+const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
-  [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
-    signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
+  [...sessions].sort((a, b) => signedInAt(b) - signedInAt(a)).map((session) => ({
+    signed_in: localIso(signedInAt(session), timezone).slice(0, 16).replace('T', ' '),
     until: localIso(session.expires, timezone).slice(0, 16).replace('T', ' '),
     current: session.token === current.token,
   }));
@@ -36,7 +56,8 @@ export const consoleSessionRows = (sessions: readonly ConsoleSession[], current:
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // One-time link from Telegram -> short session cookie. Only the owner's DM can mint a link.
-// Sessions are per browser: redeeming with a live session cookie refreshes that session instead of stacking.
+// Sessions are per browser: a sign-in in a browser that holds a session replaces it with a new token. The old one keeps
+// ordinary access for CONSOLE_REPLACED_SESSION_MS without its code (ends), so a turn under it finishes, then it ends.
 export const consoleAccess = (store: Store, now: () => number = Date.now) => {
   const readSessions = async (): Promise<Record<string, ConsoleSession>> => (await store.get<Record<string, ConsoleSession>>('console:sessions')) ?? {};
   const writeSessions = async (sessions: Record<string, ConsoleSession>): Promise<void> => {
@@ -44,9 +65,19 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     if (Object.keys(live).length > 0) await store.put('console:sessions', live);
     else await store.delete('console:sessions');
   };
-  const addSession = async (): Promise<string> => {
-    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
+  // A browser that proved a code keeps that proof through a link sign-in that replaces its session. Only the new
+  // session carries it: the replaced one loses its code and is capped, and a later cap never lengthens it.
+  const addSession = async (replacing: string | null, verified: boolean): Promise<string> => {
     const sessions = await readSessions();
+    const replaced = replacing ? sessions[replacing] : undefined;
+    const live = replaced !== undefined && replaced.expires >= now();
+    const verifiedAt = verified ? now() : live ? replaced.verified_at : undefined;
+    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), signed_in: now(), expires: now() + CONSOLE_SESSION_IDLE_MS, ...(verifiedAt === undefined ? {} : { verified_at: verifiedAt }) };
+    if (live) {
+      const { verified_at: _code, ...rest } = replaced;
+      const ends = Math.min(replaced.expires, now() + CONSOLE_REPLACED_SESSION_MS);
+      sessions[replacing!] = { ...rest, ends, expires: ends };
+    } else if (replacing) delete sessions[replacing];
     sessions[session.token] = session;
     await writeSessions(sessions);
     return session.token;
@@ -63,23 +94,25 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       const link = await store.get<Grant>('console:link');
       if (!link || link.token !== token || link.expires < now()) return null;
       await store.delete('console:link');
-      if (current) {
-        const sessions = await readSessions();
-        const existing = sessions[current];
-        if (existing && existing.expires >= now()) {
-          sessions[current] = { ...existing, expires: now() + SESSION_MS };
-          await writeSessions(sessions);
-          return current;
-        }
-      }
-      return addSession();
+      return addSession(current, false);
     },
-    async session(token: string | null): Promise<ConsoleSession | null> {
+    // Reading a live session is its use: it renews toward the idle limit, capped at the lifetime. A read another site
+    // started is not the owner's use and renews nothing.
+    async session(token: string | null, renew = true): Promise<ConsoleSession | null> {
       if (!token) return null;
-      const session = (await readSessions())[token];
-      return session && session.expires >= now() ? session : null;
+      const sessions = await readSessions();
+      const session = sessions[token];
+      if (!session || session.expires < now()) return null;
+      if (!renew || session.signed_in === undefined) return session;
+      const expires = Math.min(now() + CONSOLE_SESSION_IDLE_MS, session.signed_in + CONSOLE_SESSION_LIFETIME_MS, session.ends ?? Number.POSITIVE_INFINITY);
+      if (expires - session.expires < RENEW_STEP_MS) return session;
+      const renewed = { ...session, expires };
+      sessions[token] = renewed;
+      await writeSessions(sessions);
+      return renewed;
     },
-    grant: addSession,
+    // Only an email code grants a session, so a grant is a proven code.
+    grant: (replacing: string | null = null) => addSession(replacing, true),
     async signOut(token: string): Promise<void> {
       const sessions = await readSessions();
       delete sessions[token];
@@ -95,17 +128,25 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
 };
 
 // Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
-// link only shows a button; the token is spent by the POST that button sends.
+// link only shows a button; the token is spent by the POST that button sends. same-origin, not no-referrer: a browser
+// without Sec-Fetch-Site must still name the console as the POST's Origin, and no other site is ever sent this URL.
 export const signInPage = (token: string): Response => new Response(
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${/^c1\.[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token) && token.length <= 2048 ? token : token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
-  { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } },
+  { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
 );
 
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
-export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
+// A grant carries the browser's own owner object session, which the new one replaces.
+export const grantHeaders = (doName: string, request: Request): Record<string, string> => {
+  const current = sessionCookie(request);
+  return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
+};
+
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check'] as const;
+// made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
+export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
 // accepts any string, and several actions ignore the id entirely), so it must never reach the
@@ -132,6 +173,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
+  'health_memory.set': 'Saved. Notes Waldo keeps on its own include health only while this is on; what you ask it to remember is kept either way.',
   'schedule.set': 'Saved. That scheduled behavior is updated.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
@@ -140,10 +182,18 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'telegram.unlink': 'Telegram unlinked. Waldo will not message it again until you link an account.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
-  'spot.forget': 'Removed from long-term memory and blocked from relearning. The current chat may still mention it until the conversation moves on.',
+  'spot.pin': 'Pinned. Waldo keeps it in mind on every turn, as something you said.',
+  'spot.pin.failed': 'Nothing was pinned. Refresh Memory and try again.',
+  'spot.unpin': 'Unpinned. Waldo still remembers it and finds it when it matters.',
+  'spot.edit': 'Saved in your words. Waldo uses this from now on; the old version is kept as history.',
+  'spot.edit.failed': 'Nothing was changed. The text must be 1 to 1,000 characters and hold no password, key or token.',
+  'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
+  'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
-  'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
+  'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
+  'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
+  'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
@@ -174,6 +224,8 @@ export type ConsoleView = Readonly<{
   csrf: string;
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
+  granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
   imessage?: Readonly<{ linked: boolean }>;
@@ -184,6 +236,8 @@ export type ConsoleView = Readonly<{
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
+  // Topics a forget is still clearing from storage, masked: Waldo no longer sees them, and the owner can retry.
+  forgettingTopics: readonly ForgetHold[];
   holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];
   nodes: readonly ConstellationNode[];
   edges: readonly ConstellationEdge[];
@@ -191,6 +245,8 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
+  // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
+  pausedJobs: readonly Readonly<{ name: string; until: string }>[];
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
   lastRequest: LastRequest | null;
@@ -267,15 +323,18 @@ const serviceStatus = (view: ConsoleView) => {
   }).join('')}</div><p class="note">These are permission states, not proof that a tool succeeded. Recent activity below shows requests Waldo actually ran.</p>`;
 };
 
-// Sends need a bound sender account and exact destination in addition to words. The current
-// proposal stores neither for every channel, so console APPROVAL stays chat-only for sends.
-// Dismissal is the safe direction - it can only prevent a send, never cause one - so the
-// console offers Don't do this for open send proposals. That also un-strands proposals whose
-// Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
-// Open email/message send proposals the console may only dismiss (approve stays in chat).
+// The retired page renders its own forms and binds no read, so it approves no send. Dismissal is
+// the safe direction - it can only prevent a send, never cause one - so it offers Don't do this
+// for open send proposals. That also un-strands proposals whose Telegram approval card lost its
+// inline keyboard.
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
   (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
+// The Waiting view shows a send's whole draft and binds each decision to the read that showed it, so it sends
+// (approval.send) and changes an open email or message. Sending is its own action so the step-up table can ask for a
+// recent email code; the retired page's form route binds no read and handles no send.
+export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
+  Boolean(item && item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && item.review?.kind === item.kind);
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
@@ -284,6 +343,7 @@ const APPROVAL_LABELS: Readonly<Record<string, string>> = {
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if ('text' in review) return `<div class="approval-review"><pre>${esc(review.text)}</pre></div>`;
   if (review.kind === 'google_task_change') {
     const { args, list, before } = review.proposal;
     const task = args.changes?.title ?? before?.title;
@@ -338,7 +398,7 @@ const checklist = (view: ConsoleView) => {
   ].join('');
 };
 
-const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
+const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', waldo_confirmed: 'Waldo confirmed', inferred: 'Waldo\'s inference' };
 
 // A source pointer is an audit hint, never proof that the note is true. Only the
 // owner-DO source id may become a local episode search link; never emit a guessed
@@ -352,8 +412,16 @@ const spotProvenance = (spot: Claim): string => {
   return `${status}${source}${validity}`;
 };
 
+// A pinned spot rides every turn as the owner's own word; only the kinds the pinned blocks carry can be pinned.
+const spotPin = (view: ConsoleView, spot: ConsoleView['spots'][number]) => spot.pinned
+  ? form(view.csrf, 'spot.unpin', spot.pinned === 'facts' ? 'Unpin from facts' : 'Unpin from profile', { id: String(spot.id) })
+  : PROFILE_KINDS.includes(spot.kind) ? `${form(view.csrf, 'spot.pin', 'Pin to profile', { id: String(spot.id), value: 'profile' })}${form(view.csrf, 'spot.pin', 'Pin to facts', { id: String(spot.id), value: 'facts' })}` : '';
+// An edit replaces the spot with the owner's text; only a live spot (not a promoted one) can be corrected.
+const spotEdit = (view: ConsoleView, spot: ConsoleView['spots'][number]) => spot.status !== 'active' ? ''
+  : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="spot.edit"><input type="hidden" name="id" value="${spot.id}"><input name="value" value="${esc(spot.text)}" maxlength="${APP_CLAIM_TEXT_MAX_V1}" required aria-label="Edit this spot"><button class="btn quiet">Save edit</button></form>`;
+
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
+  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, edit it here or tell Waldo in chat. Pin what Waldo should keep in mind on every turn. Forget removes it from memory at once; older copies are cleared from storage in the background, listed under Forgetting until they are.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', awaitsOwnerConfirm(spot) || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${awaitsOwnerConfirm(spot) ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${spotPin(view, spot)}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}${spotEdit(view, spot)}</div></div>`).join('')}`;
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -370,10 +438,12 @@ const held = (view: ConsoleView) => view.holds.length === 0 ? '' : `<details><su
 
 const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'good' : 'muted')}</div>`).join('')}</details>`;
 
-// A claim stuck mid-scrub (status 'purging') must stay visible with a working retry path -
-// the 'spot.forget.incomplete' notice tells the owner to try again, so the row and its Forget
-// action cannot just vanish. act() already selects purging rows for spot.forget.
-const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
+// What a forget is still clearing stays visible with a retry, masked, so the page never repeats the forgotten words.
+const forgetting = (view: ConsoleView) => view.forgettingTopics.length === 0 ? '' : `<div class="forgetting"><h3>Forgetting (${view.forgettingTopics.length})</h3><div class="sub">Waldo no longer sees these. Copies are still being cleared from storage; each leaves this list when every store is clean.</div>${view.forgettingTopics.map((hold) => {
+  const waiting = hold.stores.filter((store) => store.state === 'pending').map((store) => store.name.replace(/_/g, ' '));
+  const progress = hold.stores.length ? `${hold.stores.length - waiting.length} of ${hold.stores.length} stores clear${waiting.length ? ` · waiting on ${waiting.join(', ')}` : ''}` : 'starting';
+  return `<div class="row spot"><div class="main"><div class="line">${esc(hold.label)}</div><div class="sub">Started ${esc(day(hold.started_at))} · ${esc(progress)}</div></div>${chip('Clearing', 'muted')}<div class="act">${form(view.csrf, 'forget.retry', 'Retry now', { id: hold.fingerprint })}</div></div>`;
+}).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Not scheduled today';
@@ -389,7 +459,8 @@ const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" a
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
-const schedules = (view: ConsoleView) => `${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
+const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div></div>`).join('');
+const schedules = (view: ConsoleView) => `${paused(view)}${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };
@@ -555,7 +626,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
     waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. You can approve calendar changes here; email sends can only be approved on the full review card in chat.', approvals(view)),
     setup: section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view)),
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
-    spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
+    spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, pin, edit, dismiss, or forget a spot here.', spots(view) + forgetting(view) + retired(view) + held(view)),
     constellation: section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s uncalibrated estimate from 0 to 1, not a probability of truth.', constellation(view)),
     day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view) + '<h3>Scheduled behaviors</h3>' + schedules(view)),
     memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),
@@ -571,6 +642,6 @@ ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class=
 <nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
-<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
+<footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session stays signed in while you use it, for up to 30 days.</footer>
 </div></body></html>`;
 };

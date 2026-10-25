@@ -30,7 +30,7 @@ const deskOn = async <T>(surface: 'app' | 'telegram' | 'whatsapp', name: string,
     const desk = approvalDesk(state.storage.sql, { surface, owner: surface === 'app' ? 7_000_000_000_006 : 42, call, appLink: appApprovalLink,
       google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {},
       currentRunRef: () => runRef.current ?? 'scope-run-0001', appReplyRef: () => runRef.current });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const handler = approvalHandlers(desk).find(candidate => candidate.name === 'raise_approval')!;
     return run({ desk, clock, runRef, sql: state.storage.sql, sent, telegram,
       raise: async args => await handler.handle(handler.schema.parse(args) as never) as never,
@@ -161,12 +161,12 @@ it('a review-only Telegram card offers Not now and Don\'t do this', async () => 
   });
 });
 
-it('on WhatsApp, a raise sends a fresh card and the model is told so', async () => {
+it('on WhatsApp, a raise sends a fresh card, with the email again in the app where it is approved, and the model is told so', async () => {
   await deskOn('whatsapp', 'raise-whatsapp', async ({ desk, sent, raise, propose }) => {
     const id = await propose('Wa');
     await desk.decide(id, 'd', 't', { surface: 'whatsapp' });
     const before = sent.filter(message => message.method === 'sendMessage').length;
-    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp'], note: 'A fresh card with its buttons was sent to the owner.' });
+    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp', 'app'], note: 'A fresh card with its buttons was sent to the owner.' });
     expect(sent.filter(message => message.method === 'sendMessage').length).toBe(before + 1);
   });
 });

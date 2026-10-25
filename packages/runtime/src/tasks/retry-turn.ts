@@ -18,12 +18,24 @@ export const RETRY_FIRST_TRY_MS = 2 * 60_000;
 // The promise, rounded up to the next five minutes so the time reads naturally.
 export const promisedBy = (now: number): number => Math.ceil((now + RETRY_WINDOW_MS) / 300_000) * 300_000;
 
-export const retryTurnText = (brief: RetryBrief, timezone: string): string => [
-  `[You could not answer the owner's message from ${ownerTime(brief.said_at, timezone)} because no model was reachable then, and you told them you would come back to them by ${ownerTime(brief.promised_by, timezone)}. ${brief.text ? 'Their message, as they wrote it:]' : 'Its text was not kept, because it held health details. It may be in this conversation just before that reply; if it is not, say you could not answer it then and ask them to send it again.]'}`,
-  ...(brief.text ? [`<owner_message>\n${brief.text}\n</owner_message>`] : []),
-  'Answer it now, saying briefly that this is the late answer. Look at what has happened since first (the conversation after it, and anything already done for it) so nothing is done twice.',
-  `If it no longer needs an answer, reply with exactly ${SKIP_UPDATE}.`,
-].join('\n\n');
+const SURFACE_NAMES: Readonly<Record<string, string>> = { app: 'the app', telegram: 'Telegram', whatsapp: 'WhatsApp', imessage: 'iMessage' };
+
+// asked: the surface the message came on; here: the surface this retry answers on. The retry runs on the chain of the surface
+// that takes the owner's proactive work, so when the two differ, the message and the conversation around it are not shown.
+export const retryTurnText = (brief: RetryBrief, timezone: string, where?: Readonly<{ asked: string; here: string }>): string => {
+  const elsewhere = where !== undefined && where.asked !== where.here ? SURFACE_NAMES[where.asked] ?? where.asked : null;
+  const unkept = elsewhere === null
+    ? 'Its text was not kept, because it held health details. It may be in this conversation just before that reply; if it is not, say you could not answer it then and ask them to send it again.'
+    : 'Its text was not kept, because it held health details, and that conversation is not shown here: say you could not answer it then and ask them to send it again.';
+  return [
+    `[You could not answer the owner's message${elsewhere === null ? '' : ` on ${elsewhere}`} from ${ownerTime(brief.said_at, timezone)} because no model was reachable then, and you told them you would come back to them by ${ownerTime(brief.promised_by, timezone)}.${elsewhere === null ? '' : ` This answer reaches them here instead; that conversation is not shown here.`} ${brief.text ? 'Their message, as they wrote it:]' : `${unkept}]`}`,
+    ...(brief.text ? [`<owner_message>\n${brief.text}\n</owner_message>`] : []),
+    elsewhere === null
+      ? 'Answer it now, saying briefly that this is the late answer. Look at what has happened since first (the conversation after it, and anything already done for it) so nothing is done twice.'
+      : `Answer it now, saying briefly that this is the late answer to their message on ${elsewhere}. Look at anything already done for it first so nothing is done twice.`,
+    `If it no longer needs an answer, reply with exactly ${SKIP_UPDATE}.`,
+  ].join('\n\n');
+};
 
 // Writes the retry job for a floor reply and returns the reply text. Synchronous: the provider renders the floor inside its
 // own call, so the job row is committed before the promise reaches the owner. One job per owner turn: a second floor in

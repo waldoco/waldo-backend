@@ -77,19 +77,48 @@ describe('nightly eval suite', () => {
   }, 60_000);
 });
 
+describe('nightly eval with the tool search menu', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('runs the whole catalogue on the flag-on menu and names that menu in the scorecard', async () => {
+    vi.stubGlobal('fetch', async () => { throw new Error('the dry run must not reach the network'); });
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', WALDO_EVAL_TOOL_SEARCH: 'on' });
+    const searched: boolean[] = [];
+    const inner = config.gateway;
+    const card = await runNightly(SCENARIOS, { ...config, gateway: () => {
+      const gateway = inner();
+      return { complete: async (request) => { if (request.request.tools?.length) searched.push(request.request.tool_search !== undefined); return gateway.complete(request); } };
+    } });
+    expect(card.candidate_model).toBe('recorded+tool_search');
+    expect(card.scenarios).toHaveLength(SCENARIOS.length);
+    expect(card.scenarios.flatMap((row) => row.harness_errors ?? [])).toEqual([]);
+    expect(card.scenarios.every((row) => row.status === 'blocked' || row.status === 'ungraded')).toBe(true);
+    // Every reply that offered tools offered them through tool search.
+    expect(searched.length).toBeGreaterThan(SCENARIOS.length);
+    expect(searched.every(Boolean)).toBe(true);
+    // A whole catalogue run, budgeted like the dry run above rather than as one unit test.
+  }, 60_000);
+
+  it('leaves the switch-off menu as it was', () => {
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded' });
+    expect(config.candidate).toBe('recorded');
+    expect(config.toolSearch).toBeUndefined();
+  });
+});
+
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the health trigger case, the background task and the late answer, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(29);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(29);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the two health cases, the look-up, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(31);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(31);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
-    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(2);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      // Something happens to the owner: they speak, an answer comes late, or the health trigger runs on a change in their health.
+      // Something happens to the owner: they speak, a late answer arrives, or the health trigger runs on a change in their health.
       expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step || 'health_change' in step)).toBe(true);
     }
   });
@@ -165,6 +194,24 @@ describe('nightly eval catalogue', () => {
     const answer = await availability.handle({ date_range: { from: '2026-09-25T12:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary', 'family@group.calendar.example'], duration_minutes: 60, work_windows: [] } as never, undefined as never);
     expect(answer).toMatchObject({ ok: true, data: { free_windows: [], unavailable_calendar_ids: ['family@group.calendar.example'] } });
     expect(JSON.stringify(errand.steps)).toContain('family@group.calendar.example');
+  });
+
+  it('seeds the look-up with the owner\'s site, a namesake and a sensitive page, and shows the judge every finding recorded, none of them owner memory', async () => {
+    const lookup = SCENARIOS.find((scenario) => scenario.id === 'k1-owner-lookup')!;
+    const world = evalWorld(lookup.world, lookup.start);
+    const tool = (name: string) => world.handlers.find((handler) => handler.name === name)!;
+    const context = { turnId: 'k1-turn', authenticatedUserId: 'eval-owner', memoryTurn: { ownerId: 'eval-owner', conversationRef: 'app-1', current: { message_ref: 'm1', text: (lookup.steps[0] as { say: string }).say }, recent: [] } } as never;
+    expect(await tool('web_search').handle({ query: 'Asha Menon', limit: 5 } as never, context)).toMatchObject({ ok: true, source_taint: 'external' });
+    const record = (args: object) => tool('record_owner_finding').handle({ category: 'work', ...args } as never, context);
+    expect(await record({ text: 'Product manager at Northwind', source_url: 'https://ashamenon.example/about', evidence_quote: 'a product manager at Northwind' })).toMatchObject({ ok: true });
+    // Code does not decide whose page the dentist's is; a model that records it shows the judge that it did.
+    expect(await record({ text: 'Dentist in Kochi', source_url: 'https://smiles.example/dr-asha-menon', evidence_quote: 'a dentist in Kochi' })).toMatchObject({ ok: true });
+    expect(await record({ text: 'Lives at 12 Hill Road', category: 'based_in', source_url: 'https://ashamenon.example/about', evidence_quote: 'lives at 12 Hill Road' })).toMatchObject({ ok: false });
+    const state = world.finalState() as { findings: { text: string; source: string; state: string }[]; memory: unknown[] };
+    expect(state.findings.map(({ text, state: kept }) => [text, kept]).sort()).toEqual([['Dentist in Kochi', 'unconfirmed'], ['Product manager at Northwind', 'unconfirmed']]);
+    expect(state.memory).toEqual([]);
+    expect(lookup.rubric.must_not.join(' ')).toContain('record the dentist page as a finding');
+    expect(lookup.rubric.must_not.join(' ')).toContain('religion or politics');
   });
 
   it('fires the owner\'s check-back at its time and recalls across a day', () => {

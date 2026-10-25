@@ -9,7 +9,8 @@ import {
 } from '@waldo/contracts';
 import { fromOpenAIStrictArguments, openAIStrictParameters } from './strict-schema';
 import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
-import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
+import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
 
@@ -18,6 +19,7 @@ export type OpenAIAdapterOptions = Readonly<{
   timeoutMs?: number;
   client?: OpenAIResponsesClient;
   onResponseMetadata?: (metadata: OpenAIResponseMetadata) => void;
+  firstTokenTimeoutMs?: number;
 }>;
 
 export type OpenAIResponseMetadata = Readonly<{
@@ -34,9 +36,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
+  private readonly firstTokenTimeoutMs: number;
 
   constructor(options: OpenAIAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     // The provider's attempt plan is the one retry owner. An SDK retry is invisible to the trace, the circuit breaker and
@@ -69,9 +73,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     // The request's own limit, cut to what is left of the turn.
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
+    // Declared outside the try: a search-only response was billed even when its continuation then fails.
+    const searched: OpenAI.Responses.ResponseOutputItem[] = [];
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     try {
-      const response = await this.client.responses.create(
-        {
+      const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
           instructions: input.request.system,
           input: responsesInput(input.request),
@@ -84,21 +90,40 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
             ...(input.request.web_search ? [hostedWebSearch(input.request.web_search)] : []),
           ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
-        },
-        { signal: controller.signal },
-      );
+      };
+      const client = this.client;
+      let ttftMs: number | undefined;
+      const send = async (params: OpenAI.Responses.ResponseCreateParamsNonStreaming) => {
+        if (!input.stream) return client.responses.create(params, { signal: controller.signal });
+        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+        // without one the call keeps its whole limit, as an unstreamed call does.
+        const streamed = await streamedResponse(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
+        ttftMs ??= streamed.ttftMs;
+        return streamed.response;
+      };
+      let response = await send(body);
+      // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
+      // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
+      for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+        searched.push(...response.output);
+        searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
+        searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
+        searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
+        const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
+        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
+      }
       const text = withCitedLinks(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
       const incomplete = response.status === 'incomplete';
-      if (incomplete && text.length === 0 && toolCalls.length === 0) {
-        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
-      }
       const spent = {
-        input_tokens: response.usage?.input_tokens ?? 0,
-        output_tokens: response.usage?.output_tokens ?? 0,
-        cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+        input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
+        output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
+        cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
       };
+      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}`, spent };
+      }
       // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
       // and the tokens it cost still count.
       if (text.length === 0 && toolCalls.length === 0) {
@@ -109,9 +134,10 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         text,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         ...spent,
-        output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
+        output_items: [...searched, ...response.output].map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
         ...(incomplete ? { truncated: true } : {}),
+        ...(ttftMs === undefined ? {} : { ttft_ms: ttftMs }),
       };
       this.onResponseMetadata?.({
         response_id: response.id,
@@ -123,16 +149,61 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
       const detail = error instanceof OpenAI.APIError
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
         : '';
       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}) };
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
     }
+  }
+}
+
+class FirstTokenTimeout extends Error {}
+
+// One create, streamed. The response's first message streams to the reply only when the model labels it its final answer
+// (the Responses API `phase`; the installed SDK does not type it yet): commentary, reasoning and an unlabelled message never
+// do. A tool call after it takes it back. The terminal event carries the same Response the unstreamed call returns, so
+// everything after this reads one shape. With `firstTokenMs`, a model that has emitted no output item or delta by then is
+// abandoned; `ttftMs` is the time to that first output.
+async function streamedResponse(client: OpenAIResponsesClient, body: OpenAI.Responses.ResponseCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number): Promise<Readonly<{ response: OpenAI.Responses.Response; ttftMs?: number }>> {
+  const sentAt = Date.now();
+  let ttftMs: number | undefined, late = false;
+  const watchdog = firstTokenMs === undefined ? undefined : setTimeout(() => { late = true; controller.abort(); }, firstTokenMs);
+  try {
+    const events = await client.responses.create({ ...body, stream: true }, { signal: controller.signal });
+    let messages = 0, streaming: number | null = null, streamed = false;
+    for await (const event of events) {
+      if (ttftMs === undefined && (event.type === 'response.output_item.added' || event.type.endsWith('.delta'))) {
+        ttftMs = Date.now() - sentAt;
+        clearTimeout(watchdog);
+      }
+      if (event.type === 'response.output_item.added') {
+        if (event.item.type === 'message') {
+          messages += 1;
+          streaming = messages === 1 && (event.item as { phase?: unknown }).phase === 'final_answer' ? event.output_index : null;
+        } else if (event.item.type === 'function_call' && streamed) {
+          streamed = false;
+          sink.retract();
+        }
+      } else if (event.type === 'response.output_text.delta' && event.output_index === streaming) {
+        streamed = true;
+        sink.delta(event.delta);
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        return { response: event.response, ...(ttftMs === undefined ? {} : { ttftMs }) };
+      } else if (event.type === 'response.failed' || event.type === 'error') {
+        throw new Error(`OpenAI stream ${event.type}`);
+      }
+    }
+    throw new Error('OpenAI stream ended without a result');
+  } catch (error) {
+    throw late ? new FirstTokenTimeout() : error;
+  } finally {
+    clearTimeout(watchdog);
   }
 }
 
@@ -165,6 +236,13 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
   ] as unknown as OpenAI.Responses.Tool[];
 }
 
+// Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
+// the provider's attempt plan decides what follows.
+const SEARCH_CONTINUATIONS = 2;
+const onlySearched = (response: OpenAI.Responses.Response): boolean => response.status !== 'incomplete'
+  && response.output.some((item) => (item.type as string) === 'tool_search_output')
+  && response.output.every((item) => ['tool_search_call', 'tool_search_output', 'reasoning'].includes(item.type as string));
+
 // A deferred function the replayed history calls without the search output that loaded it goes up front: a round
 // another provider ran is rebuilt from its call record with no namespace, and a trimmed history can drop the round whose
 // search loaded it. Only then does the list change; a turn on this provider alone replays its searches.
@@ -195,10 +273,11 @@ function strictParametersByTool(request: LLMGatewayRequest['request']): Map<stri
   return new Map((request.tools ?? []).flatMap((tool) => openAIStrictParameters(tool.parameters) ? [[tool.name, tool.parameters] as const] : []));
 }
 
-// A round that offers no tools (the turn's closing round) cannot carry tool-search state: the namespaces it loaded are
-// not declared, so the search items are left out and a loaded call is replayed as a plain function call.
-function replayable(item: Record<string, unknown>, toolsOffered: boolean): Record<string, unknown>[] {
-  if (toolsOffered) return [item];
+// A request that declares no tool search (the turn's closing round, which offers no tools, or a resend without the search
+// a model refused) cannot carry tool-search state: the namespaces it loaded are not declared, so the search items are left
+// out and a loaded call is replayed as a plain function call.
+function replayable(item: Record<string, unknown>, searchDeclared: boolean): Record<string, unknown>[] {
+  if (searchDeclared) return [item];
   if (item.type === 'tool_search_call' || item.type === 'tool_search_output') return [];
   if (item.type === 'function_call' && 'namespace' in item) { const { namespace: _namespace, ...call } = item; return [call]; }
   return [item];
@@ -227,7 +306,7 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
       // left items this API cannot read, so only OpenAI's own are replayed and that round is rebuilt from its records.
       const replayed = new Set<string>();
       return (request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
-        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER).flatMap((item) => replayable(item, request.tools !== undefined)) as unknown as OpenAI.Responses.ResponseInputItem[];
+        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER).flatMap((item) => replayable(item, request.tools !== undefined && request.tool_search !== undefined)) as unknown as OpenAI.Responses.ResponseInputItem[];
         for (const item of prior) {
           const record = item as { type?: string; call_id?: string };
           if (record.type === 'function_call' && record.call_id) replayed.add(record.call_id);

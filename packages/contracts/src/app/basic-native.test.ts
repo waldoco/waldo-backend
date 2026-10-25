@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { appCoreRoutesV1, appSessionV1Schema, appSendRequestV1Schema, appMessageReceiptV1Schema } from './core';
+import { appCoreRoutesV1, appRenewResultV1Schema, appSessionV1Schema, appSendRequestV1Schema, appMessageReceiptV1Schema } from './core';
 import { appControlActionV1Schema, appControlQueryV1Schema } from './controls';
 it('requires full scoped session hashes and fixed absolute expiry',()=>{
   const session={state:'active',session_ref:`sess_${'a'.repeat(64)}`,account_ref:`acct_${'b'.repeat(64)}`,surface:'app',absolute_expires_at:Date.now()+1000};
@@ -21,4 +21,16 @@ it('exposes basic views and bounded settings actions',()=>{
   const action={view:'day',action:'timezone.set',value:'UTC',revision:'a'.repeat(64),request_id:'request-0001'};
   expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
   expect(appControlActionV1Schema.safeParse({...action,action:'approval.approve'}).success).toBe(false);
+});
+it('a session may say when the app should renew it, and renewal answers a new credential and when to renew that', () => {
+  const session = { state: 'active', session_ref: `sess_${'a'.repeat(64)}`, account_ref: `acct_${'b'.repeat(64)}`, surface: 'app', absolute_expires_at: 1_791_700_000_000 };
+  expect(appSessionV1Schema.safeParse({ ...session, renew_after: 1_791_600_000_000 }).success).toBe(true);
+  for (const renew_after of [-1, 1.5, '2026-10-13T00:00:00Z', null]) expect(appSessionV1Schema.safeParse({ ...session, renew_after }).success).toBe(false);
+  const route = appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/renew');
+  expect(route).toMatchObject({ method: 'POST', authenticated: true, success_status: 200 });
+  expect(route && !('request' in route)).toBe(true);
+  expect(appRenewResultV1Schema.safeParse({ ...session, renew_after: 1_791_600_000_000, credential: 'x'.repeat(40) }).success).toBe(true);
+  expect(appRenewResultV1Schema.safeParse(session).success).toBe(false);
+  expect(appRenewResultV1Schema.safeParse({ ...session, credential: 'x'.repeat(40) }).success).toBe(false);
+  expect(appRenewResultV1Schema.safeParse({ state: 'needs_invite' }).success).toBe(false);
 });

@@ -1,4 +1,5 @@
 import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import { carriesTopic } from '../memory/forget-guard';
 import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
@@ -47,6 +48,8 @@ export type FinalRecord = {
   // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
   scheduleNotice?: { scheduleId: string; until: number };
   mailFollowup?: MailFollowupReceipt;
+  // An update card written by a sweep job: its update_cards row, recorded sent once the card is delivered.
+  update?: { recordId: number };
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
@@ -370,19 +373,21 @@ export class TelegramFinalOutbox {
   }
 }
 
-// What the console says for a job whose message is still in the outbox's hands, by the job's run id: sent and waiting for
+// What the console says for a job whose message is still in the outbox's hands, by the job's run id: queued and waiting for
 // the surface's report that it arrived, or refused for now and waiting for the owner's next message. Fixed lines only.
+// An accepted record may not have left Waldo yet (an iMessage part waits in Waldo's own outbox for the bridge), so the line
+// claims no send and names no surface.
 export const outboxRunNotes = (records: readonly FinalRecord[]): ReadonlyMap<string, string> => {
   const notes = new Map<string, string>();
   for (const record of records) {
     const runId = record.standingOrder?.runId ?? record.reminder?.runId ?? record.heartbeat?.runId;
     if (!runId) continue;
-    if (record.status === 'accepted') notes.set(runId, 'sent, waiting for your phone');
+    if (record.status === 'accepted') notes.set(runId, 'queued for delivery; waiting to hear it arrived');
     else if (record.status === 'pending' && record.reason === 'window_refused') notes.set(runId, 'waiting for your next message');
   }
   return notes;
 };
-// The day cards of one day that went out and are waiting for the surface's report that they arrived.
+// The day cards of one day that are queued for delivery and waiting for the surface's report that they arrived.
 export const unconfirmedCards = (records: readonly FinalRecord[], day: string): ReadonlySet<CardId> =>
   new Set(records.flatMap(record => record.status === 'accepted' && record.dayCard?.day === day ? [record.dayCard.card] : []));
 
@@ -512,7 +517,7 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     };
     if (scope) scope.commit(write); else write();
   }
-  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => value.toLowerCase().includes(needle.toLowerCase())))).length;
+  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => carriesTopic(value, needle)))).length;
   return { rewritten, remaining };
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);
@@ -522,4 +527,4 @@ export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], mark
 // owner forget reaches them the same way. A reminder's message is such a copy too: the model writes it from the note and
 // what its read tools find. Only the waiting message is cancelled; the reminder itself is the owner's and stays.
 export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope,
-  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder);
+  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder || !!row.update);

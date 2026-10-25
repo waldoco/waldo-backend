@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 // Open loops (W6): things Waldo took on for the owner, kept until closed so nothing is dropped silently.
 export const openLoopArgsSchema = z.strictObject({
-  source_ref: z.string().min(1).max(200).optional().describe('Observed mail source_ref from update context. This records a follow-up hypothesis with unknown completion, never an owner commitment or permission.'),
+  source_ref: z.string().min(1).max(200).optional().describe('Observed mail source_ref from update context: a follow-up of unknown completion, never an owner commitment or permission.'),
   title: z.string().min(1).max(200).describe('What Waldo took on, in a few plain words.'),
-  due: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/).nullable().default(null).describe("When it is due, as YYYY-MM-DD or YYYY-MM-DDTHH:MM in the owner's local time, or null."),
+  due: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/).nullable().default(null).describe("YYYY-MM-DD or YYYY-MM-DDTHH:MM in the owner's local time, or null."),
 });
 export type OpenLoopArgs = z.infer<typeof openLoopArgsSchema>;
 
@@ -25,12 +25,12 @@ export type SetProactivityArgs = z.infer<typeof setProactivityArgsSchema>;
 
 // Owner-set schedule preferences: every out-of-the-box scheduled behavior can be turned off, back on, or reset.
 export const SCHEDULE_KINDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat', 'health_proposals'] as const;
-// How the owner wants health proposals: auto watches quietly until their own baseline exists and then suggests, live
-// suggests from the first change, shadow only watches and never shows a card.
+// How the owner wants health proposals: auto and live suggest from the first zone change, shadow only watches and never
+// shows a card.
 export const HEALTH_PROPOSAL_MODES = ['auto', 'live', 'shadow'] as const;
 export const setSchedulePreferenceArgsSchema = z.strictObject({
   action: z.enum(['off', 'on', 'reset']).describe("off: stop that behavior. on: turn it back on. reset: restore every scheduled behavior to its out-of-the-box default (kind is ignored)."),
   kind: z.enum(SCHEDULE_KINDS).optional().describe('daily_brief: the day cards. followups: mail and calendar follow-ups. event_briefs: prep notes before events. nightly: overnight memory consolidation. heartbeat: periodic open-loop check. health_proposals: proposing one plan change when a health zone change meets a coming decision. Required for on and off.'),
-  mode: z.enum(HEALTH_PROPOSAL_MODES).optional().describe('Only for kind health_proposals with action on. auto (the default): watch quietly until the owner\'s own baseline exists, then suggest. live: suggest from the first change. shadow: only watch, never show a card.'),
+  mode: z.enum(HEALTH_PROPOSAL_MODES).optional().describe('Only for kind health_proposals with action on. auto (the default): suggest from the first zone change. live: the same, chosen by the owner. shadow: only watch, never show a card.'),
 }).refine((args) => args.mode === undefined || (args.kind === 'health_proposals' && args.action === 'on'), { error: 'mode is only for health_proposals with action on', path: ['mode'] });
 export type SetSchedulePreferenceArgs = z.infer<typeof setSchedulePreferenceArgsSchema>;

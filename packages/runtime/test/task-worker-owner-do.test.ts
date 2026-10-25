@@ -1,16 +1,17 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import type { TelegramWebhookEnv } from '../src/channels/telegram-webhook';
 import { persistInboxWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
-import type { JobRow } from '../src/tasks/jobs';
-import { taskWorkerName } from '../src/tasks/worker-do';
+import { jobBook, type JobRow } from '../src/tasks/jobs';
+import { TASK_ALARM_SLICE_MS, taskWorkerName } from '../src/tasks/worker-do';
 
 // The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
 // worker's alarm runs the attempt and reports over RPC, and the owner's next alarm tells the owner once. The model and
 // Telegram are the only fakes.
-const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0 }));
+const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0, skew: 0, browser: false }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string, params?: unknown) => {
@@ -18,13 +19,25 @@ vi.mock('../src/channels/telegram-api', async load => ({
     return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: seen.sent.length } : true;
   },
 }));
+// No browser is configured here, so browse_act is not offered. A case that needs the owner's real browse_act handler offered
+// (to show what the taint gate does with it) sets seen.browser; the gate refuses before any handler runs.
+vi.mock('../src/tools/eligibility', async load => {
+  const real = await load<typeof import('../src/tools/eligibility')>();
+  return { ...real, eligibleHandlers: (async (handlers) => {
+    const out = await real.eligibleHandlers(handlers);
+    return seen.browser ? { ...out, handlers: [...out.handlers, ...handlers.filter(handler => handler.name === 'browse_act' && !out.handlers.includes(handler))] } : out;
+  }) as typeof real.eligibleHandlers };
+});
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.bodies.push(JSON.stringify(body));
+  // A worker's model call that takes this long: the clock moves past the attempt's alarm slice.
+  if (seen.skew > 0 && JSON.stringify(body).includes('"finish_task"')) { vi.setSystemTime(Date.now() + seen.skew); seen.skew = 0; }
   if (seen.down > 0) { seen.down -= 1; throw Object.assign(new Error('provider down'), { status: 503 }); }
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   return { id: 'fixture', output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [] };
 } }; } }));
-beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; });
+beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; seen.skew = 0; seen.browser = false; });
+afterEach(() => { vi.useRealTimers(); });
 
 const NAME = 'task-worker-e2e';
 const owner = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(NAME));
@@ -87,7 +100,149 @@ it('an owner turn starts a task; the worker runs with no authority and the resul
   await runInDurableObject(owner(), async (instance, state) => {
     const rpc = instance as unknown as { taskReport(...args: unknown[]): Promise<string> };
     expect(await rpc.taskReport(ticket, { kind: 'result', result: { ...RESULT, summary: 'forged' } }, [], { rounds: 0, costUsd: 0 })).toBe('duplicate');
-    expect(JSON.parse(jobs(state.storage.sql)[0]!.result_json!).summary).toBe(RESULT.summary);
+    // Applied rows keep no result (only the apply turn reads it), and the duplicate wrote none back.
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'applied', result_json: null });
+  });
+}, 30_000);
+
+it('cancel_task in an owner turn ends the task and withdraws the card its errand raised', async () => {
+  const name = 'task-cancel-card-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const say = async (instance: unknown, state: DurableObjectState, update: number, text: string) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: name }, update,
+      JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: update, text } }));
+    await (instance as { drainInbox(): Promise<void> }).drainInbox();
+    // The queued task is due at once; no alarm may start its worker while this test drives the owner by hand.
+    await state.storage.deleteAlarm();
+  };
+  seen.outputs.push(fn('start_task', { ...BRIEF, profile: 'errand' }), []);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    await say(instance, state, 1, 'Book me a table for two tonight');
+    const [job] = jobs(state.storage.sql);
+    expect(job).toMatchObject({ status: 'queued' });
+    // The card the errand raised while it ran, still waiting for the owner.
+    const card = await approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
+      currentRunRef: () => `task:${job!.id}`, browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
+      .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] });
+    seen.outputs.push(fn('cancel_task', { job_id: job!.id }), []);
+    await say(instance, state, 2, 'Actually, cancel that');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
+    expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card).one().status).toBe('skipped');
+  });
+}, 30_000);
+
+// The owner's ruling for a worker step that needs their approval: words now, a card later. The task stops at the step and
+// hands it back as a proposal; the report's apply turn asks the owner. The owner's real browse_act acts on a live turn's
+// browser session, so an approval could never replay it: propose_action makes no card for it, and nothing ran.
+it('a worker\'s browser step that needs the owner stops the task as a proposal, and the apply turn asks in words: no card, nothing ran', async () => {
+  const name = 'task-owner-step-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  type Rpc = { taskClaim(...args: unknown[]): Promise<{ tools: { name: string }[] } | 'fenced'>; taskTool(...args: unknown[]): Promise<Record<string, unknown> | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const step = { url: 'https://fixture.invalid/book', task: 'Book a table for two at 8pm.' };
+  seen.browser = true;
+  const jobId = await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'ownerstep001', newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'errand', idempotencyKey: 'turn-1:call-1', origin: 'turn-1', surface: 'telegram',
+      brief: { title: 'Table tonight', goal: 'Book a table for two tonight.', context: '', done_when: 'A booking.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    const rpc = instance as unknown as Rpc;
+    const claim = await rpc.taskClaim(ticket);
+    expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toContain('browse_act');
+    // The owner's browse_act acts on a live turn's browser session, so an approval could never replay it.
+    const owned = (instance as unknown as { setup(channel: string): { toolHandlers(): { name: string; turn_bound?: boolean }[] } }).setup('telegram').toolHandlers();
+    expect(owned.find(handler => handler.name === 'browse_act')).toMatchObject({ turn_bound: true });
+    const refused = await rpc.taskTool(ticket, { call_id: 'c-book', name: 'browse_act', arguments: JSON.stringify(step) }, ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687']);
+    expect(refused).toMatchObject({ ok: false, error_code: 'taint_needs_approval', retryable: false });
+    expect(JSON.stringify(refused)).toContain('finish_task');
+    expect(JSON.stringify(refused)).not.toContain('propose_action');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'running', inflight_json: null });
+    // A worker that read pages reports outside text, so its report is applied under the outside-text ceiling.
+    state.storage.sql.exec("UPDATE task_jobs SET taint = 'external' WHERE id = ?", job.id);
+    expect(await rpc.taskReport(ticket, { kind: 'result', result: { status: 'blocked', summary: 'Found a table at 8pm; booking it needs the owner.', findings: [],
+      proposals: [{ tool: 'browse_act', why: 'Booking needs the owner\'s approval.', args: step }], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+    return job.id;
+  });
+  // The apply turn tries the card it was told to, then tells the owner in words.
+  seen.outputs.push(fn('propose_action', { tool: 'browse_act', args: step, reasoning: 'The owner asked for a table; booking needs their approval.' }), []);
+  await runDurableObjectAlarm(stub);
+  const applied = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'applied');
+  expect(applied).toMatchObject({ id: jobId, status: 'applied', outcome: 'blocked' });
+  const applyBody = seen.bodies.find(body => body.includes('A background task you started has finished'))!;
+  expect(applyBody).toContain('propose it with propose_action');
+  expect(applyBody).toContain('fixture.invalid/book');
+  // The card was refused before it was made: the next round of the apply turn carries the refusal.
+  expect(seen.bodies.some(body => body.includes('browse_act cannot run from an approval on this Waldo, so no card was made'))).toBe(true);
+  await runInDurableObject(stub, async (_instance, state) => {
+    const ledger = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").toArray().length
+      ? state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM ledger').one().n : 0;
+    expect(ledger).toBe(0);
+    const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
+    expect(outbox.filter(record => record.id === `task:${jobId}`)).toHaveLength(1);
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+it('three model failures in one job open the breaker for that job\'s next attempt and for the owner\'s next turn', async () => {
+  const name = 'task-breaker-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  type Rpc = { drainInbox(): Promise<void>; taskClaim(...args: unknown[]): Promise<{ providerHealth?: unknown } | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const say = async (instance: unknown, state: DurableObjectState, update: number, text: string) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: name }, update,
+      JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: update, text } }));
+    await (instance as Rpc).drainInbox();
+  };
+  // The deferred job's next try is made due now, and the owner's alarm starts it on a worker that runs on its own alarm.
+  const nextTry = async (deferrals: number) => {
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("UPDATE task_jobs SET due_at = ? WHERE status = 'queued'", Date.now());
+      await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+    });
+    await runDurableObjectAlarm(stub);
+    return until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'queued' && job.deferrals === deferrals);
+  };
+  const openaiHealth = () => runInDurableObject(stub, (instance) =>
+    (instance as unknown as { providerHealth: { snapshot(): { provider: string; failures: number; opened_at: number | null }[] } }).providerHealth.snapshot().find(entry => entry.provider === 'openai'));
+
+  seen.outputs.push(fn('start_task', BRIEF), []);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    await say(instance, state, 1, 'Go through my inbox since Monday and tell me who is waiting on me');
+  });
+
+  // Exactly three model failures. Attempt 1 misses twice (the full request, then the reduced one) and defers; the owner's
+  // breaker hears both. Attempt 2 starts from those two: its third miss opens the breaker, so it skips its reduced retry.
+  seen.down = 3;
+  expect(await nextTry(1)).toMatchObject({ status: 'queued', deferrals: 1 });
+  expect(await openaiHealth()).toMatchObject({ failures: 2, opened_at: null });
+  expect(await nextTry(2)).toMatchObject({ status: 'queued', deferrals: 2 });
+  expect(seen.down).toBe(0);
+  expect(await openaiHealth()).toMatchObject({ failures: 3, opened_at: expect.any(Number) });
+
+  // The job's next attempt claims a seed that shows the provider open.
+  await runInDurableObject(stub, async (instance, state) => {
+    const ticket = jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => crypto.randomUUID() }).startAttempt(jobs(state.storage.sql)[0]!.id)!;
+    const claim = await (instance as unknown as Rpc).taskClaim(ticket);
+    expect(claim === 'fenced' ? null : claim.providerHealth).toEqual([{ provider: 'openai', failures: 3, opened_at: expect.any(Number) }]);
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, [])).toBe('deferred');
+  });
+  // A real worker on that seed defers without calling the model at all.
+  const before = seen.bodies.length;
+  expect(await nextTry(4)).toMatchObject({ status: 'queued', deferrals: 4 });
+  expect(seen.bodies.length).toBe(before);
+
+  // The owner's next turn sees the same open breaker: it reaches the floor without asking the provider.
+  await runInDurableObject(stub, async (instance, state) => {
+    await say(instance, state, 2, 'What should I pack for Goa?');
+    expect(seen.bodies.length).toBe(before);
+    const queued = (state.storage.kv.get<{ payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
+    expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(true);
+    await state.storage.deleteAlarm();
   });
 }, 30_000);
 
@@ -127,4 +282,71 @@ it('R-4: when no model answers the owner, the floor reply promises a time and th
     const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
     expect(outbox.filter(record => record.id === `retry:${settled.id}`)).toHaveLength(1);
   });
+}, 30_000);
+
+it('one owner\'s provider failures open only that owner\'s breaker: another owner\'s workers and turns still ask the provider', async () => {
+  type Rpc = { drainInbox(): Promise<void>; taskClaim(...args: unknown[]): Promise<{ providerHealth?: unknown } | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const health = (instance: unknown) => (instance as { providerHealth: { snapshot(): { provider: string; failures: number; opened_at: number | null }[] } }).providerHealth.snapshot();
+  // A job's attempt claims, then reports that no provider answered, with the misses its worker saw.
+  const attempt = (name: string, misses: number) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: crypto.randomUUID(), origin: 'tg-1', surface: 'telegram', brief: { ...BRIEF, effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    const claim = await (instance as unknown as Rpc).taskClaim(ticket);
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'unavailable' }, [], { rounds: 0, costUsd: 0 }, Array.from({ length: misses }, () => ({ provider: 'openai', ok: false })))).toBe('deferred');
+    await state.storage.deleteAlarm();
+    return { seed: claim === 'fenced' ? null : claim.providerHealth, after: health(instance).find(entry => entry.provider === 'openai') };
+  });
+  const a = await attempt('breaker-owner-a', 3);
+  expect(a.after).toMatchObject({ failures: 3, opened_at: expect.any(Number) });
+  const b = await attempt('breaker-owner-b', 0);
+  expect(b.seed).toEqual([]);
+  expect(b.after).toBeUndefined();
+  // Owner B's own turn asks the provider and gets an answer, not the floor reply.
+  const before = seen.bodies.length;
+  seen.outputs.push([]);
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('breaker-owner-b')), async (instance, state) => {
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: env.TELEGRAM_BOT_TOKEN!.split(':')[0]!, subject: '42', doName: 'breaker-owner-b' }, 1,
+      JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, date: 1, text: 'What should I pack for Goa?' } }));
+    await (instance as unknown as Rpc).drainInbox();
+    await state.storage.deleteAlarm();
+    const queued = (state.storage.kv.get<{ payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
+    expect(queued.some(text => text.startsWith("I can't answer properly right now."))).toBe(false);
+  });
+  expect(seen.bodies.length).toBeGreaterThan(before);
+}, 30_000);
+
+it('an attempt that outlasts its alarm slice hands over to a fresh alarm of the same worker and finishes there', async () => {
+  const name = 'task-slice-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const workers = (env as unknown as TelegramWebhookEnv).TASK_WORKER_DO!;
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+  const ticket = await runInDurableObject(stub, async (_instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'slice-1', origin: 'tg-1', surface: 'telegram', brief: { ...BRIEF, effort: 'standard', timezone: 'UTC', started_at: Date.now() }, dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    return book.startAttempt(job.id)!;
+  });
+  const worker = workers.get(workers.idFromName(taskWorkerName(stub.id.toString(), ticket)));
+  // The first round's model call runs past the slice; its step is checkpointed and the attempt continues on a new alarm.
+  seen.skew = TASK_ALARM_SLICE_MS + 60_000;
+  seen.outputs.push(fn('get_tasks', {}), fn('finish_task', RESULT), []);
+  await worker.start({ owner: stub.id.toString(), ticket });
+  const handed = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.checkpoint_seq === 1);
+  expect(handed).toMatchObject({ status: 'running', attempt: 1, crashes: 0, checkpoint_seq: 1 });
+  await runInDurableObject(worker, async (_instance, state) => {
+    expect([...state.storage.kv.list()].map(([key]) => key)).toEqual(['task_worker_ticket_v1']);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+  });
+  // The next alarm of the same worker resumes the attempt from that checkpoint and reports.
+  expect(await runDurableObjectAlarm(worker)).toBe(true);
+  const reported = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status !== 'running');
+  expect(reported).toMatchObject({ attempt: 1, crashes: 0, outcome: 'done' });
+  const resumed = seen.bodies.filter(body => body.includes('"finish_task"'));
+  expect(resumed).toHaveLength(2);
+  expect(resumed[1]).toContain('get_tasks');
+  await runInDurableObject(worker, async (_instance, state) => { expect([...(await state.storage.list()).keys()]).toEqual([]); });
+  await runInDurableObject(stub, async (_instance, state) => { await state.storage.deleteAlarm(); });
 }, 30_000);

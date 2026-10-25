@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
-  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
+  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
@@ -38,17 +38,24 @@ export const appSendWireFits = (value: unknown): boolean => appJsonWireBytes(val
 const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
 export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
+// phone is the number a new member joins with, in E.164 as the console stores it. It is unverified contact data until the
+// owner texts their link code to Waldo from it. A member who already has an account is not changed by it.
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: z.string().regex(/^\+[1-9]\d{6,14}$/).optional() });
+// absolute_expires_at is when this credential stops working. renew_after, when sent, is when the app should call
+// /auth/renew for a new credential.
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
-  absolute_expires_at: z.int().nonnegative(),
+  absolute_expires_at: z.int().nonnegative(), renew_after: z.int().nonnegative().optional(),
 });
 export const appVerifyResultV1Schema = z.union([
   appSessionV1Schema.extend({ credential: z.string().min(20).max(512) }),
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
+// A new credential for a new session, and when to renew that. The presented credential keeps working for 5 more
+// minutes, then stops; it renews once, so a second renewal of it is refused.
+export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512), renew_after: z.int().nonnegative() });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 export const appSendRequestV1Schema = z.strictObject({
   client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
@@ -57,7 +64,10 @@ export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
   state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']).optional(),
 });
-export const appMessageReceiptV1Schema=appSendResultV1Schema.extend({state:z.enum(['admitted','running','completed','interrupted','revoked']),closed_reason:z.enum(['interrupted','session_revoked','cancelled','archived','deleted','thread_changed']).optional(),effects_unconfirmed:z.boolean().optional()});
+// Chat revision 2 (`chat=2`): a running message's receipt carries `draft`, the reply written so far, a prefix of the reply
+// its transcript row will hold. Revision 1 clients never receive the field.
+export const APP_CHAT_DRAFT_REVISION = 2;
+export const appMessageReceiptV1Schema=appSendResultV1Schema.extend({state:z.enum(['admitted','running','completed','interrupted','revoked']),closed_reason:z.enum(['interrupted','session_revoked','cancelled','archived','deleted','thread_changed']).optional(),effects_unconfirmed:z.boolean().optional(),draft:z.string().min(1).max(REPLY_TEXT_MAX_CHARS).optional()});
 export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
@@ -81,8 +91,9 @@ export const appRatingRequestV1Schema = z.strictObject({ request_id: z.string().
 export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingRequestV1Schema.shape.request_id, message_id: appMessageIdV1Schema, rating: appRatingRequestV1Schema.shape.rating });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
-// pre-authentication answer cannot say whether an address is invited.
-export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+// pre-authentication answer cannot say whether an address is invited. step_up_required (403): the action needs a sign-in
+// from the last two hours; the app signs in again with an email code and retries it.
+export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
 // "Connect iMessage": a one-time code the owner sends from their own iPhone to the Waldo iMessage address, which
@@ -97,6 +108,8 @@ export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
+  // A Worker without this route answers 404; the app then keeps its credential.
+  { method: 'POST', path: '/app/v1/auth/renew', response: appRenewResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/channels/imessage/link-code', response: appIMessageLinkCodeV1Schema, authenticated: true, success_status: 200 },
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },

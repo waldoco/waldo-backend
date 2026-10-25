@@ -1,3 +1,4 @@
+import { ANTHROPIC_PROVIDER, type Provider } from '@waldo/contracts';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 
 // How long a turn may spend, in one place.
@@ -8,6 +9,9 @@ export const MODEL_CALL_TIMEOUT_MS = 30_000;
 // An owner turn's reply and subagent calls may reason far longer than an auxiliary call; the turn's deadline still
 // bounds each one.
 export const OWNER_TURN_CALL_TIMEOUT_MS = 120_000;
+// A streamed call whose model has shown no output this long after the request goes to the next provider on its route,
+// when there is one. A call that started answering keeps the whole-call limit.
+export const FIRST_TOKEN_TIMEOUT_MS = 15_000;
 // A turn's tool rounds and answer end this long before its run is closed without its reply. The margin covers the work
 // before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
 // closed 14 minutes after it is claimed, so its turn has 13.5; an app or iMessage run has 15 minutes, so its turn has 14.5.
@@ -33,6 +37,10 @@ export const ALARM_JOB_MIN_MS = TURN_TIME_BUDGET_MS + RUN_CLOSE_MARGIN_MS;
 // stuck in a loop from spending a long run's whole deadline one tool call at a time.
 export const TOOL_ROUNDS_PER_TURN_BUDGET = 25;
 export const TOOL_ROUNDS_CEILING = 150;
+// How long a provider keeps a prompt prefix cached after a request that wrote or read it: Anthropic's default
+// (ephemeral, five minutes), which is what the adapter marks. OpenAI is left out: its retention for the routed models is
+// not confirmed from its own docs, so no wait is known to leave its cache cold.
+export const PROMPT_CACHE_TTL_MS: Readonly<Partial<Record<Provider, number>>> = { [ANTHROPIC_PROVIDER]: 5 * 60_000 };
 // Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
 // every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
 export const THREAD_TITLE_BUDGET_MS = 15_000;

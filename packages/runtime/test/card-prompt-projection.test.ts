@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type CalendarItem, type GoogleClient, type MailItem } from '../src/connectors/google';
 import { briefPrompt } from '../src/channels/event-briefs';
 import { readCalendar } from '../src/channels/day-cards';
-import { collectChanges, type UpdateBook } from '../src/channels/update-cards';
+import type { UpdateBook } from '../src/channels/update-cards';
+import { collectChanges } from './helpers/collect-changes';
 import { sanitise } from '../src/scribe/sanitiser';
 
 // Model-facing projections omit provider-internal identifiers; ordinary 16-hex mail

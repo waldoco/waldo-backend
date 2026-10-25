@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DevicesControls, IMessageControls, RevealedValue } from './ChannelSetup';
-import type { DevicesRecord, IMessageRecord } from './controls-model';
+import { DevicesControls, IMessageControls, PhoneControls, RevealedValue } from './ChannelSetup';
+import type { DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
 
 const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repeat(64), revision: 'a'.repeat(64) };
 const bridge = (over: Partial<IMessageRecord['data']['bridges'][number]> = {}): IMessageRecord['data']['bridges'][number] => ({ id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: null, chat: null, observed: false, host_version: 'host-1', actions: ['imessage.verify', 'imessage.revoke'], ...over });
-const imessage = (data: Partial<IMessageRecord['data']> = {}, bridges: IMessageRecord['status']['bridges'] = []): IMessageRecord => ({ ...base, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: null, admin: false, phone: null, photon: null, actions: ['imessage.link', 'imessage.pair'], bridges: [], ...data }, status: { bridges } });
+const imessage = (data: Partial<IMessageRecord['data']> = {}, bridges: IMessageRecord['status']['bridges'] = []): IMessageRecord => ({ ...base, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: null, admin: false, phone: null, photon: null, phone_on_file: null, actions: ['imessage.link', 'imessage.pair'], bridges: [], ...data }, status: { bridges } });
 const noop = () => {};
 
 describe('iMessage setup', () => {
@@ -28,6 +28,15 @@ describe('iMessage setup', () => {
     expect(html).toContain('Get my Waldo number'); expect(html).toContain('value="+15550000001"'); expect(html).not.toContain('Get an iMessage link code');
     const enrolled = renderToStaticMarkup(<IMessageControls record={imessage({ address: '+16285550100', phone: '+15550000001', actions: ['imessage.enroll', 'imessage.link', 'imessage.pair'] })} busy={false} onAction={noop}/>);
     expect(enrolled).toContain('Your Waldo number is <strong>+16285550100</strong>'); expect(enrolled).not.toContain('Get my Waldo number'); expect(enrolled).toContain('Get an iMessage link code');
+  });
+  it('says a number typed at sign-up is not verified yet and how to verify it, until a code arrives from it', () => {
+    const unverified = renderToStaticMarkup(<IMessageControls record={imessage({ address: '+16285550100', phone_on_file: { phone: '+15550000001', verified: false } })} busy={false} onAction={noop}/>);
+    expect(unverified).toContain('Your number on file, <strong>+15550000001</strong>, is not verified yet.');
+    expect(unverified).toContain('text your link code to Waldo from that number');
+    const verified = renderToStaticMarkup(<IMessageControls record={imessage({ phone_on_file: { phone: '+15550000001', verified: true } })} busy={false} onAction={noop}/>);
+    expect(verified).toContain('Your number on file, <strong>+15550000001</strong>, is verified.');
+    expect(verified).not.toContain('not verified yet');
+    expect(renderToStaticMarkup(<IMessageControls record={imessage()} busy={false} onAction={noop}/>)).not.toContain('number on file');
   });
   it('shows the operator the Photon connection, and nobody else', () => {
     const operator = renderToStaticMarkup(<IMessageControls record={imessage({ admin: true, photon: 'disconnected' })} busy={false} onAction={noop}/>);
@@ -64,5 +73,33 @@ describe('a code shown once', () => {
     const shown = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK' }}/>);
     expect(shown).toContain('waldo ABCDEFGHJK'); expect(shown).toContain('Copy');
     expect(shown).not.toContain('<a'); expect(shown).not.toContain('href');
+  });
+});
+
+describe('your phone', () => {
+  const phone = (data: Partial<PhoneRecord['data']> = {}): PhoneRecord => ({ ...base, view: 'phone', data: { phone: '+919800000001', verified: false, sms: true, challenge: null, actions: ['phone.sms_send'], ...data } });
+  const pending = { state: 'pending' as const, expires_at: 1_800_000_600, retry_at: null, checks_left: 5 };
+  it('says an unverified number is sent nothing, and offers the link code and a texted code', () => {
+    const html = renderToStaticMarkup(<PhoneControls record={phone()} busy={false} onAction={noop}/>);
+    expect(html).toContain('<strong>+919800000001</strong>, is not verified yet. Waldo sends nothing to it until it is.');
+    expect(html).toContain('href="#/connections/imessage"'); expect(html).toContain('Twilio sends the text');
+    expect(html).toContain('Text me a code'); expect(html).not.toContain('Code from the text');
+  });
+  it('offers only the link code with texting off, and nothing for a verified number or none on file', () => {
+    const off = renderToStaticMarkup(<PhoneControls record={phone({ sms: false, actions: [] })} busy={false} onAction={noop}/>);
+    expect(off).toContain('text your link code'); expect(off).not.toContain('Twilio'); expect(off).not.toContain('<button');
+    const verified = renderToStaticMarkup(<PhoneControls record={phone({ verified: true, actions: [] })} busy={false} onAction={noop}/>);
+    expect(verified).toContain('is verified.'); expect(verified).not.toContain('<button');
+    expect(renderToStaticMarkup(<PhoneControls record={phone({ phone: null, actions: [] })} busy={false} onAction={noop}/>)).toContain('There is no phone number on file.');
+  });
+  it('asks for the code while one waits, and says when another may be asked for', () => {
+    const waiting = renderToStaticMarkup(<PhoneControls record={phone({ challenge: { ...pending, retry_at: 1_800_000_060 }, actions: ['phone.sms_check'] })} busy={false} onAction={noop}/>);
+    expect(waiting).toContain('Code from the text'); expect(waiting).toContain('one-time-code');
+    expect(waiting).toContain('You can ask for another code after'); expect(waiting).not.toContain('Text the code again');
+    const resend = renderToStaticMarkup(<PhoneControls record={phone({ challenge: pending, actions: ['phone.sms_send', 'phone.sms_check'] })} busy={false} onAction={noop}/>);
+    expect(resend).toContain('Text the code again'); expect(resend).not.toContain('You can ask for another code after');
+    expect(renderToStaticMarkup(<PhoneControls record={phone({ challenge: { ...pending, state: 'unknown', retry_at: 1_800_003_600 }, actions: [] })} busy={false} onAction={noop}/>)).toContain('Twilio did not confirm the last text.');
+    // A code that ran out and a text Twilio turned down both leave no code waiting.
+    expect(renderToStaticMarkup(<PhoneControls record={phone({ challenge: { ...pending, state: 'expired', retry_at: 1_800_000_060 }, actions: [] })} busy={false} onAction={noop}/>)).toContain('No code is waiting for this number.');
   });
 });

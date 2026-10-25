@@ -9,7 +9,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, type TaskHost } from '../src/tasks/brain';
 import { jobBook, REPLAY_DEADLINE_MS, replayKey, TASK_LEASE_MS, type JobBook, type TaskTicket } from '../src/tasks/jobs';
-import { runJobsLane } from '../src/tasks/lane';
+import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { BROWSER_TOOLS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import { argumentDigest, type ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -31,7 +31,7 @@ type Harness = Readonly<{
   // The brain host; `restart` swaps in a fresh one, as an evicted owner object gets.
   host(): TaskHost; restart(): void;
   card(args?: Record<string, unknown>): Promise<string>;
-  pass(over?: Readonly<{ startReplay?: (ticket: TaskTicket) => void }>): Promise<number | null>;
+  pass(over?: Readonly<{ startReplay?: (ticket: TaskTicket) => void; deliver?: JobsLaneDeps['deliver'] }>): Promise<number | null>;
   settle(): Promise<void>;
 }>;
 let seq = 0;
@@ -65,7 +65,7 @@ const withReplay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       replayLater: {
         takes: tool => BROWSER_TOOLS.has(tool as ToolName),
         enqueue: (approvalId, call) => {
-          book.create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: 'telegram',
+          book.create({ kind: 'approval_replay', profile: null, idempotencyKey: replayKey(approvalId), origin: replayKey(approvalId), surface: 'app',
             brief: { approval_id: approvalId, ...call, approved_at: clock.at }, dueAt: clock.at, deadlineAt: clock.at + REPLAY_DEADLINE_MS, taint: 'external' });
         },
         wake: async () => undefined,
@@ -86,11 +86,11 @@ const withReplay = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     });
     let host = makeHost();
     const pass: Harness['pass'] = (over = {}) => runJobsLane({
-      book, host, now: () => clock.at, timezone: 'UTC', log: entry => { log.push(entry); },
+      book, host, now: () => clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); },
       startWorker: async () => { throw new Error('no task workers here'); },
       turn: async () => { throw new Error('a replay takes no model turn'); },
       applyTools: () => [],
-      deliver: async (id, _trace, text, commitWork) => { if (!sent.has(id)) sent.set(id, text); commit(commitWork); },
+      deliver: over.deliver ?? (async (id, _trace, text, commitWork) => { if (!sent.has(id)) sent.set(id, text); commit(commitWork); }),
       room: () => true, heldTopics: () => [],
       startReplay: over.startReplay ?? (ticket => { replays.push(host.replay(ticket)); }),
       approvals: desk,
@@ -194,7 +194,7 @@ describe('an approved browser card runs as a replay job', () => {
     await withReplay(async ({ desk, book, sql, ran, sent, card, pass, settle }) => {
       const id = await card();
       await desk.decide(id, 'a', 'tap');
-      expect(book.forget(['Juniper'])).toEqual([book.byKey(replayKey(id))!.id]);
+      expect(book.forget(['Juniper']).cancelled).toEqual([book.byKey(replayKey(id))!.id]);
       await pass();
       await settle();
       expect(ran).toEqual([]);
@@ -212,8 +212,8 @@ describe('an approved browser card runs as a replay job', () => {
       await pass();
       await new Promise(resolve => setTimeout(resolve, 10));
       const job = book.byKey(replayKey(id))!;
-      expect(book.forget(['Juniper'])).toEqual([job.id]);
-      host().fence(job.id);
+      expect(book.forget(['Juniper']).cancelled).toEqual([job.id]);
+      host().cancelled(job.id);
       release();
       await pass();
       await pass();
@@ -231,7 +231,7 @@ describe('an approved browser card runs as a replay job', () => {
       await pass();
       await settle();
       expect(book.byKey(replayKey(id))!.status).toBe('reported');
-      expect(book.forget(['Juniper'])).toHaveLength(1);
+      expect(book.forget(['Juniper']).cancelled).toHaveLength(1);
       await pass();
       expect(ran).toEqual(['browse_act', 'browse_act:done']);
       expect(status(sql, id)).toBe('done');
@@ -278,7 +278,7 @@ describe('an approved browser card runs as a replay job', () => {
 
   it('cancel_task stops an approved action that has not run, and refuses one that already ran', async () => {
     await withReplay(async ({ desk, book, sql, clock, ran, card, pass, settle }) => {
-      const tools = taskToolHandlers({ book, now: () => clock.at, timezone: () => 'UTC', surface: 'telegram', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const tools = taskToolHandlers({ book, now: () => clock.at, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
       const cancel = tools.find(tool => tool.name === 'cancel_task')!;
       const waiting = await card();
       await desk.decide(waiting, 'a', 'tap');
