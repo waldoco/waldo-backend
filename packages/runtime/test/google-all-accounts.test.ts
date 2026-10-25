@@ -226,6 +226,41 @@ describe('only accounts whose grant holds the feature count as accounts to read'
   });
 });
 
+describe('one read covers at most five accounts and names the rest', () => {
+  const ELEVEN: Known[] = Array.from({ length: 11 }, (_, index) => ({ id: `conn-${index}`, email: `account${index}@example.test`, error: null, calendar: true, mail: true, tasks: true }));
+  it('eleven accounts: five are read, at most five at a time, each with its share of the page, and the other six are named as not read', async () => {
+    const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
+    const limits: number[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    const people = (known: Known) => ({ searchContacts: async (_query: string, limit: number) => {
+      limits.push(limit);
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return [{ name: `Priya ${known.id}`, emails: [`priya.${known.id}@example.test`], source: 'contacts' as const }];
+    } });
+    const result = await handler(accessFor(ELEVEN, Object.fromEntries(ELEVEN.map((known) => [known.email, people(known)])), calls), 'search_contacts').handle(searchContactsArgsSchema.parse({ query: 'Priya', limit: 10 }));
+    expect(calls.map(([, account]) => account)).toEqual(ELEVEN.slice(0, 5).map((known) => known.email));
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(limits).toEqual([2, 2, 2, 2, 2]);
+    expect(sections(result)).toHaveLength(5);
+    const summary = entries(result);
+    expect(summary.map((entry) => entry.email)).toEqual(ELEVEN.map((known) => known.email));
+    expect(summary.slice(0, 5).every((entry) => entry.read === 'ok')).toBe(true);
+    for (const entry of summary.slice(5)) {
+      expect(entry.read).toBe('not_read');
+      expect(entry.fix).toContain(entry.email);
+    }
+    expect((result as { data: { note: string } }).data.note).toMatch(/not read.*unknown, not empty/i);
+  });
+  it("free time over eleven accounts leaves the six unread primary calendars unchecked, so nothing is offered as surely free", async () => {
+    const open = { freeBusy: async (from: string, to: string) => ({ from, to, calendars: { primary: { busy: [] } } }) };
+    const result = await handler(accessFor(ELEVEN, Object.fromEntries(ELEVEN.map((known) => [known.email, open]))), 'query_availability').handle({ date_range: { from: '2026-10-25T09:00:00Z', to: '2026-10-25T12:00:00Z' }, calendar_ids: ['primary'], duration_minutes: 30, work_windows: [] });
+    expect(result).toMatchObject({ ok: true, data: { status: 'partial_provider_coverage', free_windows: [], unavailable_calendar_ids: ELEVEN.slice(5).map((known) => known.email) } });
+  });
+});
+
 describe('free time and Drive cover every account too', () => {
   const range = { from: '2026-10-25T09:00:00Z', to: '2026-10-25T12:00:00Z' };
   const busy = (start: string, end: string) => ({ freeBusy: async (from: string, to: string) => ({ from, to, calendars: { primary: { busy: [{ start, end }] } } }) });
