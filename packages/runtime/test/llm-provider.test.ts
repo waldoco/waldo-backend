@@ -12,6 +12,7 @@ import {
   type AdapterResult,
   type HookHandler,
   type LLMResponse,
+  type LLMToolTurn,
   type ModelName,
   type TriggerType,
   MODEL_CONTEXT_MAX_CHARS,
@@ -2063,6 +2064,49 @@ describe('sanitiseRequest structural degradation', () => {
     expect(turns[0]!.output).toContain('withheld by the health-data filter');
     expect(JSON.stringify(turns[0])).not.toMatch(/hrv|42/i);
     expect(turns[1]!.output).toContain('Deluxe Twin');
+  });
+
+  // The owner's own readings (synthetic) beside an outside read in one request: the turn goes on, and no reading reaches
+  // the model once outside content is in the same request.
+  const ownerReadings = JSON.stringify({ ok: true, data: { state: 'available', timezone: 'UTC', from: '2026-10-12', to: '2026-10-12', read_at: '2026-10-13T06:00:00.000Z', signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-12', value: 67.4 }] }, { signal: 'sleep', unit: 'minutes', source: 'apple', method: 'asleep', days: [{ day: '2026-10-12', value: 431 }] }], freshness: 'fresh', coverage: 1 } });
+  const healthTurn = { call: { call_id: 'h1', name: 'get_health', arguments: '{"signals":["hrv","sleep"],"from":"2026-10-12","to":"2026-10-12"}' }, output: ownerReadings };
+  const calendarTurn = { call: { call_id: 'c1', name: 'query_calendar', arguments: '{}' }, output: JSON.stringify({ ok: true, data: { events: [{ title: 'Board call', start: '2026-10-14T09:00:00Z' }] } }) };
+  const planWith = async (tool_turns: readonly LLMToolTurn[]) => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(
+      { trigger: 'brief', renderRequest: () => ({ messages: [{ role: 'user' as const, content: 'Plan tomorrow around my energy' }], tool_turns: [...tool_turns], max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    return { result, sent: gateway.requests.at(-1)?.request.tool_turns };
+  };
+
+  it('withholds the owner\'s own readings when an outside read shares the request, and the turn goes on', async () => {
+    for (const order of [[healthTurn, calendarTurn], [calendarTurn, healthTurn]]) {
+      const { result, sent } = await planWith(order);
+      expect(result).toMatchObject({ ok: true });
+      expect(sent).toHaveLength(2);
+      const health = sent!.find((turn) => turn.call.call_id === 'h1')!;
+      expect(health.call).toEqual({ call_id: 'h1', name: 'get_health', arguments: '{}' });
+      expect(health.output).toContain('hidden because outside content was read');
+      expect(health.output).not.toMatch(/\d/);
+      expect(JSON.stringify(sent)).not.toMatch(/67\.4|431|hrv/i);
+      expect(sent!.find((turn) => turn.call.call_id === 'c1')!.output).toContain('Board call');
+    }
+  });
+
+  it('keeps the owner\'s own readings when nothing outside was read in the request', async () => {
+    const { result, sent } = await planWith([healthTurn]);
+    expect(result.ok).toBe(true);
+    expect(sent).toEqual([healthTurn]);
+  });
+
+  it('still denies raw readings at external taint, so an outside result carrying one is withheld whole', async () => {
+    const denied = await sanitise({ payload: [healthTurn], destination: 'internal_context', source_taint: 'external', canary_tokens: canaryTokens });
+    expect(denied).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    const { result, sent } = await planWith([{ call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: ownerReadings }, healthTurn]);
+    expect(result.ok).toBe(true);
+    expect(sent!.find((turn) => turn.call.call_id === 'c2')!.output).toContain('withheld by the health-data filter');
+    expect(JSON.stringify(sent)).not.toMatch(/67\.4|431/);
   });
 
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
