@@ -16,6 +16,7 @@ import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { appApprovalExactV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { appApprovalStepUp } from './approval-step-up';
+import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -166,6 +167,8 @@ export type ApprovalDesk = Readonly<{
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
   placement(id: string): CardPlacement;
+  // Whether this decision on this approval needs the recent email check; an approval it cannot read needs it.
+  stepUp(id: string, action: ApprovalActionV1): boolean;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
@@ -289,9 +292,11 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
 // The chat surfaces where a send to another person, and every other kind the app gates behind the recent email check, is
 // handed to the app rather than approved. Which kinds is the app's own rule; a request that cannot be classified is handed over.
 const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessage']);
-const approvedInApp = (entry: LedgerRow): boolean => {
-  try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, 'approve'); } catch { return true; }
+// Classified from every detail of the frozen request, never the app card's trimmed one.
+const stepUpFor = (entry: LedgerRow, action: ApprovalActionV1): boolean => {
+  try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, action); } catch { return true; }
 };
+const approvedInApp = (entry: LedgerRow): boolean => stepUpFor(entry, 'approve');
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
 const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be approved at all.";
 // Asking for a new draft acts on nothing, so the app takes it without the email check; chat hands it over all the same.
@@ -1325,6 +1330,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'review_only' as const, undoable: false, review: review(r) })),
         ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
+    },
+    stepUp(id, action) {
+      const entry = row(id);
+      return !entry || stepUpFor(entry, action);
     },
     placement(id) {
       const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
