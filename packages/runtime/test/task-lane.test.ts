@@ -127,6 +127,22 @@ describe('the jobs lane', () => {
     });
   });
 
+  // An apply turn holds the owner's tools: one lost partway (the object evicted) may already have acted, so the next pass
+  // does not run it again; the owner hears what is known.
+  it('a pass lost inside a report\'s apply turn does not run it again: the owner hears it may have acted, once', async () => {
+    await withLane(async ({ book, sent, turns, deps, log }) => {
+      const id = reported(book, 'k1');
+      void runJobsLane(deps({ turn: async (_job, trace) => { turns.push(trace); return new Promise<string>(() => undefined); } }));
+      await Promise.resolve();
+      await runJobsLane(deps());
+      await runJobsLane(deps());
+      expect(turns).toEqual([`task:${id}:apply`]);
+      expect(sent.get(`task:${id}`)).toBe('I was interrupted while telling you about your background task "Inbox since Monday", so I can\'t tell what I\'d already done about it. Check before you start it again.');
+      expect(book.get(id)).toMatchObject({ status: 'applied', result_json: null });
+      expect(log.find(entry => entry.hop === 'task_apply_uncertain')).toMatchObject({ ok: false, job_id: id });
+    });
+  });
+
   it(`runs at most ${TASK_MAX_RUNNING} tasks at once; the rest queue and start as slots free`, async () => {
     await withLane(async ({ book, started, clock, deps }) => {
       const ids = Array.from({ length: TASK_MAX_RUNNING + 1 }, (_, i) => book.create(task(`k${i}`)).job.id);
@@ -408,6 +424,48 @@ describe('R-4: the retried turn', () => {
       await runJobsLane(deps({ turn: async (_job, _trace, _text, current) => { book.cancel(job!.id, 'forgotten'); await current(); return 'late'; } }));
       expect(sent.size).toBe(0);
       expect(book.get(job!.id)!.status).toBe('cancelled');
+    });
+  });
+
+  // The retried turn holds the owner's tools. A pass lost inside it (the object evicted mid-turn) must not run the owner's
+  // message again: its lease lapses with the turn's intent recorded, the job parks as uncertain, and the owner hears so.
+  it('P8: a pass that hangs inside the retried turn past its lease: the next pass parks it as uncertain and never runs it twice', async () => {
+    await withLane(async ({ book, sent, clock, deps, turns }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      let release!: () => void;
+      const hung = new Promise<void>((resolve) => { release = resolve; });
+      const first = runJobsLane(deps({ turn: async (_job, trace, _text, current) => { turns.push(trace); await hung; await current(); return 'Done: your 3pm is now Friday.'; } }));
+      await Promise.resolve();
+      expect(turns).toEqual([`retry:${job!.id}`]);
+      clock.at += TASK_LEASE_MS + 1;
+      await runJobsLane(deps());
+      release();
+      await first;
+      await runJobsLane(deps());
+      expect(turns).toEqual([`retry:${job!.id}`]);
+      expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'uncertain_effect' });
+      expect([...sent.keys()]).toEqual([`retry:${job!.id}`]);
+      expect(sent.get(`retry:${job!.id}`)).toBe('I was interrupted partway through answering your message from 08:00, so I can\'t tell what I\'d already done about it. Check before you send it again.');
+    });
+  });
+
+  it('a retried turn that keeps calling in holds its lease past the lease time, so a later pass leaves it alone', async () => {
+    await withLane(async ({ book, sent, clock, deps }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      await runJobsLane(deps({ turn: async (_job, _trace, _text, current) => {
+        clock.at += TASK_LEASE_MS - 1_000;
+        await current();
+        clock.at += TASK_LEASE_MS - 1_000;
+        await current();
+        expect(book.lapse()).toEqual([]);
+        return 'Done: your 3pm is now Friday.';
+      } }));
+      expect(sent.get(`retry:${job!.id}`)).toBe('Done: your 3pm is now Friday.');
+      expect(book.get(job!.id)).toMatchObject({ status: 'applied', inflight_json: null });
     });
   });
 });
