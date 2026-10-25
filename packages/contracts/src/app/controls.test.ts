@@ -320,7 +320,7 @@ describe("today's update cards", () => {
 describe('welcome constellation fixture', () => {
   it('parses every example the app builds against', async () => {
     const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;
-    for (const projection of [fixture.summary_building, fixture.summary_done, fixture.interpretations_after_welcome]) expect(appControlProjectionV1Schema.safeParse(projection).success).toBe(true);
+    for (const projection of [fixture.summary_building, fixture.summary_done, fixture.interpretations_after_welcome, fixture.detail_node]) expect(appControlProjectionV1Schema.safeParse(projection).success).toBe(true);
     for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
     expect(appControlResultV1Schema.safeParse(fixture.action_result).success).toBe(true);
   });
