@@ -22,6 +22,7 @@ import { productionDeps } from '../src/seams/deps';
 import { jobBook } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 // The forgotten literal comes only from what the model wrote, never from the loop title or the reminder note: a loop whose
 // title carried it would be dropped by the purge, and the outbox would then refuse the check-back for that reason instead.
@@ -163,10 +164,13 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           await internals.serial(async () => undefined);
           runTurn = false;
         },
+        // The tick writes a check-back job on the first pass; its worker reports (stood in for here) for the passes after.
         heartbeat: async () => {
           loops.open({ title: 'Send the quarterly numbers', due: new Date(Date.now() - HOUR).toISOString().slice(0, 16) });
           await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000,
             recurrence: { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: 0 } });
+          await owner.alarm(); await state.storage.deleteAlarm();
+          expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
         },
         reminder: async repeat => {
           const clock = { timezone: 'UTC', now: () => new Date(Date.now() - HOUR) };
@@ -251,7 +255,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await alarms(3);
       expect(model.checkBacks).toBe(1);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
-      expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:heartbeat-tick:\d+$/), status: 'pending', payload: { text: CHECK_BACK } }]);
+      expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:job_/), status: 'pending', payload: { text: CHECK_BACK } }]);
 
       expect(await forget(kind, SECRET)).toBe(true);
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
@@ -261,7 +265,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await alarms(1);
       expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
       // The tick ran and its check-back was cancelled by the owner, which is neither a failure nor a failed delivery.
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
       // Nothing writes that occurrence's check-back again.
       await alarms(3);
       expect(model.checkBacks).toBe(1);
@@ -284,7 +288,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events.filter(event => event.includes(SECRET) || event === `text:${CHECK_BACK}`)).toEqual([]);
-      expect(job('heartbeat').run).toEqual([{ status: 'stopped', summary: STOPPED_HEARTBEAT }]);
+      expect(job('heartbeat').run).toEqual([{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }]);
     });
   });
 
@@ -318,7 +322,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await report('delivered');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'delivered' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'heartbeat sent' }], scheduled: [{ outcome: 'ok', delivery: 'sent' }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'completed', summary: 'heartbeat sent' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 
@@ -331,7 +335,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       await report('refused');
       await alarms(1);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 
@@ -344,7 +348,7 @@ describe('a heartbeat check-back Meta took, and one whose window never reopens',
       age(31 * 24 * HOUR);
       await alarms(2);
       expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'lapsed' }]);
-      expect(job('heartbeat')).toEqual({ run: [{ status: 'stopped', summary: 'heartbeat not sent; your WhatsApp window stayed closed for 30 days' }], scheduled: [{ outcome: 'ok', delivery: null }] });
+      expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: 'heartbeat not sent; your WhatsApp window stayed closed for 30 days' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 });
@@ -478,7 +482,7 @@ describe('owner forget reaches an open background task', { timeout: 30_000 }, ()
   });
 });
 
-describe('the job-report redactor covers heartbeat check-backs and reminders', () => {
+describe('the job-report redactor covers heartbeat check-backs, reminders and update cards', () => {
   it('cancels waiting ones, scrubs delivered ones, leaves replies and notices alone, and counts what it could not scrub', async () => {
     const { TelegramFinalOutbox, redactJobReportEntries, FINAL_OUTBOX_KEY } = await import('../src/channels/telegram-final-outbox');
     const values = new Map<string, unknown>();
@@ -492,15 +496,18 @@ describe('the job-report redactor covers heartbeat check-backs and reminders', (
     await outbox.enqueue({ ...base, id: 'delivered-heartbeat', heartbeat: { ...heartbeat, occurrence: 800 } });
     await outbox.enqueue({ ...base, id: 'reply' });
     await outbox.enqueue({ ...base, id: 'notice', scheduleNotice: { scheduleId: 'job', until: 5000 } });
+    // An update card now waits in the outbox too (up to half an hour), so forget reaches it like any job's report.
+    await outbox.enqueue({ ...base, id: 'update', update: { recordId: 7 } });
     const rows = outbox.records(); rows[2]!.status = 'delivered'; rows[2]!.settled = true; kv.put(FINAL_OUTBOX_KEY, rows);
 
-    expect(redactJobReportEntries(kv, [SECRET], FORGOTTEN)).toEqual({ rewritten: 3, remaining: 0 });
+    expect(redactJobReportEntries(kv, [SECRET], FORGOTTEN)).toEqual({ rewritten: 4, remaining: 0 });
     expect(new TelegramFinalOutbox(kv).records().map(({ id, status, reason, payload }) => ({ id, status, reason, text: payload.text }))).toEqual([
       { id: 'heartbeat', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
       { id: 'reminder', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
       { id: 'delivered-heartbeat', status: 'delivered', reason: undefined, text: `Still open: the ${FORGOTTEN}.` },
       { id: 'reply', status: 'pending', reason: undefined, text: `Still open: the ${SECRET}.` },
       { id: 'notice', status: 'pending', reason: undefined, text: `Still open: the ${SECRET}.` },
+      { id: 'update', status: 'blocked', reason: 'owner_forget', text: `Still open: the ${FORGOTTEN}.` },
     ]);
   });
 

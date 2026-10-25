@@ -10,8 +10,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
 import { TelegramFinalOutbox, type HeartbeatReceipt } from '../src/channels/telegram-final-outbox';
 import type { OwnerDO } from '../src/channels/owner-do';
-// Stands in for the check-back turn: reports which loops it was given.
-const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
+import { heartbeatJobs } from './helpers/heartbeat-job';
 
 let sequence = 0;
 const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`proactivity-${sequence++}`)) as DurableObjectStub<OwnerDO>;
@@ -36,21 +35,24 @@ const withBeat = async <T>(now: number, work: (ctx: {
     const sent: string[] = [];
     const book = loopBook(sql, { newId: (() => { let n = 0; return () => `l${++n}`; })(), now: () => now });
     const plans = dayPlanBook(sql);
+    const jobs = heartbeatJobs(state.storage, { loops: book, timezone: TZ, now: () => now, deliver: deliverSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) });
     const beat = async (occurrenceAt: number) => {
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt, dueAt: occurrenceAt, payloadRefs: { id: HEARTBEAT_ID } }).catch(() => undefined);
-      return scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
+      const dispatched = await scheduler.dispatchDue({
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, ...jobs.tickDeps }),
       } as ScheduleExecutors);
+      await jobs.runJobs();
+      return dispatched;
     };
     const runs = () => sql.exec<RunRow>('SELECT schedule_id, outcome, heartbeat_result, delivery, attempt FROM schedule_runs ORDER BY id').toArray();
     return work({ scheduler, sql, runs, beat, sent, plans });
   });
 
-const enqueueSend = (sql: SqlStorage, storage: DurableObjectStorage, scheduler: Scheduler, now: number, send: (text: string) => Promise<void>) =>
-  async (text: string, heartbeat: HeartbeatReceipt) => {
+const deliverSend = (sql: SqlStorage, storage: DurableObjectStorage, scheduler: Scheduler, now: number, send: (text: string) => Promise<void>) =>
+  async (id: string, _trace: string, text: string, heartbeat: HeartbeatReceipt, commit: () => void) => {
     let transportNow = now;
     const outbox = new TelegramFinalOutbox(storage.kv, () => transportNow);
-    await outbox.enqueue({ id: `heartbeat:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'synthetic', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat });
+    await outbox.enqueueFenced({ id, trace: 'synthetic', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat }, work => storage.transactionSync(() => { work(); commit(); }));
     transportNow += 1000;
     await outbox.drain({ allowed: async () => true, send: async payload => { await send(payload.text); return { message_id: 1, chat: { id: 7 } }; }, settled: async record => { settleHeartbeat(record, sql, scheduler); } });
     await storage.deleteAlarm();

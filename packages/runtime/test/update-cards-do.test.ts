@@ -2,8 +2,10 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { googleClient, type CalendarChange, type GoogleClient, type MailItem } from '../src/connectors/google';
-import { collectChanges, updateBook } from '../src/channels/update-cards';
+import { updateBook } from '../src/channels/update-cards';
+import { collectChanges } from './helpers/collect-changes';
 import { updateCardPrompt } from '../src/prompt/update-cards';
+import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
 
 const tz = 'Asia/Kolkata';
 const t0 = Date.parse('2026-09-23T04:00:00Z');
@@ -108,14 +110,21 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       const loops = updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' });
       loops.setProactivity({ volume: mode === 'low' ? 'low' : 'normal', quiet_start: mode === 'quiet' ? '08:00' : null, quiet_end: mode === 'quiet' ? '10:00' : null, followups: mode !== 'off' });
       if (mode === 'closed') updatePlans(state.storage.sql).sent('2026-10-08', 'card:close');
-      await runtime.updateCheck('seed'); updateFixture.changed = true;
+      await runtime.updateCheck('seed');
+      // Nothing changed: no job, no update record and no model call.
+      expect([updateFixture.prompts.length, state.storage.sql.exec('SELECT COUNT(*) AS n FROM task_jobs').one().n, state.storage.sql.exec('SELECT COUNT(*) AS n FROM update_cards').one().n]).toEqual([0, 0, 0]);
+      updateFixture.changed = true;
       await runtime.updateCheck('changed');
+      // Only an open gate writes a sweep job; its worker reports (stood in for here), the next pass applies it, and the pass
+      // after sends the card it queued.
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(mode === 'normal' ? 1 : 0);
+      await applyAndSend(owner as unknown as { alarm(): Promise<void> }, state.storage.kv);
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
       expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
-      // On Telegram the update card carries its Useful / Not useful feedback buttons, keyed to its stored row.
+      // The card goes through the final outbox, whose payload carries no buttons, and counts as pushed once delivered.
       if (mode === 'normal') {
-        const id = state.storage.sql.exec<{ id: number }>('SELECT id FROM update_cards WHERE pushed = 1').one().id;
-        expect(updateFixture.markups).toEqual([{ inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] }]);
+        expect(updateFixture.markups).toEqual([undefined]);
+        expect(state.storage.sql.exec<{ text: string }>('SELECT text FROM update_cards WHERE pushed = 1').one().text).toBe('Calendar update: Lunch added.');
       }
       expect(closedTraces(state, 'changed')).toBe(1);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }

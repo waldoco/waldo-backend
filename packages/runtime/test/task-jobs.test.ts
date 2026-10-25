@@ -240,6 +240,22 @@ describe('task job book', () => {
     });
   });
 
+  it('a forget reaches machine jobs like the owner\'s: open and reported ones are cancelled, and no machine row keeps the text', async () => {
+    await withBook((book, _clock, sql) => {
+      const machine = (key: string, context: string, block: NonNullable<TaskBrief['machine']>): CreateJob =>
+        job(key, { origin: `machine:${block.job}`, brief: { ...brief, title: 'Background check', context, machine: block } });
+      const open = book.create(machine('m1', 'Due: check how the Lisbon trip call went.', { job: 'heartbeat', input_digest: 'd1', scope: 'owner', refs: ['loop:1'] })).job;
+      const reported = book.create(machine('m2', 'Mail since the last sweep.', { job: 'update_sweep', input_digest: 'd2', scope: 'owner', refs: ['mail:1'], record_id: 7 })).job;
+      book.report(book.startAttempt(reported.id)!, { ...result, findings: [{ text: 'Asha wrote about the Lisbon trip.' }] }, spend);
+      expect(book.openMachine('heartbeat', 'owner')!.id).toBe(open.id);
+      expect(book.forget(['Lisbon trip'])).toEqual({ cancelled: [open.id, reported.id], remaining: 0 });
+      expect(book.get(open.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+      expect(book.openMachine('heartbeat', 'owner')).toBeNull();
+      expect(JSON.stringify(sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray())).not.toMatch(/lisbon trip/i);
+      expect(taskBrief(book.get(open.id)!).machine).toEqual({ job: 'heartbeat', input_digest: 'd1', scope: 'owner', refs: ['loop:1'] });
+    });
+  });
+
   // A running worker may hold a forgotten text only in memory (P2c): its rows cannot show it, so the forget is not settled
   // while the task runs, and the held topic fences the worker's next checkpoint (task-brain). Once it stops, it settles.
   it('a forget is not settled while a task runs, even when no row carries the text; it settles once the task stops', async () => {

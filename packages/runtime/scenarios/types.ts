@@ -43,7 +43,8 @@ export type FixtureFreeBusy = Readonly<{ busy: readonly Readonly<{ start: string
 
 // A turn is owner text; the '@plan ' and '@prompt ' prefixes drive the planning and proactive
 // entry points, matching the evals runner's convention. '@job ' drives a proactive job that embeds
-// text someone else wrote (a day card, an update card), as the owner DO runs one.
+// text someone else wrote (a day card, an update card), as the owner DO runs one. '@sweep ' drives an update sweep job's
+// apply turn, with the tools and taint the owner DO gives it.
 export type Scenario = Readonly<{
   id: string;
   category: ScenarioCategory;
