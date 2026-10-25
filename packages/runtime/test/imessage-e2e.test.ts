@@ -205,8 +205,9 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
     await replyFor(w, 'Move my 3pm to 4');
-    console.log('DEBUG0', JSON.stringify((await outbox(w.ownerStub)).map(r => [r.replyRef, r.state, r.attempts, r.frozenAt - t0, r.nextAttemptAt - t0])), JSON.stringify(await inbox(w.ownerStub)).slice(0, 300));
-    // The card is its own message, ahead of the reply on the bridge's one slot.
+    // The card is its own message, ahead of the reply on the bridge's one slot. The reply polls the busy slot for a few
+    // seconds, then leaves itself to its retry.
+    await vi.waitFor(async () => expect((await outbox(w.ownerStub)).find(row => row.replyRef.startsWith('reply:'))?.attempts).toBeGreaterThan(0), { timeout: 10_000, interval: 250 });
     const first = (await w.host.pull()).delivery!;
     const card = JSON.parse(first.body);
     expect(card.text).toContain('Move "Design review"');
@@ -214,7 +215,6 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
     expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
     await moveClock(w, t0 + 6_000);
     await w.pump(3);
-    console.log('DEBUGOUTBOX', JSON.stringify((await outbox(w.ownerStub)).map(r => [r.replyRef, r.state, r.result, r.attempts, r.nextAttemptAt - Date.now()])));
     const second = (await w.host.pull()).delivery!;
     expect(JSON.parse(second.body).text.startsWith(proof.reply)).toBe(true);
     expect((await w.host.postResult(second, await w.host.execute(second))).status).toBe(200);
@@ -224,18 +224,19 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
     });
 
     // A tapback on the card is evidence, never a turn or a decision.
+    const modelCalls = proof.turns.length;
     const base = w.host.message('x');
     const tapback: any = { ...base, eventId: 'sim-card-tapback', kind: 'reaction', action: 'add', actorHandle: SUBJECT, reaction: { kind: 'standard', type: 'like' },
-      target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT, messageGuid: 'sim-card-guid', partIndex: 0 } };
+      target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT, messageGuid: `sim-sent-${card.commandId}`, partIndex: 0 } };
     delete tapback.text; delete tapback.attachments;
     expect((await w.host.send(tapback)).status).toBe(200);
     await w.pump(2);
     expect(proof.moved).toEqual([]);
-    expect(proof.turns).toHaveLength(1);
+    expect(proof.turns).toHaveLength(modelCalls);
 
     // "1" decides the card without a model turn, and the decision is the reply.
     await replyFor(w, '1');
-    expect(proof.turns).toHaveLength(1);
+    expect(proof.turns).toHaveLength(modelCalls);
     expect(proof.moved).toEqual(['ev-3pm']);
     const decided = (await w.host.pull()).delivery!;
     expect(JSON.parse(decided.body).text).toMatch(/^Done: Move "Design review"/);
@@ -244,7 +245,7 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
 
     // Another "1" has no waiting card: it is an ordinary turn, and the event is not moved again.
     await replyFor(w, '1');
-    expect(proof.turns).toHaveLength(2);
+    expect(proof.turns).toHaveLength(modelCalls + 1);
     expect(proof.moved).toEqual(['ev-3pm']);
     expect(forbiddenEgress).toEqual([]);
   } finally { vi.useRealTimers(); }

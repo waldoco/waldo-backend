@@ -15,7 +15,8 @@ const iso = (s: string) => s as never;
 
 const harness = (state: DurableObjectState) => {
   const cards: { text: string; markup: boolean }[] = [], applied: string[] = [], sent: string[] = [];
-  let n = 0;
+  // Outside a turn iMessage has no sender to answer, so a card waits for the owner's next message.
+  let n = 0, inTurn = true;
   const client = {
     account: { connection_id: 'local:owner@example.test', email: 'owner@example.test' },
     event: async (id: string) => ({ id, title: 'Standup', start: '2026-10-26T10:00:00Z', end: '2026-10-26T10:15:00Z', all_day: false, etag: 'v1' }),
@@ -25,7 +26,7 @@ const harness = (state: DurableObjectState) => {
   const desk = approvalDesk(state.storage.sql, {
     owner: OWNER, surface: 'imessage', appLink: appApprovalLink, appIdentity: () => true, writesFirstNow: () => false,
     call: async (method: string, body: object) => {
-      if (method !== 'sendMessage') return undefined;
+      if (method !== 'sendMessage' || !inTurn) return undefined;
       const message = body as { text: string; reply_markup?: unknown };
       cards.push({ text: message.text, markup: message.reply_markup !== undefined });
       return { messages: [{ id: `wac_${cards.length}` }] };
@@ -35,7 +36,7 @@ const harness = (state: DurableObjectState) => {
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `sent-${sent.length}` }; },
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
-  return { desk, cards, applied, sent, status };
+  return { desk, cards, applied, sent, status, outsideTurn: (outside: boolean) => { inTurn = !outside; } };
 };
 const owner = (name: string, work: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -103,6 +104,27 @@ describe('only an exact 1 or 2, for a waiting numbered card, is a decision', () 
       expect(await f.desk.numberedReply('1', 'trace')).toBeNull();
       expect(f.sent).toEqual([]);
       expect(f.status(id)).toBe('open');
+    });
+  });
+});
+
+describe('a card made outside a turn', () => {
+  it('waits for the owner\'s next message, and a "1" in that message does not answer the card it brings', async () => {
+    await owner('imsg-numbered-waits', async state => {
+      const f = harness(state);
+      f.outsideTurn(true);
+      const id = await f.desk.propose(hold('Focus'));
+      expect(f.cards).toEqual([]);
+      expect(f.desk.placement(id)).toMatchObject({ here: false, waitsHere: true });
+      // The owner writes "1" before ever seeing the card: the number is read first and answers nothing.
+      f.outsideTurn(false);
+      expect(await f.desk.numberedReply('1', 'trace')).toBeNull();
+      await f.desk.ownerWrote();
+      expect(f.cards.at(-1)!.text).toMatch(/Reply 1 to add it, or 2 to skip\.$/);
+      expect(f.status(id)).toBe('open');
+      expect(f.applied).toEqual([]);
+      expect(await f.desk.numberedReply('1', 'trace')).toMatchObject({ toast: 'Done' });
+      expect(f.applied).toEqual(['add Focus']);
     });
   });
 });

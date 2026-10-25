@@ -1116,14 +1116,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         return { outcome: 'unshown' };
       } finally { raising.delete(id); }
     },
-    // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
-    // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
     async numberedReply(text, trace) {
       const number = NUMBERED_REPLY.exec(text)?.[1];
       const latest = surface === 'imessage' && number ? latestNumbered() : undefined;
       if (!latest || latest.retired_at !== null) return null;
       return decideOnce(latest.approval_id, number === '1' ? 'a' : 's', trace, { surface, messageRef: latest.message_ref });
     },
+    // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
+    // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
     async ownerWrote() {
       expireDue();
       const passStarted = deps.now();
