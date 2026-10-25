@@ -11,7 +11,7 @@ import { TASK_ALARM_SLICE_MS, taskWorkerName } from '../src/tasks/worker-do';
 // The worker layer end to end in workerd: an owner turn starts a task, the owner's alarm starts a real TaskWorkerDO, the
 // worker's alarm runs the attempt and reports over RPC, and the owner's next alarm tells the owner once. The model and
 // Telegram are the only fakes.
-const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0, skew: 0 }));
+const seen = vi.hoisted(() => ({ bodies: [] as string[], outputs: [] as unknown[][], sent: [] as string[], down: 0, skew: 0, browser: false }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string, params?: unknown) => {
@@ -19,6 +19,15 @@ vi.mock('../src/channels/telegram-api', async load => ({
     return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: seen.sent.length } : true;
   },
 }));
+// No browser is configured here, so browse_act is not offered. A case that needs the owner's real browse_act handler offered
+// (to show what the taint gate does with it) sets seen.browser; the gate refuses before any handler runs.
+vi.mock('../src/tools/eligibility', async load => {
+  const real = await load<typeof import('../src/tools/eligibility')>();
+  return { ...real, eligibleHandlers: (async (handlers) => {
+    const out = await real.eligibleHandlers(handlers);
+    return seen.browser ? { ...out, handlers: [...out.handlers, ...handlers.filter(handler => handler.name === 'browse_act' && !out.handlers.includes(handler))] } : out;
+  }) as typeof real.eligibleHandlers };
+});
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.bodies.push(JSON.stringify(body));
   // A worker's model call that takes this long: the clock moves past the attempt's alarm slice.
@@ -27,7 +36,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   return { id: 'fixture', output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [] };
 } }; } }));
-beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; seen.skew = 0; });
+beforeEach(() => { seen.bodies.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.down = 0; seen.skew = 0; seen.browser = false; });
 afterEach(() => { vi.useRealTimers(); });
 
 const NAME = 'task-worker-e2e';
@@ -121,6 +130,60 @@ it('cancel_task in an owner turn ends the task and withdraws the card its errand
     await say(instance, state, 2, 'Actually, cancel that');
     expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'owner' });
     expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', card).one().status).toBe('skipped');
+  });
+}, 30_000);
+
+// The owner's ruling for a worker step that needs their approval: words now, a card later. The task stops at the step and
+// hands it back as a proposal; the report's apply turn asks the owner. The owner's real browse_act acts on a live turn's
+// browser session, so an approval could never replay it: propose_action makes no card for it, and nothing ran.
+it('a worker\'s browser step that needs the owner stops the task as a proposal, and the apply turn asks in words: no card, nothing ran', async () => {
+  const name = 'task-owner-step-e2e';
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  type Rpc = { taskClaim(...args: unknown[]): Promise<{ tools: { name: string }[] } | 'fenced'>; taskTool(...args: unknown[]): Promise<Record<string, unknown> | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  const step = { url: 'https://fixture.invalid/book', task: 'Book a table for two at 8pm.' };
+  seen.browser = true;
+  const jobId = await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'ownerstep001', newToken: () => crypto.randomUUID() });
+    const { job } = book.create({ kind: 'task', profile: 'errand', idempotencyKey: 'turn-1:call-1', origin: 'turn-1', surface: 'telegram',
+      brief: { title: 'Table tonight', goal: 'Book a table for two tonight.', context: '', done_when: 'A booking.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    const rpc = instance as unknown as Rpc;
+    const claim = await rpc.taskClaim(ticket);
+    expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toContain('browse_act');
+    // The owner's browse_act acts on a live turn's browser session, so an approval could never replay it.
+    const owned = (instance as unknown as { setup(channel: string): { toolHandlers(): { name: string; turn_bound?: boolean }[] } }).setup('telegram').toolHandlers();
+    expect(owned.find(handler => handler.name === 'browse_act')).toMatchObject({ turn_bound: true });
+    const refused = await rpc.taskTool(ticket, { call_id: 'c-book', name: 'browse_act', arguments: JSON.stringify(step) }, ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687']);
+    expect(refused).toMatchObject({ ok: false, error_code: 'taint_needs_approval', retryable: false });
+    expect(JSON.stringify(refused)).toContain('finish_task');
+    expect(JSON.stringify(refused)).not.toContain('propose_action');
+    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'running', inflight_json: null });
+    // A worker that read pages reports outside text, so its report is applied under the outside-text ceiling.
+    state.storage.sql.exec("UPDATE task_jobs SET taint = 'external' WHERE id = ?", job.id);
+    expect(await rpc.taskReport(ticket, { kind: 'result', result: { status: 'blocked', summary: 'Found a table at 8pm; booking it needs the owner.', findings: [],
+      proposals: [{ tool: 'browse_act', why: 'Booking needs the owner\'s approval.', args: step }], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+    return job.id;
+  });
+  // The apply turn tries the card it was told to, then tells the owner in words.
+  seen.outputs.push(fn('propose_action', { tool: 'browse_act', args: step, reasoning: 'The owner asked for a table; booking needs their approval.' }), []);
+  await runDurableObjectAlarm(stub);
+  const applied = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'applied');
+  expect(applied).toMatchObject({ id: jobId, status: 'applied', outcome: 'blocked' });
+  const applyBody = seen.bodies.find(body => body.includes('A background task you started has finished'))!;
+  expect(applyBody).toContain('propose it with propose_action');
+  expect(applyBody).toContain('fixture.invalid/book');
+  // The card was refused before it was made: the next round of the apply turn carries the refusal.
+  expect(seen.bodies.some(body => body.includes('browse_act cannot run from an approval on this Waldo, so no card was made'))).toBe(true);
+  await runInDurableObject(stub, async (_instance, state) => {
+    const ledger = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").toArray().length
+      ? state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM ledger').one().n : 0;
+    expect(ledger).toBe(0);
+    const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
+    expect(outbox.filter(record => record.id === `task:${jobId}`)).toHaveLength(1);
+    await state.storage.deleteAlarm();
   });
 }, 30_000);
 

@@ -256,6 +256,21 @@ describe('task job book', () => {
     });
   });
 
+  // A running worker may hold a forgotten text only in memory (P2c): its rows cannot show it, so the forget is not settled
+  // while the task runs, and the held topic fences the worker's next checkpoint (task-brain). Once it stops, it settles.
+  it('a forget is not settled while a task runs, even when no row carries the text; it settles once the task stops', async () => {
+    await withBook((book) => {
+      const running = book.create(job('k1')).job;
+      const ticket = book.startAttempt(running.id)!;
+      const retry = book.create(job('k2', { kind: 'retry_turn', profile: null, brief: { message_ref: 'm', text: 'hi', conversation_ref: 'c', said_at: 1, promised_by: 2 } })).job;
+      book.startAttempt(retry.id);
+      expect(book.forget(['Project Falcon'])).toEqual({ cancelled: [], remaining: 1 });
+      expect(book.get(running.id)!.status).toBe('running');
+      book.report(ticket, result, spend);
+      expect(book.forget(['Project Falcon'])).toEqual({ cancelled: [], remaining: 0 });
+    });
+  });
+
   it('an open job that only carries a marker is not cancelled: no forget rewrites an open job, so the marker is the owner\'s words', async () => {
     await withBook((book) => {
       const marked = book.create(job('k1', { brief: { ...brief, context: 'The [forgotten] thread is closed.' } })).job;

@@ -40,6 +40,8 @@ type Harness = Readonly<{
   health: InMemoryCircuitBreaker;
   // What the directory says of the owner when a worker call asks.
   admission: { now: 'admitted' | 'dormant' | 'retry' | 'throws'; waiting?: Promise<void> };
+  // Topics the owner is forgetting whose purge has not settled.
+  topics: string[];
 }>;
 let seq = 0;
 const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -56,6 +58,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const handler: Harness['handler'] = {};
     const health = new InMemoryCircuitBreaker({ now: () => clock.at });
     const admission: Harness['admission'] = { now: 'admitted' };
+    const topics: string[] = [];
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
@@ -68,12 +71,13 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => { if (spend === 'throws') throw new Error('no runtime for the task channel'); return spend; }, wake: async () => undefined, withdrawCards: runRef => { withdrawn.push(runRef); },
       providerHealth: health,
       admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
+      heldTopics: () => topics,
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, withdrawn, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler, health, admission, topics });
   });
 
 describe('the task brain host', () => {
@@ -89,19 +93,70 @@ describe('the task brain host', () => {
     });
   });
 
-  // A worker has always read outside content, and it cannot raise a card: a free-form browser step, which may commit, is
-  // refused toward the owner's card before it runs, with no effect intent written.
-  it('an errand worker\'s untyped browser step is refused toward the owner\'s card: nothing runs and no effect intent is written', async () => {
-    await withHost(async ({ host, ticket, ran, book }) => {
+  // A worker has always read outside content, and it cannot raise a card or approve: a step the taint gate sends to the
+  // owner (a free-form browser step, a download) does not run, and the worker is told to stop there and hand the step back
+  // in its result's proposals, which the report's apply turn puts to the owner. It is never pointed at propose_action, which
+  // no worker profile holds.
+  for (const [label, step] of [
+    ['untyped browser step', UNTYPED_BROWSE],
+    ['download', { call_id: 'c-download', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/book', task: 'Save the menu.', command: { operation: 'download', element_ref: 'e2' } }) }],
+  ] as const) {
+    it(`an errand worker's ${label} stops for the owner: nothing runs, no intent is written, and the worker is told to finish with it as a proposal`, async () => {
+      await withHost(async ({ host, ticket, ran, book }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        const refused = await host.tool(t, step, CANARIES);
+        expect(refused).toMatchObject({ ok: false, error_code: 'taint_needs_approval', retryable: false });
+        const told = JSON.stringify(refused);
+        expect(told).not.toContain('propose_action');
+        expect(told).toContain(FINISH_TASK);
+        expect(told).toContain('proposals');
+        expect(ran).toEqual([]);
+        expect(book.get(t.jobId)!).toMatchObject({ status: 'running', inflight_json: null });
+        expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+        expect(ran).toEqual(['browse_act', 'browse_act:done']);
+      });
+    });
+  }
+
+  it('a worker that stops at a step needing the owner reports it as a proposal, and the stored result keeps the exact step', async () => {
+    await withHost(async ({ host, ticket, book }) => {
       const t = ticket('errand');
       await host.claim(t);
-      const refused = await host.tool(t, UNTYPED_BROWSE, CANARIES);
-      expect(refused).toMatchObject({ ok: false });
-      expect(JSON.stringify(refused)).toContain('propose_action');
-      expect(ran).toEqual([]);
-      expect(book.get(t.jobId)!.inflight_json).toBeNull();
-      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
-      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+      await host.tool(t, UNTYPED_BROWSE, CANARIES);
+      const proposal = { tool: 'browse_act', why: 'Booking needs the owner\'s approval.', args: JSON.parse(UNTYPED_BROWSE.arguments) as Record<string, unknown> };
+      expect(await host.report(t, { kind: 'result', result: { status: 'blocked', summary: 'Found a table; booking it needs you.', findings: [], proposals: [proposal], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(t.jobId)!.result_json!)).toMatchObject({ status: 'blocked', proposals: [proposal] });
+    });
+  });
+
+  // A worker has always read outside content, so every call it makes runs with outside-sourced arguments: this value is
+  // the whole taint gate for a worker's browse_act, and the worker never grants itself approval.
+  it('every worker call reaches its handler with outside-sourced arguments and no approval', async () => {
+    await withHost(async ({ host, ticket, handler }) => {
+      const seen: Pick<ToolDispatcherContext, 'toolArgSourceTaint' | 'sourceTaint'>[] = [];
+      let approved: boolean | undefined;
+      handler.search = async (ctx) => { seen.push({ toolArgSourceTaint: ctx.toolArgSourceTaint, sourceTaint: ctx.sourceTaint }); approved = await ctx.hasApproval?.({ tool: 'search_communication', args: {}, session: null }); return { hits: 1 }; };
+      const t = ticket();
+      await host.claim(t);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+      expect(seen).toEqual([{ toolArgSourceTaint: 'external', sourceTaint: null }]);
+      expect(approved).toBe(false);
+    });
+  });
+
+  // The lease renews only for the attempt's own token: a forged token neither keeps the job alive nor reaches its calls.
+  it('a heartbeat with a forged token is refused and leaves the lease where it was', async () => {
+    await withHost(async ({ host, ticket, book, clock }) => {
+      const t = ticket();
+      await host.claim(t);
+      const lease = book.get(t.jobId)!.lease_until;
+      clock.at += 60_000;
+      expect(await host.heartbeat({ ...t, token: 'forged' })).toBe(false);
+      expect(book.get(t.jobId)!.lease_until).toBe(lease);
+      expect(await host.tool({ ...t, token: 'forged' }, call('search_communication'), CANARIES)).toBe('fenced');
+      expect(await host.heartbeat(t)).toBe(true);
+      expect(book.get(t.jobId)!.lease_until).toBeGreaterThan(lease!);
     });
   });
 
@@ -183,6 +238,33 @@ describe('the task brain host', () => {
       expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ ok: false, code: 'uncertain_effect' });
       expect(released).toHaveLength(1);
       expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+    });
+  });
+
+  // P2c: the forget found no row carrying the text, but the worker read it and holds it in memory. Its next checkpoint
+  // would write the text back after the forget: the job is cancelled as forgotten instead, and nothing is written.
+  it('a checkpoint carrying a topic the owner is forgetting cancels the job as forgotten and writes nothing', async () => {
+    await withHost(async ({ host, ticket, book, topics, released, withdrawn, sql }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      topics.push('Project Falcon');
+      const turns = [{ call: call('search_communication'), output: '{"ok":true,"data":"Mail about project falcon, page 1"}' }];
+      expect(await host.checkpoint(t, 1, turns, [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', checkpoint_json: null, lease_token: null });
+      expect(JSON.stringify(sql.exec('SELECT * FROM task_jobs').toArray())).not.toMatch(/project falcon/i);
+      expect(released).toHaveLength(1);
+      expect(withdrawn).toEqual([`task:${t.jobId}`]);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+    });
+  });
+
+  it('a checkpoint clear of the held topics is written as usual', async () => {
+    await withHost(async ({ host, ticket, book, topics }) => {
+      const t = ticket();
+      await host.claim(t);
+      topics.push('Project Falcon');
+      expect(await host.checkpoint(t, 1, [{ call: call('search_communication'), output: 'page 1' }], [], { rounds: 1, costUsd: 0 })).toBe('ok');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'running', checkpoint_seq: 1 });
     });
   });
 

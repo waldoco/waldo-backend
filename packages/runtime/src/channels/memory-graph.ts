@@ -1,5 +1,7 @@
 // Owner-scoped read projection. No initializer, model calls, URLs or mutation helpers.
 import { holdsIn } from '../memory/forget-guard';
+import type { Claim } from '../memory/claims';
+import { nodeConfirmation, nodeSources } from '../memory/node-sources';
 export const MEMORY_GRAPH_PATH='/console/dashboard/api/v1/memory';
 type Row=Record<string,unknown>;
 const text=(v:unknown)=>typeof v==='string'?v:'';
@@ -24,10 +26,11 @@ export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Ro
   let support:number[]=[];let valid=true;try{const value=JSON.parse(text(n.supporting_spots));if(!Array.isArray(value)||!value.every(id))valid=false;else support=[...new Set(value)];}catch{valid=false}
   const available=support.filter(i=>byId.has(i));if(!valid||!support.length||available.length!==support.length)partial=true;
   if(!valid||available.length!==support.length||support.length===0)return null;
-  const sourceRefs=new Set(input.claims.filter(c=>available.includes(c.id as number)).map(c=>text(c.source_ref)).filter(Boolean));
+  const supports=input.claims.filter(c=>available.includes(c.id as number)) as unknown as Claim[];
+  const sourceRefs=new Set(supports.map(c=>text(c.source_ref)).filter(Boolean));
   const estimate=finite(n.strength);
   if(estimate===null||estimate<0||estimate>1||!validDate(n.last_confirmed)||!['active','stale'].includes(text(n.status)))partial=true;
-  return{id:ref(input.scope,'node',n.id as number),local_id:n.id as number,type:'interpretation' as const,label:text(n.label),summary:text(n.summary),domain:text(n.domain),stored_status:text(n.status),recorded_active_at:text(n.last_confirmed),estimate:estimate!==null&&estimate>=0&&estimate<=1?estimate:null,estimate_kind:'uncalibrated_model_estimate' as const,support:{state:!valid?'invalid' as const:available.length===support.length?'stored_links' as const:'incomplete' as const,claim_ids:available.map(i=>ref(input.scope,'claim',i)),unavailable_count:support.length-available.length,distinct_source_refs:sourceRefs.size,independent_observations:'unverified' as const}};
+  return{id:ref(input.scope,'node',n.id as number),local_id:n.id as number,type:'interpretation' as const,label:text(n.label),summary:text(n.summary),domain:text(n.domain),stored_status:text(n.status),recorded_active_at:text(n.last_confirmed),estimate:estimate!==null&&estimate>=0&&estimate<=1?estimate:null,estimate_kind:'uncalibrated_model_estimate' as const,support:{state:!valid?'invalid' as const:available.length===support.length?'stored_links' as const:'incomplete' as const,claim_ids:available.map(i=>ref(input.scope,'claim',i)),unavailable_count:support.length-available.length,distinct_source_refs:sourceRefs.size,independent_observations:'unverified' as const},sources:nodeSources(supports,{supporting_spots:JSON.stringify(available)}),confirmation:nodeConfirmation(supports,{supporting_spots:JSON.stringify(available)})};
  }).filter((n):n is NonNullable<typeof n>=>n!==null);
  if(nodes.length!==input.nodes.length)partial=true;
  const nodeIds=new Set(nodes.map(n=>n.local_id));

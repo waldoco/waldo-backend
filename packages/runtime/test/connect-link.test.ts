@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleConnectTicket, newTicket, ticketHash, BEGIN_SESSION_PATH } from '../src/channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from '../src/connectors/google';
+import { MCP_CALLBACK_PATH } from '../src/connectors/mcp-oauth';
 import { checkBrowser } from '../src/connectors/oauth-browser-binding';
 import { handoffHash } from '../src/channels/connect-confirm';
 import { cookieJar, setCookies } from './support/cookie-jar';
@@ -101,7 +102,7 @@ describe('handleConnectTicket', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(rpcCalls.map(r => r.fn)).toEqual(['connect_session_resolve', 'connect_session_begin']);
     expect(rpcCalls[1]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
-    expect(doCalls).toEqual([{ path: BEGIN_SESSION_PATH, body: JSON.stringify({ ticket_hash: await ticketHash(TICKET) }) }]);
+    expect(doCalls).toEqual([{ path: BEGIN_SESSION_PATH, body: JSON.stringify({ ticket_hash: await ticketHash(TICKET), provider: 'google' }) }]);
     const [set] = setCookies(response);
     expect(set).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
     expect(set).toContain('Max-Age=43200');
@@ -282,5 +283,57 @@ describe('a /c/ link handed to the app binds only the browser the app opened it 
     expect((await open(env)).status).toBe(200);
     expect((await proceed(env)).status).toBe(303);
     expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_hand_off');
+  });
+});
+
+describe('a Granola ticket', () => {
+  const GRANOLA = { ...LIVE, provider: 'granola' };
+  const AUTHORIZE = 'https://mcp-auth.granola.ai/oauth2/authorize?client_id=x';
+
+  it('names Granola on the confirm page and lets the form go only to Granola\'s sign-in', async () => {
+    const { env } = owner({ url: AUTHORIZE, nonce: NONCE });
+    answers.connect_session_resolve = GRANOLA;
+    const response = await open(env);
+    const html = await response.text();
+    expect(html).toContain('Connect Granola?');
+    expect(html).toContain('Continue to Granola');
+    expect(html).not.toContain('Google');
+    expect(response.headers.get('content-security-policy')).toContain("form-action 'self' https://mcp-auth.granola.ai");
+    expect(response.headers.get('content-security-policy')).not.toContain('accounts.google.com');
+  });
+
+  it('on Continue redirects to Granola and binds this browser to the MCP callback, not Google\'s', async () => {
+    const { env } = owner({ url: AUTHORIZE, nonce: NONCE });
+    answers.connect_session_resolve = GRANOLA;
+    const response = await proceed(env);
+    expect([response.status, response.headers.get('location')]).toEqual([303, AUTHORIZE]);
+    const [set] = setCookies(response);
+    expect(set).toContain(`Path=${MCP_CALLBACK_PATH}`);
+    const atCallback = new Request(`${ORIGIN}${MCP_CALLBACK_PATH}`, { headers: { cookie: set!.split(';')[0]! } });
+    expect(await checkBrowser(atCallback, STATE_SECRET, 'mcp', NONCE, Date.now())).toBe('bound');
+    expect(await checkBrowser(atCallback, STATE_SECRET, 'google', NONCE, Date.now())).not.toBe('bound');
+  });
+
+  it('refuses a consent address off the provider the page named, and binds nothing', async () => {
+    const { env } = owner({ url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1', nonce: NONCE });
+    answers.connect_session_resolve = GRANOLA;
+    const response = await proceed(env);
+    expect([response.headers.get('location'), setCookies(response)]).toEqual([null, []]);
+    expect(response.status).not.toBe(303);
+  });
+
+  it('treats a provider it does not know as an invalid link', async () => {
+    const { env, doCalls } = owner();
+    answers.connect_session_resolve = { ...LIVE, provider: 'notion' };
+    expect((await open(env)).status).toBe(400);
+    expect(doCalls).toHaveLength(0);
+  });
+
+  it('says Granola is already connected, with no redirect, when Continue finds a live connection', async () => {
+    const { env } = owner({ url: null, already: true } as never);
+    answers.connect_session_resolve = GRANOLA;
+    const response = await proceed(env);
+    expect([response.status, response.headers.get('location')]).toEqual([200, null]);
+    expect(await response.text()).toContain('Granola is already connected');
   });
 });

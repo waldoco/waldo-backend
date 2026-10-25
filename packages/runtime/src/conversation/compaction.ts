@@ -97,7 +97,9 @@ export const compactionDue = (input: Readonly<{ stats: Pick<ConversationWindowSt
   && input.ownerRows >= settings.minOwnerRows
   && (input.lastAttemptAt === null || input.now - input.lastAttemptAt >= settings.minIntervalMs);
 
-export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage[]; covers: ConversationCovers; gap: number; toEntry: ConversationEntry; entryIds: readonly string[] }>;
+// sources[i] is the row input[i] was made from: the live summary's row first when there is one, then the span rows carried.
+// entryIds names every row leaving the window, whether or not the summary reads it.
+export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage[]; sources: readonly ConversationEntry[]; covers: ConversationCovers; gap: number; toEntry: ConversationEntry; entryIds: readonly string[] }>;
 
 // What the next compaction covers: every row on the chain older than a verbatim tail of whole rounds at or under the tail
 // fraction of the budget, so the tail starts with an owner message. The call's input is the live summary first, then the
@@ -139,11 +141,27 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
   const first = Math.min(...kept);
   return {
     input: [...(summary ? [summary] : []), ...carried.map((row) => row.message!)],
-    covers: { from_id: live ? live.covers!.from_id : span[first]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
+    sources: [...(live ? [live] : []), ...carried.map((row) => row.entry)],
+    covers:{ from_id: live ? live.covers!.from_id : span[first]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
     gap: span.filter((row) => row.message !== null).length - carried.length,
     toEntry: span[span.length - 1]!.entry,
     entryIds: span.map((row) => row.entry.id),
   };
+};
+
+// What a summary was made from, checked again in the commit that writes it, after the model call: each source row must
+// still be stored as the summary read it, and admits() must pass, reading what is held at that moment. A forget that
+// landed while the summary was being written rewrites a source row or holds a topic, and the summary is not written.
+export type CompactionFence = Readonly<{ sources: readonly ConversationEntry[]; admits: () => boolean }>;
+
+// The plan without the inputs `drop` selects, as a held topic's rows are left out: covers.rows counts only the original
+// rows the summary is still made from, the previous summary's count among them only while that summary is kept. Null when
+// nothing is left.
+export const planWithout = (plan: CompactionPlan, drop: (message: ConversationModelMessage) => boolean): CompactionPlan | null => {
+  const kept = plan.input.flatMap((message, index) => (drop(message) ? [] : [{ message, source: plan.sources[index]! }]));
+  if (!kept.length) return null;
+  const rows = kept.reduce((count, { source }) => count + (source.role === 'compaction' ? source.covers!.rows : 1), 0);
+  return { ...plan, input: kept.map(({ message }) => message), sources: kept.map(({ source }) => source), covers: { ...plan.covers, rows } };
 };
 
 // The row itself: a child of the last row it covers, beside the first row it does not, on the same thread, so no stored

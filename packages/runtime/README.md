@@ -56,6 +56,9 @@ pnpm --filter @waldo/runtime test
 - `RESPONSIBILITY_RATE_LIMITER` is the Cloudflare Rate Limiting binding declared in
   `wrangler.jsonc`; the channel ingress routes (console, app, Telegram link, iMessage, device
   connect) use it as their edge rate limiter. The name is historical.
+- `EXPO_ACCESS_TOKEN`, provisioned with `wrangler secret put`, is Expo's access token for
+  the app's push project. Without it the owner object's app push is not configured: it reads
+  no device tokens and sends nothing.
 
 Gateway mode currently wires a metadata-only Cloudflare AI Gateway adapter and a
 fail-closed delivery/safety placeholder. It also fails before provider egress until HEY-99

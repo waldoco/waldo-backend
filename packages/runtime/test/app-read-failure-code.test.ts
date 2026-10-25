@@ -16,7 +16,7 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'app_session_authority' && ++wire.authorityReads > wire.authorityLimit) throw new Error('directory unavailable');
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
-    if (fn === 'console_session_list') { if (wire.sessions === 'outage') throw new Error('directory unavailable'); return Response.json([]); }
+    if (fn === 'console_session_inventory') { if (wire.sessions === 'outage') throw new Error('directory unavailable'); return Response.json([]); }
     return new Response('unexpected', { status: 500 });
   });
 });

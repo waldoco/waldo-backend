@@ -18,6 +18,8 @@ export const retryParkedNotice = (brief: RetryBrief, timezone: string, reason: P
   const said = ownerTime(brief.said_at, timezone);
   if (reason === 'provider_unavailable') return `I still can't reach my model, so I couldn't answer your message from ${said}. Could you send it again in a little while?`;
   if (reason === 'deadline') return `I couldn't get back to you by ${ownerTime(brief.promised_by, timezone)} as I said, so your message from ${said} is still unanswered. Could you send it again?`;
+  // The turn holds the owner's tools and was lost partway, so it may have acted: asking for the message again could do it twice.
+  if (reason === 'uncertain_effect') return `I was interrupted partway through answering your message from ${said}, so I can't tell what I'd already done about it. Check before you send it again.`;
   return `Something kept going wrong while I answered your message from ${said}, so it is still unanswered. Could you send it again?`;
 };
 
@@ -45,6 +47,13 @@ export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>, tim
   return row.park_reason
     ? `${name} stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Start it again if you still need it.`
     : `${name} finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
+};
+
+// A report whose apply turn was lost partway: that turn holds the owner's tools and may have acted, so it is not run again.
+export const interruptedReport = (row: Pick<JobRow, 'brief_json'>, timezone: string): string => {
+  const { title, started } = taskName(row, timezone);
+  const name = title === null ? `the background task you started at ${started}` : `your background task "${title}"`;
+  return `I was interrupted while telling you about ${name}, so I can't tell what I'd already done about it. Check before you start it again.`;
 };
 
 // A long task's progress note.

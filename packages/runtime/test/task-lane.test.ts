@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult, ToolName } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
+import { ClosedRunError } from '../src/channels/run-effect-scope';
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, TASK_LEASE_MS, TASK_MAX_RUNNING, type CreateJob, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
@@ -127,6 +128,36 @@ describe('the jobs lane', () => {
     });
   });
 
+  // An apply turn holds the owner's tools: one lost partway (the object evicted) may already have acted, so the next pass
+  // does not run it again; the owner hears what is known.
+  it('a pass lost inside a report\'s apply turn does not run it again: the owner hears it may have acted, once', async () => {
+    await withLane(async ({ book, sent, turns, deps, log }) => {
+      const id = reported(book, 'k1');
+      void runJobsLane(deps({ turn: async (_job, trace) => { turns.push(trace); return new Promise<string>(() => undefined); } }));
+      await Promise.resolve();
+      await runJobsLane(deps());
+      await runJobsLane(deps());
+      expect(turns).toEqual([`task:${id}:apply`]);
+      expect(sent.get(`task:${id}`)).toBe('I was interrupted while telling you about your background task "Inbox since Monday", so I can\'t tell what I\'d already done about it. Check before you start it again.');
+      expect(book.get(id)).toMatchObject({ status: 'applied', result_json: null });
+      expect(log.find(entry => entry.hop === 'task_apply_uncertain')).toMatchObject({ ok: false, job_id: id });
+    });
+  });
+
+  // A turn the owner's admission closes partway (a directory lookup that cannot answer) ended in this pass, not lost: its
+  // intent goes, and the next pass applies the report as usual.
+  it('an apply turn closed partway while its job is still current is run again by the next pass, not taken for a lost one', async () => {
+    await withLane(async ({ book, sent, turns, deps }) => {
+      const id = reported(book, 'k1');
+      await runJobsLane(deps({ turn: async (_job, trace) => { turns.push(trace); throw new ClosedRunError(); } }));
+      expect(book.get(id)).toMatchObject({ status: 'reported', inflight_json: null });
+      await runJobsLane(deps());
+      expect(turns).toEqual([`task:${id}:apply`, `task:${id}:apply`]);
+      expect(sent.get(`task:${id}`)).toMatch(/^Reply to /);
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+
   it(`runs at most ${TASK_MAX_RUNNING} tasks at once; the rest queue and start as slots free`, async () => {
     await withLane(async ({ book, started, clock, deps }) => {
       const ids = Array.from({ length: TASK_MAX_RUNNING + 1 }, (_, i) => book.create(task(`k${i}`)).job.id);
@@ -163,6 +194,20 @@ describe('the jobs lane', () => {
       expect(book.get(carrying)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
       expect(fenced).toEqual([carrying]);
       expect(started.map(ticket => ticket.jobId)).toEqual([other]);
+    });
+  });
+
+  it('a running task whose progress carries a topic the owner is forgetting is cancelled and fenced, not only due ones', async () => {
+    await withLane(async ({ book, fenced, deps }) => {
+      const carrying = book.create(task('k1')).job.id;
+      const other = book.create(task('k2')).job.id;
+      await runJobsLane(deps());
+      const ticket = { jobId: carrying, attempt: 1, token: book.get(carrying)!.lease_token! };
+      expect(book.checkpoint(ticket, 1, { turns: [{ call: { call_id: 'c1', name: 'search_communication', arguments: '{}' }, output: 'Mail about the Lisbon trip' }] }, { rounds: 1, costUsd: 0 })).toBe('ok');
+      await runJobsLane(deps({ heldTopics: () => ['Lisbon trip'] }));
+      expect(book.get(carrying)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(book.get(other)!.status).toBe('running');
+      expect(fenced).toEqual([carrying]);
     });
   });
 
@@ -408,6 +453,62 @@ describe('R-4: the retried turn', () => {
       await runJobsLane(deps({ turn: async (_job, _trace, _text, current) => { book.cancel(job!.id, 'forgotten'); await current(); return 'late'; } }));
       expect(sent.size).toBe(0);
       expect(book.get(job!.id)!.status).toBe('cancelled');
+    });
+  });
+
+  // The retried turn holds the owner's tools. A pass lost inside it (the object evicted mid-turn) must not run the owner's
+  // message again: its lease lapses with the turn's intent recorded, the job parks as uncertain, and the owner hears so.
+  it('P8: a pass that hangs inside the retried turn past its lease: the next pass parks it as uncertain and never runs it twice', async () => {
+    await withLane(async ({ book, sent, clock, deps, turns }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      let release!: () => void;
+      const hung = new Promise<void>((resolve) => { release = resolve; });
+      const first = runJobsLane(deps({ turn: async (_job, trace, _text, current) => { turns.push(trace); await hung; await current(); return 'Done: your 3pm is now Friday.'; } }));
+      await Promise.resolve();
+      expect(turns).toEqual([`retry:${job!.id}`]);
+      clock.at += TASK_LEASE_MS + 1;
+      await runJobsLane(deps());
+      release();
+      await first;
+      await runJobsLane(deps());
+      expect(turns).toEqual([`retry:${job!.id}`]);
+      expect(book.get(job!.id)).toMatchObject({ status: 'parked', park_reason: 'uncertain_effect' });
+      expect([...sent.keys()]).toEqual([`retry:${job!.id}`]);
+      expect(sent.get(`retry:${job!.id}`)).toBe('I was interrupted partway through answering your message from 08:00, so I can\'t tell what I\'d already done about it. Check before you send it again.');
+    });
+  });
+
+  it('a retried turn that keeps calling in holds its lease past the lease time, so a later pass leaves it alone', async () => {
+    await withLane(async ({ book, sent, clock, deps }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      await runJobsLane(deps({ turn: async (_job, _trace, _text, current) => {
+        clock.at += TASK_LEASE_MS - 1_000;
+        await current();
+        clock.at += TASK_LEASE_MS - 1_000;
+        await current();
+        expect(book.lapse()).toEqual([]);
+        return 'Done: your 3pm is now Friday.';
+      } }));
+      expect(sent.get(`retry:${job!.id}`)).toBe('Done: your 3pm is now Friday.');
+      expect(book.get(job!.id)).toMatchObject({ status: 'applied', inflight_json: null });
+    });
+  });
+
+  it('a retried turn closed partway while its attempt is still current is retried after its lease, not parked as uncertain', async () => {
+    await withLane(async ({ book, sent, clock, deps }) => {
+      floor(book, clock.at);
+      const [job] = book.open();
+      clock.at += 2 * 60_000;
+      await runJobsLane(deps({ turn: async () => { throw new ClosedRunError(); } }));
+      expect(book.get(job!.id)).toMatchObject({ status: 'running', inflight_json: null });
+      clock.at += TASK_LEASE_MS + 1;
+      await runJobsLane(deps({ turn: async () => 'Done: your 3pm is now Friday.' }));
+      expect(sent.get(`retry:${job!.id}`)).toBe('Done: your 3pm is now Friday.');
+      expect(book.get(job!.id)).toMatchObject({ status: 'applied', park_reason: null, attempt: 2 });
     });
   });
 });

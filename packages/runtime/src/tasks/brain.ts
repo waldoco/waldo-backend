@@ -3,14 +3,14 @@ import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scop
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, leadingNote, toolDefinitions, UNKEPT_EFFECT, type LoopToolResult } from '../conversation/tool-loop';
-import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { carriesTopic, hidesTopic, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { isMachine, jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
-import { BROWSER_TOOLS, jobTools, unreplayable } from './profiles';
+import { BROWSER_TOOLS, FINISH_TASK, jobTools, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
@@ -36,6 +36,9 @@ export type TaskHostDeps = Readonly<{
   wake(due: number): Promise<void>;
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
+  // Topics the owner asked to forget whose purge has not settled. A running task keeps them held (jobs.forget), and a
+  // checkpoint that carries one cancels its job rather than write it back.
+  heldTopics?(): readonly string[];
   // Whether the directory still admits the owner, asked before each worker call as an owner job asks before each effect.
   // Without it (no directory on this deploy) the owner stands.
   admitted?(): Promise<'admitted' | 'dormant' | 'retry'>;
@@ -80,6 +83,14 @@ const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
     ...(unkeptOutput ? { output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}` } : {}),
   };
 };
+
+// A step the taint gate holds for the owner's approval. A worker cannot raise a card (no profile holds propose_action) and
+// never approves, so the task stops at the step and hands it back as a proposal: the report's apply turn asks the owner. A
+// browser step cannot be replayed from an approval, so Waldo asks in words; a final form submit keeps the browser card.
+const OWNER_STEP = {
+  error: 'This step needs the owner\'s approval, which a task cannot ask for, so it did not run.',
+  fix: `Do not try it again. Call ${FINISH_TASK} now with status blocked, this exact step (the tool and its arguments) in proposals, and what you found so far: Waldo asks the owner.`,
+} as const;
 
 // A spend that cannot be read holds the worker at the ceiling (the cheap route, no paid tools): read as no ceiling, a worker's
 // spend would have no bound at all.
@@ -202,6 +213,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         return 'fenced';
       }
       if (effect && !entered && !deps.book.endEffect(ticket)) return 'fenced';
+      if (result.error_code === 'taint_needs_approval') result = { ...result, ...OWNER_STEP, retryable: false };
     }
     if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
     deps.log({
@@ -212,11 +224,13 @@ export const taskHost = (deps: TaskHostDeps) => {
     return result;
   };
 
+  // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
+  // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
+  const cancelled = (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); };
+
   return {
     fence,
-    // A job the owner cancelled or forgot: its attempt is fenced, and a card its errand raised is withdrawn, since it asks
-    // the owner to finish work they stopped. A job that reported keeps its cards: the report tells the owner about them.
-    cancelled: (jobId: string): void => { fence(jobId); deps.withdrawCards?.(`task:${jobId}`); },
+    cancelled,
     // Jobs whose live attempt has a call running here.
     busy: (): ReadonlySet<string> => new Set([...busy.keys()].flatMap((key) => {
       const split = key.lastIndexOf(':');
@@ -284,7 +298,15 @@ export const taskHost = (deps: TaskHostDeps) => {
     },
     async checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes: readonly ProviderOutcome[] = []): Promise<'ok' | 'stale' | 'fenced'> {
       logEvents(events);
-      const written = deps.book.checkpoint(ticket, seq, { turns: turns.map(keptTurn) }, spend);
+      const kept = turns.map(keptTurn);
+      const topics = deps.heldTopics?.() ?? [];
+      if (topics.length && holdsIn(topics)(JSON.stringify(kept))) {
+        if (!deps.book.touch(ticket, null) || !deps.book.cancel(ticket.jobId, 'forgotten')) { fence(ticket.jobId); return 'fenced'; }
+        cancelled(ticket.jobId);
+        hop(deps.book.get(ticket.jobId)!, 'task_cancelled', { code: 'forgotten' });
+        return 'fenced';
+      }
+      const written = deps.book.checkpoint(ticket, seq, { turns: kept }, spend);
       if (written === 'fenced') { fence(ticket.jobId); return written; }
       if (written === 'ok') replay(outcomes);
       const row = deps.book.get(ticket.jobId)!;

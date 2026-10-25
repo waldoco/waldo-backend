@@ -9,7 +9,8 @@ import {
 } from '@waldo/contracts';
 import { fromOpenAIStrictArguments, openAIStrictParameters } from './strict-schema';
 import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
-import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
+import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
 
@@ -18,6 +19,7 @@ export type OpenAIAdapterOptions = Readonly<{
   timeoutMs?: number;
   client?: OpenAIResponsesClient;
   onResponseMetadata?: (metadata: OpenAIResponseMetadata) => void;
+  firstTokenTimeoutMs?: number;
 }>;
 
 export type OpenAIResponseMetadata = Readonly<{
@@ -34,9 +36,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
+  private readonly firstTokenTimeoutMs: number;
 
   constructor(options: OpenAIAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     // The provider's attempt plan is the one retry owner. An SDK retry is invisible to the trace, the circuit breaker and
@@ -87,7 +91,17 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
       };
-      let response = await this.client.responses.create(body, { signal: controller.signal });
+      const client = this.client;
+      let ttftMs: number | undefined;
+      const send = async (params: OpenAI.Responses.ResponseCreateParamsNonStreaming) => {
+        if (!input.stream) return client.responses.create(params, { signal: controller.signal });
+        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+        // without one the call keeps its whole limit, as an unstreamed call does.
+        const streamed = await streamedResponse(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
+        ttftMs ??= streamed.ttftMs;
+        return streamed.response;
+      };
+      let response = await send(body);
       // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
       // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
@@ -96,7 +110,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
         searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
         const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
-        response = await this.client.responses.create({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] }, { signal: controller.signal });
+        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
       }
       const text = withCitedLinks(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
@@ -123,6 +137,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         output_items: [...searched, ...response.output].map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
         ...(incomplete ? { truncated: true } : {}),
+        ...(ttftMs === undefined ? {} : { ttft_ms: ttftMs }),
       };
       this.onResponseMetadata?.({
         response_id: response.id,
@@ -134,6 +149,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
       const detail = error instanceof OpenAI.APIError
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
@@ -144,6 +160,50 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
     }
+  }
+}
+
+class FirstTokenTimeout extends Error {}
+
+// One create, streamed. The response's first message streams to the reply only when the model labels it its final answer
+// (the Responses API `phase`; the installed SDK does not type it yet): commentary, reasoning and an unlabelled message never
+// do. A tool call after it takes it back. The terminal event carries the same Response the unstreamed call returns, so
+// everything after this reads one shape. With `firstTokenMs`, a model that has emitted no output item or delta by then is
+// abandoned; `ttftMs` is the time to that first output.
+async function streamedResponse(client: OpenAIResponsesClient, body: OpenAI.Responses.ResponseCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number): Promise<Readonly<{ response: OpenAI.Responses.Response; ttftMs?: number }>> {
+  const sentAt = Date.now();
+  let ttftMs: number | undefined, late = false;
+  const watchdog = firstTokenMs === undefined ? undefined : setTimeout(() => { late = true; controller.abort(); }, firstTokenMs);
+  try {
+    const events = await client.responses.create({ ...body, stream: true }, { signal: controller.signal });
+    let messages = 0, streaming: number | null = null, streamed = false;
+    for await (const event of events) {
+      if (ttftMs === undefined && (event.type === 'response.output_item.added' || event.type.endsWith('.delta'))) {
+        ttftMs = Date.now() - sentAt;
+        clearTimeout(watchdog);
+      }
+      if (event.type === 'response.output_item.added') {
+        if (event.item.type === 'message') {
+          messages += 1;
+          streaming = messages === 1 && (event.item as { phase?: unknown }).phase === 'final_answer' ? event.output_index : null;
+        } else if (event.item.type === 'function_call' && streamed) {
+          streamed = false;
+          sink.retract();
+        }
+      } else if (event.type === 'response.output_text.delta' && event.output_index === streaming) {
+        streamed = true;
+        sink.delta(event.delta);
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        return { response: event.response, ...(ttftMs === undefined ? {} : { ttftMs }) };
+      } else if (event.type === 'response.failed' || event.type === 'error') {
+        throw new Error(`OpenAI stream ${event.type}`);
+      }
+    }
+    throw new Error('OpenAI stream ended without a result');
+  } catch (error) {
+    throw late ? new FirstTokenTimeout() : error;
+  } finally {
+    clearTimeout(watchdog);
   }
 }
 
