@@ -40,8 +40,9 @@ export const healthProviderDisconnectResultV1Schema = z.strictObject({
   revoked_at_provider: z.boolean(),
 });
 // With consent_required, missing names the provider's grants that are not live, so the app sends the owner to exactly those.
+// step_up_required (403): starting a connection needs a sign-in from the last two hours.
 export const healthProviderErrorV1Schema = z.strictObject({
-  error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable']),
+  error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable', 'step_up_required']),
   message: z.string().max(1000).optional(),
   missing: z.array(healthPurposeV1Schema).min(1).max(2).optional(),
 });

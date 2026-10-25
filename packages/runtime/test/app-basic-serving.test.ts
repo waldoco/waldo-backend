@@ -41,7 +41,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       if(fn==='owner_for_auth')return Response.json(a.p_auth_user===AUTH&&a.p_email===EMAIL?name:null);
       if(fn==='console_session_open'){expect(a.p_do_name).toBe(name);hash=a.p_session_hash;live=true;return Response.json(true);}
       if(fn==='console_session_touch')return Response.json(live&&a.p_do_name===name&&a.p_session_hash===hash);
-      if(fn==='console_session_inventory')return Response.json(live&&a.p_do_name===name?[{session:hash,created_at:created,last_seen_at:created,expires_at:new Date(Date.parse(created)+12*60*60_000).toISOString(),rotated_to:null}]:[]);
+      if(fn==='console_session_inventory')return Response.json(live&&a.p_do_name===name?[{session:hash,created_at:created,last_seen_at:created,expires_at:new Date(Date.parse(created)+12*60*60_000).toISOString(),rotated_to:null,signed_in_at:created}]:[]);
       if(fn==='owner_runtime_authority')return Response.json(a.p_do_name===name?{owner_id:OWNER,auth_user_id:AUTH,do_name:name,state_version:0,admission_revision:'1'}:null);
       if(fn==='app_session_authority'&&directoryUnavailable)return new Response('',{status:503});
       if(fn==='set_owner_settings'){settingsWrites++;savedZone=a.p_timezone;return Response.json(true);}

@@ -14,9 +14,9 @@ import {fetchMemory,memoryItemLink,MemoryReadError,type Claim,type Interpretatio
 import {SignInRequired,signInHref} from './model';
 const label=(item:Claim|Interpretation)=>'text' in item?item.text:item.label;
 const recorded=(value:string)=>Number.isNaN(Date.parse(value))?'Time unavailable':new Intl.DateTimeFormat('en',{dateStyle:'medium',timeStyle:'short',timeZoneName:undefined}).format(new Date(value));
-const source=(value:string)=>value==='inferred'?'Waldo’s inference':value==='stated'?'You said this':value==='confirmed'?'You confirmed this':'Recorded source: '+value;
+const source=(value:string)=>value==='inferred'?'Waldo’s inference':value==='stated'?'You said this':value==='confirmed'?'You confirmed this':value==='waldo_confirmed'?'Waldo confirmed':'Recorded source: '+value;
 const sourceMix=(items:(Claim|Interpretation)[])=>{const counts=new Map<string,number>();for(const item of items){const key='text' in item?item.source:item.stored_status;counts.set(key,(counts.get(key)??0)+1);}
- const name=(key:string)=>({stated:'you said',confirmed:'you confirmed',inferred:'inferred'}[key]??key);
+ const name=(key:string)=>({stated:'you said',confirmed:'you confirmed',waldo_confirmed:'Waldo confirmed',inferred:'inferred'}[key]??key);
  return [...counts].sort((a,b)=>b[1]-a[1]).map(([key,count])=>({key,label:name(key),count}));};
 const origin=(value:string)=>({owner:'Owner',agent:'Added by an agent',shared:'Shared · origin unverified',untrusted:'Untrusted origin',legacy:'Older record'}[value]??'Origin unavailable');
 export function MemoryReadNotice({data}:{data:MemoryStatus}) {

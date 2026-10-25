@@ -59,8 +59,9 @@ describe('app problem envelope', () => {
   });
 
   it('adds an optional closed code to non-generic errors only', () => {
-    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'client_message_id_reused' }).success).toBe(true);
+    expect(appProblemV1Schema.safeParse({ error: 'step_up_required', code: 'step_up_required' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'stale_read', code: 'stale_read', message: 'Refresh.' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'unavailable', code: 'inbox_full' }).success).toBe(false);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'approval_superseded' }).success).toBe(false);

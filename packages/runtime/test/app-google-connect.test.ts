@@ -15,11 +15,11 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 const SECRET = 'fictional-connect-app-router-secret-0000000000', STATE_SECRET = 'fictional-connect-state-secret', DIRECTORY = 'https://connect-app.fixture.invalid', ORIGIN = 'https://app.fixture.invalid';
 const OWNER = '10000000-0000-0000-0000-000000000002', AUTH = '20000000-0000-0000-0000-000000000002', EMAIL = 'connect-owner@example.test';
 
-const fixture = async (google: boolean, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: OwnerDO) => Promise<void>) => {
+const fixture = async (google: boolean, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: OwnerDO) => Promise<void>, signedInAgo = 0) => {
   const name = `app-connect-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
-    const created = new Date().toISOString(), expires = Date.now() + 3_600_000, issued: Record<string, string>[] = [];
+    const created = new Date(Date.now() - signedInAgo).toISOString(), expires = Date.now() + 3_600_000, issued: Record<string, string>[] = [];
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body));
       if (url.pathname === '/auth/v1/otp') return Response.json({});
@@ -34,7 +34,7 @@ const fixture = async (google: boolean, run: (app: (path: string, body?: unknown
       if (fn === 'owner_for_auth') return Response.json(a.p_auth_user === AUTH && a.p_email === EMAIL ? name : null);
       if (fn === 'console_session_open') { hash = a.p_session_hash; live = true; return Response.json(true); }
       if (fn === 'console_session_touch') return Response.json(live && a.p_session_hash === hash);
-      if (fn === 'console_session_inventory') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created, expires_at: new Date(Date.parse(created) + 12 * 60 * 60_000).toISOString(), rotated_to: null }] : []);
+      if (fn === 'console_session_inventory') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created, expires_at: new Date(Date.parse(created) + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: created }] : []);
       if (fn === 'owner_runtime_authority') return Response.json(a.p_do_name === name ? { owner_id: OWNER, auth_user_id: AUTH, do_name: name, state_version: 0, admission_revision: '1' } : null);
       if (fn === 'app_session_authority') return Response.json(live && a.p_do_name === name && a.p_session_hash === hash ? { owner_id: OWNER, do_name: name, session_hash: hash, state_version: 0, admission_revision: '1', expires_at: expires } : null);
       if (fn === 'workspace_owner_binding') return Response.json({ owner_id: OWNER, environment: 'staging', namespace: 'connect-app-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 });
@@ -82,6 +82,30 @@ it('an app-only owner starts Google connect from the app: a first-party ticket i
     expect((await readConsentState(STATE_SECRET, consent.searchParams.get('state')!))?.surface).toBe('app');
     expect(await consentPage({ kind: 'denied' }, null, 'app').text()).toContain(`href="${APP_RETURN_DEEP_LINK}"`);
   });
+});
+
+const connectFrom = async (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, credential: string) => {
+  const { revision } = await (await app('/controls?view=connections', undefined, credential)).json() as { revision: string };
+  return app('/actions', { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-request-0002' }, credential);
+};
+
+it('a session signed in over two hours ago cannot start Google connect: it is asked to confirm and no ticket is issued', async () => {
+  await fixture(true, async (app, issued) => {
+    const credential = await signIn(app);
+    const response = await connectFrom(app, credential);
+    expect([response.status, await response.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(issued).toEqual([]);
+    expect((await app('/actions/connect-request-0002', undefined, credential)).status).toBe(404);
+  }, 3 * 60 * 60_000);
+});
+
+it('setup\'s first Google connect, ninety minutes after sign-in, still starts', async () => {
+  await fixture(true, async (app, issued) => {
+    const response = await connectFrom(app, await signIn(app));
+    expect(response.status).toBe(200);
+    expect(appControlResultV1Schema.parse(await response.json()).receipt.state).toBe('recorded');
+    expect(issued).toHaveLength(1);
+  }, 90 * 60_000);
 });
 
 it('the app cannot start Google connect from another view, with an unknown feature, or when Google is not configured', async () => {

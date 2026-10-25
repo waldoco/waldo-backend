@@ -8,6 +8,10 @@ import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { OWNER_CONTROLS_ACTION_PATH } from './dashboard-owner-controls';
 import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
+import { APP_PROVIDERS_PATH } from '../health/providers/app-providers';
+import type { AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import type { AppChatProviderV1 } from '../../../contracts/src/app/onboarding';
+import type { ApprovalActionV1, ApprovalKindV1 } from '../../../contracts/src/app/parts';
 
 type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 
@@ -118,4 +122,38 @@ export const consoleStepUpRefusal = async (request: Request, session: ConsoleSes
     return Response.json({ error: 'step_up_required' }, { status: 403, headers: DASHBOARD_OVERVIEW_HEADERS });
   }
   return confirmPage(returnTarget(action, form));
+};
+
+// error is what a client acts on; code names it for the core app problem shape.
+export const appStepUpRefusal = () => Response.json({ error: 'step_up_required', code: 'step_up_required' }, { status: 403, headers: { 'cache-control': 'private, no-store' } });
+// An action the table does not name is gated, so a new app action fails closed until it is classified.
+export const stepUpGated = (action: string): boolean => STEP_UP_ACTIONS[action]?.gated !== false;
+// Each app control is the console action of the same name, except that unlinking names its channel in id.
+export const appControlStepUpAction = (action: Readonly<{ action: string; id?: string | undefined }>): string => action.action === 'channel.unlink' ? `${action.id}.unlink` : action.action;
+export const appLinkStepUpAction = (provider: AppChatProviderV1): string => `${provider}.link`;
+
+// App routes with no console action of their own.
+export const APP_STEP_UP_ROUTES: Readonly<Record<string, StepUpRule>> = {
+  [`${APP_PROVIDERS_PATH}/connect`]: { gated: true, why: 'Connects a health provider Waldo keeps syncing after this session.' },
+};
+
+// Approving is the only decision that can act for the owner: skipping, deferring and asking for a new draft act on nothing, and
+// undoing within its window reaches only those the approved change reached. Approving one change to the owner's own things
+// stays one tap; approving anything that reaches other people, or acts on a site, a tool or external content, is gated like
+// approval.send. A calendar change reaches other people when it has guests or is on a calendar other than the primary one.
+export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared', StepUpRule>> = {
+  email_send: { gated: true, why: 'Sends one email as the owner to other people; it cannot be called back.' },
+  message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },
+  calendar_change: { gated: false, why: 'Changes one event on the owner\'s own primary calendar, with no guests.' },
+  calendar_shared: { gated: true, why: 'Changes an event with guests, or on a calendar other people may share.' },
+  google_task_change: { gated: false, why: 'Changes one task on the owner\'s own list; reaches no one else.' },
+  browser_submit: { gated: true, why: 'Submits a form on a website as the owner.' },
+  mcp_call: { gated: true, why: 'Runs a tool on a connected server, which can act beyond the owner\'s own things.' },
+  tainted_action: { gated: true, why: 'Runs an action that content from outside asked for.' },
+};
+export const appApprovalStepUp = (item: Pick<AppApprovalV1, 'kind' | 'exact'>, action: ApprovalActionV1): boolean => {
+  if (action !== 'approve') return false;
+  const changes = item.exact.changes;
+  const shared = item.kind === 'calendar_change' && (changes?.guests !== undefined || changes?.emails_guests !== undefined || changes?.calendar !== undefined);
+  return STEP_UP_APPROVALS[shared ? 'calendar_shared' : item.kind]?.gated !== false;
 };
