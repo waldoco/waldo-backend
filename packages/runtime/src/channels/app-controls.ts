@@ -8,6 +8,8 @@ import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from '
 import type { ConsoleAction, ConsoleView } from './console';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
+import { phoneControlAct, phoneControls } from './dashboard-phone';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
@@ -19,6 +21,7 @@ export type AppControlsHost = Readonly<{
   cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
+  phone:PhoneSmsEnv;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -77,6 +80,12 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const data=graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
+    if(query.data.view==='phone'){
+      let controls:Awaited<ReturnType<typeof phoneControls>>;
+      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf);}catch{return reply({error:'projection_unavailable'},503);}
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
     if(query.data.view==='account'){
       const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
       const {csrf:_csrf,...shown}=await response.json() as Record<string,unknown>,parsed=appControlProjectionV1Schema.safeParse(shown);
@@ -116,10 +125,16 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
-  if(!action.success||!(action.data.view==='day'||(action.data.view==='connections'&&(action.data.action==='google.connect'||action.data.action==='session.revoke'))))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&(action.data.action==='google.connect'||action.data.action==='session.revoke'))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
-  const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-    act:async action=>{await host.assertCurrent();return host.act(action);}});
+  // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
+  const phone=action.data.view==='phone';
+  const response=await controlAction(form,phone
+    ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf):null,
+      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields);}}
+    :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
+      act:async action=>{await host.assertCurrent();return host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.

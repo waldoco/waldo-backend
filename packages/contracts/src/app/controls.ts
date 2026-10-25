@@ -5,7 +5,7 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -32,10 +32,12 @@ export const appControlQueryV1Schema = z.strictObject({
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'session.revoke']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'session.revoke', 'phone.sms_send', 'phone.sms_check']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
+  // The six digits Twilio texted, for phone.sms_check only. Never the number: the backend texts the number on file.
+  code: z.string().regex(/^\d{6}$/).optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
@@ -61,6 +63,10 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
   const edited = action.value?.trim() ?? '';
   if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
+  const phone = action.action === 'phone.sms_send' || action.action === 'phone.sms_check';
+  if (phone !== (action.view === 'phone')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The phone actions alone use the phone view' });
+  if ((action.code !== undefined) !== (action.action === 'phone.sms_check')) ctx.addIssue({ code: 'custom', path: ['code'], message: 'phone.sms_check alone carries the code, and always does' });
+  if (phone && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code' });
 });
 
 // The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
@@ -162,6 +168,16 @@ export const appControlConstellationDataV1Schema = z.union([
     expand: z.strictObject({ next_cursor: memoryCursor.nullable(), links_capped: z.boolean(), capped_links_recoverable: z.literal(false), capped_links: count }),
   }),
 ]);
+// The owner's number on file and how to prove it: texting a code is listed only while it is offered and would be
+// accepted now, checking only while a code waits with checks left. Times are epoch seconds; retry_at null means now.
+export const appControlPhoneDataV1Schema = z.strictObject({
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/).nullable(), verified: z.boolean(), sms: z.boolean(),
+  challenge: z.strictObject({
+    state: z.enum(['sending', 'pending', 'checking', 'approved', 'expired', 'unknown']), expires_at: z.int().positive(),
+    retry_at: z.int().positive().nullable(), checks_left: z.int().min(0).max(5),
+  }).nullable(),
+  actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check'])),
+});
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -169,6 +185,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('activity'), data: appControlActivityDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
 ]);
 export const appControlReceiptV1Schema = z.strictObject({ state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional() });
 export const appControlResultV1Schema = z.strictObject({ request_id: appControlRequestIdV1Schema, receipt: appControlReceiptV1Schema, duplicate: z.boolean() });
