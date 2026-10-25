@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
@@ -15,9 +16,10 @@ import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { runBook } from '../src/channels/background-runs';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { jobBook } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
@@ -110,6 +112,17 @@ type Steps = Readonly<{
   claims(status?: 'purging'): string[];
   // Forget topics still waiting for a verified purge.
   heldTopics(): string[];
+  // A background task whose brief carries the text, and the status of every task.
+  task(text: string): void;
+  tasks(): { status: string; cancel_reason: string | null }[];
+  // Every task row's brief, progress and result, as one string.
+  taskColumns(): string;
+  // A text taken into the forget purge job's custody as the forget tool takes it, then one pass of the job: the pass a turn
+  // start runs and the console's retry arms.
+  purgePass(text: string): Promise<void>;
+  // A browser card that task's errand raised, waiting for the owner; returns its ledger id.
+  taskCard(): Promise<string>;
+  cardStatus(id: string): string;
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -207,6 +220,21 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
         cancel: async id => { expect(await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').cancel(id)).toBe(true); },
         claims: status => memory.claims(status).map(claim => claim.text),
         heldTopics: () => memory.pendingTopics(),
+        task: text => {
+          const brief = { title: 'Quarterly numbers', goal: `Find the latest mail about the ${text}.`, context: `The owner asked about the ${text} draft.`, done_when: 'The newest mail, summarised.', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+          jobBook(state.storage.sql, { now: Date.now, newId: () => 'c0ffee000001', newToken: () => 'token' })
+            .create({ kind: 'task', profile: 'reader', idempotencyKey: 'forget-task', origin: 'turn', surface: 'whatsapp', brief, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR });
+        },
+        tasks: () => state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray(),
+        taskColumns: () => JSON.stringify(state.storage.sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray()),
+        purgePass: async text => {
+          state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(text), text, new Date().toISOString());
+          await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+        },
+        taskCard: () => approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'task-card-1', now: Date.now, timezone: 'UTC', log: () => {},
+          currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
+          .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
+        cardStatus: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -414,6 +442,38 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       expect(job('reminder').run).toEqual([{ status: 'stopped', summary: STOPPED_REMINDER }]);
       expect(note(id)).toBe('send the quarterly numbers');
       expect(armed(id)).toBe(true);
+    });
+  });
+});
+
+describe('owner forget reaches an open background task', { timeout: 30_000 }, () => {
+  it.each(['node', 'spot'] as const)('cancels it from the console (%s), so its worker cannot report the text back', async kind => {
+    await owned(`wa-forget-task-${kind}`, async ({ task, tasks, taskColumns, forget }) => {
+      task(SECRET);
+      expect(await forget(kind, SECRET)).toBe(true);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+    });
+  });
+
+  it('the forget purge job\'s pass cancels a task that carries a held text and leaves no copy in it', async () => {
+    await owned('wa-forget-task-pass', async ({ task, tasks, taskColumns, purgePass, heldTopics }) => {
+      task(SECRET);
+      await purgePass(SECRET);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(taskColumns()).not.toContain(SECRET);
+      expect(heldTopics()).toEqual([]);
+    });
+  });
+
+  it('withdraws the card the forgotten task\'s errand raised: the owner is not asked to finish work they stopped', async () => {
+    await owned('wa-forget-task-card', async ({ task, tasks, taskCard, cardStatus, forget }) => {
+      task(SECRET);
+      const card = await taskCard();
+      expect(cardStatus(card)).not.toBe('skipped');
+      expect(await forget('spot', SECRET)).toBe(true);
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(cardStatus(card)).toBe('skipped');
     });
   });
 });

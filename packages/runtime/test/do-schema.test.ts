@@ -11,6 +11,7 @@ import {
   HEY144_GOALS_SCHEMA_MIGRATION,
   DO_SCHEMA_MIGRATIONS,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
+  TASK_JOBS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
   getSchemaVersion,
@@ -85,7 +86,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(12);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -155,7 +156,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -187,7 +188,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 8, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: DO_SCHEMA_VERSION, description: 'Preserve this row.' });
   });
 
   it('applies only the live chain: retired versions 3-7 and 9-11 are skipped and create nothing', async () => {
@@ -201,12 +202,14 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
       { version: 8, name: SCHEDULE_RUNS_SCHEMA_MIGRATION.name },
+      { version: 12, name: TASK_JOBS_SCHEMA_MIGRATION.name },
     ]);
+    expect(result.tables).toContain('task_jobs');
     for (const retired of ['owner_roots', 'presence_registrations', 'work_units', 'judgment_requests', 'common_message_custody', 'planning_execution_requests']) {
       expect(result.tables).not.toContain(retired);
     }
@@ -346,7 +349,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 9,
+        version: DO_SCHEMA_VERSION + 1,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -368,8 +371,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 8,
-      afterVersion: 8,
+      beforeVersion: DO_SCHEMA_VERSION,
+      afterVersion: DO_SCHEMA_VERSION,
       goalsPresent: true,
       probeTables: [],
     });
