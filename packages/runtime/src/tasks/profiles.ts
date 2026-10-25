@@ -10,10 +10,11 @@ const READER: readonly ToolName[] = [
   'get_context', 'query_calendar', 'query_availability', 'get_communication', 'search_communication', 'read_thread', 'search_contacts', 'get_tasks',
   'read_drive', 'read_mcp_tool', 'web_search', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
 ];
-// A machine job reads text nobody asked Waldo to read, with no owner in the loop, so an instruction planted in it could pick
-// the arguments of a tool that sends text out (a search query, an MCP call) and carry private data with them. Its worker
-// has neither; the apply turn and the owner's own turns still do.
-export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => name !== 'web_search' && name !== 'read_mcp_tool');
+// The reads whose arguments leave the account: a search query, an MCP call. Nothing cards a read, so a turn that starts on
+// text nobody asked Waldo to read, with no owner in the loop, could be steered into carrying private data out in them.
+// A machine job's worker and every unattended outside-text turn (channels/check-back) go without; the owner's own turns keep them.
+export const EGRESS_READ_TOOLS: readonly ToolName[] = ['web_search', 'read_mcp_tool'];
+export const MACHINE_READER: readonly ToolName[] = READER.filter((name) => !EGRESS_READ_TOOLS.includes(name));
 // The browser host serves one active run scope per owner, so these run in the brain's serial lane under the job's scope.
 export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'browse_act']);
 
