@@ -77,7 +77,7 @@ export const spendHold = (now: Date): ToolError => {
 // runtime (DO session) boots, checked by the scribe against every fragment bound for the
 // provider, and rotated when the runtime restarts. Hardcoding them in the repo made them
 // public (useless as tripwires) and a false-positive source for any tool output quoting it.
-const newSessionCanaryTokens = (): string[] =>
+export const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 // Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
 // room for reasoning and output. Sol gets that room whatever effort it runs at; other models keep the 4,096 cap Luna

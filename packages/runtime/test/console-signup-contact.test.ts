@@ -97,7 +97,7 @@ describe('sign-up asks for a name and a phone', () => {
     expect(welcome.status).toBe(200);
     const html = await welcome.text();
     expect(html).toContain('href="/console#/connections">Connect Google');
-    expect(html).toContain('href="/console#/connections/imessage">');
+    expect(html).toContain('href="/console#/connections/phone">Verify your phone</a>. Until you do, Waldo sends nothing to the number you gave.');
     expect(html).toContain('href="/console">');
     expect(html).not.toMatch(/src="https?:/);
     expect(s.fetcher).not.toHaveBeenCalled();

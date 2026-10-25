@@ -310,7 +310,7 @@ export const SCENARIOS: readonly Scenario[] = [
         { text: 'On it.' },
       ] },
       { match: /drop it/, rounds: [
-        { toolCalls: [{ name: 'close_loop', arguments: { id: 'loop-1', outcome: 'dropped' } }] },
+        { toolCalls: [{ name: 'close_loop', arguments: { id: 'oloop-1', outcome: 'dropped' } }] },
         { text: 'Dropped.' },
       ] },
     ],
