@@ -68,6 +68,10 @@ export type ProbeTurnEnv = Readonly<{
   WALDO_ENVIRONMENT?: string;
   WALDO_PROBE_TOKEN?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
+  // The designated synthetic owner probes run as, and the DO names that may receive them. A probe turn runs with owner
+  // authority and writes what any turn writes (loops, reminders, the transcript), so it never lands in a real owner's DO.
+  WALDO_PROBE_TELEGRAM_ID?: string;
+  WALDO_PROBE_SYNTHETIC_DO_NAMES?: string;
   WALDO_OWNER_TIMEZONE?: string;
   OWNER_DO?: DurableObjectNamespace;
 }> & OwnerDirectoryEnv;
@@ -98,10 +102,13 @@ export const handleProbeTurn = async (
   // Capture mode is the default; live:true opts into real Telegram sends for receipt probes.
   const live = payload.live === undefined ? false : payload.live;
   if (typeof live !== 'boolean') return new Response('bad request', { status: 400 });
-  const subject = env.WALDO_OWNER_TELEGRAM_ID;
-  if (!subject) return new Response('owner unavailable', { status: 503 });
+  const subject = env.WALDO_PROBE_TELEGRAM_ID;
+  const synthetic = (env.WALDO_PROBE_SYNTHETIC_DO_NAMES ?? '').split(',').map(name => name.trim()).filter(Boolean);
+  if (!subject || !synthetic.length) return new Response('synthetic probe owner unavailable', { status: 503 });
+  if (subject === env.WALDO_OWNER_TELEGRAM_ID) return new Response('probe target is not a synthetic owner', { status: 403 });
   const route = await directory.byPresence('telegram', subject).catch(() => null);
-  if (!route) return new Response('owner unavailable', { status: 503 });
+  if (!route) return new Response('synthetic probe owner unavailable', { status: 503 });
+  if (!synthetic.includes(route.doName)) return new Response('probe target is not a synthetic owner', { status: 403 });
   const doName = route.doName;
   const headers: Record<string, string> = {
     'content-type': 'application/json',

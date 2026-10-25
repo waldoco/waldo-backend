@@ -388,7 +388,9 @@ export async function runToolLoop(input: Readonly<{
       batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
        input.onSettle?.('completed');
-       return `Sent to your Mac for approval. Request: ${result.data.request_id}`;
+       // The handler's status says whether the Mac took the request (and whether it asks for approval) or it is still queued.
+       const status='status' in result.data && typeof result.data.status==='string' ? result.data.status : 'Sent to your Mac.';
+       return `${status} Request: ${result.data.request_id}`;
       }
     }
   }

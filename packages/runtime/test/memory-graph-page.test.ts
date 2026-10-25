@@ -29,7 +29,27 @@ describe('Memory pagination and bounded pattern view', () => {
       const next = (r.body.page as { next_cursor: string | null }).next_cursor;
       if (!next) break; cursor = next;
     }
-    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    expect(seen).toEqual([5, 4, 3, 2, 1]);
+  });
+  it('lists open on the newest page, for claims and patterns alike', () => {
+    const g = graph();
+    expect(items(pageMemoryGraph(g, q({ view: 'claims', limit: '2' }))).map((x) => x.local_id)).toEqual([5, 4]);
+    expect(items(pageMemoryGraph(g, q({ view: 'interpretations', limit: '3' }))).map((x) => x.local_id)).toEqual([8, 7, 6]);
+  });
+  it('a single page holds everything and offers no next page', () => {
+    const r = pageMemoryGraph(graph(), q({ view: 'claims', limit: '5' }));
+    expect(items(r).map((x) => x.local_id)).toEqual([5, 4, 3, 2, 1]);
+    expect(r.body.page).toMatchObject({ returned: 5, total: 5, next_cursor: null });
+  });
+  it('an empty memory is one empty, final page', () => {
+    const r = pageMemoryGraph(projectMemoryGraph({ scope: 'o', complete: true, claims: [], nodes: [], edges: [] }), q({ view: 'claims', limit: '5' }));
+    expect(r.status).toBe(200);
+    expect(r.body.items).toEqual([]);
+    expect(r.body.page).toEqual({ limit: 5, returned: 0, total: 0, next_cursor: null });
+  });
+  it('refuses a cursor minted for the old oldest-first order instead of serving a wrong page', () => {
+    const oldOrder = btoa(JSON.stringify({ v: 1, k: 'claims', after: 2 })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    expect(pageMemoryGraph(graph(), q({ view: 'claims', limit: '2', cursor: oldOrder }))).toEqual({ status: 400, body: { error: 'cursor_invalid' } });
   });
   it('limit is required and never defaulted', () => {
     expect(pageMemoryGraph(graph(), q({ view: 'claims' })).body.error).toBe('limit_required');

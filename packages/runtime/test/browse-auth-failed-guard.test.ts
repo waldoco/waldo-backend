@@ -115,6 +115,17 @@ describe('a browse auth_failed ends browsing for the rest of the turn', () => {
     expect(offered).toEqual([['web_search', 'browse_page'], ['web_search', 'browse_page']]);
   });
 
+  // With tool search on the menu stays the same every round, so the refusal is dispatch's alone.
+  it('with a stable menu, browsing stays listed and every later browse is answered without running', async () => {
+    const { handler, reads } = unboundBrowser();
+    const offered: Array<readonly string[] | undefined> = [];
+    const events: ToolLoopEvent[] = [];
+    await runToolLoop({ handlers: [clock, handler, browseAct], ctx, maxSteps: 25, stableMenu: true, onTool: (event) => events.push(event), step: s5Model(offered) });
+    expect(reads).toEqual(['https://example.com/page-1']);
+    expect(offered).toEqual(Array.from({ length: 4 }, () => ['get_context', 'browse_page', 'browse_act']));
+    expect(events.map((event) => [event.code, event.reason])).toEqual([['auth_failed', 'tool_result_error'], ['auth_failed', 'withheld_this_turn'], ['auth_failed', 'withheld_this_turn']]);
+  });
+
   it('offers browsing again on the next turn, where eligibility decides', async () => {
     const { handler } = unboundBrowser();
     await runToolLoop({ handlers: [clock, handler], ctx, maxSteps: 25, step: s5Model([]) });

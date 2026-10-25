@@ -254,6 +254,17 @@ describe('a /c/ link handed to the app binds only the browser the app opened it 
     expect(rpcCalls.map((call) => call.fn)).not.toContain('connect_session_begin');
   });
 
+  it('never lets a POST redeem the code: the code stays unspent for the app\'s own GET', async () => {
+    await handoffTicket();
+    const { env, doCalls } = owner();
+    const posted = await browser().post(env, `?handoff=${CODE}`);
+    expect([posted.status, posted.headers.get('location'), setCookies(posted)]).toEqual([403, null, []]);
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve']);
+    expect(doCalls).toEqual([]);
+    expect((await browser().get(env, `?handoff=${CODE}`)).status).toBe(200);
+    expect(rpcCalls.map((call) => call.fn)).toEqual(['connect_session_resolve', 'connect_session_resolve', 'connect_session_hand_off']);
+  });
+
   it('refuses a Continue from a browser that built the hop binding from the link, after the app redeemed the code', async () => {
     await handoffTicket();
     const { env, doCalls } = owner();

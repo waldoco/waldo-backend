@@ -10,11 +10,13 @@ export type PageResult = Readonly<{ status: number; body: Record<string, unknown
 const bad = (error: string, status = 400): PageResult => ({ status, body: { error } });
 const posInt = (raw: string | null): number | null => (raw !== null && /^[0-9]{1,9}$/.test(raw) && Number(raw) >= 1 ? Number(raw) : null);
 const enc = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const dec = (raw: string | null): { v: 1; k: string; after: number } | null => {
+// Lists page newest first with v2 'before' cursors; the pattern view pages its neighbours oldest first with v1 'after'
+// cursors. A v1 list cursor was minted for the old oldest-first order, so it is refused rather than read as a position.
+const dec = <F extends 'after' | 'before'>(raw: string | null, v: 1 | 2, field: F): ({ k: string } & Record<F, number>) | null => {
   if (!raw) return null;
   try {
     const value = JSON.parse(atob(raw.replace(/-/g, '+').replace(/_/g, '/')));
-    return value && value.v === 1 && typeof value.k === 'string' && Number.isSafeInteger(value.after) && value.after >= 0 ? value : null;
+    return value && value.v === v && typeof value.k === 'string' && Number.isSafeInteger(value[field]) && value[field] >= 0 ? value : null;
   } catch { return null; }
 };
 const localId = (ref: string) => Number(ref.split(':').pop());
@@ -41,15 +43,15 @@ export const pageMemoryGraph = (g: MemoryGraph, params: URLSearchParams, opts: P
   if (view === 'claims' || view === 'interpretations') {
     const limit = limitOf(params, 'limit', opts);
     if (typeof limit !== 'number') return limit;
-    const rows = [...(view === 'claims' ? g.claims : g.nodes)].sort((a, b) => a.local_id - b.local_id);
+    const rows = [...(view === 'claims' ? g.claims : g.nodes)].sort((a, b) => b.local_id - a.local_id);
     const cursorRaw = params.get('cursor');
-    const cursor = dec(cursorRaw);
+    const cursor = dec(cursorRaw, 2, 'before');
     if (cursorRaw && (cursor === null || cursor.k !== view)) return bad('cursor_invalid');
-    const rest = rows.filter((r) => r.local_id > (cursor?.after ?? 0));
+    const rest = cursor ? rows.filter((r) => r.local_id < cursor.before) : rows;
     const items = rest.slice(0, limit);
     const last = items[items.length - 1];
     const more = rest.length > items.length && last !== undefined;
-    return { status: 200, body: { ...header(g), view, items, page: { limit, returned: items.length, total: rows.length, next_cursor: more ? enc({ v: 1, k: view, after: last.local_id }) : null } } };
+    return { status: 200, body: { ...header(g), view, items, page: { limit, returned: items.length, total: rows.length, next_cursor: more ? enc({ v: 2, k: view, before: last.local_id }) : null } } };
   }
   const id = params.get('id');
   if (!id) return bad('id_required');
@@ -73,7 +75,7 @@ export const pageMemoryGraph = (g: MemoryGraph, params: URLSearchParams, opts: P
     const incident = g.associations.filter((a) => a.from === id || a.to === id);
     const neighborIds = [...new Set(incident.map((a) => (a.from === id ? a.to : a.from)))].filter((n) => nodeById.has(n)).sort((a, b) => localId(a) - localId(b));
     const cursorRaw = params.get('cursor');
-    const cursor = dec(cursorRaw);
+    const cursor = dec(cursorRaw, 1, 'after');
     if (cursorRaw && (cursor === null || cursor.k !== `pattern:${id}`)) return bad('cursor_invalid');
     const pool = neighborIds.filter((n) => localId(n) > (cursor?.after ?? 0));
     const shownIds = pool.slice(0, maxNodes);

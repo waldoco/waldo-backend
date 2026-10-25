@@ -1,8 +1,8 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
-import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
-import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
+import { applyForgetBarrier, barrierMemory, forgetBarrier, resultOrigin, structuredStrings, type ForgetBarrierMode } from '../context-composer/forget-barrier';
+import { heldTopicsOf } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -28,8 +28,8 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush } from '../conversation/compaction';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
@@ -40,7 +40,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
@@ -97,10 +97,12 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
+// memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; taken
+// once that reply is saved.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -171,7 +173,6 @@ export const createOwnerResponder = (
   })();
   // Cleanup custody does not admit legacy profile or claim content.
   const forgettingState = memory;
-  const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
@@ -189,11 +190,11 @@ export const createOwnerResponder = (
   // Earlier turns' tool results, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
     const fragments = await toolLedger?.recent(heldTopics(), thread) ?? [];
-    return fragments.filter(fragment => !holdsHeldTopic(fragment.text));
+    return barrier().texts(fragments, fragment => fragment.text, (fragment, text) => ({ ...fragment, text }));
   };
   const earlierOwnerResults = async () => {
     const results = await toolLedger?.ownerTurnResults(heldTopics(), thread) ?? [];
-    return results.filter(result => !holdsHeldTopic(result));
+    return barrier().texts(results, result => result, (_result, text) => text);
   };
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => {
     return health(traceId);
@@ -208,6 +209,7 @@ export const createOwnerResponder = (
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
+    ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}),
     heldTool: (tool: string) => {
       if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
       // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
@@ -228,7 +230,7 @@ export const createOwnerResponder = (
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
@@ -332,50 +334,12 @@ export const createOwnerResponder = (
   let windowingRef = '';
   const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
-  // Every string in a structured result (keys and values), unserialised: JSON.stringify would double a stored backslash and hide an escaped topic from hidesTopic.
-  const structuredStrings = (value: unknown, depth = 0): string[] => {
-    if (typeof value === 'string') return [value];
-    if (value === null || typeof value !== 'object' || depth > 64) return [];
-    return Object.entries(value).flatMap(([key, child]) => [key, ...structuredStrings(child, depth + 1)]);
-  };
   const removedTopics = new Set<string>();
   const heldTopics = () => [...removedTopics, ...(forgettingState ? heldTopicsOf(forgettingState) : [])];
-  const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
-  const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => holdsIn(heldTopics())(...values);
-  // Retained reads drop only the list items that carry a held topic. A held string or key outside a list withholds the whole read (undefined).
-  const withholdHeldItems = <T,>(value: T, tally: { dropped: number }, depth = 0): T | undefined => {
-    if (typeof value === 'string') return holdsHeldTopic(value) ? undefined : value;
-    if (value === null || typeof value !== 'object') return value;
-    if (depth > 64) return undefined;
-    if (Array.isArray(value)) { const kept = value.filter(item => !holdsHeldTopic(...structuredStrings(item))); tally.dropped += value.length - kept.length; return kept.map(item => withholdHeldItems(item, tally, depth + 1)) as T; }
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      if (holdsHeldTopic(key)) return undefined;
-      const kept = withholdHeldItems(child, tally, depth + 1);
-      if (kept === undefined && child !== undefined) return undefined;
-      out[key] = kept;
-    }
-    return out as T;
-  };
-  // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
-  const promptNodes = (held: readonly string[]) => {
-    const holds = holdsIn(held);
-    const all = memory!.allClaims();
-    const known = new Set(all.map(claim => claim.id));
-    const withheld = new Set(all
-      .filter(claim => holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
-    // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like unreadable support.
-    const holding = held.length > 0;
-    const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
-    return memory!.nodes().filter(node => !holds(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
-  };
-  const promptMemory = (): ClaimStore | undefined => memory && ({
-    ...memory,
-    nodes: () => promptNodes(heldTopics()),
-    edges: () => { const held = heldTopics(); const holds = holdsIn(held); const kept = new Set(promptNodes(held).map(node => node.id)); return memory!.edges().filter(edge => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge))); },
-    claims: status => { const holds = holdsIn(heldTopics()); return memory!.claims(status).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
-    recall: (query, limit) => { const holds = holdsIn(heldTopics()); return memory!.recall(query, limit).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
-  });
+  // Everything bound for the model that is not owner memory is cut here, by the rule the owner's flag selects.
+  const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
+  const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
+  const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
@@ -387,7 +351,7 @@ export const createOwnerResponder = (
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
     const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
-    const recalled = await recallForTurn({ claims, question: text, room, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const recalled = await recallForTurn({ claims, question: text, room, holds: barrier().holds, ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
@@ -399,6 +363,8 @@ export const createOwnerResponder = (
   };
   const composer = context?.composer ?? adapters.contextComposer!;
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
+  // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
+  const compaction = conversationStore?.compaction ?? COMPACTION;
   const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
@@ -438,9 +404,9 @@ export const createOwnerResponder = (
           }
           if (handler.name === 'forget_memory' && result.ok) forgetEpoch += 1;
           if (retainedRead) {
-            const tally = { dropped: 0 };
+            const tally = { dropped: 0, redacted: 0 };
             // A search hit is a highlighted snippet that can split the topic; judge the stored source row it points at (the tool's own ref read).
-            if (handler.name === 'search_episodes' && holdsAnyHeldTopic()) {
+            if (handler.name === 'search_episodes' && barrier().active) {
               const data = (result as { data?: { hits?: ReadonlyArray<{ ref?: string }> } }).data;
               if (Array.isArray(data?.hits)) {
                 // Fail closed: a hit with no string ref, or whose source row cannot be read back, is dropped.
@@ -453,22 +419,22 @@ export const createOwnerResponder = (
                   } catch { unreadable += 1; return undefined; }
                 }));
                 if (unreadable > 0) log({ trace, hop: 'episode_recheck', ms: 0, ok: false, code: 'episode_read_failed', detail: `count=${unreadable}` });
-                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
+                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !barrier().holds(...structuredStrings(rows[index])));
                 tally.dropped += data.hits.length - hits.length;
                 result = { ...(result as object), data: { ...data, hits } } as typeof result;
               }
             }
             // read_memory strips aliases from its claims; a held topic can live only in an alias, so read them back by claim id.
-            if (handler.name === 'read_memory' && holdsAnyHeldTopic()) {
+            if (handler.name === 'read_memory' && barrier().active) {
               const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
               if (Array.isArray(data?.claims)) {
                 const aliasesById = new Map([...(forgettingState?.claims()??[]), ...(forgettingState?.claims('promoted')??[])].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
-                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !holdsHeldTopic(aliasesById.get(claim.id)));
+                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !barrier().holds(aliasesById.get(claim.id)));
                 tally.dropped += data.claims.length - claims.length;
                 result = { ...(result as object), data: { ...data, claims } } as typeof result;
               }
             }
-            const kept = withholdHeldItems(result, tally);
+            const kept = barrier().structured(result, resultOrigin(handler.name), tally);
             if (kept === undefined) return { ok: false, code: 'transient', error: 'This read touches a topic whose forgetting is still incomplete, so it is withheld.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
             // Say so when items were withheld: a filtered list must not read as a complete retrieval.
             const body = kept as { data?: Record<string, unknown> };
@@ -528,7 +494,7 @@ export const createOwnerResponder = (
       // request by its leading bytes, so a remember or open loop mid-turn that rewrote the message re-billed every later round.
       // It is rebuilt when the owner steers (the message changed anyway), when any forget lands (this turn's or the console's,
       // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
-      type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
+      type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; held: string; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
       let turnSuffix: FrozenSuffix | undefined;
       return runToolLoop({
         handlers: turnHandlers,
@@ -543,18 +509,9 @@ export const createOwnerResponder = (
           const contextSteering = control.revision();
           const visibleOwnerTexts = new Set(request.messages.filter(message => message.role === 'user').map(message => message.content));
           for (const [id, turn] of recentOwnerTurns) if (!visibleOwnerTexts.has(turn.text)) recentOwnerTurns.delete(id);
-          const entries = request.messages.filter((message, index) => index === request.messages.length - 1 || !holdsHeldTopic(message.content));
-          const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
-          if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
-          if (promptContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + promptContext };
-          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
-          const ordersRaw = standingOrders?.() ?? '';
-          const ordersSection = ordersRaw.split('\n').filter(row => !holdsHeldTopic(row)).join('\n');
-          // Open loops: owner text that may hide a forgotten topic (escapes, NUL), so it is withheld on the same proof the forget coverage uses.
-          const loopsSectionFor = (loopsRoom: number): string => {
-            const raw = standingOrders?.({ loopsRoom }) ?? '';
-            return raw.split('\n').filter(row => !holdsHeldTopic(row)).join('\n');
-          };
+          const held = heldTopics();
+          const heldKey = [...held].sort().join('\u0000');
+          const ownerCurrentText = (request.messages.at(-1)?.content ?? '') + added;
           await assertCurrent();
           const skillPrompt = skills ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
@@ -569,23 +526,14 @@ export const createOwnerResponder = (
           const reasons = composed?.ok ? composed : undefined;
           // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
-          const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
-            skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
-            procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
-          };
           const frozen = turnSuffix;
           const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
           const generation = forgettingState?.forgetGeneration() ?? 0;
           const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
-            && frozen.health === admittedHealth && !holdsHeldTopic(frozen.text);
-          // A rebuild reads recall, earlier results, receipts, memory and loops afresh; a reused round reads none of them.
-          const rebuild = async (): Promise<Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }>> => {
+            && frozen.health === admittedHealth && frozen.held === heldKey;
+          // A rebuild reads recall, earlier results and receipts afresh; a reused round reads none of them.
+          const gather = async () => {
             const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
-            // A committed receipt authenticates identity, not user/provider-authored path text.
-            // Keep the external fragment gate before joining metadata to trusted instructions.
-            // Externally authored path text never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
-            let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
             // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
             const admitsExternal = async (payload: string): Promise<boolean> => {
               const sanitise = adapters.safety.sanitise;
@@ -598,22 +546,48 @@ export const createOwnerResponder = (
             // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
             // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
             const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined) : '';
-            let suffix = recalled ? fenced('memory recalled for this message', recalled) : '';
             // The owner's earlier turns' tool results, newest kept whole within the gate's size, as they stood when this turn
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
             const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
             while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
-            const toolResultsData = earlier.join('\n');
-            const toolResultsShown = await admitsExternal(toolResultsData) && !holdsHeldTopic(toolResultsData);
-            if (toolResultsShown) suffix += fenced('earlier tool results', toolResultsData);
-            else if (earlier.length && !withheldLogged) {
+            const earlierShown = await admitsExternal(earlier.join('\n'));
+            if (!earlierShown && earlier.length && !withheldLogged) {
               withheldLogged = true;
               log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
             }
-            const taskContextData = await admitsExternal(rawTaskContext) ? rawTaskContext : '';
-            if (taskContextData && !holdsHeldTopic(taskContextData)) suffix += fenced('external workspace receipts', taskContextData);
-            const taskContext = holdsHeldTopic(guardedTaskContext) ? '' : guardedTaskContext;
+            return {
+              recalled, earlier: earlierShown ? earlier.join('\n') : '',
+              receipts: await admitsExternal(rawTaskContext) ? rawTaskContext : '',
+              // A committed receipt authenticates identity, not user/provider-authored path text. Externally authored path text
+              // never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
+              taskContext: rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '',
+            };
+          };
+          const raw = reuseSuffix ? undefined : await gather();
+          // Everything this call shows the model crosses the forget barrier here, once.
+          const cut = applyForgetBarrier({
+            history: { kind: 'messages', messages: request.messages },
+            replyQuote: { kind: 'text', origin: 'external', text: turnReplyContext },
+            jobContext: { kind: 'text', origin: 'external', text: promptContext },
+            orders: { kind: 'lines', origin: 'owner_record', text: standingOrders?.() ?? '' },
+            loops: { kind: 'sized', origin: 'owner_record', text: (loopsRoom: number) => standingOrders?.({ loopsRoom }) ?? '' },
+            memory: { kind: 'sized', origin: 'owner_store', text: (room: number) => memory ? turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) : '' },
+            recalled: { kind: 'lines', origin: 'owner_store', text: raw?.recalled ?? '' },
+            earlier: { kind: 'lines', origin: 'external', text: raw?.earlier ?? '' },
+            receipts: { kind: 'text', origin: 'external', text: raw?.receipts ?? '' },
+            taskContext: { kind: 'text', origin: 'code', text: raw?.taskContext ?? '' },
+            turns: { kind: 'turns', turns },
+          }, held, forgetBarrierMode);
+          const instructions = {
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
+            skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
+            procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
+          };
+          const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
+            const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) : '')
+              + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
+              + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
             const turnPrompt = assembleTurnPrompt({
               instructions,
               facts: {
@@ -621,24 +595,26 @@ export const createOwnerResponder = (
                 // The owner's message is the composer's staged input, so only its operations material joins it.
                 reasons: reasons?.operations,
                 // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
-                toolResultsNote: reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
+                toolResultsNote: reasons !== undefined && cut.earlier ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
                 health: healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined,
-                ownerProfile: ownerProfileLine, taskContext, connections,
+                ownerProfile: ownerProfileLine, taskContext: cut.taskContext, connections,
               },
-              ...(memory ? { memory: (room: number) => turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) } : {}),
-              loops: loopsSectionFor,
+              ...(memory ? { memory: cut.memory } : {}),
+              loops: cut.loops,
               room: systemRoom,
             });
-            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
+            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, held: heldKey, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
           };
           const built = reuseSuffix
             ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }), suffix: frozen }
-            : await rebuild();
+            : rebuilt();
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           turnSuffix = built.suffix;
           const turnPrompt = built.prompt;
-          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + built.suffix.text };
+          const entries = cut.history;
+          const current = entries[entries.length - 1]!;
+          entries[entries.length - 1] = { ...current, content: current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
@@ -648,7 +624,7 @@ export const createOwnerResponder = (
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
+          cut.turns,
           ownerTurnActive ? undefined : auxiliaryModel,
           );
         },
@@ -664,7 +640,7 @@ export const createOwnerResponder = (
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },
-  }, tree, undefined, pathObservers);
+  }, tree, undefined, pathObservers, compaction);
   const conversationLeaves = new Map<string, string>();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
@@ -729,15 +705,11 @@ export const createOwnerResponder = (
       for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); if (entry.role !== 'compaction') conversationLeaves.set(entry.chatId, entry.id); }
     };
     await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
-    const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
-    const topics = forgettingState?.pendingTopics() ?? [];
-    if (forgettingState && (ids.length || topics.length)) {
-      const purge = forgettingState.purge(ids, new Date().toISOString(), topics);
-      try {
-        const cleanup = redactConversation ? await redactConversation(purge.texts, privateRunScope) : { remaining: store ? 1 : 0 };
-        const remaining = cleanupLedger ? await cleanupLedger.remaining(purge.texts) : 0;
-        if (purge.ready && cleanup.remaining === 0 && remaining === 0) forgettingState.settle(ids, topics);
-      } catch (error) {
+    // A turn can open a channel's window or flush a waiting card, so an unfinished forget gets a cleaning pass first: the
+    // barrier guards what the model reads, not text already written into a card that is waiting to send.
+    // A pass that fails leaves the job to retry and the barrier to guard the view, so the turn goes on.
+    if (heldTopics().length) {
+      try { await privateOwner?.forgetPass?.(); } catch (error) {
         if (error instanceof ClosedRunError) throw error;
         log({ trace: traceId, hop: 'memory_cleanup', ms: 0, ok: false, code: 'retained_cleanup_incomplete' });
       }
@@ -759,7 +731,7 @@ export const createOwnerResponder = (
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -794,13 +766,15 @@ export const createOwnerResponder = (
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
-      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
+      const notice = fromOwner ? privateOwner?.memoryNotice?.() ?? null : null;
+      const out = [reply, receipt?.line, notice?.line].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertFresh();
+      notice?.taken();
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
@@ -815,13 +789,32 @@ export const createOwnerResponder = (
       throw error;
     } finally { activeOwnerTurn = undefined; }
   };
+  // What the owner said in conversation about to leave the window, kept as memory first: the same admission gate as the
+  // nightly pass, in this turn's scope, never forgetting or pinning. Returns the claims it wrote.
+  const saveFromSpan: SpanMemory['save'] = async (span, sides, policy) => {
+    if (!memory || probeGuard?.suppressMemory) return [];
+    // Span rows are read raw; a topic still being forgotten would be saved again. The nightly pass reads them after the purge.
+    if (barrier().holds(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
+    const before = new Set(memory.allClaims().map(claim => claim.id));
+    const started = Date.now();
+    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+    await assertFresh();
+    // A forget the owner started during the model call holds its topic from here on.
+    if (barrier().holds(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
+    privateRunScope?.admit();
+    // The flush cannot verify retained text is clean, so a pending forget its purge touches stays pending (a no-op onPurged
+    // never settles); the turn path that verifies settles it.
+    const detail = applyClaimOps(memory, policy.health ? raw : withoutHealthClaims(raw), new Date().toISOString(), `owner, day of ${traceId}`, () => undefined, sides, false, undefined, false);
+    log({ trace: traceId, hop: 'memory_flush', ms: Date.now() - started, ok: true, detail });
+    return memory.allClaims().filter(claim => !before.has(claim.id)).map(claim => ({ id: claim.id, kind: claim.kind }));
+  };
   // A scoped turn runs in its own responder (below); its compaction runs there too, after the reply is delivered.
   let scopedCompaction: ((conversationRef: string) => Promise<void>) | undefined;
   const compactIfDue = async (conversationRef: string): Promise<void> => {
     const hop = (ok: boolean, code: string, extra: Readonly<{ ms?: number; detail?: string }> = {}) => log({ trace: traceId, hop: 'compaction', ms: extra.ms ?? 0, ok, code, ...(extra.detail ? { detail: extra.detail } : {}) });
     try {
-      if (!COMPACTION.enabled) return;
       if (scopedCompaction) return scopedCompaction(conversationRef);
+      if (!compaction.enabled) return;
       if (!conversationStore?.appendCompaction) return;
       const ref = context?.conversationRef ?? conversationRef;
       const leafId = conversationLeaves.get(ref), stats = lastWindow.get(ref);
@@ -829,24 +822,31 @@ export const createOwnerResponder = (
       const now = Date.now();
       const live = liveCompaction(tree, leafId);
       const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
-      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now })) return;
+      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const plan = compactionPlan(tree, leafId, live);
+      const plan = compactionPlan(tree, leafId, live, compaction);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
+      let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
-        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input }); }
+        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      // A topic forgotten this turn is still in this turn's rows; like the reply, the summary never reads a row that carries it.
+      const input = plan.input.filter((message) => !barrier().shows(message.content));
+      if (!input.length) { hop(false, 'held_topic'); return; }
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
-      if (response.truncated || summary.length > COMPACTION.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
+      if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
-      // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
-      if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }
+      // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here, by
+      // source: a reading the owner wrote in the span is ordinary chat, while one whose number came from Waldo's reply (a
+      // relayed device reading), shared content, an owner number about something else or nowhere is refused. Without the
+      // owner's words, every reading is refused.
+      if (readingBeyondOwner(summary, ownerReadings(ownerWords))) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
       await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
@@ -866,7 +866,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -944,25 +944,26 @@ export const createOwnerResponder = (
         return await converse(id, conversationRef, said, time, false, surface, toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined));
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
     },
-    async consolidate(trace, day, sides) {
-      const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));
+    async consolidate(trace, day, sides, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day, policy?.health !== false), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
-      return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
+      return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
-    async migrate(trace, input) {
-      const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input));
+    async migrate(trace, input, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return 'no memory';
-      if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
-      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      if (barrier().active) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
+      const off = policy?.health === false;
+      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, off ? `${HEALTH_NOTES_OFF}\n\n${input}` : input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
-      return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
+      return applyClaimOps(memory, off ? withoutHealthClaims(raw) : raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
     },
     async promote(trace) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));

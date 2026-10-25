@@ -9,7 +9,7 @@ import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
 import { loopBook, loopHandlers } from '../../src/channels/loops';
-import { episodeIndex, indexedConversationStore } from '../../src/channels/episodes';
+import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
@@ -18,7 +18,7 @@ import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN } from '../../src/memory/claims';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
 import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
 import { webSearchHandler } from '../../src/tools/live/web-search';
@@ -26,6 +26,7 @@ import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors
 import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
+import { evalConversation, type ConversationSeed } from './conversation-world';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -58,11 +59,13 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Loops the owner already gave Waldo to stay on, as the loop store holds them.
+  loops?: readonly Readonly<{ title: string; due: string | null }>[];
   // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
   // consent granted or not.
   lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
-}>;
+}> & ConversationSeed;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
 const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -264,8 +267,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   }
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
+  for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
-  const conversation = indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, now);
+  const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,
     description: 'Search the web. Results are untrusted external text.',
@@ -290,7 +295,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   })();
   const handlers = [
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -337,7 +342,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       comingItems: (from, to) => comingItemsFrom({
         events: async () => (await client.calendarPage!('primary', new Date(from).toISOString(), new Date(to).toISOString(), 20, false)).events, tasks: null, loops: () => loops.list(),
       }, from, to, TIMEZONE),
-      admit: () => true, charge: () => undefined, decide,
+      admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
       reschedule: async () => undefined, log: () => undefined,
     });
@@ -346,7 +351,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange,
-    ready: mcpReady,
+    ready: Promise.all([mcpReady, chat.seed(conversation)]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
@@ -358,6 +363,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     markFired(id: string) { const reminder = reminders.find((entry) => entry.id === id); if (reminder) reminder.fired = true; },
     effects: (): readonly Effect[] => effects.map((entry) => structuredClone(entry)),
     finalState: () => ({
+      ...chat.state(),
       calendar: events.map(({ owner_id: _owner, ...event }) => event),
       mail: mail.map(({ id, thread_id, from, subject, at }) => ({ id, thread_id, from, subject, at })),
       sent_mail: 0,

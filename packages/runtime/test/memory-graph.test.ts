@@ -18,3 +18,10 @@ it.each(['[999]','[]','not json','[1,999]'])('missing/partial/malformed support 
 it('invalid Memory session cannot rebind owner KV through forwarded identity header',async()=>{const{env}=await import('cloudflare:workers');const{runInDurableObject}=await import('cloudflare:test');const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-invalid-kv'));await runInDurableObject(stub,(_i,state)=>{state.storage.kv.put('do_name','original-owner');state.storage.kv.put('private-marker','keep')});const response=await stub.fetch('https://telegram-owner/console/dashboard/api/v1/memory',{headers:{'x-waldo-do-name':'attacker-rebinding',cookie:'waldo_console=invalid'}});expect(response.status).toBe(401);await runInDurableObject(stub,(_i,state)=>{expect(state.storage.kv.get('do_name')).toBe('original-owner');expect(state.storage.kv.get('private-marker')).toBe('keep')})});
 it.each([-1,1.5,NaN,Infinity])('invalid writer counts stay null and partial: %s',seen_count=>{const g=projectMemoryGraph({...base(),claims:[{...claim(),seen_count}]});expect(g.claims[0]!.writer_seen_count).toBeNull();expect(g.state).toBe('partial')});
 it('invalid dates/status/estimates and dropped dangling edges count as partial',()=>{const g=projectMemoryGraph({...base(),nodes:[{...node,last_confirmed:'not a date',status:'bogus',strength:NaN}],edges:[{from_id:1,to_id:99,relation:'fake',strength:.5,evidence_count:1}]});expect(g.state).toBe('partial');expect(g.nodes[0]!.estimate).toBeNull();expect(g.associations).toEqual([])});
+it('a forget still clearing leaves out only what carries it: unrelated claims and the interpretations on them stay, marked partial',()=>{
+ const g=projectMemoryGraph({...base(),claims:[{...claim(3),text:'Private coffee order',status:'purging'},claim(1),{...claim(2),text:'Coffee before calls'}],nodes:[{...node,supporting_spots:'[1]'}],held:['coffee']});
+ expect(g.claims.map(c=>c.text)).toEqual(['A walk helps']);
+ expect(g.nodes.map(n=>n.label)).toEqual(['Recovery']);
+ expect(g.state).toBe('partial');
+ expect(JSON.stringify(g).toLowerCase()).not.toContain('coffee');
+});

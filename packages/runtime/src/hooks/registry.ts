@@ -152,6 +152,8 @@ export type HookRuntimeContext = {
   approvedTaintedAction?: Readonly<{ tool: ToolName; args_digest: string }>;
   // Set by the dispatcher for one call whose handler declares proposal_only: the call only raises the owner's card.
   proposalOnlyCall?: ToolName;
+  // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
+  loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -438,6 +440,17 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
 // tool outside its handler set), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
 
+// The taint law with the one exception the arguments cannot show: a loop the mail follow-through bound to an observed
+// source closes without a card, as it opened without one. Any other loop, or an id the store does not know, is the owner's.
+export const taintedCallNeedsOwnerApproval = async (
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+): Promise<boolean> => {
+  if (!taintGateNeedsOwnerApproval(tool, taint, args)) return false;
+  if (tool !== 'close_loop' || ctx.loopIsSourceBound === undefined) return true;
+  const id = typeof args === 'object' && args !== null ? (args as { id?: unknown }).id : undefined;
+  return typeof id !== 'string' || !(await ctx.loopIsSourceBound(id));
+};
+
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
   event: 'PreToolUse',
@@ -464,8 +477,11 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
 
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
-    if (taintGateNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args) && ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
-      return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
+    if (ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
+      let needsOwner: boolean;
+      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
+      catch { return halt('loop lookup failed', 'transient'); }
+      if (needsOwner) return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
     // A standing change is not privileged: past the taint law it runs on the owner's own turn as any tool does.

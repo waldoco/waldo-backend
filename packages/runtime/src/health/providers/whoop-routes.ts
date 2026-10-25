@@ -32,7 +32,7 @@ const notFound = () => new Response('not found', { status: 404, headers: { 'cach
 const PAGES = {
   linked: { status: 200, title: 'WHOOP is connected', body: 'Waldo can now read your WHOOP sleep, recovery and workouts. Your first days arrive in a few minutes. You can close this tab.' },
   denied: { status: 400, title: 'WHOOP was not connected', body: 'Access was not granted. You can connect WHOOP from Waldo whenever you want to try again.' },
-  expired: { status: 410, title: 'This link has expired', body: 'Connect links last 30 minutes. Start the connection again from Waldo.' },
+  expired: { status: 410, title: 'This link has expired', body: 'This connect link has run out. Start the connection again from Waldo.' },
   used: { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Start the connection again from the Waldo app.' },
   cancelled: { status: 200, title: 'WHOOP was not connected', body: 'Nothing was connected. You can go back to the app.' },
   unhanded: UNHANDED,
@@ -116,7 +116,7 @@ export const handleWhoopCallback = async (request: Request, env: WhoopRoutesEnv)
   const params = new URL(request.url).searchParams;
   const state = params.get('state') ?? '', error = params.get('error'), code = params.get('code');
   if (!STATE.test(state)) { log('bad_state'); return whoopPage(error ? 'denied' : 'invalid'); }
-  // Checked before anything else is asked, so a forwarded sign-in or an injected code neither links nor settles the attempt.
+  // Checked before anything else is asked, so a callback landing in a browser that did not start the attempt neither links nor settles it. WHOOP has no PKCE, so a code injected into the starting browser is not stopped here.
   const browser = await checkBrowser(request, bindingSecret, 'whoop', state, Date.now());
   if (browser !== 'bound') { log(`browser_${browser}`); return whoopPage('unbound'); }
   try { if (await throttled(env, request, 'whoop-callback')) return slowDown(); } catch { return whoopPage('failed'); }
