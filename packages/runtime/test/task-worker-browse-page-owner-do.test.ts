@@ -4,6 +4,7 @@ import {OwnerDO} from '../src/channels/owner-do';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
 import {jobBook,type TaskTicket} from '../src/tasks/jobs';
 import {appSubjectFor} from '../src/channels/app-api';
+import {toolOutputLedger} from '../src/conversation/tool-output-ledger';
 const proof=vi.hoisted(()=>({calls:[] as string[]}));
 // A real article's body text runs to tens of thousands of characters (the HTTP article, RFC 9110 far more).
 const ARTICLE=vi.hoisted(()=>'HTTP is an application layer protocol. '+'It carries requests and responses between clients and servers. '.repeat(1_000));
@@ -21,7 +22,7 @@ let alive=false;
 registerCommonBrowserSdk(async()=>({acquire:async()=>{proof.calls.push('acquire');alive=true;return {sessionId:'task-read-session'};},connect:async()=>({newContext:async()=>({serviceWorkers:()=>[],addInitScript:async()=>{},routeWebSocket:async()=>{},route:async()=>{},newPage:async()=>({mainFrame:()=>null,setDefaultTimeout(){},on(){},waitForLoadState:async()=>{},evaluate:async()=>{},goto:async()=>({status:()=>200}),url:()=> 'https://en.wikipedia.org/wiki/HTTP',title:async()=> 'HTTP',locator:()=>({innerText:async()=> ARTICLE})}),close:async()=>{}}),newBrowserCDPSession:async()=>({send:async()=>{proof.calls.push('close');alive=false;}}),close:async()=>{}}),sessions:async()=>alive?[{sessionId:'task-read-session'}]:[],endpointURLString:()=>''} as never));
 
 const CANARIES=['0123456789abcdef','fedcba9876543210','00112233aabbccdd'];
-type Host={taskClaim(t:TaskTicket):Promise<any>;taskTool(t:TaskTicket,c:unknown,k:string[]):Promise<any>};
+type Host={taskClaim(t:TaskTicket):Promise<any>;taskTool(t:TaskTicket,c:unknown,k:string[]):Promise<any>;tasks:{forgetOutputs():void}};
 // The real OwnerDO task host for one owner, with the Cloudflare browser SDK faked and no live network.
 const withOwner=async(surface:'telegram'|'app',work:(host:Host,state:DurableObjectState,job:(key:string)=>TaskTicket)=>Promise<void>)=>{
  proof.calls=[];alive=false;
@@ -82,14 +83,16 @@ it('a worker cannot read a stored output it did not create in the same job and a
   await host.taskClaim(first);await host.taskClaim(second);
   const stored=(await host.taskTool(first,browse,CANARIES)).data.stored_output as string;
   expect((await host.taskTool(second,call('read_thread',{thread_id:'t-1'}),CANARIES)).ok).toBe(true);
+  // An owner turn's output in the owner's own ledger, which no worker may read.
+  await toolOutputLedger(state.storage).record({tool:'get_health',ok:true,at:Date.now(),taint:null,origin:'owner',summary:'OWNER-LEDGER-MARKER'} as never);
+  expect(JSON.stringify([...state.storage.kv.list({prefix:'toolout:'})])).toContain('OWNER-LEDGER-MARKER');
   const refused=async(ticket:TaskTicket,id:string)=>{
    const result=await host.taskTool(ticket,call('read_tool_output',{id},`read-${id}`),CANARIES);
    expect(result,id).toMatchObject({ok:false,error_code:'not_found'});
-   expect(JSON.stringify(result)).not.toContain('application layer');
-   expect(JSON.stringify(result)).not.toContain('Each team lists');
+   for (const marker of ['application layer','Each team lists','OWNER-LEDGER-MARKER']) expect(JSON.stringify(result),id).not.toContain(marker);
   };
-  // The owner turn's ledger and in-memory store name their outputs to-1, to-2, ...
-  for (const id of ['to-1','to-2']) await refused(second,id);
+  // An owner turn names its stored outputs to-1, to-2, ...; its ledger keys them toolout:N.
+  for (const id of ['to-1','to-2','toolout:0000000000']) await refused(second,id);
   await refused(second,stored);
   // The same job's next attempt starts with an empty store.
   state.storage.sql.exec("UPDATE task_jobs SET status = 'queued', lease_token = NULL WHERE id = ?",first.jobId);
@@ -111,5 +114,19 @@ it('a job whose only outside read came back through read_tool_output is marked e
   state.storage.sql.exec('UPDATE task_jobs SET taint = NULL WHERE id = ?',ticket.jobId);
   expect((await host.taskTool(ticket,call('read_tool_output',{id:stored}),CANARIES)).ok).toBe(true);
   expect(taintOf(state,ticket.jobId)).toBe('external');
+ });
+},20000);
+
+// An owner forget empties every running attempt's stored outputs; the worker reads the page again if it still needs it.
+it('an owner forget empties a running worker\'s stored outputs',async()=>{
+ await withOwner('telegram',async(host,_state,job)=>{
+  const ticket=job('forget-1');
+  await host.taskClaim(ticket);
+  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.stored_output as string;
+  expect((await host.taskTool(ticket,call('read_tool_output',{id:stored},'before'),CANARIES)).ok).toBe(true);
+  host.tasks.forgetOutputs();
+  const after=await host.taskTool(ticket,call('read_tool_output',{id:stored},'after'),CANARIES);
+  expect(after).toMatchObject({ok:false,error_code:'not_found'});
+  expect(JSON.stringify(after)).not.toContain('application layer');
  });
 },20000);
