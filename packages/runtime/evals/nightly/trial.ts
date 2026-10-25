@@ -10,7 +10,7 @@ import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrie
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -68,6 +68,8 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        // The post-reply compaction hook; a store built with compaction off makes it a no-op.
+        await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
