@@ -769,8 +769,13 @@ describe('produceHealthScores', () => {
     });
 
     it('leaves a night with fewer than three asleep hours, or no sleep, unavailable with its reason', async () => {
-      const sparse = hcHistory(25).filter(entry => !(entry.day === TODAY && entry.signal === 'heart_rate_window' && Number(String(entry.start_at).slice(11, 13)) >= 2));
-      const few = harness(hc([...sparse, heartHour(TODAY, Date.parse(`${TODAY}T09:00:00Z`), 74)]));
+      // Last night keeps two asleep hours, 00:00 and 01:00; the hour before midnight and 02:00 to 07:00 are gone.
+      const asleepOutside = (entry: Sample) => {
+        const at = Date.parse(String(entry.start_at));
+        return entry.signal === 'heart_rate_window' && at >= Date.parse(`${addDays(TODAY, -1)}T23:00:00Z`) && at < Date.parse(`${TODAY}T07:00:00Z`)
+          && at !== Date.parse(`${TODAY}T00:00:00Z`) && at !== Date.parse(`${TODAY}T01:00:00Z`);
+      };
+      const few = harness(hc(hcHistory(25).filter(entry => !asleepOutside(entry))));
       await run(few);
       expect(dayIn(few, TODAY).restingHeartRate).toEqual([]);
       expect(todayRow(few).recovery).toEqual({ reason: 'missing_resting_signal' });

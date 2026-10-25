@@ -9,7 +9,8 @@ export type UnavailableReason =
 
 export type HealthAccess = 'granted' | 'not_linked' | 'consent_required' | 'consent_withdrawn';
 export type HrvMethod = 'rmssd' | 'sdnn';
-export type RestingMethod = 'overnight_resting' | 'provider_resting_daily' | 'resting_measurement' | 'unknown';
+// asleep_hours_low is the producer's own, for a night with no measured resting rate; no phone or provider sends it.
+export type RestingMethod = 'overnight_resting' | 'provider_resting_daily' | 'resting_measurement' | 'unknown' | 'asleep_hours_low';
 export type TemperatureMethod = 'absolute' | 'baseline_delta';
 // A reading is compared only with earlier readings of its own method: two methods measure two quantities.
 export interface MethodReading<Method extends string> { readonly value: number; readonly method: Method }
