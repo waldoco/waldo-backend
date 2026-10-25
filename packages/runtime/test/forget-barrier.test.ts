@@ -115,7 +115,7 @@ describe('tool turns', () => {
 
 
   it('classifies only the owner-memory reads as owner store', () => {
-    expect(['read_owner_context', 'read_memory', 'search_episodes'].map(resultOrigin)).toEqual(['owner_store', 'owner_store', 'owner_store']);
+    expect(['read_memory', 'search_episodes'].map(resultOrigin)).toEqual(['owner_store', 'owner_store']);
     expect(['read_tool_output', 'web_search', 'get_communication', 'browse_page'].map(resultOrigin)).toEqual(['external', 'external', 'external', 'external']);
   });
 });

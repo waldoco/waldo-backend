@@ -11,6 +11,7 @@ import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispat
 export type TaintedActionDesk = Readonly<{
   proposeTaintedAction(proposal: TaintedActionProposal): Promise<string>;
   placement?(id: string): CardPlacement;
+  waitingTaintedActions?(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -19,8 +20,8 @@ const OUTCOME_CHARS = 300;
 // The owner-confirm route the taint gate points at (ADR-0049). The handler only freezes the call: the tool, its
 // arguments validated against that tool's own schema, and their digest, on a card. Nothing runs here; the approval
 // replays exactly the frozen call once, through the same dispatcher and hooks as a turn.
-// What the host can do with an approved call: replayable names the tools in its own handler set, and raisesOwnCard
-// the ones whose handler only raises the owner's card (send_message), which the model calls directly instead.
+// What the host can do with an approved call: replayable names the tools an approval can run, and raisesOwnCard the
+// ones whose handler only raises the owner's card (send_message), which the model calls directly instead.
 // A proposal for any other tool is refused here, so the owner is never shown a card that cannot run.
 // claims reads the owner's memory, so a forget card can show what each id removes; loop reads the loop an id names, when
 // the turn may close it, so a close card names the loop it closes.
@@ -30,13 +31,19 @@ export type ProposeActionHost = Readonly<{
   claims?(): readonly Readonly<{ id: number; text: string }>[];
   loop?(id: string, turnId: string | undefined): Readonly<{ title: string; due: string | null; status: string }> | undefined;
 }>;
+// The host's answers read from its own handler set: an approval runs a tool the host holds unless its handler needs the
+// live turn that called it, which has ended by the time the owner taps.
+export const replayHost = (handlers: () => readonly Pick<ToolHandler<never, unknown, ToolDispatcherContext>, 'name' | 'proposal_only' | 'turn_bound'>[]): Pick<ProposeActionHost, 'replayable' | 'raisesOwnCard'> => ({
+  replayable: tool => handlers().some(handler => handler.name === tool && handler.turn_bound !== true),
+  raisesOwnCard: tool => handlers().some(handler => handler.name === tool && handler.proposal_only === true),
+});
 // A forget card lists every memory it removes, so the owner can read it before approving.
 export const FORGET_CARD_MAX_IDS = 20;
 const PREVIEW_CHARS = 200;
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, proactivity or schedule setting, or a forget by memory ids). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or any change (a reminder, loop, standing order or setting, a health log, a file or document, or a forget by memory ids). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,
@@ -51,7 +58,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {
-      return { ok: false, error: `${tool.data} cannot run from an approval on this Waldo; tell the owner what you would do so they can do it themselves.`, code: 'rejected' };
+      return { ok: false, error: `${tool.data} cannot run from an approval on this Waldo, so no card was made. Tell the owner what you would do; they can do it themselves or ask you in a message of their own.`, code: 'rejected' };
     }
     const schema = TOOL_ARG_SCHEMAS[tool.data] as z.ZodType | undefined;
     if (schema === undefined) return { ok: false, error: `${tool.data} cannot be proposed on this Waldo.`, code: 'not_found' };
@@ -82,6 +89,13 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
       if (loop === undefined) return { ok: false, error: `There is no loop with the id ${id} that this turn can close. Propose close_loop only with an id from the open loops listed in this turn.`, code: 'invalid_args' };
       if (loop.status !== 'open') return { ok: false, error: `Loop ${id} is already closed (${loop.status}), so there is nothing to ask the owner. If you meant another loop, propose it with an id from the open loops listed in this turn.`, code: 'rejected' };
       preview = [`${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}, as ${outcome}`];
+    }
+    // A check-back runs every 4 hours and a card lasts 12, so the same close is asked again while its card waits; a second
+    // card would leave one that closes nothing.
+    if (tool.data === 'close_loop') {
+      const { id } = frozen as CloseLoopArgs;
+      const waiting = desk.waitingTaintedActions?.('close_loop').find((card) => card.args.id === id);
+      if (waiting) return { ok: false, error: `A card asking the owner to close loop ${id} (card ${waiting.approval_id}) is already waiting, so no second card was raised. Tell the owner that card is waiting for them; the loop stays open until they approve it.`, code: 'rejected' };
     }
     // The host's own approval line still applies on replay; a tool it never admits is refused now, not after the card.
     if (ctx.hasApproval !== undefined) {
