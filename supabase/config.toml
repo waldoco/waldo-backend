@@ -3,6 +3,11 @@ project_id = "oqcjjcytjvrckvylagsl"
 [api]
 schemas = ["public", "graphql_public", "waldo"]
 
+# Sign-in codes are 6 digits (owner, 2026-10-24). This pins the local stack; the hosted project's
+# Email OTP Length is set separately in the dashboard or the management API (mailer_otp_length).
+[auth.email]
+otp_length = 6
+
 [auth.email.template.magic_link]
 subject = "Your Waldo sign-in code"
 content_path = "./supabase/templates/magic_link.html"

@@ -100,7 +100,8 @@ describe('the body in a day card', () => {
     const prompt = (id: string) => dayCardPrompt(DAY_CARDS.find(card => card.id === id)!, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
     for (const id of ['card:brief', 'card:midday']) {
       expect(prompt(id)).toContain('what to protect and what could move, lighten or wait');
-      expect(prompt(id)).toContain('never say a change is made or a card is waiting');
+      expect(prompt(id)).toContain('never say a change is made or that you raised a card for it');
+      expect(prompt(id)).not.toContain('or a card is waiting');
       expect(prompt(id)).not.toContain('at most one line');
     }
     expect(prompt('card:close')).toContain('at most one line');
