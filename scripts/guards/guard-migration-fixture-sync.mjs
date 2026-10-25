@@ -3,7 +3,7 @@
 // SQL fixture only runs Mac-side against a live-local database, so fixture drift is invisible in the
 // sandbox gates. The two canonical lists must name the same migration versions; compare them here so
 // drift fails before push, not on the Mac.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const NAME = 'guard-migration-fixture-sync';
@@ -13,10 +13,15 @@ const fixture = readFileSync(fileURLToPath(new URL('supabase/fixtures/assert-can
 
 const mjsVersions = [...mjs.matchAll(/'(\d{14})_[^']+\.sql'/g)].map((match) => match[1]).sort();
 const fixtureVersions = [...fixture.matchAll(/'(\d{14})'/g)].map((match) => match[1]).sort();
+// Supabase keys applied history by version alone, so two files sharing one version cannot both apply, and the
+// lists above would still agree with each other.
+const fileVersions = readdirSync(fileURLToPath(new URL('supabase/migrations/', root))).filter((name) => name.endsWith('.sql')).map((name) => name.slice(0, 14));
+const duplicated = [...new Set(fileVersions.filter((version, index) => fileVersions.indexOf(version) !== index))];
 
 const problems = [];
 if (mjsVersions.length === 0) problems.push('no migration versions parsed from verify-supabase-migrations.mjs');
 if (/'\d{14}'\s+'\d{14}'/.test(fixture)) problems.push('adjacent SQL migration strings concatenate without a comma');
+if (duplicated.length > 0) problems.push(`migration version used by more than one file: ${duplicated.join(', ')}`);
 if (fixtureVersions.length === 0) problems.push('no migration versions parsed from assert-canonical-migration-history.sql');
 if (JSON.stringify(mjsVersions) !== JSON.stringify(fixtureVersions)) {
   problems.push(`canonical lists diverged: only in mjs [${mjsVersions.filter((v) => !fixtureVersions.includes(v))}], only in fixture [${fixtureVersions.filter((v) => !mjsVersions.includes(v))}]`);
