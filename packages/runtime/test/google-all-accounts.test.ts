@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getCommunicationArgsSchema, getTasksArgsSchema, queryCalendarArgsSchema, readDriveArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema } from '@waldo/contracts';
-import { googleClient, type GoogleClient, type GoogleFeature } from '../src/connectors/google';
+import { googleClient, type FreeBusyResult, type GoogleClient, type GoogleFeature } from '../src/connectors/google';
 import { readDriveHandler } from '../src/tools/live/drive';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
@@ -289,6 +289,18 @@ describe('free time and Drive cover every account too', () => {
     const access = accessFor([WORK, { ...HOME, error: 'google token failed: invalid_grant' }], { [WORK.email]: busy('2026-10-25T09:00:00Z', '2026-10-25T10:00:00Z') });
     const result = await handler(access, 'query_availability').handle({ date_range: range, calendar_ids: ['primary'], duration_minutes: 30, work_windows: [] });
     expect(result).toMatchObject({ ok: true, data: { accounts: [{ read: 'ok' }, { email: HOME.email, read: 'failed', reason: 'reauth_needed' }], status: 'partial_provider_coverage', free_windows: [], unavailable_calendar_ids: [HOME.email] } });
+  });
+
+  // A shared calendar both accounts can name: the one that cannot see it answers with an error, and the clean answer is
+  // the one used, whichever account answers first.
+  const TEAM = 'team@group.example.test';
+  const sharedAnswer = (answer: FreeBusyResult['calendars'][string]) => ({ freeBusy: async (from: string, to: string) => ({ from, to, calendars: { [TEAM]: answer } }) });
+  const CLEAN = { busy: [{ start: '2026-10-25T09:00:00Z', end: '2026-10-25T11:00:00Z' }] };
+  const UNSEEN = { busy: [], errors: [{ reason: 'notFound' }] };
+  it.each([['the first account cannot see it', UNSEEN, CLEAN], ['the second account cannot see it', CLEAN, UNSEEN]])('a calendar other than primary takes the clean answer when %s', async (_case, work, home) => {
+    const result = await handler(accessFor([WORK, HOME], { [WORK.email]: sharedAnswer(work), [HOME.email]: sharedAnswer(home) }), 'query_availability').handle({ date_range: range, calendar_ids: [TEAM], duration_minutes: 30, work_windows: [] });
+    expect(result).toMatchObject({ ok: true, data: { status: 'complete_provider_coverage', calendar_ids: [TEAM], unavailable_calendar_ids: [] } });
+    expect((result as { data: { free_windows: { start: string }[] } }).data.free_windows.map((window) => window.start)).toEqual(['2026-10-25T11:00:00+00:00']);
   });
 
   const drive = (name: string) => ({ driveListFiles: async () => ({ files: [{ id: `${name}-file`, name, mimeType: 'text/plain', modifiedTime: null, webViewLink: null, size: null }], nextPageToken: null, incompleteSearch: false }) });
