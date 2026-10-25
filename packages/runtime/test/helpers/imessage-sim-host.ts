@@ -15,10 +15,13 @@ export class SimulatedHost {
   readonly journal = new Map<string, { digest: string; result: IMessageResult }>();
   readonly nativeSends: { commandId: string; text: string }[] = [];
   private nonce = 0; private seq = 0;
+  // Each simulated host is its own source address, as each real host is: the edge limits requests per address, and a test
+  // file's hosts sharing one would trip it once the file runs fast enough.
+  private readonly source = `2001:db8::${crypto.randomUUID().slice(0, 4)}`;
   constructor(private call: Call, private origin = 'https://imessage.fixture.invalid') {}
 
   async redeem(code: string, overrides: Record<string, unknown> = {}): Promise<Response> {
-    const response = await this.call(new Request(`${this.origin}/channels/imessage/v1/pair/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    const response = await this.call(new Request(`${this.origin}/channels/imessage/v1/pair/redeem`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': this.source },
       body: JSON.stringify({ version: 1, code, hostVersion: 'sim-host-1', transportVersion: 'waldo-imessage-http-v1', databaseGeneration: this.generation, ...overrides }) }));
     if (response.status === 200) {
       const body = await response.clone().json() as { bridgeId: string; accountId: string; credential: { key: string } };
@@ -28,7 +31,7 @@ export class SimulatedHost {
   }
   async signed(path: string, body: string, opts: { atMs?: number; nonce?: string; key?: string; bridgeId?: string } = {}): Promise<Response> {
     const headers = await signS2(body, { version: 1, bridgeId: opts.bridgeId ?? this.bridgeId, accountId: this.accountId, atMs: opts.atMs ?? Date.now(), nonce: opts.nonce ?? `sim-nonce-${++this.nonce}-${crypto.randomUUID()}` }, opts.key ?? this.key);
-    return this.call(new Request(`${this.origin}/channels/imessage/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/json', [S2_HEADER]: JSON.stringify(headers) }, body }));
+    return this.call(new Request(`${this.origin}/channels/imessage/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': this.source, [S2_HEADER]: JSON.stringify(headers) }, body }));
   }
   scope() { return { version: 1 as const, bridgeId: this.bridgeId, accountId: this.accountId }; }
   heartbeat(status: 'online' | 'offline' = 'online') { return this.signed('/heartbeat', JSON.stringify({ ...this.scope(), databaseGeneration: this.generation, status })); }

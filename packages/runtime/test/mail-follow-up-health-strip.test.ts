@@ -5,6 +5,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { presenceAuthority } from './helpers/directory-presence';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -41,18 +42,19 @@ const storedText = (state: DurableObjectState) => {
 };
 
 it('a mail follow-up is written with the owner\'s health logs, but no stored copy of its prompt carries their numbers', async () => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName('mail-follow-up-health-strip')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('synthetic-mail-owner')), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
     fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
       if (fn === 'health_log_recent') return Response.json([
         { id: 1, kind: 'meal', logged_at: new Date(now - 3_600_000).toISOString(), payload: { description: 'oat bowl', calories_estimate: 640 } },
         { id: 2, kind: 'workout', logged_at: new Date(now - 3_600_000).toISOString(), payload: { type: 'run', duration_minutes: 37 } },
       ]);
       if (fn === 'health_context_read') return Response.json(null);
+      if (fn === 'common_owner_authority') return presenceAuthority('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', init?.body);
       return Response.json(true);
     });
     const config = { ...env, ...directory, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };

@@ -9,7 +9,8 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramRejection } from '../src/channels/telegram-api';
-
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 it('persists heartbeat intent without claiming delivery or starting cooldown', async () => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('heartbeat-outbox-tracer'));
@@ -22,10 +23,10 @@ it('persists heartbeat intent without claiming delivery or starting cooldown', a
     const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
     await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: {} });
     await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql), timezone: 'Asia/Kolkata', now: () => now,
-      enqueue: async (text, heartbeat) => outbox.enqueue({ id: `heartbeat:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'beat', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat }),
+      checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({ id: `heartbeat:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'beat', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat }),
     }) });
     expect(outbox.records()).toHaveLength(1);
-    expect(outbox.records()[0]?.heartbeat?.loops).toEqual([{ id: loop.id, due: '2026-09-26T14:00' }]);
+    expect(outbox.records()[0]?.heartbeat?.loops).toEqual([{ id: loop.id, due: '2026-09-26T14:00', status: 'open' }]);
     expect(state.storage.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);
     expect(state.storage.sql.exec('SELECT outcome, delivery FROM schedule_runs').toArray()).toEqual([{ outcome: 'running', delivery: 'pending' }]);
     await state.storage.deleteAlarm();
@@ -51,7 +52,7 @@ const withTransport = async (work: (f: {
     const occurrence = now;
     await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: occurrence, dueAt: occurrence, payloadRefs: {}, recurrence: { type: 'interval', every_ms: 1800000, phase_ms: 0 } });
     const tick = () => scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: dayPlanBook(sql), timezone: 'Asia/Kolkata', now: () => now,
-      enqueue: async (text, heartbeat) => outbox.enqueue({ id: `heartbeat:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'beat', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat }),
+      checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({ id: `heartbeat:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'beat', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', heartbeat }),
     }) });
     const drain = (send: (p: { chat_id: number; text: string }) => Promise<unknown>, allowed = true) => outbox.drain({
       allowed: async record => allowed && heartbeatEligible(record, sql, loops, 'Asia/Kolkata', now), send,
@@ -153,11 +154,23 @@ it('partial ACK bookkeeping replays every frozen cooldown without resending or s
 it('failure before enqueue leaves no intent or cooldown and a later producer retry can commit', async () => {
   await withTransport(async f => {
     await f.scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler: f.scheduler, sql: f.sql, loops: f.loops, plans: dayPlanBook(f.sql), timezone: 'Asia/Kolkata', now: f.now,
-      enqueue: async () => { throw new Error('storage failed before enqueue'); },
+      checkBack: checkedBack, enqueue: async () => { throw new Error('storage failed before enqueue'); },
     }) });
     expect(f.outbox.records()).toEqual([]); expect(f.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);
     f.advance(31000); await f.tick();
     expect(f.outbox.records()).toHaveLength(1);
     expect(f.sql.exec('SELECT outcome, delivery FROM schedule_runs ORDER BY attempt').toArray()).toEqual([{ outcome: 'failed', delivery: 'pending' }, { outcome: 'running', delivery: 'pending' }]);
+  });
+});
+
+it('a receipt freezes each loop as the check-back turn left it; a receipt from before has no status and reads as open', async () => {
+  await withTransport(async f => {
+    const [loop] = f.loops.list();
+    const record = (loops: { id: string; due: string; status?: string }[]) => ({ heartbeat: { id: HEARTBEAT_ID, occurrence: 0, schedulerRunId: 'r', loops } }) as never;
+    expect(heartbeatEligible(record([{ id: loop!.id, due: loop!.due! }]), f.sql, f.loops, 'Asia/Kolkata', f.now())).toBe(true);
+    f.loops.close(loop!.id, 'done');
+    expect(heartbeatEligible(record([{ id: loop!.id, due: loop!.due! }]), f.sql, f.loops, 'Asia/Kolkata', f.now())).toBe(false);
+    expect(heartbeatEligible(record([{ id: loop!.id, due: loop!.due!, status: 'done' }]), f.sql, f.loops, 'Asia/Kolkata', f.now())).toBe(true);
+    expect(heartbeatEligible(record([{ id: loop!.id, due: loop!.due!, status: 'dropped' }]), f.sql, f.loops, 'Asia/Kolkata', f.now())).toBe(false);
   });
 });

@@ -5,7 +5,8 @@ import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../.
 import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const CSRF = 'c'.repeat(64);
 
@@ -25,8 +26,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => { current++; }, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const get = (query = '') => appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host);
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
-    const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nSee you at four.';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'See you at four.', message_id: '<app@waldo-send>' }));
 
     const listed = await get();
     expect(listed.status).toBe(200);
@@ -86,7 +86,7 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const decide = async (body: unknown) => { const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host); return { status: response.status, text: await response.text() }; };
     const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nPRIVATE-BODY-TEXT';
-    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>' }));
     const [item] = await desk.approvals(Date.now(), { id });
     const failed = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'receipt-0001' });
     expect(failed.status).toBe(409);
@@ -109,7 +109,7 @@ it('Not now keeps the approval open and its cards live, leaves it out of the def
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
     const list = async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals;
     const raw = 'To: b@x.test\r\nSubject: Later\r\n\r\nNot today.';
-    const id = await desk.proposeSendEmail({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>' }));
     const [item] = await list();
     expect(item).toMatchObject({ approval_id: id, state: 'open' });
     expect(item!.actions).toContain('defer');
@@ -145,7 +145,7 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
     const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
-    const id = await desk.proposeSendEmail({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const id = await desk.proposeSendEmail(await emailProposal({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>' }));
     const list = async () => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
     const [item] = await list();
     const answer = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -171,8 +171,7 @@ const deferDesk = async <T>(name: string, run: (tools: Readonly<{ desk: ReturnTy
       decide: body => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host),
       list: async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals,
       propose: async (subject, body) => {
-        const raw = `To: e@x.test\r\nSubject: ${subject}\r\n\r\n${body}`;
-        return desk.proposeSendEmail({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>`, raw, digest: await sha256Hex(raw) });
+        return desk.proposeSendEmail(await emailProposal({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>` }));
       },
       deferredAt: id => state.storage.sql.exec<{ deferred_at: number | null }>('SELECT deferred_at FROM ledger WHERE id = ?', id).one().deferred_at });
   });
@@ -232,5 +231,79 @@ it('adds the deferral column to a ledger created before it, once, and keeps the 
     approvalDesk(sql, deps); approvalDesk(sql, deps);
     expect(sql.exec<{ name: string; type: string }>('PRAGMA table_info(ledger)').toArray().filter(column => column.name === 'deferred_at').map(column => column.type)).toEqual(['INTEGER']);
     expect(sql.exec<{ id: string; deferred_at: number | null }>('SELECT id, deferred_at FROM ledger').toArray()).toEqual([{ id: 'p-old', deferred_at: null }]);
+  });
+});
+
+it('a calendar approval carries the details its frozen review states, only to a build that declares approvals revision 2', async () => {
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-calendar-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0;
+    const TEAM = 'team@group.calendar.google.com';
+    const client = {
+      account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      event: async (id: string) => ({ id, title: 'Standup', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30', all_day: false, etag: 'v1', attendees: 3 }),
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `cal${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const list = async (contract?: string) => {
+      const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host);
+      return { text: await response.clone().text(), approvals: appApprovalListV1Schema.parse(await response.json()).approvals };
+    };
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const move = await desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: `${day(2)}T18:30:00+05:30` as never, end: `${day(2)}T18:45:00+05:30` as never,
+      calendar_id: TEAM, send_updates: 'none', reason: 'clash' });
+    const invite = await desk.propose({ action: 'create', title: 'Design review', start: `${day(3)}T10:00:00+05:30` as never, end: `${day(3)}T10:30:00+05:30` as never, reason: 'Sam asked',
+      account: 'owner@example.com', attendees: ['sam@example.com', 'pat@example.org'], send_updates: 'all', location: 'Room 4' });
+
+    const declared = (await list('approvals=2')).approvals;
+    const moved = declared.find(a => a.approval_id === move)!, invited = declared.find(a => a.approval_id === invite)!;
+    expect(moved.exact.changes).toEqual({ action: 'move', title: 'Standup', start: `${day(2)}T18:30:00+05:30`, end: `${day(2)}T18:45:00+05:30`,
+      emails_guests: false, calendar: TEAM, account: 'owner@example.com', previous: { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' }, time_zone: 'Asia/Kolkata' });
+    for (const stated of ['from Wed 23 Sept, 18:00–18:15', `to `, '18:30–18:45', ` on ${TEAM}`, '(owner@example.com)', 'Google does not email the 3 guests']) expect(moved.review).toContain(stated);
+    expect(invited.exact.changes).toEqual({ action: 'create', title: 'Design review', start: `${day(3)}T10:00:00+05:30`, end: `${day(3)}T10:30:00+05:30`,
+      guests: ['sam@example.com', 'pat@example.org'], emails_guests: true, location: 'Room 4', account: 'owner@example.com', time_zone: 'Asia/Kolkata' });
+    for (const stated of ['Guests: sam@example.com, pat@example.org.', 'Place: Room 4.', 'Google emails the 2 guests', '(owner@example.com)', '10:00']) expect(invited.review).toContain(stated);
+    expect(invited.review).not.toContain(' on ');
+
+    // Installed builds parse strictly: with no declaration they get the first revision, unchanged.
+    const first = await list();
+    for (const approval of first.approvals) expect(Object.keys(approval.exact.changes!)).toEqual(['action', 'title', 'start', 'end']);
+    const stripped = declared.map(approval => { const { action, title, start, end } = approval.exact.changes!; return { ...approval, exact: { changes: { action, title, start, end } } }; });
+    expect(first.text).toBe(JSON.stringify({ approvals: stripped }));
+    for (const header of ['approvals=1', 'approvals=x', 'threads=2', '']) expect([header, (await list(header)).text]).toEqual([header, first.text]);
+  });
+});
+
+it('a calendar detail that fails its schema drops the details, not the card, so every build still lists it; the primary calendar is never named', async () => {
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-calendar-fallback-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0;
+    // Google answered without an offset, which the review can still write but `previous` does not accept.
+    let seen = { start: '2026-09-23T18:00:00', end: '2026-09-23T18:15:00' };
+    const client = {
+      account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      event: async (id: string) => ({ id, title: 'Standup', ...seen, all_day: false, etag: 'v1' }),
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `fb${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const list = async (contract?: string) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host)).json()).approvals;
+    const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    const move = await desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: `${day}T18:30:00+05:30` as never, end: `${day}T18:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });
+    const fallback = { action: 'move', title: 'Standup', start: `${day}T18:30:00+05:30`, end: `${day}T18:45:00+05:30` };
+    for (const contract of [undefined, 'approvals=2']) {
+      const [approval] = await list(contract);
+      expect([contract, approval?.approval_id, approval?.state, approval?.exact]).toEqual([contract, move, 'open', { changes: fallback }]);
+    }
+    expect((await list('approvals=2'))[0]!.review).toContain('Move "Standup" from');
+
+    // With a well-formed event the details return, and an explicit primary calendar is still not named.
+    seen = { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' };
+    const primary = await desk.propose({ action: 'move', event_id: 'e2', title: 'Standup', start: `${day}T19:30:00+05:30` as never, end: `${day}T19:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });
+    const detailed = (await list('approvals=2')).find(a => a.approval_id === primary)!;
+    expect(detailed.exact.changes).toEqual({ action: 'move', title: 'Standup', start: `${day}T19:30:00+05:30`, end: `${day}T19:45:00+05:30`,
+      account: 'owner@example.com', previous: { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' }, time_zone: 'Asia/Kolkata' });
+    expect(detailed.review).not.toContain('primary');
   });
 });

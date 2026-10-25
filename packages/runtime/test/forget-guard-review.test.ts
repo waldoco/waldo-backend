@@ -11,15 +11,16 @@ it('guard unit: a topic containing a tab/newline is spelled by \\t / \\n in JSON
   expect(hidesTopic(JSON.stringify({ a: 'alpha\nbeta' }), 'alpha\nbeta')).toBe(true);
 });
 
-it('cleanup projection (memory_backups) with a tab-bearing topic must not read clean', async () => {
+it('cleanup projection (memory_backups) sees a tab-bearing topic, and the purge reads clean only because it deleted that backup', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-topic')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: `note ${topic} tail` }, at);
-    store.beginTopicCoverage(topic, at);
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
-    expect(store.purge([], at, [topic]).ready).toBe(false);
+    // A backup is a derived snapshot, so one that holds the topic, however escaped, is deleted rather than left behind.
+    expect(store.purge([], at, [topic]).ready).toBe(true);
+    expect(store.backups()).toEqual([]);
   });
 });
 
@@ -32,16 +33,17 @@ it('conversation store: JSON-escaped topic in a payload is held (unguarded forge
   });
 });
 
-it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behind \\t must not settle clean', async () => {
+it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behind \\t settles only by deleting that backup', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-json5')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: 'x' }, at);
     state.storage.sql.exec('UPDATE memory_backups SET payload = ?', '{"detail":"note alpha\\tbeta secret tail",}');
-    store.beginTopicCoverage(topic, at);
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
-    expect(store.purge([], at, [topic]).ready).toBe(false);
+    // A backup is a derived snapshot, so one that holds the topic, however escaped, is deleted rather than left behind.
+    expect(store.purge([], at, [topic]).ready).toBe(true);
+    expect(store.backups()).toEqual([]);
   });
 });
 
@@ -72,13 +74,18 @@ describe('hidesTopic unicode escapes', () => {
       expect(hidesTopic(value, topic), `${value} / ${topic}`).toBe(carriesTopic(decoded, topic));
     }
   });
-  it('pins the sigma and dotted-I fail-open found in review, and keeps malformed escapes held', async () => {
+  it('pins the sigma and dotted-I fail-open found in review; a malformed escape is read leniently and holds only what it spells', async () => {
     const { hidesTopic } = await import('../src/memory/forget-guard');
     expect(hidesTopic('\u03b1\\u03a3', '\u03b1\u03c2')).toBe(true);
     expect(hidesTopic('moved \\u2013 see agenda', 'code word')).toBe(false);
-    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(true);
-    expect(hidesTopic('C:\\Users', 'code word')).toBe(true);
-    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(true);
+    // A malformed or non-JSON escape spells no topic here under any reading, so it cannot hold a forget forever.
+    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(false);
+    expect(hidesTopic('C:\\Users', 'code word')).toBe(false);
+    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(false);
+    // One that does spell it still holds: a hex escape, an identity escape inside the word, a line continuation.
+    expect(hidesTopic('moved \\x63ode word', 'code word')).toBe(true);
+    expect(hidesTopic('c\\ode word', 'code word')).toBe(true);
+    expect(hidesTopic('code\\\nword is code \\\u2028word', 'codeword')).toBe(true);
   });
 });
 

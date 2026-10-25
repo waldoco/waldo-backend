@@ -4,7 +4,10 @@ import { b64url, consentState, googleConsentUrl, type ConsentSurface, type Googl
 // state), its PKCE verifier and its outcome. The callback settles a record once; a repeat callback
 // for the same attempt (browsers and in-app webviews reload) replays that outcome and never
 // exchanges the single-use code again. Callers serialize start and finish per owner.
-export const CONSENT_TTL_MS = 15 * 60_000;
+// 12 hours: the single-use nonce, the server-held PKCE verifier and settle-once replay make a long window
+// cheap, and the link goes only to the owner's own chat or console. A 15-minute link died silently when the
+// owner opened it later.
+export const CONSENT_TTL_MS = 12 * 3_600_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 
 export type ConsentGrant = Readonly<{ email?: string; scopes?: readonly string[] | null }>;
@@ -18,6 +21,8 @@ export type ConsentOutcome =
 export type ConsentFlow = Readonly<{
   // Set when the attempt was minted from a /c/<ticket> connect session (S3): the session's ticket hash.
   session?: string;
+  // The Google address a console start link hands out once, to the signed-in owner's browser; gone once taken.
+  start?: string;
   expires: number;
   verifier: string;
   redirect_uri: string;
@@ -42,14 +47,26 @@ const challengeFor = async (verifier: string) => b64url(new Uint8Array(await cry
 const prune = (flows: Record<string, ConsentFlow>, now: number) =>
   Object.fromEntries(Object.entries(flows).filter(([, flow]) => (flow.settled ? (flow.settled_at ?? 0) + KEEP_SETTLED_MS : flow.expires) > now));
 
-export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface }>): Promise<Readonly<{ url: string; nonce: string }>> {
+// hold keeps the Google address in the attempt for takeStart, so it is handed out only by a start link the caller guards.
+export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface; hold?: boolean }>): Promise<Readonly<{ url: string; nonce: string }>> {
   const random = deps.random ?? randomBytes;
   const nonce = b64url(random(32));
   const verifier = b64url(random(32));
   const now = deps.now();
   const flows = prune(await deps.store.read(), now);
-  await deps.store.write({ ...flows, [nonce]: { expires: now + CONSENT_TTL_MS, verifier, redirect_uri: app.redirectUri, ...(opts?.session ? { session: opts.session } : {}) } });
-  return { url: googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier)), nonce };
+  const url = googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier));
+  await deps.store.write({ ...flows, [nonce]: { expires: now + CONSENT_TTL_MS, verifier, redirect_uri: app.redirectUri, ...(opts?.session ? { session: opts.session } : {}), ...(opts?.hold ? { start: url } : {}) } });
+  return { url, nonce };
+}
+
+// The held address, once: a second visit to the same start link, or one after the attempt ended, gets null.
+export async function takeStart(deps: ConsentDeps, nonce: string): Promise<string | null> {
+  const flows = await deps.store.read();
+  const flow = flows[nonce];
+  if (!flow?.start || flow.settled || flow.expires <= deps.now()) return null;
+  const { start, ...spent } = flow;
+  await deps.store.write({ ...flows, [nonce]: spent });
+  return start;
 }
 
 export type ConsentCallback = Readonly<{ nonce: string; code?: string | null; error?: string | null }>;

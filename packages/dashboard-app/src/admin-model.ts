@@ -1,3 +1,4 @@
+import { isStepUpRefusal, StepUpRequired } from './model';
 export type AdminRecord = {
   csrf: string; as_of: string;
   current_issuer: { id: string; email: string | null; issued_count: number };
@@ -20,7 +21,8 @@ export function readAdmin(v: unknown): AdminRecord {
 export function inviteStatus(i: AdminRecord['invites'][number], asOf: string) {
   return i.used_at ? 'used' : i.revoked_at ? 'revoked' : i.expires_at && Date.parse(i.expires_at) <= Date.parse(asOf) ? 'expired' : 'open';
 }
-export const quota = (issued: number) => ({used:issued,remaining:Math.max(0,5-issued)});
+// Only the viewing admin is known to be uncapped; the projection carries no admin flag for other issuers.
+export const quotaLabel = (issued: number, uncapped: boolean) => uncapped ? `${issued} issued · no limit` : `${issued} of 5 used`;
 export const pageRows = <T,>(rows: T[], page: number, size = 10) => {
   const pages=Math.max(1,Math.ceil(rows.length/size)); const current=Math.max(1,Math.min(page,pages));
   return {rows:rows.slice((current-1)*size,current*size),current,pages,total:rows.length};
@@ -36,7 +38,7 @@ export async function submitInvite(data: AdminRecord, action: 'invite.create'|'i
   try { response=await fetch('/console/action',{method:'POST',headers:{accept:'application/json'},credentials:'same-origin',cache:'no-store',redirect:'error',body:new URLSearchParams({csrf:data.csrf,action,[action==='invite.create'?'value':'id']:value})}); }
   catch { throw new Error('The action result is unavailable. Refresh records before retrying; a code cannot be recovered.'); }
   if(response.status===409)throw new Error('Not completed. Refresh records: the quota, recipient or invite state may have changed.');
-  if(response.status===403)throw new Error('Not completed. Reload this page to renew the session before trying again.');
+  if(response.status===403){let body:unknown=null;try{body=await response.json();}catch{body=null;}if(isStepUpRefusal(403,body))throw new StepUpRequired();throw new Error('Not completed. Reload this page to renew the session before trying again.');}
   if(!response.ok)throw new Error('The action result is unavailable. Refresh records before retrying; a code cannot be recovered.');
   let receipt: unknown;
   try { receipt=await response.json(); }

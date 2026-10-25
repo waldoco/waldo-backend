@@ -32,7 +32,8 @@ export const appControlActionV1Schema = z.strictObject({
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
-  // The receipt's navigation is the first-party /c/<ticket> path; the backend decides which features exist.
+  // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
+  // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
   // Signs another device out. The current session signs out through /auth/signout, which revokes push first.
   if (action.action === 'session.revoke' && (action.view !== 'connections' || !sessionRef.safeParse(action.value).success
@@ -72,6 +73,11 @@ const carried = z.strictObject({
 });
 // Open follow-ups, soonest due first and undated last. source says where one came from, never which thread.
 const openLoop = z.strictObject({ id: text.min(1).max(100), title: workTitle, due: localWhen.nullable(), source: z.enum(['gmail', 'chat']) });
+// Today's update cards in Main chat, newest first, each named like a card's latest delivery. checked_at (epoch ms) is
+// when Waldo last read the calendar and inbox for changes, null before its first real read. A check can hold what it
+// found for the next main card, so an empty page does not mean nothing changed.
+const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW_PAGE_MAX_V1), total: count, checked_at: z.int().positive().nullable() })
+  .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
@@ -81,6 +87,7 @@ export const appControlDayDataV1Schema = z.strictObject({
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),
   open_loops: firstPage(openLoop).optional(),
+  updates: updates.optional(),
 });
 // Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
 // binding keeps it: an unlinked or pending channel holds no peer identifier.

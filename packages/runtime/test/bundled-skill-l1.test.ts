@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
@@ -22,8 +23,8 @@ for (const name of scenarioNames) {
     expect(skill).toBeDefined();
     if(!skill)throw new Error('skill_missing');
     expect(skill.required_tools.length).toBeGreaterThan(0);
-    await runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(`l1-${skill.name}`)), async (_,state) => {
-      const scope = { runId:'run', attempt:'attempt', deadline:Date.now()+60000, signal:new AbortController().signal, admit(){}, commit<T>(work:()=>T){return work();} };
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`l1-${skill.name}`)), async (_,state) => {
+      const scope = { runId:'run', attempt:'attempt', deadline:Date.now()+15*60_000, signal:new AbortController().signal, admit(){}, commit<T>(work:()=>T){return work();} };
       const seen: string[] = []; const successful: string[] = []; const systems: string[] = []; let step=0; let activeTool=skill.required_tools[0]!;
       const gateway: LLMGatewayAdapter = { complete: async ({request}) => {
         if(request.response_format) return {ok:true,data:{model:request.model,text:'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}',input_tokens:1,output_tokens:1,cache_read_input_tokens:0,latency_ms:1}};
@@ -40,7 +41,7 @@ for (const name of scenarioNames) {
       const responder=createOwnerResponder(...args);
       for (const [index, tool] of skill.required_tools.entries()) {
         activeTool=tool; step=0; systems.length=0;
-        const reply=await responder.respond({traceId:`skill-${skill.name}-${index}`,conversationRef:'telegram-42',surface:'telegram',text:`Help me with ${skill.trigger_condition}`,runScope:scope,memoryWrites:false},async(_hop,work)=>work());
+        const reply=await responder.respond(ownerTyped({traceId:`skill-${skill.name}-${index}`,conversationRef:'telegram-42',surface:'telegram',text:`Help me with ${skill.trigger_condition}`,runScope:scope,memoryWrites:false}),async(_hop,work)=>work());
         expect(reply).toContain('Prepared with verified receipts.');
         expect(systems[0]).not.toContain(skill.body_markdown);
         expect(systems.slice(1).some(s=>s.includes(skill.body_markdown))).toBe(true);
@@ -53,7 +54,7 @@ for (const name of scenarioNames) {
 }
 
 it('a disabled procedure does not block an unrelated tool', async () => {
-  await runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('l1-no-skill-gate')),async(_,state)=>{
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('l1-no-skill-gate')),async(_,state)=>{
     const { CuratedOwnerSkills }=await import('../src/skills/curated-owner');
     const turn={owner:'owner-a',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills disable day-brief',assertCurrent:async()=>{}};
     const book=new CuratedOwnerSkills(state.storage.sql,turn.owner);

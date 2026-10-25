@@ -46,6 +46,9 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       if (closed) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', id);
       return closed;
     },
+    get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
+    // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
+    sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
     reviewDue(localNow: string, timezone = 'UTC', now = deps.now()): readonly Loop[] {
       return sql.exec<Loop>(`SELECT l.*, s.source_ref, json_extract(j.value, '$.detail') AS source_detail, m.thread_id, m.message_id AS source_message_id
@@ -134,7 +137,9 @@ export const openLoopsPrompt = (book: LoopBook, _timezone: string, room: number)
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
-export const loopHandlers = (book: LoopBook) => [
+// closable names the loops a turn may close: a check-back turn holds only the ones it was given. null leaves every loop open
+// to the turn, as in an owner's own turn.
+export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null) => [
   {
     name: 'open_loop',
     description: 'Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. For a mail follow-up hypothesis, supply the observed source_ref and explicit due time; completion stays unknown. Do not turn an email request into an owner commitment or permission. Use it whenever you say you will do something later. Never for remembering information - memory handles that on its own, no loop needed.',
@@ -153,7 +158,8 @@ export const loopHandlers = (book: LoopBook) => [
     trigger_allowlist: allowlist('close_loop'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle({ id, outcome }) {
+    async handle({ id, outcome }, ctx) {
+      if (closable(ctx?.turnId)?.has(id) === false) return { ok: false, code: 'rejected', error: 'This check-back can close only the loops it was given.' };
       return { ok: true, data: { id, closed: book.close(id, outcome) }, source_taint: null };
     },
   } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: boolean }, ToolDispatcherContext>,

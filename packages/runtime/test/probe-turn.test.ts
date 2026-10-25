@@ -10,12 +10,15 @@ const namespace = () => {
 const post = (token: string | null, body: unknown = { text: 'probe ping' }) => new Request('https://w.test/probe/turn', {
   method: 'POST', body: JSON.stringify(body), headers: token === null ? {} : { 'x-waldo-probe-token': token },
 });
+// '42' is the real owner; '9001' is the designated synthetic probe owner whose DO is allowlisted.
 const staging = (ns: DurableObjectNamespace): ProbeTurnEnv => ({
   WALDO_ENVIRONMENT: 'staging', WALDO_PROBE_TOKEN: 'probe-secret',
   WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', OWNER_DO: ns,
+  WALDO_PROBE_TELEGRAM_ID: '9001', WALDO_PROBE_SYNTHETIC_DO_NAMES: 'synthetic-probe-a, synthetic-probe-b',
 });
+const routes: Record<string, string> = { '42': 'owner-real', '9001': 'synthetic-probe-a', '9002': 'not-listed' };
 const directory: OwnerDirectory = {
-  byPresence: async () => ({ doName: 'do-a', subject: '42', timezone: 'Asia/Kolkata' }),
+  byPresence: async (_provider, subject) => routes[subject] ? { doName: routes[subject]!, subject, timezone: 'Asia/Kolkata' } : null,
   redeem: async () => null,
 };
 
@@ -41,12 +44,12 @@ describe('handleProbeTurn', () => {
     const { fetch, idFromName, ns } = namespace();
     const response = await handleProbeTurn(post('probe-secret'), staging(ns), directory);
     expect(response.status).toBe(200);
-    expect(idFromName).toHaveBeenCalledWith('do-a');
+    expect(idFromName).toHaveBeenCalledWith('synthetic-probe-a');
     expect(fetch).toHaveBeenCalledWith(PROBE_TURN_DO_URL, {
       method: 'POST', body: JSON.stringify({ text: 'probe ping', live: false }),
       headers: {
         'content-type': 'application/json', 'x-waldo-origin': 'https://w.test',
-        'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata',
+        'x-waldo-telegram-subject': '9001', 'x-waldo-timezone': 'Asia/Kolkata',
       },
     });
     expect(await response.json()).toEqual({ trace: 'tg--1', outcome: 'answered' });
@@ -57,6 +60,30 @@ describe('handleProbeTurn', () => {
     expect((await handleProbeTurn(post('probe-secret', { text: 'receipt check', live: true }), staging(ns), directory)).status).toBe(200);
     expect(fetch).toHaveBeenCalledWith(PROBE_TURN_DO_URL, expect.objectContaining({ body: JSON.stringify({ text: 'receipt check', live: true }) }));
     expect((await handleProbeTurn(post('probe-secret', { text: 'x', live: 'yes' }), staging(ns), directory)).status).toBe(400);
+  });
+
+  it('never reaches a real owner: without a designated synthetic owner it refuses instead of using the owner id', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    const unset = { ...staging(ns), WALDO_PROBE_TELEGRAM_ID: undefined, WALDO_PROBE_SYNTHETIC_DO_NAMES: undefined };
+    expect((await handleProbeTurn(post('probe-secret'), unset, directory)).status).toBe(503);
+    expect(idFromName).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a probe aimed at the real owner, even when the owner DO is put on the synthetic list', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    const ownerTarget = { ...staging(ns), WALDO_PROBE_TELEGRAM_ID: '42', WALDO_PROBE_SYNTHETIC_DO_NAMES: 'owner-real' };
+    expect((await handleProbeTurn(post('probe-secret', { text: 'Book the SYNTH-OTHER room' }), ownerTarget, directory)).status).toBe(403);
+    expect(idFromName).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a probe whose target DO is not a designated synthetic owner', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    expect((await handleProbeTurn(post('probe-secret'), { ...staging(ns), WALDO_PROBE_TELEGRAM_ID: '9002' }, directory)).status).toBe(403);
+    expect((await handleProbeTurn(post('probe-secret'), { ...staging(ns), WALDO_PROBE_SYNTHETIC_DO_NAMES: ' , ' }, directory)).status).toBe(503);
+    expect(idFromName).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('does not select the legacy subject DO when the directory has no presence', async () => {
@@ -87,6 +114,8 @@ describe('probe capture confinement (Codex #230/#231 holds)', () => {
     const { googleHandlers } = await import('../src/tools/live/google');
     const { browsePageHandler, browseActHandler } = await import('../src/tools/live/browser');
     const { callMcpToolHandler } = await import('../src/tools/live/mcp');
+    // A capture probe records the turn's sends in its response, so a minted console link would go to the probe caller.
+    const { consoleLinkHandler } = await import('../src/tools/live/console-link');
     const google = googleHandlers(
       { client: async () => { throw new Error('no client in test'); }, connectUrl: async () => null } as never,
       { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined } as never,
@@ -98,6 +127,7 @@ describe('probe capture confinement (Codex #230/#231 holds)', () => {
       browseActHandler('k', 'p', 'm', () => undefined, async () => 'p').name,
       callMcpToolHandler(undefined).name,
       'connect_service',
+      consoleLinkHandler(async () => ({ sent: false, reason: 'unavailable' })).name,
     ];
     for (const name of liveNames) {
       expect(PROBE_STRIPPED_TOOLS, `live handler ${name} must be stripped from capture-mode probes`).toContain(name);
@@ -118,8 +148,9 @@ it('does not select a legacy DO when probe directory lookup fails', async () => 
  expect((await handleProbeTurn(post('probe-secret'), staging(ns), failed)).status).toBe(503);
  expect(idFromName).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
 });
-it('keeps the no-directory deploy-owner probe route', async () => {
+it('the no-directory deploy owner is a real owner, so it is never a probe target', async () => {
  const { idFromName, ns } = namespace();
- expect((await handleProbeTurn(post('probe-secret'), staging(ns))).status).toBe(200);
- expect(idFromName).toHaveBeenCalledWith('42');
+ expect((await handleProbeTurn(post('probe-secret'), staging(ns))).status).toBe(503);
+ expect((await handleProbeTurn(post('probe-secret'), { ...staging(ns), WALDO_PROBE_TELEGRAM_ID: '42', WALDO_PROBE_SYNTHETIC_DO_NAMES: '42' })).status).toBe(403);
+ expect(idFromName).not.toHaveBeenCalled();
 });

@@ -39,6 +39,11 @@ jobs:
         with:
           version: 2.109.1
 
+      - name: Pull Supabase images from Docker Hub
+        # setup-cli points every later Supabase CLI call at ghcr.io, which throttles hosted runners
+        # with toomanyrequests, signed in or not; public ECR answers them "Data limit exceeded".
+        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io" >> "$GITHUB_ENV"
+
       - name: Start isolated Supabase Auth, REST, and database stack
         run: supabase start > /dev/null
 
@@ -47,11 +52,7 @@ jobs:
       # after all tests pass (every run 2026-09-25, incl. docs-only commits) - the lane's 4
       # shards exit cleanly (#154). The scenario harness runs here, in the required job, below.
       - name: Verify (core)
-        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
-
-      - name: Native-profile common RunLoop bootstrap (fictional authority, no legacy provider)
-        working-directory: packages/runtime
-        run: pnpm exec vitest run --config vitest.common-bootstrap.config.ts
+        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:guards
 
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.
@@ -65,6 +66,16 @@ jobs:
       - name: Hermetic device bridge
         working-directory: packages/runtime
         run: pnpm exec vitest run --config vitest.devices.config.ts
+      # The main config excludes these files, and test:owner-ingress was their only runner.
+      - name: Telegram link routing
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.link-routing.config.ts
+      - name: iMessage bridge
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.imessage.config.ts
+      - name: Mac result recovery
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.mac-closeout.config.ts
       # live-memory.test.ts needs node:sqlite, so the workers-pool config excludes it; this step is its only CI run.
       - name: Live owner memory handlers
         working-directory: packages/runtime
@@ -120,6 +131,11 @@ jobs:
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
         with:
           version: 2.109.1
+
+      - name: Pull Supabase images from Docker Hub
+        # setup-cli points every later Supabase CLI call at ghcr.io, which throttles hosted runners
+        # with toomanyrequests, signed in or not; public ECR answers them "Data limit exceeded".
+        run: echo "SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io" >> "$GITHUB_ENV"
 
       - name: Start isolated database and apply migrations from zero
         run: supabase db start

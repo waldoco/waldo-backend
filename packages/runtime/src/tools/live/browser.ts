@@ -1,5 +1,5 @@
 import {
-  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_CHAT_MODEL,
+  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_AUXILIARY_MODEL,
   type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
 import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
@@ -12,7 +12,9 @@ import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../../
 const BASE = 'https://api.stagehand.browserbase.com';
 // Browserbase GET /v1/sessions/{id}/debug lists the session's open pages (docs.browserbase.com/reference/api/session-live-urls).
 const BROWSERBASE_BASE = 'https://api.browserbase.com';
-const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
+// Stagehand's model only picks page elements and extracts page text for the owner turn's model, and a Stagehand
+// session names a model with no reasoning effort, so it stays on the auxiliary model.
+const MODEL = `${PROVIDER_OF[WALDO_AUXILIARY_MODEL]}/${WALDO_AUXILIARY_MODEL}`;
 
 
 // Provider failure bodies are untrusted and may echo credentials or page instructions.
@@ -92,27 +94,23 @@ const recheckPages = async (
   return { ok: true };
 };
 
-export type BrowserPageProviders = Readonly<{ defaultProvider: 'cloudflare_playwright' | 'browserbase_stagehand_http_v3'; cloudflare?: CloudflarePageReader; allowBrowserbase: boolean }>;
+export type BrowserPageProviders = Readonly<{ cloudflare?: CloudflarePageReader; allowBrowserbase: boolean }>;
 
 export const browsePageHandler = (
   apiKey: string | undefined,
   projectId: string | undefined,
   modelApiKey: string | undefined,
   fetcher: typeof fetch = fetch,
-  providers: BrowserPageProviders = { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: true },
+  providers: BrowserPageProviders = { allowBrowserbase: true },
 ): ToolHandler<BrowsePageArgs, Readonly<{ url: string; data: unknown }>, ToolDispatcherContext> => ({
   name: 'browse_page',
-  description: 'Select cloudflare_playwright or browserbase_stagehand_http_v3 to open a public web page in a real browser and read information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
+  description: 'Open a public web page in a real browser and read information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
   eligible: () => providers.cloudflare || (providers.allowBrowserbase && apiKey && projectId) ? { ok: true } : { ok: false, reason: 'not_configured' },
-  async handle({ url, instruction, provider }: BrowsePageArgs, ctx) {
-    const selected = provider ?? providers.defaultProvider;
-    if (selected === 'cloudflare_playwright') {
-      if (!providers.cloudflare) return { ok: false, code: 'auth_failed', error: 'The selected Cloudflare browser is not configured.', source_taint: 'external' };
-      return providers.cloudflare({ url, instruction, provider: selected }, ctx);
-    }
+  async handle({ url, instruction }: BrowsePageArgs, ctx) {
+    if (providers.cloudflare) return providers.cloudflare({ url, instruction }, ctx);
     if (!providers.allowBrowserbase) return { ok: false, code: 'rejected', error: 'The selected Browserbase provider is not enabled by this host.', source_taint: 'external' };
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
@@ -196,7 +194,7 @@ export const browseActHandler = (
   fetcher: typeof fetch = fetch,
 ): ToolHandler<BrowseActArgs, BrowseActResult, ToolDispatcherContext> => ({
   name: 'browse_act',
-  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, then report what the page shows. Capped steps. It stops before a step that looks like it would submit, pay, send, book, delete, sign in or otherwise commit something, and reports instead. That check is a safety net, not a guarantee: do not use this tool for those actions.',
+  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, when reading the page with browse_page is not enough, then report what the page shows. Capped steps. It stops before a step that looks like it would submit, pay, send, book, delete, sign in or otherwise commit something, and reports instead. That check is a safety net, not a guarantee: do not use this tool for those actions.',
   schema: browseActArgsSchema,
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,

@@ -8,3 +8,16 @@ it('RPC failure and malformed binding are unverifiable, never missing schema cla
 it('production and rate limit cause no RPC',async()=>{const f=fixture(),fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);expect((await commonRuntimeReadiness({...f.env,WALDO_ENVIRONMENT:'production'},f.storage,'physical',f.limiter)).status).toBe(404);expect((await commonRuntimeReadiness(f.env,f.storage,'physical',{limit:async()=>({success:false})} as RateLimit)).status).toBe(429);expect(fetcher).not.toHaveBeenCalled();});
 it('mapping mismatch and authority revocation never produce a verified receipt',async()=>{const f=fixture();let reads=0;vi.stubGlobal('fetch',async(input:unknown)=>Response.json(String(input).endsWith('workspace_owner_binding')?{owner_id:authority.owner_id,environment:'staging',namespace:'private-namespace',do_name:'private-name',do_id:'OTHER_PHYSICAL',state_version:0,mapping_version:1}:{...authority,state_version:++reads>=3?1:0}));expect(await(await commonRuntimeReadiness(f.env,f.storage,'physical',f.limiter)).json()).toMatchObject({owner_authority:'unverifiable',workspace_binding:'unverifiable'});});
 it('absent owner link remains distinct from RPC failure and opens no workspace RPC',async()=>{const f=fixture(),fetcher=vi.fn(async()=>Response.json(null));vi.stubGlobal('fetch',fetcher);expect(await(await commonRuntimeReadiness(f.env,f.storage,'physical',f.limiter)).json()).toMatchObject({owner_authority:'unlinked',workspace_binding:'unlinked'});expect(fetcher).toHaveBeenCalledTimes(1);});
+it('an owner bound only through the app is verified through the account, never through a Telegram presence',async()=>{
+ const {appSubjectFor}=await import('../src/channels/app-api');
+ const rows=new Map<string,unknown>([['do_name','private-name'],['app_subject',String(appSubjectFor('private-name'))]]);
+ const f=fixture(),asked:string[]=[];
+ vi.stubGlobal('fetch',async(input:unknown,init?:RequestInit)=>{const fn=String(input).split('/rpc/')[1]!;asked.push(fn);const body=JSON.parse(String(init?.body));
+  return Response.json(fn==='owner_runtime_authority'?{owner_id:authority.owner_id,auth_user_id:authority.auth_user_id,do_name:body.p_do_name,state_version:0,admission_revision:'1'}
+   :fn==='workspace_owner_binding'?{owner_id:authority.owner_id,environment:'staging',namespace:'private-namespace',do_name:'private-name',do_id:'physical',state_version:0,mapping_version:1}:null);});
+ const text=await(await commonRuntimeReadiness(f.env,{kv:{get:(key:string)=>rows.get(key)}} as DurableObjectStorage,'physical',f.limiter)).text();
+ expect(JSON.parse(text)).toMatchObject({owner_authority:'verified',workspace_binding:'verified'});
+ expect(asked).not.toContain('common_owner_authority');expect(asked).toContain('owner_runtime_authority');
+ for(const word of ['PRIVATE','private-name','10000000','fixture.invalid'])expect(text).not.toContain(word);
+ expect((await commonRuntimeReadiness(f.env,{kv:{get:(key:string)=>rows.get(key)}} as DurableObjectStorage,'another-physical',f.limiter)).status).toBe(503);
+});

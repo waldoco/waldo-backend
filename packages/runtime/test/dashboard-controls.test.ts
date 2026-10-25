@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONTROLS_PATH, projectControls, readControlsQuery } from '../src/channels/dashboard-controls';
 import type { ApprovalItem } from '../src/channels/approvals';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { appControlConnectionsDataV1Schema } from '../../contracts/src/app/controls';
 
 describe('narrow controls read projection', () => {
   it('accepts only explicit views and activity cursors, never identity selectors', () => {
@@ -44,25 +45,47 @@ describe('narrow controls read projection', () => {
     expect(JSON.stringify(result)).not.toContain('verified');
   });
 
+  it('lists iMessage beside the other channels only when its link state is known, within the app contract', () => {
+    const linked = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: true } }, 'connections');
+    const unlinked = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: false } }, 'connections');
+    expect(linked.data.channels).toEqual([{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }]);
+    expect(unlinked.data.channels).toEqual([{ channel: 'imessage', state: 'unlinked', masked_label: null }]);
+    expect('channels' in projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined }, 'connections').data).toBe(false);
+    for (const result of [linked, unlinked]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
+  });
+
+  it('lists WhatsApp beside iMessage only when its link state is known; absent is unknown, never unlinked', () => {
+    const both = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: false }, whatsapp: { linked: true } }, 'connections');
+    const onlyWhatsapp = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: { linked: false } }, 'connections');
+    expect(both.data.channels).toEqual([{ channel: 'imessage', state: 'unlinked', masked_label: null }, { channel: 'whatsapp', state: 'linked', masked_label: 'Your WhatsApp' }]);
+    expect(onlyWhatsapp.data.channels).toEqual([{ channel: 'whatsapp', state: 'unlinked', masked_label: null }]);
+    expect('channels' in projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: undefined }, 'connections').data).toBe(false);
+    for (const result of [both, onlyWhatsapp]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
+  });
+
   it('lists console sessions without credentials beside the count', () => {
     const sessions = [{ signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false }, { signed_in: '2026-10-05 15:30', until: '2026-10-06 03:30', current: true }];
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2, sessions }, 'connections');
     expect(result.data.sessions).toEqual({ until: SAMPLE_CONSOLE_VIEW.sessionUntil, count: 2, items: sessions });
   });
 
-  it('preserves exact safe proposal reviews and existing action eligibility', () => {
+  it('preserves exact safe proposal reviews and offers each decision the Waiting view can make', () => {
     const calendar = SAMPLE_CONSOLE_VIEW.approvals[0]!;
-    const email: ApprovalItem = { id: 'email', kind: 'email_send', summary: 'Send proposal', state: 'open', undoable: false, review: { kind: 'email_send', to: ['to@test.invalid'], cc: [], bcc: [], subject: '<script>hostile</script>', body: 'Exact reviewed words' } };
-    const proposals: ApprovalItem[] = [calendar, email, { ...email, id: 'review-only', state: 'review_only' }, { ...email, id: 'unconfirmed', state: 'unconfirmed' }, { ...calendar, id: 'no-review', review: null }, { ...calendar, id: 'undo', state: 'done', undoable: true }, { ...calendar, id: 'mismatch', review: email.review }];
+    const email: ApprovalItem = { id: 'email', kind: 'email_send', summary: 'Send proposal', state: 'open', undoable: false, review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: '<script>hostile</script>', body: 'Exact reviewed words' } };
+    const message: ApprovalItem = { id: 'message', kind: 'message_send', summary: 'Send message', state: 'open', undoable: false, review: { kind: 'message_send', channel: 'telegram', content: 'Exact message words' } };
+    const proposals: ApprovalItem[] = [calendar, email, message, { ...email, id: 'review-only', state: 'review_only' }, { ...email, id: 'unconfirmed', state: 'unconfirmed' }, { ...calendar, id: 'no-review', review: null },
+      { ...calendar, id: 'undo', state: 'done', undoable: true }, { ...calendar, id: 'mismatch', review: email.review }, { ...email, id: 'email-mismatch', review: message.review }, { ...email, id: 'email-no-review', review: null }];
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals }, 'waiting');
     expect(result.data.proposals.map((p) => ({ id: p.id, actions: p.actions }))).toEqual([
       { id: calendar.id, actions: ['approval.approve', 'approval.skip'] },
-      { id: 'email', actions: ['approval.skip'] }, { id: 'review-only', actions: ['approval.skip'] },
-      { id: 'unconfirmed', actions: [] }, { id: 'no-review', actions: [] },
-      { id: 'undo', actions: ['approval.undo'] }, { id: 'mismatch', actions: [] },
+      { id: 'email', actions: ['approval.send', 'approval.edit', 'approval.skip'] }, { id: 'message', actions: ['approval.send', 'approval.edit', 'approval.skip'] },
+      { id: 'review-only', actions: ['approval.skip'] }, { id: 'unconfirmed', actions: [] }, { id: 'no-review', actions: [] },
+      { id: 'undo', actions: ['approval.undo'] }, { id: 'mismatch', actions: [] }, { id: 'email-mismatch', actions: ['approval.skip'] }, { id: 'email-no-review', actions: ['approval.skip'] },
     ]);
+    // The sending account is part of what an email approval shows.
     expect(result.data.proposals[1]?.review).toEqual(email.review);
-    expect(result.data.proposals[6]?.review).toBeNull();
+    expect(result.data.proposals[2]?.review).toEqual(message.review);
+    expect(result.data.proposals[7]?.review).toBeNull();
   });
 
   it('names the owner zone beside the proposals so times can be drawn in it', () => {
@@ -99,9 +122,10 @@ describe('narrow controls read projection', () => {
     expect(result.data.runs[3]).toMatchObject({ status: 'running', ended: null, summary: null });
   });
 
-  it('suppresses profile while removal is incomplete without leaking purge text or ids', () => {
+  it('shows the profile while a removal is incomplete, without leaking purge text or ids', () => {
+    // The profile is built from memory with held items already left out, so it is shown, not blanked.
     const result = projectControls(SAMPLE_CONSOLE_VIEW, 'profile');
-    expect(result.data).toEqual({ sections: [], barriers: 1, removal: { state: 'incomplete', pending_count: 1 }, holds: [{ kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }] });
+    expect(result.data).toEqual({ sections: SAMPLE_CONSOLE_VIEW.profile, barriers: 1, removal: { state: 'incomplete', pending_count: 1 }, holds: [{ kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }] });
     expect(JSON.stringify(result)).not.toContain('4123');
     expect(JSON.stringify(result)).not.toContain('source_ref');
     const complete = projectControls({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] }, 'profile');

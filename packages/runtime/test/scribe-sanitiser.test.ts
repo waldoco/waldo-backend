@@ -5,7 +5,7 @@ import type {
 } from '@waldo/contracts';
 import { MODEL_CONTEXT_MAX_CHARS, ROSTER } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
+import { carriesSecretOrCanary, guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
 
@@ -263,6 +263,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
 
     const safe = JSON.stringify('ordinary text');
@@ -270,22 +271,26 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
     const safeObject = JSON.stringify({ note: 'ordinary text' });
     expect(inspect(JSON.stringify(JSON.stringify(safeObject)))).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
     expect(inspect(JSON.stringify(JSON.stringify(JSON.stringify('ordinary'))))).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
     expect(inspect(btoa(btoa(btoa('hrv: 42 ms'))), 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'base64', depth: 3 } },
     });
   });
 
@@ -872,7 +877,7 @@ describe('Scribe sanitiser', () => {
     });
     expect(
       inspectExternal({ 'alice@example.com': 'owner', '[REDACTED_EMAIL]': 'existing' }, 'send_message'),
-    ).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+    ).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic: { stage: 'pii' } });
   });
 
   it('owner seam: owner-authored contact details stay readable to the model and the owner channel', () => {
@@ -1030,6 +1035,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'percent', depth: 3 } },
     });
     // Over-cap content is denied by the destination size cap with its truthful reason; the
     // uniform 4x decode budget (2026-09-28 RCA) no longer masks it as invalid_payload.
@@ -1055,31 +1061,37 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect('not structured', 'audit_log')).toMatchObject({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect(true, 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect(42, 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect(null, 'internal_context')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect(null, 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'policy' },
     });
     expect(inspect({ note: 'x'.repeat(MODEL_CONTEXT_MAX_CHARS) }, 'internal_context')).toEqual({
       ok: false,
@@ -1203,15 +1215,18 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
 
     expect(inspect({ bad: Number.POSITIVE_INFINITY } as SanitiseInput['payload'])).toMatchObject({
       ok: false,
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
     expect(inspect({ bad: undefined } as unknown as SanitiseInput['payload'])).toMatchObject({
       ok: false,
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
 
     let deep: Record<string, unknown> = {};
@@ -1220,6 +1235,7 @@ describe('Scribe sanitiser', () => {
     expect(inspect(deep as SanitiseInput['payload'])).toMatchObject({
       ok: false,
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
   });
 
@@ -1235,6 +1251,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
 
     expect(inspect(JSON.stringify(Array.from({ length: 19_999 }, () => 0)), 'draft_document')).toMatchObject({
@@ -1244,6 +1261,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'health' },
     });
 
     const customPrototype = Object.create({ inherited: 'not-owned' }) as Record<string, unknown>;
@@ -1252,6 +1270,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
 
     const symbolKeyed = { safe: 'ordinary', [Symbol('hidden')]: 'value' };
@@ -1259,6 +1278,7 @@ describe('Scribe sanitiser', () => {
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
+      diagnostic: { stage: 'prepare' },
     });
   });
 });
@@ -1466,4 +1486,18 @@ it('owner-authored and external text are both admitted past the former keyword s
   const base = { payload, destination: 'internal_context' as const, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'] };
   expect(sanitise({ ...base, source_taint: null } as never).ok).toBe(true);
   expect(sanitise({ ...base, source_taint: 'external' } as never).ok).toBe(true);
+});
+
+describe('carriesSecretOrCanary', () => {
+  const jwt = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljc2lnbmF0dXJl';
+  it('flags what the scribe refuses, in any decoded view, and this session\'s canary', () => {
+    expect(carriesSecretOrCanary(`https://example.test/v?t=${jwt}`)).toBe(true);
+    expect(carriesSecretOrCanary(`https://example.test/v?t=%65${jwt.slice(1).replace(/\./g, '%2E')}`)).toBe(true);
+    expect(carriesSecretOrCanary('key AKIAABCDEFGHIJKLMNOP')).toBe(true);
+    expect(carriesSecretOrCanary('see 1111111111111111 here', ['1111111111111111'])).toBe(true);
+  });
+  it('leaves ordinary text and links alone', () => {
+    expect(carriesSecretOrCanary('Join the meeting: https://zoom.example.test/j/123')).toBe(false);
+    expect(carriesSecretOrCanary('see 1111111111111111 here')).toBe(false);
+  });
 });

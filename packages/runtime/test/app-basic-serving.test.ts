@@ -31,7 +31,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
         console_auth_throttle:`throttle.${a.p_key}.${a.p_limit}.${a.p_window_seconds}`,signin_allowed:`signin.${a.p_email}.${a.p_code_hash}`,
         owner_for_auth:`owner.${a.p_auth_user}.${a.p_email}.${a.p_phone}.${a.p_code_hash}`,
         console_session_open:`consolesess.open.${a.p_do_name}.${a.p_session_hash}`,console_session_touch:`consolesess.touch.${a.p_do_name}.${a.p_session_hash}`,
-        console_session_list:`consolesess.list.${a.p_do_name}`,console_session_revoke:`consolesess.revoke.${a.p_do_name}.${a.p_session_hash}`,
+        console_session_inventory:`consolesess.inventory.${a.p_do_name}`,console_session_revoke:`consolesess.revoke.${a.p_do_name}.${a.p_session_hash}`,
         owner_runtime_authority:`owner.runtime.${a.p_do_name}`,app_session_authority:`app.session.${a.p_do_name}.${a.p_session_hash}`,
         app_push_revoke_session:`app.push.revoke-session.${a.p_do_name}.${a.p_session_hash}`,set_owner_settings:`settings.${a.p_do_name}.${a.p_timezone}.${a.p_quiet_start}.${a.p_quiet_end}.${a.p_volume}`,
       };
@@ -41,7 +41,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       if(fn==='owner_for_auth')return Response.json(a.p_auth_user===AUTH&&a.p_email===EMAIL?name:null);
       if(fn==='console_session_open'){expect(a.p_do_name).toBe(name);hash=a.p_session_hash;live=true;return Response.json(true);}
       if(fn==='console_session_touch')return Response.json(live&&a.p_do_name===name&&a.p_session_hash===hash);
-      if(fn==='console_session_list')return Response.json(live&&a.p_do_name===name?[{session:hash,created_at:created,last_seen_at:created}]:[]);
+      if(fn==='console_session_inventory')return Response.json(live&&a.p_do_name===name?[{session:hash,created_at:created,last_seen_at:created,expires_at:new Date(Date.parse(created)+12*60*60_000).toISOString(),rotated_to:null}]:[]);
       if(fn==='owner_runtime_authority')return Response.json(a.p_do_name===name?{owner_id:OWNER,auth_user_id:AUTH,do_name:name,state_version:0,admission_revision:'1'}:null);
       if(fn==='app_session_authority'&&directoryUnavailable)return new Response('',{status:503});
       if(fn==='set_owner_settings'){settingsWrites++;savedZone=a.p_timezone;return Response.json(true);}
@@ -70,7 +70,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(page.messages.find((m:any)=>m.role==='user')).toMatchObject({id:receipt.message_id,text:body.text,channel:'app'});
       expect(page.messages.find((m:any)=>m.role==='assistant')).toMatchObject({text:'Hello from the signed app owner.',parent_id:receipt.message_id,channel:'app'});
       expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toBe(hash);expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(1);
-      const told=proof.inputs.find(i=>!i.text?.format).instructions as string;expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
+      const told=JSON.stringify(proof.inputs.find(i=>!i.text?.format));expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
       const count=proof.inputs.length;instance=new OwnerDO(state,settings as never);
       const recovered=await app(`/chat/main/messages/${clientId}`,undefined,credential);expect(recovered.status).toBe(200);expect(await recovered.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
       const retried=await app('/chat/main/messages',body,credential);expect(retried.status).toBe(202);expect(await retried.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
@@ -99,7 +99,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       instance=new OwnerDO(state,settings as never);
       const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
       const effectedReply=withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id);
-      expect(effectedReply?.text).not.toContain('Receipts:');
+      expect(effectedReply?.text).toContain('\n\nReceipts: workspace file written proof-missing.txt (failed)');
       expect(effectedReply?.parts.at(-1)).toMatchObject({type:'receipt',fallback_text:'Receipts: workspace file written proof-missing.txt (failed)',items:[{kind:'workspace_file_written',target:'proof-missing.txt',outcome:'failed'}]});
       instance=new OwnerDO(state,settings as never);
       let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
@@ -137,7 +137,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       const foreign='foreign-basic-owner',sid='b'.repeat(32),foreignCredential=`${foreign}.${sid}.${await routerSignature(SECRET,0,`appbearer.${foreign}.${sid}`)}`;
       expect((await app('/chat/main',undefined,foreignCredential)).status).toBe(401);
       const foreignPhysical=await instance.fetch(new Request('https://telegram-owner/app/v1/chat/main',{headers:{'x-waldo-do-name':foreign,'x-waldo-app-session-hash':hash!}}));expect(foreignPhysical.status).toBeGreaterThanOrEqual(400);expect(state.storage.kv.get('do_name')).toBe(name);
-      const signout=await app('/auth/signout',{},credential);expect(signout.status).toBe(200);expect(await signout.json()).toEqual({result:'revoked'});expect(calls.slice(-3)).toEqual(['app_push_revoke_session','console_session_revoke','console_session_list']);
+      const signout=await app('/auth/signout',{},credential);expect(signout.status).toBe(200);expect(await signout.json()).toEqual({result:'revoked'});expect(calls.slice(-3)).toEqual(['app_push_revoke_session','console_session_revoke','console_session_inventory']);
       expect((await app('/session',undefined,credential)).status).toBe(401);expect((await app('/chat/main/messages',{...body,client_message_id:'revoked-client'},credential)).status).toBe(401);
       const revokedDirect=await instance.fetch(new Request('https://telegram-owner/app/v1/chat/main',{headers:{'x-waldo-do-name':name,'x-waldo-app-session-hash':hash!}}));expect(revokedDirect.status).toBeGreaterThanOrEqual(400);
       await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('revoked');expect(proof.inputs.length).toBe(total);expect(proof.telegram).toBe(0);expect(hash).toBe(await linkCodeHash(credential.split('.').at(-2)!));

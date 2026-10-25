@@ -41,9 +41,10 @@ function CalendarReview({ review, timezone }: { review: Extract<ProposalReview, 
 function Review({ review, timezone }: { review: ProposalReview; timezone: string | null }) {
   if (review.kind === 'email_send') {
     const people = (label: string, list: string[]) => list.length > 0 && <div className="letter-row"><span className="label">{label}</span>{list.map(address => <span className="person" key={address}><i aria-hidden="true">{address.charAt(0).toUpperCase()}</i>{address}</span>)}</div>;
-    return <div className="proposal-full-review letter">{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
+    return <div className="proposal-full-review letter">{review.account && <div className="letter-row"><span className="label">From</span><span className="person">{review.account}</span></div>}{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   }
   if (review.kind === 'message_send') return <div className="proposal-full-review chat-preview"><span className="channel">{review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/> : <Icon name="paperplane"/>}To your {review.channel} chat</span><p className="bubble">{review.content}</p><CopyText text={review.content}/></div>;
+  if ('text' in review) return <div className="proposal-full-review"><pre className="owner-record-text">{review.text}</pre></div>;
   return <CalendarReview review={review} timezone={timezone}/>;
 }
 
@@ -58,17 +59,25 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
       const send = item.kind === 'email_send' || item.kind === 'message_send';
       const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || approvable(item.review.start)) && (!item.review.end || approvable(item.review.end));
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
+      const draft = send && item.state === 'open' && item.review?.kind === item.kind;
+      const sendApprove = draft && item.actions.includes('approval.send'), sendChange = draft && item.actions.includes('approval.edit');
+      const earlier = sendApprove && item.review?.kind === 'email_send' ? item.review.earlier_unknown_at : undefined;
       const note = item.state === 'review_only' ? 'Too long for a chat card, so there’s no Send it button. Ask Waldo for a shorter version or a draft.'
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'
-          : send && item.state === 'open' ? 'Approve on its review card in chat, after checking sender, recipient and words. Dismissing here only stops the send.'
-            : item.state === 'open' && item.kind === 'calendar_change' ? 'Want it changed? Ask Waldo for a new proposal before approving.' : null;
+          : sendApprove ? 'Sending can’t be undone, so check the sender, recipients and words above. Change it asks Waldo for a new draft; this one stays as it is.'
+            : send && item.state === 'open' ? 'Approve on its review card in chat, after checking sender, recipient and words. Dismissing here only stops the send.'
+            : item.state === 'open' && item.kind === 'calendar_change' ? 'Want it changed? Ask Waldo for a new proposal before approving.'
+              : item.state === 'open' && (item.review?.kind === 'mcp_call' || item.review?.kind === 'tainted_action' || item.review?.kind === 'browser_submit') ? 'Approve or skip it on its card in chat or the Waldo app.' : null;
       return <details name="proposals" open={index === first} className="tile disclosure proposal-detail reveal" style={{ '--i': index } as React.CSSProperties} key={item.id}>
         <summary><span className="kind"><KindMark item={item}/></span><span className="value proposal-summary">{item.summary}</span><span className={`access-label${item.state === 'open' ? ' needs' : ''}`}>{item.state === 'open' ? 'Needs you' : item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : 'Decision recorded'}</span></summary>
         <div className="disclosure-body">
           {item.review ? <Review review={item.review} timezone={record.data.timezone}/> : <p>Full details aren’t available for this one. Ask Waldo to show them before you decide.</p>}
           {note && <p className="meta">{note}</p>}
+          {earlier && <p role="alert">{`An identical email from ${earlier} may already have gone out. Check Gmail’s Sent folder before you send it again.`}</p>}
           <div className="control-actions">
             {calendarApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>Approve this calendar change</button>}
+            {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.send', { id: item.id })}>{item.kind === 'email_send' ? 'Send this email' : 'Send this message'}</button>}
+            {sendChange && <button disabled={busy} onClick={() => onAction('approval.edit', { id: item.id })}>Change it</button>}
             {item.actions.includes('approval.skip') && <button disabled={busy} onClick={() => onAction('approval.skip', { id: item.id })}>{send ? 'Dismiss proposal' : 'Not now'}</button>}
             {calendarUndo && <button disabled={busy} onClick={() => { if (window.confirm('Undo this calendar change?')) onAction('approval.undo', { id: item.id }); }}>Undo calendar change</button>}
           </div>
@@ -146,6 +155,7 @@ export function SetupControls({ record }: { record: SetupRecord }) {
   const items = [
     { title: 'Link Telegram', recorded: record.data.telegram_linked, href: '#/connections', description: 'Link your owner DM so chat, cards and reminders reach the right account.' },
     { title: 'Connect Google', recorded: record.data.google_access_granted, href: '#/connections', description: 'Saved grants are access permission. Check an actual Calendar or Gmail request in chat to verify a live read.' },
+    { title: 'Connect iMessage', recorded: record.data.imessage_linked === true, href: '#/connections/imessage', description: 'Text Waldo from your own iPhone. Get a one-time code and text it to Waldo from that iPhone; only your number reaches your Waldo.' },
     { title: 'Set quiet hours', recorded: record.data.quiet_hours_set, href: '#/day', description: 'Choose when Waldo holds cards and updates. Reminders you set still fire.' },
   ];
   return <section className="panel"><h2>Setup</h2>{items.map(item => <article className="control-row" key={item.title}><div><h3>{item.title}</h3><p>{item.description}</p><span className="access-label">{item.recorded ? 'Setting recorded' : 'To do'}</span></div><a href={item.href}>Manage {item.title.toLowerCase()}</a></article>)}</section>;

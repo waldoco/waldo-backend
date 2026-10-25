@@ -3,7 +3,8 @@ import { fromRowZone } from '../../contracts/src/health/zone-bridge';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
 import { computeDailyScores } from '../src/health/scores';
-import type { DailyScoresInput } from '../src/health/scores/types';
+import type { DailyScores, DailyScoresInput } from '../src/health/scores/types';
+import { formZone, recoveryZone } from '../src/health/scores/zones';
 import realSeries from './fixtures/health-series-read.json';
 
 const NOW = Date.parse('2026-03-20T12:00:00Z');
@@ -350,11 +351,152 @@ describe('produceHealthScores', () => {
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
       // Admitting fewer inputs is a new Form version under ADR-0081.
-      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v3');
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v4');
     });
   });
 
-  it('computes from the source with the most readings and names only that source as the basis', async () => {
+  it('computes each day from the highest-ranked source holding its sleep, never the one with most readings', async () => {
+    // A ring sends one record a night; the phone sends dozens of hourly windows. Rank decides, so the owner is not re-based
+    // on another wearable whenever the phone happens to send more.
+    const ring = history(25).filter(s => !SCORED_WINDOW_SIGNALS.includes(s.signal as string));
+    const series = { access: 'granted', read_at: READ_AT, sources: [
+      { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(25) },
+      { source: 'whoop', consent_epoch: 2, truncated: false, samples: ring },
+    ] };
+    const h = harness(series);
+    await run(h);
+    expect(h.writes.map(w => w.basis)).toEqual([[{ source: 'whoop', consent_epoch: 2 }], [{ source: 'whoop', consent_epoch: 2 }]]);
+    // The night the ring missed is computed from the next source that has it, and that row names that source.
+    const missed = { ...series, sources: [series.sources[0]!, { ...series.sources[1]!, samples: ring.filter(s => s.day !== TODAY) }] };
+    const g = harness(missed);
+    await run(g);
+    expect(g.writes.map(w => [w.day, w.basis])).toEqual([[addDays(TODAY, -1), [{ source: 'whoop', consent_epoch: 2 }]], [TODAY, [{ source: 'health_connect', consent_epoch: 1 }]]]);
+  });
+
+  it('tells the owner only that today moved zone, and only when the writer says a pillar moved', async () => {
+    const told: string[] = [];
+    const onZoneChange = async (day: string) => { told.push(day); };
+    await run(harness(seriesOf(history(25)), { written: true, changed: [] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([]);
+    await run(harness(seriesOf(history(25)), { written: true, changed: ['recovery'] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([TODAY]);
+    await run(harness(seriesOf(history(25)), { written: false, stale: true, changed: ['recovery'] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([TODAY]);
+    // A notice that fails never fails the write.
+    expect(await run(harness(seriesOf(history(25)), { written: true, changed: ['form'] }, computeDailyScores, { onZoneChange: async () => { throw new Error('owner object away'); } }))).toBe('written');
+  });
+
+  describe('a zone that holds through a steady move', () => {
+    // The derived rows as the database keeps them: the writer reports a pillar changed against the row it replaces or, for a
+    // day's first row, the newest earlier day; the scores read returns one day's row.
+    const plane = () => {
+      const rows = new Map<string, Record<string, Record<string, unknown>>>();
+      const newestBefore = (day: string) => [...rows.keys()].filter(d => d < day).sort().at(-1);
+      return {
+        rows,
+        writeContext: async (payload: string) => {
+          const row = JSON.parse(payload) as Record<string, Record<string, unknown>> & { day: string };
+          const old = rows.get(row.day) ?? rows.get(newestBefore(row.day) ?? '');
+          const changed = old ? ['recovery', 'form', 'weight'].filter(p => typeof old[p]?.zone === 'string' && typeof row[p]?.zone === 'string' && old[p]!.zone !== row[p]!.zone) : [];
+          rows.set(row.day, row);
+          return { written: true, changed };
+        },
+        readScores: async (day: string) => {
+          const row = rows.get(day);
+          return row ? { scores: { day, timezone: 'UTC', compiled_at: '2026-03-20T11:00:00.000Z', freshness: 'fresh', form: row.form, recovery: row.recovery, weight: row.weight } } : { unavailable: 'no_readings' };
+        },
+      };
+    };
+    const scored = (form: number, version = 'form.candidate.v4', recovery = 70): DailyScores => ({
+      recovery: { state: 'available', score: recovery, zone: recoveryZone(recovery), algorithm_version: 'recovery.candidate.v1', activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
+      form: { state: 'available', score: form, zone: formZone(form), algorithm_version: version, activation: 'candidate_unaccepted', coverage: 1, hrv_method: 'rmssd', used: { signals: [], days: [] } },
+      weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' }, sleep_debt: { state: 'unavailable', reason: 'no_readings' },
+    });
+    // One recompute per score; for each, whether the owner's object was told today moved zone.
+    const uploads = async (scores: readonly number[], store = plane(), version?: string, recovery?: number) => {
+      const told: boolean[] = [];
+      for (const score of scores) {
+        let notified = false;
+        await run(harness(seriesOf(history(25)), undefined, () => scored(score, version, recovery), { writeContext: store.writeContext, readScores: store.readScores, onZoneChange: async () => { notified = true; } }));
+        told.push(notified);
+      }
+      return { told, store };
+    };
+    const formWord = (store: ReturnType<typeof plane>, day = TODAY) => fromRowZone('form', store.rows.get(day)?.form?.zone);
+
+    it('tells the owner of a real crossing once, when it happens, not of the first wobble across the edge', async () => {
+      const { told, store } = await uploads([62, 58, 52]);
+      expect(told).toEqual([false, false, true]);
+      expect(formWord(store)).toBe('flagging');
+    });
+    it('tells the owner nothing while a score wavers on an edge', async () => {
+      const { told, store } = await uploads([62, 58, 62, 58, 56, 63]);
+      expect(told).toEqual([false, false, false, false, false, false]);
+      expect(formWord(store)).toBe('steady');
+      expect(store.rows.get(TODAY)!.form!.score).toBe(63);
+    });
+    it('holds on the lower edges too, and crosses once the score is clear of them', async () => {
+      const { told, store } = await uploads([42, 38, 41, 37, 33]);
+      expect(told).toEqual([false, false, false, false, true]);
+      expect(formWord(store)).toBe('depleted');
+    });
+    it('needs more than a steady move past the old zone in both directions', async () => {
+      expect((await uploads([80, 75])).told).toEqual([false, false]);
+      expect((await uploads([80, 74])).told).toEqual([false, true]);
+      expect((await uploads([79, 84])).told).toEqual([false, false]);
+      expect((await uploads([79, 85])).told).toEqual([false, true]);
+    });
+    it('holds nothing across days, so a fresh night\'s score writes its own band and its crossing is told', async () => {
+      // Yesterday's row was Recovery 82 and Form 62; tonight's scores are 76 and 58, each within a steady move of yesterday's zone.
+      const store = plane();
+      store.rows.set(addDays(TODAY, -1), {
+        recovery: { score: 82, zone: 'high', algorithm_version: 'recovery.candidate.v1' },
+        form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v4' },
+      });
+      let told = false;
+      const nightly = (input: DailyScoresInput) => (input.targetDay === TODAY ? scored(58, undefined, 76) : scored(62, undefined, 82));
+      await run(harness(seriesOf(history(25)), undefined, nightly, { writeContext: store.writeContext, readScores: store.readScores, onZoneChange: async () => { told = true; } }));
+      expect(told).toBe(true);
+      expect(fromRowZone('recovery', store.rows.get(TODAY)?.recovery?.zone)).toBe('solid');
+      expect(formWord(store)).toBe('flagging');
+    });
+    it('holds nothing from a zone another algorithm version wrote', async () => {
+      const store = plane();
+      store.rows.set(TODAY, { form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v3' } });
+      store.rows.set(addDays(TODAY, -1), { form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v3' } });
+      const { told } = await uploads([58], store);
+      expect(told).toEqual([true]);
+      expect(formWord(store)).toBe('flagging');
+    });
+    it('writes the score\'s own band when the row before cannot be read', async () => {
+      const store = plane();
+      store.rows.set(TODAY, { form: { score: 62, zone: 'good', algorithm_version: 'form.candidate.v4' } });
+      const writes: Record<string, unknown>[] = [];
+      for (const readScores of [async () => { throw new Error('down'); }, async () => null, async () => ({ error: 'not_linked' })]) {
+        await run(harness(seriesOf(history(25)), undefined, () => scored(58), { writeContext: async payload => { writes.push(JSON.parse(payload)); return { written: true }; }, readScores }));
+      }
+      expect(writes.filter(w => w.day === TODAY).map(w => (w.form as { zone: string }).zone)).toEqual(['moderate', 'moderate', 'moderate']);
+    });
+  });
+
+  it('never scores a newly worn wearable against the old one\'s baseline', async () => {
+    // Two weeks on the watch, then three nights on a strap: the strap's nights are its own short history, still learning.
+    const watch = Array.from({ length: 14 }, (_, i) => dayOfReadings(addDays(TODAY, -3 - i), i)).flat();
+    const strap = Array.from({ length: 3 }, (_, i) => dayOfReadings(addDays(TODAY, -i), i, { hrvMethod: 'rmssd' })).flat()
+      .filter(s => !SCORED_WINDOW_SIGNALS.includes(s.signal as string)).map(s => s.signal === 'overnight_hrv' ? { ...s, value: 31 } : s);
+    const h = harness({ access: 'granted', read_at: READ_AT, sources: [
+      { source: 'apple', consent_epoch: 1, truncated: false, samples: watch },
+      { source: 'whoop', consent_epoch: 1, truncated: false, samples: strap },
+    ] });
+    await run(h);
+    const today = h.inputs.find(i => i.targetDay === TODAY)!;
+    expect(today.days.filter(d => d.overnightHrv).map(d => d.day).sort()).toEqual([addDays(TODAY, -2), addDays(TODAY, -1), TODAY]);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    expect(row.basis).toEqual([{ source: 'whoop', consent_epoch: 1 }]);
+    expect(row.recovery).not.toHaveProperty('score');
+  });
+
+  it('computes from the higher-ranked of two sources and names only that source as the basis', async () => {
     const series = { access: 'granted', read_at: READ_AT, sources: [
       { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(3) },
       { source: 'apple', consent_epoch: 4, truncated: false, samples: history(25) },

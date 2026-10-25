@@ -77,6 +77,24 @@ describe('handleTelegramWebhook', () => {
     expect((await run(post('s3cret',message(7,'/start ABCDEFGH23')),{...base,RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:false})}as unknown as RateLimit})).status).toBe(429);
     expect(idFromName).not.toHaveBeenCalled();
   });
+  it('a forwarded /start or /link CODE is never coded setup: no throttle, no link object, no redemption; a linked owner\'s goes to their own inbox', async () => {
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+    const forwarded = (from: number, text: string) => JSON.stringify({ update_id: 1, message: { from: { id: from }, chat: { id: from, type: 'private' }, text, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } });
+    const { fetch, idFromName, ns } = namespace();
+    const limit = vi.fn(async () => ({ success: true }));
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async (_provider, subject) => subject === '8' ? { doName: 'do-8', subject, timezone: null } : null, redeem };
+    const env: TelegramWebhookEnv = { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: '7:token', RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    for (const text of ['/start ABCDEFGH23', '/link ABCDEFGH23']) {
+      expect((await run(post('s3cret', forwarded(7, text)), env, directory)).status).toBe(200);
+      expect((await run(post('s3cret', forwarded(8, text)), env, directory)).status).toBe(200);
+    }
+    expect(limit).not.toHaveBeenCalled();
+    expect(redeem).not.toHaveBeenCalled();
+    expect(idFromName.mock.calls.map(([name]) => name)).toEqual(['do-8', 'do-8']);
+    expect((fetch.mock.calls as unknown as [string][]).map(([url]) => url)).toEqual(['https://telegram-owner/enqueue', 'https://telegram-owner/enqueue']);
+  });
   it('ignores link codes sent from a group chat', async () => {
     const { ns } = namespace();
     const redeem = vi.fn(async () => null);

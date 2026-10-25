@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL, type ConnectIntent, type LLMToolCall } from '@waldo/contracts';
@@ -10,6 +11,7 @@ import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 import { readDriveHandler } from '../src/tools/live/drive';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { callMcpToolHandler, readMcpToolHandler } from '../src/tools/live/mcp';
+import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 
 type Account = Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
 const clock = { timezone: 'UTC', now: () => new Date('2026-10-10T09:00:00Z') };
@@ -21,6 +23,8 @@ const account = (features: Partial<Account> = {}): Account => ({ id: 'acct-1', e
 const turn = async (name: string, accounts: () => readonly Account[] | Promise<readonly Account[]>, script: (round: number) => readonly LLMToolCall[] | undefined) => {
   const offered: (readonly string[] | undefined)[] = [];
   const systems: string[] = [];
+  // The connection fact is current for the turn, so it rides the owner's message; the rule for it is in the system prompt.
+  const told: string[] = [];
   const offers: ConnectIntent[] = [];
   const logs: TurnLogEntry[] = [];
   const google: GoogleAccess = { client: async () => null, state: async () => accounts() };
@@ -28,6 +32,7 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     const calls = script(offered.length);
     offered.push(request.tools?.map(tool => tool.name));
     systems.push(request.system ?? '');
+    told.push(String(request.messages.at(-1)?.content ?? ''));
     return { ok: true, data: { model: request.model, text: calls ? '' : 'Done.', ...(calls ? { tool_calls: [...calls] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
   } };
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async () => {
@@ -35,31 +40,33 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     args[3] = entry => { logs.push(entry); }; args[4] = clock;
     args[5] = [...googleHandlers(google, desk, clock), connectServiceHandler(google)] as never;
     args[6] = WALDO_CHAT_MODEL; args[9] = async intent => { offers.push(intent); return true; }; args[10] = gateway;
-    await createOwnerResponder(...args).respond({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }, (_hop, work) => work());
+    await createOwnerResponder(...args).respond(ownerTyped({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }), (_hop, work) => work());
   });
-  return { offered, systems, offers, logs };
+  return { offered, systems, told, offers, logs };
 };
 const call = (name: string, args: object): LLMToolCall => ({ call_id: `call-${name}`, name, arguments: JSON.stringify(args) });
 
 it('no Google connected: calendar and mail tools are left out, connect_service stays and its connect button still reaches the channel', async () => {
-  const { offered, systems, offers, logs } = await turn('eligibility-none', () => [], round => round === 0 ? [call('connect_service', { service: 'google' })] : undefined);
+  const { offered, systems, told, offers, logs } = await turn('eligibility-none', () => [], round => round === 0 ? [call('connect_service', { service: 'google' })] : undefined);
   expect(offered[0]).toContain('connect_service');
   for (const name of [...CALENDAR, ...MAIL, 'get_tasks']) expect(offered[0], name).not.toContain(name);
   expect(offers).toEqual([expect.objectContaining({ status: 'auth_required', service: 'google', reason: 'not_connected' })]);
-  expect(systems[0]).toContain('Google features not connected for this owner: calendar, mail, tasks.');
+  expect(told[0]).toContain('Google features not connected for this owner: calendar, mail, tasks.');
+  expect(systems[0]).not.toContain('Google features not connected for this owner');
+  expect(systems[0]).toContain('If the owner asks for one, call connect_service with that feature');
   const removal = logs.find(entry => entry.hop === 'tool_eligibility')!;
   expect(removal.detail).toBe('not_connected=9 not_configured=0 check_failed=0');
   const shape = logs.find(entry => entry.hop === 'llm_reply')!.shape!;
   const { skill_procedures: procedures = 0, ...joined } = shape.context!.system_sections!;
-  expect(joined.connections).toBeGreaterThan(0);
+  expect(shape.context!.context_sections!.connections).toBeGreaterThan(0);
   expect(Object.values(joined).reduce((sum, bytes) => sum + bytes, 0) + 2 * (Object.values(joined).length - 1) + procedures).toBe(shape.system_bytes);
 });
 
 it('a calendar-only grant keeps calendar tools, leaves out mail tools, and connect_service offers the missing mail feature', async () => {
-  const { offered, systems, offers } = await turn('eligibility-calendar', () => [account({ mail: false, tasks: false })], round => round === 0 ? [call('connect_service', { service: 'google', feature: 'mail' })] : undefined);
+  const { offered, told, offers } = await turn('eligibility-calendar', () => [account({ mail: false, tasks: false })], round => round === 0 ? [call('connect_service', { service: 'google', feature: 'mail' })] : undefined);
   for (const name of CALENDAR) expect(offered[0], name).toContain(name);
   for (const name of [...MAIL, 'get_tasks']) expect(offered[0], name).not.toContain(name);
-  expect(systems[0]).toContain('Google features not connected for this owner: mail, tasks.');
+  expect(told[0]).toContain('Google features not connected for this owner: mail, tasks.');
   expect(offers).toEqual([{ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'mail' }]);
 });
 
@@ -93,21 +100,25 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
   expect(await verdict(readMcpToolHandler(readable, undefined, true))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browsePageHandler('key', 'project', undefined))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: false }))).toEqual(missing);
+  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
+  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { allowBrowserbase: false }))).toEqual(missing);
   expect(await verdict(browseActHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browseActHandler('key', 'project', undefined))).toEqual({ ok: true });
   expect(await verdict(readDriveHandler({ client: async () => null }, false))).toEqual(missing);
   expect(await verdict(readDriveHandler({ client: async () => null }, true))).toEqual({ ok: true });
 });
 
-it('the owner browser keeps browse tools where it serves them natively, and otherwise follows the fallback provider', async () => {
-  const storage = { kv: { get: () => undefined, put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
-  const runtime = (environment: string) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+it('the owner browser offers browse tools only where its Cloudflare host can serve them, whatever the Browserbase keys say', async () => {
+  // The owner holds a Telegram binding on this physical object; browse tools are never offered without one.
+  const bound: Record<string, unknown> = { do_name: 'owner', telegram_subject: '81' };
+  const storage = { kv: { get: (key: string) => bound[key], put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
   const missing = { ok: false, reason: 'not_configured' };
-  expect(await runtime('production').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
+  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, BROWSERBASE_API_KEY: 'key', BROWSERBASE_PROJECT_ID: 'project', OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'owner' ? 'physical' : 'elsewhere' }) }, ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+  expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('staging', false).act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  registerCommonBrowserSdk(async () => ({}) as never);
+  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('production').act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   expect(await runtime('staging').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
   expect(await runtime('staging').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
 });

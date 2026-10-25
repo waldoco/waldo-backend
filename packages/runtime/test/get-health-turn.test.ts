@@ -7,8 +7,11 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 // A get_health result reaches the model in the turn that asked and nowhere else: not the ledger the next turn reads,
-// not the transcript, not the object's storage. Synthetic readings only; the value is a decimal no id or time holds.
-const HRV = '47.5';
+// not the transcript, not the object's storage. Synthetic readings only. The value has one decimal, so the tool's
+// one-decimal rounding leaves a stored copy byte-identical and the leak checks still match it. Its integer part can't
+// occur in an ISO time, whose only dot follows the seconds, which never reach 60; the clock is frozen as well, so every
+// timestamp the turn writes is fixed.
+const HRV = '67.4';
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -16,7 +19,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
     model.requests.push(request);
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
-    const asked = String(request.messages.at(-1)?.content ?? '');
+    // The owner's own words only: past messages recalled for this one follow them as fenced data.
+    const asked = String(request.messages.at(-1)?.content ?? '').split('\n\n[memory recalled for this message')[0]!;
     if (asked.includes('overnight HRV') && !request.tool_turns?.length) return done('', [{ call_id: 'hrv', name: 'get_health', arguments: JSON.stringify({ signals: ['hrv'], from: '2026-10-12', to: '2026-10-12' }) }]);
     return done('Noted.');
   } };
@@ -58,8 +62,7 @@ it('the model sees the value in the asking turn; the ledger, the next turn and t
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
-    const originalNow = Date.now;
-    Date.now = () => Date.parse('2026-10-13T06:30:00Z');
+    vi.setSystemTime('2026-10-13T06:30:00Z');
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const send = async (client: string, text: string) => {
@@ -88,6 +91,6 @@ it('the model sees the value in the asking turn; the ledger, the next turn and t
       model.requests = [];
       await send('get-health-client-02', 'QA: anything else for today?');
       expect(JSON.stringify(model.requests)).not.toContain(HRV);
-    } finally { Date.now = originalNow; quiet.mockRestore(); await state.storage.deleteAlarm(); }
+    } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

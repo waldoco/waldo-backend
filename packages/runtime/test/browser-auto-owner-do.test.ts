@@ -4,21 +4,30 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { routerSignature } from '../src/identity/owner-directory';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
+import { toolOutput } from './fixtures/tool-output';
+import { OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
+// The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
+// Remove this pin, and the test that asserts it, once the trial meter prices Sol.
+vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   proof.inputs.push({ subject: proof.subject, input: structuredClone(input) });
   const format = input.text?.format?.name;
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
   const urls = ['https://example.com/a', 'https://example.com/b', 'https://example.com/a'];
   const read = !format && previous.length < urls.length;
-  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ provider: 'cloudflare_playwright', url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
+  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : `Owner ${proof.subject} read A/B/A.`, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, payload: any) => {
   if (method === 'sendMessage') { proof.delivered.push({ subject: payload.chat_id, text: payload.text }); return { message_id: proof.delivered.length, chat: { id: payload.chat_id } }; }
   return method === 'getMe' ? { username: 'auto_owner_fixture_bot' } : true;
 } }));
+
+it('runs its owner turns on Luna, the one model the browser trial prices', () => {
+  expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
+});
 
 it('one explicit bounded operator policy serves two existing owners and a newly admitted owner through their ordinary hosts', async () => {
   const sessions = new Map<string, { subject: number; pages: any[]; context: any }>();
@@ -103,7 +112,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         await send('Use Cloudflare to read A, B, then revisit A.');
         const final = proof.inputs.filter(row => row.subject === owner.subject).map(row => row.input).find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 3);
         expect(final).toBeDefined();
-        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
+        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => toolOutput(item.output));
         expect(outputs).toHaveLength(3); expect(outputs.slice(0, 2).every((row: any) => row.ok && row.data.text.includes(`cookie-${owner.subject}`))).toBe(true);
         expect(outputs[2]).toMatchObject({ok:false,code:'repeat_refusal'});
         expect(new Set(outputs.slice(0,2).map((row: any) => row.data.session_handle)).size).toBe(1);

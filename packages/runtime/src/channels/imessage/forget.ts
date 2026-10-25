@@ -1,4 +1,5 @@
 import { literalTextRedactor } from '@waldo/contracts';
+import { carriesTopic } from '../../memory/forget-guard';
 import type { RunEffectScope } from '../run-effect-scope';
 import { IMessageFinalOutbox } from './final-outbox';
 import { IMessageOwnerInbox } from './owner-inbox';
@@ -12,7 +13,7 @@ export const redactIMessageEntries = (storage: DurableObjectStorage, texts: read
   const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
   if (!needles.length) return { rewritten: 0, remaining: 0 };
   const redact = literalTextRedactor(needles, marker);
-  const holds = (text: string) => needles.some((needle) => text.toLowerCase().includes(needle.toLowerCase()));
+  const holds = (text: string) => needles.some((needle) => carriesTopic(text, needle));
   let out = { rewritten: 0, remaining: 0 };
   const work = () => {
     const inbox = new IMessageOwnerInbox(storage).forget(redact, holds), outbox = new IMessageFinalOutbox(storage).forget(redact, holds);

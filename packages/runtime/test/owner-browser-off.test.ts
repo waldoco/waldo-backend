@@ -7,7 +7,7 @@ vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority:
 vi.mock('../src/channels/common-public-browser-configuration', () => ({ commonPublicBrowserConfiguration: proof.configuration }));
 vi.mock('../src/llm/openai', () => ({ OpenAIResponsesAdapter: class { constructor() { proof.gateway(); } complete = vi.fn(); } }));
 
-function fixture() {
+function fixture(keys: Record<string, string> = {}) {
   proof.directory.mockReset().mockRejectedValue(Error('Browser-off fixture forbids directory I/O'));
   proof.gateway.mockReset(); proof.configuration.mockReset().mockReturnValue(undefined);
   const rows = new Map<string, unknown>([['do_name', 'browser-off-owner'], ['telegram_subject', '81102']]);
@@ -16,7 +16,7 @@ function fixture() {
     transactionSync: transaction, getAlarm: alarm, setAlarm: alarm, deleteAlarm: alarm } as unknown as DurableObjectStorage;
   const scope: RunEffectScope = { runId: 'ordinary-first-turn', attempt: 'first', deadline: Date.now() + 60000,
     signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
-  const env = { WALDO_ENVIRONMENT: 'staging', OPENAI_API_KEY: 'synthetic',
+  const env = { WALDO_ENVIRONMENT: 'staging', OPENAI_API_KEY: 'synthetic', ...keys,
     OWNER_DO: { idFromName: () => ({ toString: () => 'browser-off-physical' }) } } as never;
   const runtime = ownerBrowserRuntime({ env, storage, actualDoId: 'browser-off-physical', activeScope: () => scope });
   const ctx = { authenticatedUserId: 'browser-off-owner', runScope: scope } as never;
@@ -43,14 +43,18 @@ it('browser-off ordinary gateway selection adds no extra model adapter', () => {
   expect(proof.directory).not.toHaveBeenCalled(); expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled();
 });
 
-it('browser-off routing refuses explicit Cloudflare while keeping explicit legacy selection available', async () => {
-  const f = fixture(), handle = vi.fn(async () => ({ ok: true as const, data: { selected: 'legacy' }, source_taint: 'external' as const }));
-  const handler = f.runtime.read({ name: 'browse_page', handle } as never);
+it('with no browser binding every browse call is refused, Browserbase keys or not, without provider I/O or durable writes', async () => {
+  const handle = vi.fn(async () => ({ ok: true as const, data: { selected: 'legacy' }, source_taint: 'external' as const }));
   const args = { url: 'https://example.com', instruction: 'Read page' };
-  expect(await handler.handle({ ...args, provider: 'cloudflare_playwright' }, f.ctx)).toMatchObject({ ok: false });
+  const keys = { BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic' };
+  for (const env of [{}, keys, { ...keys, WALDO_ENVIRONMENT: 'production' }]) {
+    const f = fixture(env), network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('No external I/O allowed'));
+    try {
+      expect(await f.runtime.read({ name: 'browse_page', handle } as never).handle(args, f.ctx)).toMatchObject({ ok: false, code: 'auth_failed' });
+      expect(await f.runtime.act({ name: 'browse_act', handle } as never).handle({ url: args.url, task: 'Read page', max_actions: 1 }, f.ctx)).toMatchObject({ ok: false, code: 'rejected' });
+      expect(network).not.toHaveBeenCalled(); expect(proof.directory).not.toHaveBeenCalled(); expect(proof.gateway).not.toHaveBeenCalled();
+      expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  }
   expect(handle).not.toHaveBeenCalled();
-  expect(await handler.handle({ ...args, provider: 'browserbase_stagehand_http_v3' }, f.ctx)).toMatchObject({ ok: true });
-  expect(handle).toHaveBeenCalledTimes(1);
-  expect(proof.directory).not.toHaveBeenCalled(); expect(proof.gateway).not.toHaveBeenCalled();
-  expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
 });

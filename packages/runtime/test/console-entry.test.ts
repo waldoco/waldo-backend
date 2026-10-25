@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import worker from '../src/index';
-import { consoleAccess } from '../src/channels/console';
+import { consoleAccess, NOTICES } from '../src/channels/console';
 
 const origin = 'https://waldo.invalid';
 describe('console entry across actual owner sessions', () => {
-  it('serves the root shell after ticket redemption and preserves legacy JSON, notices and controls', async () => {
+  it('serves the root shell after ticket redemption, opens classic pages in the new console and keeps JSON and controls', async () => {
     const name = 'console-entry-owner';
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
     const ticket = await runInDurableObject(stub, (instance, state) => {
@@ -17,7 +17,7 @@ describe('console entry across actual owner sessions', () => {
     const bindings = { ...env, WALDO_OWNER_TELEGRAM_ID: name };
     const preview = await worker.fetch(new Request(ticket), bindings);
     expect(await preview.text()).toContain('Open console');
-    const redeem = () => worker.fetch(new Request(origin + '/console', { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: new URL(ticket).searchParams.get('t')! }) }), bindings);
+    const redeem = () => worker.fetch(new Request(origin + '/console', { method: 'POST', redirect: 'manual', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: new URL(ticket).searchParams.get('t')! }) }), bindings);
     const receipt = await redeem();
     expect(receipt.status).toBe(303);
     expect(receipt.headers.get('location')).toBe('/console');
@@ -36,17 +36,33 @@ describe('console entry across actual owner sessions', () => {
     };
     const current = await json('/console');
     expect((await json('/console/legacy')).csrf).toBe(current.csrf);
-    const notice = await worker.fetch(new Request(origin + '/console?m=invalid', { headers: { cookie } }), bindings);
-    expect(await notice.text()).toContain('That change could not be applied');
-    const legacy = await worker.fetch(new Request(origin + '/console/legacy', { headers: { cookie } }), bindings);
-    expect(legacy.status).toBe(200);
-    expect(await legacy.text()).toContain('Overview');
-    const waiting = await worker.fetch(new Request(origin + '/console/waiting', { headers: { cookie } }), bindings);
-    expect(waiting.status).toBe(200);
+    const opens = async (path: string) => {
+      const response = await worker.fetch(new Request(origin + path, { redirect: 'manual', headers: { cookie } }), bindings);
+      expect({ path, status: response.status }).toEqual({ path, status: 303 });
+      return response.headers.get('location');
+    };
+    expect(await opens('/console/waiting')).toBe('/console#/waiting');
+    expect(await opens('/console?m=invalid')).toBe('/console');
+    expect(await opens('/console?m=' + encodeURIComponent('Your account is locked. Call +1 555 0100.'))).toBe('/console');
+    expect(await opens('/console/legacy')).toBe('/console');
+    expect(await opens('/console/activity')).toBe('/console#/patrol');
+    expect(await opens('/console/invites')).toBe('/console#/invites');
+    expect((await json('/console/waiting')).csrf).toBe(current.csrf);
+    expect((await json('/console?m=' + encodeURIComponent('Your account is locked.')) as { notice?: unknown }).notice ?? null).toBeNull();
+    expect((await json('/console?m=invalid') as { notice?: unknown }).notice).toBe(NOTICES.invalid);
+    expect((await json('/console?m=__proto__') as { notice?: unknown }).notice ?? null).toBeNull();
+    const signedOut = await worker.fetch(new Request(origin + '/console/waiting', { redirect: 'manual' }), bindings);
+    expect({ status: signedOut.status, location: signedOut.headers.get('location') }).toEqual({ status: 401, location: null });
+    expect(await opens('/console/imessage')).toBe('/console#/connections/imessage');
+    expect(await opens('/console/devices')).toBe('/console#/connections/devices');
+    const missingFile = await worker.fetch(new Request(origin + '/console/file?id=987654', { redirect: 'manual', headers: { cookie } }), bindings);
+    expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), cache: missingFile.headers.get('cache-control'), body: await missingFile.text() })
+      .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', cache: 'no-store', body: NOTICES['file.unavailable'] });
     expect((await worker.fetch(new Request(origin + '/console/unknown', { headers: { cookie } }), bindings)).status).toBe(404);
-    const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
-    expect(denied.status).toBe(303);
-    expect(denied.headers.get('location')).toBe('/console?m=invalid');
+    const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
+    expect({ status: denied.status, location: denied.headers.get('location'), body: await denied.text() }).toEqual({ status: 400, location: null, body: NOTICES.invalid });
+    const adminFormFailure = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'invite.revoke', csrf: current.csrf, id: 'no-such-invite' }) }), bindings);
+    expect({ status: adminFormFailure.status, location: adminFormFailure.headers.get('location'), body: await adminFormFailure.text() }).toEqual({ status: 400, location: null, body: NOTICES.invalid });
     expect((await json('/console')).timezone).toBe(current.timezone);
     const other = { ...bindings, WALDO_OWNER_TELEGRAM_ID: 'console-entry-other' };
     const crossed = await worker.fetch(new Request(origin + '/console', { headers: { cookie } }), other);

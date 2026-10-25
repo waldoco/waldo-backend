@@ -9,7 +9,7 @@ const owner = 'owner-a';
 const turn = { owner, turnId:'turn-1', trigger:'user_message' as const, ownerText:'/skills install document-email-preparation@1', assertCurrent:async()=>{} };
 
 it('keeps metadata available but instructions disabled until explicit owner install; later turn loads and disable revokes', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-lifecycle'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-lifecycle'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -27,7 +27,7 @@ it('keeps metadata available but instructions disabled until explicit owner inst
  });
 });
 it('rejects foreign owner, background installs, unknown versions and storage body tampering',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-boundaries'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-boundaries'));
  await runInDurableObject(stub,async(_,state)=>{
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -52,7 +52,7 @@ it('uses an explicit conservative UTF8 byte upper bound, not fixture token count
 it('counts the whole rendered fragment; unavailable and oversize budgets never inject',async()=>{
  const {renderSkill}=await import('@waldo/contracts');
  expect(new TextEncoder().encode(renderSkill(CURATED_PREPARATION_SKILL)).length).toBeLessThanOrEqual(600);
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-budgets'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-budgets'));
  await runInDurableObject(stub,async(_,state)=>{
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;
@@ -66,7 +66,7 @@ it('counts the whole rendered fragment; unavailable and oversize budgets never i
  });
 });
 it('disable or source mutation during an awaited budget prevents publication',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-revoke-await'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-revoke-await'));
  await runInDurableObject(stub,async(_,state)=>{
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;
@@ -76,7 +76,7 @@ it('disable or source mutation during an awaited budget prevents publication',as
  });
 });
 it('untrusted owner-workspace skill files and forged source identity are never catalog instructions',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-source'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-source'));
  await runInDurableObject(stub,async(_,state)=>{
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;const book=new CuratedOwnerSkills(sql,owner);
@@ -90,7 +90,7 @@ it('untrusted owner-workspace skill files and forged source identity are never c
 it('the reviewed catalog is immutable and contradictory active storage cannot bypass shared loader invariants',async()=>{
  expect(()=>CURATED_PREPARATION_SKILL.trigger_types.push('intervention')).toThrow();
  expect(()=>Object.defineProperty(CURATED_PREPARATION_SKILL,'body_markdown',{value:'forged'})).toThrow();
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-contradiction'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-contradiction'));
  await runInDurableObject(stub,async(_,state)=>{
   const book=new CuratedOwnerSkills(state.storage.sql,owner);expect(book.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
   state.storage.sql.exec("UPDATE skills SET archived_at='2026-10-02T00:00:00Z' WHERE name=?",CURATED_PREPARATION_SKILL.name);
@@ -99,7 +99,7 @@ it('the reviewed catalog is immutable and contradictory active storage cannot by
  });
 });
 it('oversize and NUL-tail storage is rejected without materializing raw instruction bytes or reactivating the row',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-bounded-storage'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-bounded-storage'));
  await runInDurableObject(stub,async(_,state)=>{
   const sql=state.storage.sql;const writer=new CuratedOwnerSkills(sql,owner);
   expect(writer.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);

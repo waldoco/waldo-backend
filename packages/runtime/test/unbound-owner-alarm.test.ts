@@ -3,6 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { ensureSchema } from '../src/tracer/schema';
 import { OwnerDO } from '../src/channels/owner-do';
+import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
+import { presenceAuthority } from './helpers/directory-presence';
 
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -48,7 +50,11 @@ it.each(['missing-name', 'foreign-name', 'missing-subject', 'unlinked', 'invalid
       await state.storage.put('telegram_link_due_v1', now - 1); await owner.alarm();
       expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(now + 30_000);
       expect(await state.storage.get('telegram_link_due_v1')).toBe(now - 1);
+      // With nothing due, the pass leaves the alarm state to the platform; a re-arm outside the handler clears it.
+      const armed = await state.storage.getAlarm();
       await state.storage.put('telegram_link_due_v1', null); await owner.alarm();
+      expect(await state.storage.getAlarm()).toBe(armed);
+      await rearmSharedAlarm(state.storage, null, Date.now());
       expect(await state.storage.getAlarm()).toBeNull();
     } finally { Date.now = originalNow; vi.unstubAllGlobals(); await state.storage.deleteAlarm(); }
   });
@@ -61,7 +67,8 @@ it('restoring canonical binding resumes retained scheduled dispatch and normal a
     const now = Date.now();
     state.storage.sql.exec("INSERT INTO schedule (id,kind,occurrence_at,due_at,payload_json,status,attempts,created_at,updated_at) VALUES ('retained-reminder','reminder',?,?, '{}','armed',0,?,?)", now, now, now, now);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' });
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/rpc/common_owner_authority')
+      ? presenceAuthority('6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e', init?.body) : Response.json([])));
     try {
       await owner.alarm();
       expect(state.storage.sql.exec("SELECT status, attempts FROM schedule WHERE id='retained-reminder'").one()).toEqual({ status: 'armed', attempts: 0 });

@@ -1,11 +1,11 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { fitPromptToBudget } from '../src/prompt/fit-prompt';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
-const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
 const wire = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
 const lines = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}-${index} ${'x'.repeat(200)}`).join('\n');
 
@@ -51,9 +51,12 @@ describe('proactive prompts through the owner responder', () => {
       expect(reply).toBe('ok');
       const sent = requests.at(-1)!.request.messages.at(-1)!.content;
       expect(wire(sent)).toBeLessThanOrEqual(limit);
-      expect(sent.startsWith('[Scheduled job')).toBe(true);
-      expect(sent.endsWith('Write one short message, or SKIP.')).toBe(true);
-      expect(sent).toMatch(/lines omitted from the middle/);
+      // The host's turn context follows the fitted job prompt on the same message, inside the same budget.
+      const job = sent.split("\n\nTurn context from Waldo's host")[0]!;
+      expect(job.length).toBeLessThan(sent.length);
+      expect(job.startsWith('[Scheduled job')).toBe(true);
+      expect(job.endsWith('Write one short message, or SKIP.')).toBe(true);
+      expect(job).toMatch(/lines omitted from the middle/);
     });
   });
 
@@ -63,7 +66,7 @@ describe('proactive prompts through the owner responder', () => {
       const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;
       await createOwnerResponder(...args).prompt('proactive-fit-small', 'owner:fixture', 'Say hi.', async (_hop, work) => work());
-      expect(requests.at(-1)!.request.messages.at(-1)!.content).toBe('Say hi.');
+      expect(requests.at(-1)!.request.messages.at(-1)!.content.startsWith("Say hi.\n\nTurn context from Waldo's host")).toBe(true);
     });
   });
 });

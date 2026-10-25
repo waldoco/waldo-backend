@@ -20,12 +20,12 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   proof.inputs.push(structuredClone(input));
   const format = input.text?.format?.name;
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
-  const outputs=previous.map((row:any)=>JSON.parse(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
+  const outputs=previous.map((row:any)=>toolOutput(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
   const at=format?-1:proof.phaseCalls++;
   const call=format?undefined:proof.phase==='main'?[
-    {name:'browse_page',args:{provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
-    {name:'browse_act',args:{provider:'cloudflare_playwright',url:'https://example.com/a',task:'Owner login',max_actions:1,command:{operation:'owner_login',reason:'Sign in to the intended account and complete MFA.'}}},
-  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{provider:'cloudflare_playwright',session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:undefined;
+    {name:'browse_page',args:{retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
+    {name:'browse_act',args:{url:'https://example.com/a',task:'Owner login',max_actions:1,command:{operation:'owner_login',reason:'Sign in to the intended account and complete MFA.'}}},
+  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:undefined;
   const read=Boolean(call);
   return { id: 'synthetic-public-browser-reply', output: read ? [{ type: 'function_call', call_id: `public-call-${at}`, name:call!.name, arguments:JSON.stringify(call!.args) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : proof.phase==='main'?'Sign in through https://local.invalid/console/browser-handoff then reply after Done.':'Fresh evidence identifies the fictional intended owner.', usage: { input_tokens: 1, output_tokens: 1 } };
@@ -36,6 +36,7 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 } }));
 
 import {consoleAccess,CONSOLE_COOKIE} from '../src/channels/console';
+import { toolOutput } from './fixtures/tool-output';
 it.each(['resume','restart'])('protocol double: real owner inbox and console handoff %s keep exact allocation custody',async(mode)=>{
  commonBrowserFixture.reset();proof.inputs=[];proof.delivered=[];proof.outputs=[];proof.phase='main';proof.phaseCalls=0;proof.sessionHandle='';
  const doName=proof.doName=`native-handoff-${crypto.randomUUID()}`,subject=Number(proof.subject);
@@ -66,6 +67,9 @@ it.each(['resume','restart'])('protocol double: real owner inbox and console han
    const opened=await instance.fetch(new Request(url,{method:'POST',headers:{cookie,origin:'https://local.invalid','content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:session.csrf,action:'open'})}));expect(opened.status).toBe(200);expect(await opened.text()).toContain('FICTIONAL_BEARER');
    nativeHandoffDouble.emit(true);commonBrowserFixture.text='Signed in as fictional intended owner';proof.phase='resume';proof.phaseCalls=0;
    await send(`I used Done; resume browser ${proof.sessionHandle} and verify the intended account.`);
+   // browse_act answers one generic error for every plain throw, and several throws leave the same retained record, so the record only narrows down which check refused the resume.
+   const resumed=proof.outputs.at(-1),retained=[...state.storage.kv.list<any>({prefix:'common-browser:'})].map(([,row])=>({handoff:row.handoff?.state,allocation:row.allocation,cleanup:row.cleanup,action:row.action?.state,expired:row.session?.expiresAt<=Date.now()}));
+   expect(resumed?.error,JSON.stringify({code:resumed?.code,reason:resumed?.reason,error:resumed?.error,retained})).toBeUndefined();
    expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{owner_login:'completed',intended_account_verification_required:true,text:'Signed in as fictional intended owner'}});
    expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(0);
    expect(JSON.stringify(proof.inputs)+JSON.stringify([...state.storage.kv.list({prefix:'common-browser:'})])).not.toContain('FICTIONAL_BEARER');expect(JSON.stringify(proof.inputs)).not.toContain('fixture-retained-provider');expect(denied).not.toHaveBeenCalled();

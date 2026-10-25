@@ -81,7 +81,7 @@ export const loadIMessageMedia = async (event: Extract<IMessageEvent, { kind: 'm
       attachment.filename !== file.filename || attachment.data_base64 !== toBase64(bytes)) throw new Error('iMessage media mismatch');
     attachments.push(attachment); statuses.push({ scope, state: 'loaded' });
   }
-  ownerTurnAttachments({ surface: 'imessage', traceId: event.eventId, conversationRef: event.chatGuid, text: event.text, attachments });
+  ownerTurnAttachments({ attachments });
   current();
   return { attachments, statuses };
 };

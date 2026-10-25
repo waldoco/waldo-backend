@@ -14,6 +14,7 @@ import { persistTransportWake } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
 
 const REMINDER_TEXT = 'Time to call Sam.';
 const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
@@ -48,6 +49,7 @@ beforeEach(() => {
       return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     }
     if (fn === 'assert_channel_presence') { wire.asked.push(fn); return Response.json(true); }
+    if (fn === 'common_owner_authority') { wire.asked.push(fn); return presenceAuthority(OWNER_ID, init?.body); }
     if (fn === 'app_session_authority') {
       wire.asked.push(fn);
       const asked = JSON.parse(String(init?.body)) as { p_do_name: string; p_session_hash: string };
@@ -89,7 +91,9 @@ const driveAlarm = async (name: string, identity: Identity) => {
       .enqueue({ id: 'turn:telegram-1', trace: 'tg-1', payload: { chat_id: 7, text: identity.telegramReply }, ownerSubject: '7', doName: name, bot: '7' });
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
-      for (let pass = 0; pass < (identity.alarms ?? 1); pass++) await owner.alarm();
+      // Each direct call stands in for the platform's invocation, which consumes the alarm that fired: a pass leaves the
+      // alarm state it found, so the wake read afterwards is only the one the pass asked for.
+      for (let pass = 0; pass < (identity.alarms ?? 1); pass++) { await state.storage.deleteAlarm(); await owner.alarm(); }
       const askedByAlarm = [...wire.asked];
       const wake = await state.storage.getAlarm();
       const principal = `prn_${ownerHex}`, tenant = `ten_${ownerHex}`;
@@ -179,6 +183,7 @@ describe('scheduled reminders for a Telegram-linked owner', () => {
   it.each([['none'], ['foreign']] as const)('keeps the reminder on Telegram while the owner has no app binding of their own (%s)', async app => {
     const outcome = await driveAlarm(`telegram-linked-app-${app}`, { telegram: true, app });
     expect(outcome.askedByAlarm).not.toContain('owner_runtime_authority');
+    expect(outcome.askedByAlarm).toContain('common_owner_authority');
     expect(outcome.transcript).toEqual([]);
     expect(outcome.queuedOnTelegram).toEqual([7]);
   });

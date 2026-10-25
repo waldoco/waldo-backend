@@ -1,0 +1,488 @@
+// Scheduled work for an owner whose only surface is WhatsApp, through the real alarm, scheduler and final outbox. Outside
+// the 24-hour window the reminder waits in the outbox, the owner gets one approved template, and nothing is retried or
+// reported as failed; the owner's reply delivers it before that reply's own turn, or drops it if it was cancelled meanwhile.
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
+import { traceBook } from '../src/channels/harness';
+import { reminderBook } from '../src/channels/reminders';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
+import { loopBook } from '../src/channels/loops';
+import { claimStore } from '../src/memory/claims';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
+import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
+import { consoleAccess } from '../src/channels/console';
+import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
+import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
+
+const REMINDER_TEXT = 'Time to call Sam.';
+// Counts the reminder turns only; the day plan the runtime boots also calls the model.
+const model = vi.hoisted(() => ({ reminders: 0, reminderText: null as string | null }));
+vi.mock('../src/channels/telegram-turn', async load => {
+  const original = await load<typeof import('../src/channels/telegram-turn')>();
+  const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
+    const sent = JSON.stringify(request);
+    if (sent.includes('Reminder due now')) model.reminders += 1;
+    return { ok: true as const, data: { model: request.request.model, text: sent.includes('Reminder due now') ? model.reminderText ?? REMINDER_TEXT : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+  } };
+  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+});
+const { OwnerDO } = await import('../src/channels/owner-do');
+
+const OWNER_ID = '3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
+const SUBJECT = '15550001111';
+const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+
+// `stall` holds one text send open until the test releases it, so another request can overlap it; `reached` says the send
+// has started and is waiting.
+const wire = { events: [] as string[], other: [] as string[], wamid: 0, unlinked: false, stall: null as null | { text: string; until: Promise<void>; reached: () => void } };
+beforeEach(() => {
+  model.reminders = 0; model.reminderText = null; wire.events = []; wire.other = []; wire.wamid = 0; wire.unlinked = false; wire.stall = null;
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+    // The directory's WhatsApp presence: active until the owner unlinks it from the console.
+    if (fn === 'assert_channel_presence') return Response.json(!wire.unlinked);
+    if (fn === 'presence_hint') return Response.json(!wire.unlinked && String(init?.body).includes('"p_provider":"whatsapp"') ? '1111' : null);
+    if (fn === 'unlink_presence') { wire.unlinked = true; return Response.json(true); }
+    if (fn === 'health_context_read') return Response.json(null);
+    if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
+      const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
+      wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
+      wire.wamid += 1;
+      if (wire.stall && body.text?.body === wire.stall.text) { wire.stall.reached(); await wire.stall.until; }
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+    }
+    wire.other.push(url);
+    return new Response('unexpected', { status: 500 });
+  });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
+
+type Outbox = { id: string; status: string; reason?: string; providerMessageIds?: (string | null)[] }[];
+
+const drive = async (name: string, script: (steps: Readonly<{
+  alarms(passes: number): Promise<void>;
+  reply(from?: string): Promise<void>;
+  windowKeys(): string[];
+  cancel(): Promise<void>;
+  // Runs the step with the clock moved forward, as when the owner next writes much later.
+  later<T>(ms: number, step: () => Promise<T>): Promise<T>;
+  reminderRuns(): { status: string; summary: string | null }[];
+  refuse(id: string, at?: number): Promise<number>;
+  // Meta reports that a message reached the phone; answers the owner's status code.
+  arrive(id: string): Promise<number>;
+  unlink(): Promise<void>;
+  sendNowOnly(text: string): Promise<unknown>;
+  hold(texts: string[]): void;
+  replyStarted(sentAt?: number): Promise<void>;
+  stall(text: string): Readonly<{ reached: Promise<void>; release: () => void }>;
+  settled(): Promise<void>;
+  held(): string[];
+  ledger(): Readonly<{ runs: { outcome: string; delivery: string | null }[]; outbox: Outbox; notes: number; notices: number; scheduled: { status: string; attempts: number }[] }>;
+  // Meta reports that every message it accepted reached the owner's phone.
+  arrived(): Promise<void>;
+}>) => Promise<void>) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    traceBook(state.storage.sql);
+    const clockBack = (ms: number) => () => new Date(Date.now() - ms);
+    const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
+    const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
+    // The owner's own schedule (day cards, heartbeat, nightly, brief sweep) is off: it is planned on the real date, so a step
+    // run with the clock moved forward would find those entries due and add records these tests do not make.
+    const preferences = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }));
+    for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) preferences.set(kind, false);
+    state.storage.kv.put('do_name', name);
+    state.storage.kv.put('whatsapp_subject', SUBJECT);
+    // The owner last wrote 30 hours ago, so WhatsApp's 24-hour window is closed.
+    state.storage.kv.put('wa_last_inbound_ms', Date.now() - 30 * 60 * 60_000);
+    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
+    let seq = 0;
+    try {
+      await script({
+        // A queued record falls due 250 ms after it is written, so each pass waits that out before the next. The wake a pass
+        // armed is cleared first, so the platform does not run this object's alarm on its own instance meanwhile.
+        alarms: async passes => { for (let pass = 0; pass < passes; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 300)); } },
+        reply: async (from = SUBJECT) => {
+          seq += 1;
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': from },
+            body: JSON.stringify({ messages: [{ from, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
+          }));
+          expect(response.status).toBe(200);
+          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+        },
+        cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
+        later: async (ms, step) => {
+          const now = Date.now;
+          Date.now = () => now() + ms;
+          try { return await step(); } finally { Date.now = now; }
+        },
+        reminderRuns: () => state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder' ORDER BY started_at").toArray(),
+        hold: texts => texts.forEach((text, index) => state.storage.kv.put(`wa_held:${String(index + 1).padStart(12, '0')}`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text } })),
+        // The owner's message is admitted and its turn's work starts in the background, as after the webhook's ack.
+        stall: text => {
+          let release!: () => void, reached!: () => void;
+          const started = new Promise<void>(resolve => { reached = resolve; });
+          wire.stall = { text, until: new Promise<void>(resolve => { release = resolve; }), reached };
+          return { reached: started, release };
+        },
+        // A send time past now is clamped to receipt time, so `sentAt` can make a message newer than one sent this second.
+        replyStarted: async (sentAt = Date.now()) => {
+          seq += 1;
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
+            body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(sentAt / 1000)), type: 'text', text: { body: 'hi' } }] }),
+          }));
+          expect(response.status).toBe(200);
+        },
+        // The wake that work armed is cleared, as after an alarm pass: it would run on the platform's own instance of this object,
+        // which shares this storage, and could move a record while a later step of the test is reading it.
+        settled: async () => {
+          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+          await state.storage.deleteAlarm();
+        },
+        // The owner runtime's own call stack (routing, link redaction, egress gate, window layer, shim).
+        sendNowOnly: async text => {
+          const runtime = (owner as unknown as { setup(channel: string): { call(method: string, body: object): Promise<unknown>; owner: number } }).setup('whatsapp');
+          return runtime.call('sendMessage', { chat_id: runtime.owner, text, [SEND_NOW_ONLY]: true });
+        },
+        // Every key that holds text for, or describes the window of, the chat the DO is bound to.
+        windowKeys: () => [...state.storage.kv.list({ prefix: 'wa_' })].map(([key]) => key)
+          .filter(key => /^wa_(held:|reheld:|knocked_for$|window_refused_for$|last_inbound_ms$)/.test(key)),
+        held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
+        // The owner unlinks WhatsApp from the new console: the real dashboard action and executor.
+        // The console's controls build the Telegram runtime, which needs a bot token; it is lent for this step only, so the
+        // alarm passes still run as a WhatsApp-only owner.
+        unlink: async () => {
+          const settings = (owner as unknown as { env: Record<string, unknown> }).env;
+          settings.TELEGRAM_BOT_TOKEN = '123:synthetic';
+          try {
+            const cookie = { cookie: 'waldo_console=' + await consoleAccess(state.storage).grant() };
+            const read = await owner.fetch(new Request('https://telegram-owner' + CONTROLS_PATH + '?view=connections', { headers: cookie }));
+            const { csrf, revision } = await read.json() as { csrf: string; revision: string };
+            const response = await owner.fetch(new Request('https://telegram-owner' + CONTROL_ACTION_PATH, { method: 'POST', headers: { ...cookie, 'content-type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ csrf, revision, view: 'connections', action: 'whatsapp.unlink', request_id: 'wa-unlink-old-chat' }) }));
+            expect(await response.json()).toMatchObject({ receipt: { state: 'recorded' } });
+          } finally { settings.TELEGRAM_BOT_TOKEN = undefined; }
+        },
+        refuse: async (id, at = Date.now()) => {
+          const { status } = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
+          }));
+          await state.storage.deleteAlarm();
+          return status;
+        },
+        arrive: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: [{ id, at: Date.now() }] }),
+        }))).status,
+        ledger: () => ({
+          runs: state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', reminder.id).toArray(),
+          outbox: (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).map(({ id, status, reason, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
+          notes: state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reminder_notes WHERE id = ?', reminder.id).one().n,
+          notices: (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('schedule-failed:')).length,
+          scheduled: state.storage.sql.exec<{ status: string; attempts: number }>('SELECT status, attempts FROM schedule WHERE id = ?', reminder.id).toArray(),
+        }),
+        arrived: async () => {
+          const ids = (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(record => record.status === 'accepted')
+            .flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        },
+      });
+    } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
+  });
+};
+
+// Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
+describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
+  // Nothing was attempted, so the run stopped rather than failed: the same outcome an order's lapsed report and an unlinked
+  // reminder get, and the schedule's run is not counted against the job.
+  it('a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent', async () => {
+    await drive('whatsapp-only-reminder-lapsed', async ({ alarms, later, ledger, reminderRuns }) => {
+      await alarms(3);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+      await later(31 * 24 * 60 * 60_000, () => alarms(2));
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
+      expect(reminderRuns()).toEqual([{ status: 'stopped', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+    });
+  });
+
+  // Meta refused the head after taking both parts, so the tail is on the owner's phone and the window never reopens.
+  it('a split reminder whose tail Meta took ends quarantined when the window stays closed for 30 days, and its run does not say it was not sent', async () => {
+    model.reminderText = ['a'.repeat(3000), 'b'.repeat(3000)].join('\n\n');
+    await drive('whatsapp-only-split-lapsed', async ({ alarms, reply, refuse, settled, later, ledger, reminderRuns }) => {
+      await reply();
+      await alarms(3);
+      expect(await refuse('wamid.out.1')).toBe(200);
+      await settled();
+      expect(ledger().outbox).toMatchObject([{ status: 'pending', providerMessageIds: [null, 'wamid.out.2'] }]);
+      await later(31 * 24 * 60 * 60_000, () => alarms(2));
+      // The record's text is scrubbed a day after it ends unconfirmed, so its reason by now is that scrub's.
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined' }]);
+      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder partly sent; the rest was not sent' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+    });
+  });
+
+  it('holds a due reminder with one template knock, never retries or reports it, and delivers it on the reply before that turn', async () => {
+    await drive('whatsapp-only-reminder', async ({ alarms, reply, arrived, ledger }) => {
+      await alarms(3);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(model.reminders).toBe(1);
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'running', delivery: 'pending' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'pending' }],
+        notes: 1, notices: 0,
+      });
+      // Later passes neither knock again, nor send, nor run the reminder again.
+      await alarms(3);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(model.reminders).toBe(1);
+      expect(ledger().runs).toHaveLength(1);
+
+      await reply();
+      expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REMINDER_TEXT}`, 'turn']);
+      // Meta accepted it; the reminder is recorded sent once Meta reports it reached the phone.
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'running', delivery: 'pending' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'accepted', providerMessageIds: ['wamid.out.2'] }],
+        notes: 1,
+      });
+      await arrived();
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'ok', delivery: 'sent' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.2'] }],
+        notes: 0, notices: 0,
+      });
+      expect(wire.other).toEqual([]);
+    });
+  });
+
+  it('never knocks for a reminder the owner cancelled before its first send', async () => {
+    await drive('whatsapp-only-cancelled-early', async ({ alarms, cancel, ledger }) => {
+      await alarms(1);
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+      await cancel();
+      await alarms(3);
+      expect(wire.events).toEqual([]);
+      expect(ledger().outbox).toMatchObject([{ status: 'blocked' }]);
+    });
+  });
+
+  it('drops a held reminder the owner cancelled before replying', async () => {
+    await drive('whatsapp-only-cancelled', async ({ alarms, reply, cancel, ledger }) => {
+      await alarms(3);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      await cancel();
+      await reply();
+      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(ledger()).toMatchObject({ outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'blocked' }], notices: 0 });
+      expect(ledger().runs.map(run => run.outcome)).not.toContain('quarantined');
+    });
+  });
+
+  it('sends a due reminder at once while the window is open, with an honest WhatsApp receipt', async () => {
+    await drive('whatsapp-only-open-window', async ({ alarms, reply, arrived, ledger }) => {
+      await reply();
+      wire.events = [];
+      await alarms(3);
+      expect(wire.events).toEqual([`text:${REMINDER_TEXT}`]);
+      expect(ledger()).toMatchObject({ runs: [{ outcome: 'running', delivery: 'pending' }], outbox: [{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }] });
+      await arrived();
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'ok', delivery: 'sent' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.1'] }],
+        notes: 0,
+      });
+    });
+  });
+
+  it('a reminder Meta refuses after accepting it closes the window, knocks once, and goes out again on the reply', async () => {
+    await drive('whatsapp-only-late-refusal', async ({ alarms, reply, refuse, settled, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`]);
+      expect(await refuse('wamid.out.1')).toBe(200);
+      expect(await refuse('wamid.out.1')).toBe(200);
+      // The knock runs in the owner's serial queue, after the acknowledgement.
+      await settled();
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`, 'template:waldo_update_ready']);
+      await reply();
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`, 'template:waldo_update_ready', `text:${REMINDER_TEXT}`, 'turn']);
+      expect(ledger().notices).toBe(0);
+    });
+  });
+
+  it('refuses a status callback for a subject this owner is not bound to', async () => {
+    await drive('whatsapp-only-foreign-status', async () => {
+      const response = await env.OWNER_DO!.get(env.OWNER_DO!.idFromName('whatsapp-only-foreign-status')).fetch(new Request('https://telegram-owner/whatsapp-status', {
+        method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15559999999' }, body: JSON.stringify({ refused: [{ id: 'wamid.x', at: null }] }),
+      }));
+      expect(response.status).toBe(403);
+      expect(wire.events).toEqual([]);
+    });
+  });
+
+  it('a one-time code outside the window is refused through the owner runtime, never held, with one knock', async () => {
+    await drive('whatsapp-only-now-only', async ({ sendNowOnly, held }) => {
+      expect(await sendNowOnly('From bank:\nCode: 482913')).toBeUndefined();
+      expect(held()).toEqual([]);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+    });
+  });
+
+  it('a status callback during the reply\'s held delivery sends each held message exactly once', async () => {
+    await drive('whatsapp-only-held-race', async ({ hold, stall, replyStarted, refuse, settled }) => {
+      hold(['one', 'two']);
+      const { reached, release } = stall('one');
+      await replyStarted();
+      // The reply's pass is waiting on the send of 'one' when Meta's status callback arrives; its refusal predates the reply.
+      await reached;
+      expect(await refuse('wamid.unknown', 0)).toBe(200);
+      release();
+      await settled();
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(['text:one', 'text:two']);
+      expect(wire.events.at(-1)).toBe('turn');
+    });
+  });
+
+  it('a refusal that closes the window while the queue is busy does not knock once the owner has written again; the next closure knocks', async () => {
+    await drive('whatsapp-only-late-knock', async ({ hold, stall, replyStarted, refuse, settled }) => {
+      hold(['one']);
+      const { reached, release } = stall('one');
+      await replyStarted();
+      await reached;
+      // Meta refuses a send: the window closes and a knock is due, but the queue is busy with the reply's delivery. The refusal
+      // is a second past the admitted message, which is dated to its whole second, so it closes the window whatever the clock reads.
+      expect(await refuse('wamid.refused.1', Date.now() + 1_000)).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      // The owner writes again before the knock runs, which reopens the window.
+      await replyStarted(Date.now() + 1_000);
+      release();
+      await settled();
+      expect(wire.events.filter(event => event.startsWith('template:'))).toEqual([]);
+      // The next closure of this window still knocks, once.
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(await refuse('wamid.refused.2', Date.now())).toBe(200);
+      await settled();
+      expect(wire.events.filter(event => event.startsWith('template:'))).toEqual(['template:waldo_update_ready']);
+    });
+  });
+
+  it('a late refusal of each part of a split reminder keeps both parts in the outbox, and the reply delivers them in order', async () => {
+    const parts = ['a'.repeat(3000), 'b'.repeat(3000)];
+    model.reminderText = parts.join('\n\n');
+    await drive('whatsapp-only-split-refusal', async ({ alarms, reply, refuse, settled, held, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(parts.map(part => `text:${part}`));
+      expect(await refuse('wamid.out.1')).toBe(200);
+      expect(await refuse('wamid.out.2')).toBe(200);
+      await settled();
+      expect(held()).toEqual([]);
+      expect(ledger().outbox).toMatchObject([{ status: 'pending', reason: 'window_refused', providerMessageIds: [null, null] }]);
+      wire.events = [];
+      await reply();
+      expect(wire.events).toEqual([...parts.map(part => `text:${part}`), 'turn']);
+    });
+  });
+
+  it('after the owner unlinks WhatsApp, nothing reaches the old chat: no held text, no queued reminder, no knock', async () => {
+    await drive('whatsapp-unlinked-old-chat', async ({ alarms, unlink, refuse, hold, held, ledger }) => {
+      await alarms(3);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      hold(['Held before the unlink.']);
+      await unlink();
+      wire.events = [];
+      // The alarm no longer runs as the WhatsApp owner, and the reminder waits addressed to the old number.
+      await alarms(3);
+      // A status callback for the old number is refused, so it neither knocks nor delivers held text.
+      expect(await refuse('wamid.out.1')).toBe(403);
+      expect(wire.events).toEqual([]);
+      // What was held for the old chat was discarded with the unlink, and the reminder waiting for it ended unsent with it.
+      expect(held()).toEqual([]);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
+      // Never sent, so it settles as work that stopped before any delivery, not as an unconfirmed one.
+      expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+    });
+  });
+
+  it('settles the records an unlink retired on the alarm when the unlink\'s own settle did not run, so no job stays running', async () => {
+    const settle = vi.spyOn(OwnerDO.prototype as unknown as { settleRetiredWhatsApp(): Promise<void> }, 'settleRetiredWhatsApp').mockImplementationOnce(async () => undefined);
+    try {
+      await drive('whatsapp-unlink-settle-lost', async ({ alarms, unlink, ledger, reminderRuns }) => {
+        await alarms(3);
+        expect(ledger().outbox).toMatchObject([{ status: 'pending' }]);
+        await unlink();
+        expect(settle).toHaveBeenCalledTimes(1);
+        // The unlink retired the record, but nothing settled it: the run is still open.
+        expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
+        expect(reminderRuns()).toEqual([{ status: 'running', summary: null }]);
+        // The owner has no surface left, and the alarm still settles what ended before it returns.
+        await alarms(2);
+        expect(reminderRuns()).toEqual([{ status: 'stopped', summary: 'reminder not sent; its WhatsApp number was unlinked' }]);
+        expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
+      });
+    } finally { settle.mockRestore(); }
+  });
+
+  it('a reminder Meta took before the unlink ends unconfirmed with it; a later report for the old number changes nothing', async () => {
+    await drive('whatsapp-unlink-accepted', async ({ alarms, reply, unlink, arrive, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`]);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      await unlink();
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+      // Meta's report of arrival comes in for the old number: it no longer routes here, and the record is already terminal.
+      expect(await arrive('wamid.out.1')).toBe(403);
+      await alarms(2);
+      expect(ledger().outbox).toMatchObject([{ status: 'quarantined', reason: 'surface_unlinked' }]);
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual([`text:${REMINDER_TEXT}`]);
+    });
+  });
+
+  it('a reminder Meta took before the owner\'s number changed ends unconfirmed with the change, and its run settles then', async () => {
+    await drive('whatsapp-rebind-accepted', async ({ alarms, reply, settled, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      // A different number the directory has as this owner's writes: admission rebinds to it, retiring the old chat's records.
+      await reply('15550002222');
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      // Settled after the ack, in the serial work the rebind queued, before any alarm pass.
+      await settled();
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+    });
+  });
+
+  it('an unlink discards what was held for the old number, so a number linked next never receives it', async () => {
+    await drive('whatsapp-unlink-discards-held', async ({ alarms, unlink, hold, held, reply, windowKeys }) => {
+      await alarms(3);
+      hold(['Held for the old number.']);
+      expect(windowKeys()).toEqual(expect.arrayContaining(['wa_held:000000000001', 'wa_knocked_for', 'wa_last_inbound_ms']));
+      await unlink();
+      expect(held()).toEqual([]);
+      expect(windowKeys()).toEqual([]);
+      // The owner links a different number, which writes first; its turn runs and nothing held for the old number goes out.
+      wire.unlinked = false;
+      wire.events = [];
+      await reply('15550002222');
+      expect(wire.events).toEqual(['turn']);
+    });
+  });
+});

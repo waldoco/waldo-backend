@@ -20,7 +20,7 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 - Logs, audit records, R2 summaries, browser jobs: no health values.
 - Traces: during alpha and beta, by owner ruling (10 October 2026), the staging Langfuse project captures model text for opted-in testers, health included. Production never captures text (enforced in code); revisit before production.
 - Secrets, canaries, forget and withdrawal guarantees.
-- Long-term memory: no bulk readings; qualitative patterns only, with the existing distinct-day evidence rule. Numeric pattern evidence (owner ruling, 10 October 2026) lives in the Supabase health plane, with memory holding the qualitative pattern and a pointer.
+- Long-term memory: no bulk readings. Synced wearable readings and numeric pattern evidence (owner ruling, 10 October 2026) live in the Supabase health plane and are read live; memory holds patterns and pointers. Owner-stated readings are the exception below.
 - Provider requests set `store: false`.
 
 ## Retention and access (recommendation the owner approved in scope, "90 d raw / 24 mo aggregate")
@@ -43,3 +43,10 @@ Ruling: a chip on a Brief card may show last night's raw sleep duration (#1103 c
 - **When it is gone.** The chip is left out entirely, never shown empty or as zero, in three cases: there is no reading, storage consent is withdrawn, or the health connection is lost (the read fails or reports the owner not linked).
 - **What never holds it on this path.** The card text on any surface, including the Telegram copy and push text. The model's input and output for the card, the card delivery record, Durable Object storage, R2, memory, traces, logs and metrics. On this path the number leaves the health plane only into that one response. Other paths keep their own rules: ruling 2's model context, the bounded read tool and the staging trace exception.
 - **Proof before it ships.** Tests show that the stored card text and the delivery record never hold the duration. They show the label is absent without storage consent or without a reading, and that the Telegram copy carries no number. Before the chip is emitted, ADR-0081's matrix change and its destination fixtures land in waldo-brain.
+
+## Addendum: what the owner tells Waldo (owner ruling of 22 October 2026)
+Ruling on #1379 (comment 6343869643): what the owner tells Waldo about their own health may go into their memory, numbers included.
+- **What is kept.** Readings and goals the owner states, through `remember`, the nightly pass, the memory flush before compaction and the notes-file migration. The owner's health notes setting turns this off for every writer but `remember`. A stated reading is kept as a dated statement ("On 22 Oct said resting HR was 52"), a goal as a standing entry the owner can replace. Only what the owner said: never an inferred condition or diagnosis, a government or insurance id, a medication dose, or someone else's health unless the owner asks. What counts as a stated reading or goal is the model's judgment, through its instruction.
+- **What stays in the health plane.** Synced wearable readings are never copied into memory. They are read live with `get_health`, which wins for anything current.
+- **What stays blocked, keyed on source.** A health number that arrives in externally tainted content (mail, web, MCP output) is not written to memory from that path: `remember` refuses one in a turn that read outside content, and the background writers hold one whose evidence is not the owner's own words, stated. A held reading keeps no fingerprint of its words. Lab values from those sources wait for the health-plane contract review. Logs, production traces, R2, metric labels and third-party sends or drafts still never carry the value.
+- **Deletion.** These are ordinary claims: per-claim forget, topic forget and account deletion cover them in the owner's Durable Object.

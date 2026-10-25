@@ -22,11 +22,15 @@ vi.mock('../src/scheduler/alarm-slot', async load => {
     }
   } };
 });
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('heartbeat fixture forbids model calls'); } }; } }));
+// Only the check-back turn may call the model; its reply carries a link the outbox must redact.
+vi.mock('openai', () => ({ default: class { responses = { create: async (body: { input: unknown }) => {
+  if (!JSON.stringify(body.input).includes('[Check-back due now')) throw new Error('heartbeat fixture allows only the check-back turn');
+  return { status: 'completed', output_text: 'Still open: Synthetic errand https://fixture.invalid/page?code=fixture-code', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+} }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 let sequence = 0;
 it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {
-  const stub = env.TRACER_DO.get(env.TRACER_DO.idFromName(`heartbeat-owner-${sequence++}`));
+  const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`heartbeat-owner-${sequence++}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const owner = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' });
     state.storage.kv.put('do_name', 'synthetic-owner'); state.storage.kv.put('telegram_subject', '7');
@@ -39,8 +43,8 @@ it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual 
       const scheduler = new Scheduler(state.storage.sql, state.storage, { now: () => now, newRunId: () => 'r', newOutboxId: () => 'o', sha256Hex: async () => 's' });
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: {} });
       effects.sends = 0; effects.ack = mode === 'ack' || mode === 'enqueueCrash' || mode === 'enqueueFailure'; effects.crashEnqueue = mode === 'enqueueCrash' || mode === 'enqueueFailure'; effects.ordinaryEnqueue = mode === 'enqueueFailure';
-      if (mode === 'enqueueCrash') await expect(owner.alarm()).rejects.toThrow('crash-injection');
-      else await owner.alarm();
+      await owner.alarm();
+      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBe(mode === 'enqueueCrash' ? 1 : undefined);
       const rows = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
       expect(rows).toHaveLength(1); expect(rows[0]?.heartbeat?.runId).toBeTruthy();
       expect(rows[0]?.payload.text).not.toContain('fixture-code');
@@ -51,6 +55,9 @@ it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual 
       rows[0]!.dueAt = Date.now() - 1; state.storage.kv.put(FINAL_OUTBOX_KEY, rows);
       if (mode === 'unlink') state.storage.kv.put('telegram_unlinked', true);
       await owner.alarm();
+      // The crash failed the schedule lane, which waits for its retry; the outbox lane delivers the reply meanwhile.
+      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBe(mode === 'enqueueCrash' ? 1 : undefined);
+      expect(state.storage.kv.get('owner_alarm_failed_lane_v1')).toBe(mode === 'enqueueCrash' ? 'schedule' : undefined);
       expect(effects.sends).toBe(mode === 'unlink' ? 0 : 1);
       if (mode !== 'unlink') expect(effects.sentText).toBe(rows[0]!.payload.text);
       expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ status: effects.ack ? 'completed' : 'failed' }]);

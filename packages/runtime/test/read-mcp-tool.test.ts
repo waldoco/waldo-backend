@@ -124,7 +124,10 @@ describe('read_mcp_tool through the real dispatcher', () => {
     expect(handler.description).not.toContain('read_file_content');
     expect(handler.description).not.toContain('"mail"');
     expect(handler.description).not.toContain('delete_file');
-    expect(readMcpToolHandler(undefined, auth, true).description).toContain('No read-only MCP servers');
+    // With no configured servers it still covers the owner's own connected servers, and names none.
+    const bare = readMcpToolHandler(undefined, auth, true).description;
+    expect(bare).toContain('search_mcp_tools');
+    expect(bare).not.toContain('Use exactly these server');
   });
 
   it('a missing Drive grant yields a fixed, typed message naming the feature and reason, with no button claim and no link text', async () => {

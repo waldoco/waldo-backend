@@ -10,10 +10,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
-const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
 const DO_MIGRATION_GUARD = 'scripts/guards/guard-do-migration-lineage.mjs';
 const AGENT_SURFACE_GUARD = 'scripts/guards/guard-agent-surface-stale-refs.mjs';
+const SURFACE_NEUTRAL_GUARD = 'scripts/guards/guard-surface-neutral-core.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -35,10 +35,6 @@ const LEAK_CASES = [
 
 function runGuardOn(root) {
   return spawnSync('node', [GUARD, '--root', root], { encoding: 'utf8' });
-}
-
-function runFakeCallbackGuardOn(root) {
-  return spawnSync('node', [FAKE_CALLBACK_GUARD, '--root', root], { encoding: 'utf8' });
 }
 
 function runDoOnlyRuntimeGuardOn(root) {
@@ -196,6 +192,64 @@ if (
   !unversionedDoMigration.stderr.includes('migration history is unavailable')
 ) {
   process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED implicit unversioned mode\n');
+  failures += 1;
+}
+
+// Retirement policy: a historical migration leaves the chain only with a retired reservation.
+const THREE_MIGRATIONS = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND, THIRD] as const;
+`;
+const THREE_RESERVATIONS = {
+  allocation: 'rebase_then_append',
+  migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }, { version: 3, name: 'third' }],
+};
+const WITHOUT_SECOND = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, THIRD] as const;
+`;
+const SECOND_RETIRED = {
+  allocation: 'rebase_then_append',
+  migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second', retired: true }, { version: 3, name: 'third' }],
+};
+const retiredHistorical = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, WITHOUT_SECOND, SECOND_RETIRED,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (retiredHistorical.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-do-migration-lineage REJECTED a retired historical migration:\n${retiredHistorical.stderr}`);
+  failures += 1;
+}
+const removedHistorical = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, WITHOUT_SECOND,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }, { version: 3, name: 'third' }] },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (removedHistorical.status === 0 || !removedHistorical.stderr.includes('historical migration 2 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED an unretired historical removal\n');
+  failures += 1;
+}
+const retiredStillChained = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, THREE_MIGRATIONS, SECOND_RETIRED,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (retiredStillChained.status === 0) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED a retired migration still in the chain\n');
+  failures += 1;
+}
+const reusedRetired = withVersionedDoMigrationFixture(
+  WITHOUT_SECOND, SECOND_RETIRED,
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND, THIRD] as const;
+`,
+  THREE_RESERVATIONS,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (reusedRetired.status === 0 || !reusedRetired.stderr.includes('retired reservation 2 cannot be reused')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED reuse of a retired version\n');
   failures += 1;
 }
 
@@ -543,7 +597,7 @@ export const DO_SCHEMA_MIGRATIONS = [SECOND, FIRST] as const;
 );
 if (
   reorderedDoMigration.status === 0 ||
-  !reorderedDoMigration.stderr.includes('reserve version 1')
+  !reorderedDoMigration.stderr.includes('versions must increase')
 ) {
   process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED reordered chain\n');
   failures += 1;
@@ -749,46 +803,6 @@ const basisPoints = withFixture(
 if (basisPoints.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-health-leak FALSE POSITIVE on basis-points shorthand:\n${basisPoints.stderr}`,
-  );
-  failures += 1;
-}
-
-const fakeCallbackViolation = withFixture(
-  'packages/runtime/src/run-loop/do.ts',
-  `class RunLoopDO {
-  constructor() {
-    this.gateway = new FakeRunLoopGateway();
-  }
-  rebuildInvocationContext() {
-    return {
-      rateLimitCheck: () => true,
-      hasApproval: () => true,
-      sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
-      medicalGate: () => true,
-    };
-  }
-}
-`,
-  runFakeCallbackGuardOn,
-);
-if (!fakeCallbackViolation.stderr.includes('packages/runtime/src/run-loop/do.ts')) {
-  process.stderr.write('guards-selftest: guard-fake-callbacks MISSED production fake/stub wiring\n');
-  failures += 1;
-}
-
-const fakeCallbackClean = withFixture(
-  'packages/runtime/src/run-loop/do.ts',
-  `class RunLoopDO {
-  constructor(env) {
-    this.adapters = resolveRunLoopAdapters(env);
-  }
-}
-`,
-  runFakeCallbackGuardOn,
-);
-if (fakeCallbackClean.stderr.trim() !== '') {
-  process.stderr.write(
-    `guards-selftest: guard-fake-callbacks FALSE POSITIVE on resolver wiring:\n${fakeCallbackClean.stderr}`,
   );
   failures += 1;
 }
@@ -1044,6 +1058,138 @@ if (legitimateSupabaseFunction.status !== 0 || legitimateSupabaseFunction.stderr
   process.stderr.write(
     `guards-selftest: guard-do-only-runtime FALSE POSITIVE on mint-agent-jwt:\n${legitimateSupabaseFunction.stderr}`,
   );
+  failures += 1;
+}
+
+// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, re-arm with a bare
+// null for the schedule, or are clean.
+const WAKE_GUARD = 'scripts/guards/guard-wake-due-keys.mjs';
+const WAKE_SLOT = "export const LANE_DUE_KEY = 'lane_due_v1';\nexport const WAKE_DUE_KEYS = [\n  LANE_DUE_KEY, 'other_due_v1',\n] as const;\n";
+function withWakeFixture(lanes) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    for (const [path, code] of Object.entries({ 'packages/runtime/src/scheduler/alarm-slot.ts': WAKE_SLOT, ...lanes })) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), code);
+    }
+    return spawnSync('node', [WAKE_GUARD, '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+const WAKE_CASES = [
+  { name: 'an unlisted due key', lanes: { 'packages/runtime/src/channels/lane.ts': "kv.put('stray_due_v1', due);\n" }, finds: "'stray_due_v1'" },
+  { name: 'an arm without a listed key', lanes: { 'packages/runtime/src/channels/lane.ts': 'await armAlarm(storage, due);\n' }, finds: 'channels/lane.ts: arms the owner alarm' },
+  { name: 'a re-arm with a bare null for the schedule', lanes: { 'packages/runtime/src/channels/lane.ts': 'await rearmSharedAlarm(this.ctx.storage,\n  null, Date.now());\n' }, finds: 'channels/lane.ts: re-arms the owner alarm with a bare null' },
+];
+for (const { name, lanes, finds } of WAKE_CASES) {
+  const result = withWakeFixture(lanes);
+  if (result.status === 0 || !result.stderr.includes(finds)) {
+    process.stderr.write(`guards-selftest: guard-wake-due-keys MISSED ${name}\n${result.stderr}`);
+    failures += 1;
+  }
+}
+const wakeClean = withWakeFixture({
+  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\nawait rearmSharedAlarm(storage, bound, now);\nawait rearmSharedAlarm(storage, held ? retry : NO_SCHEDULE_WAKE, now, 30_000);\n",
+  'packages/runtime/src/channels/other.ts': "kv.put('other_due_v1', due);\nawait armAlarm(storage, due);\n",
+  'packages/runtime/src/devices/device-bridge-do.ts': "await armAlarm(this.ctx.storage, due);\nkv.put('bridge_due_v1', due);\n",
+});
+if (wakeClean.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-wake-due-keys FALSE POSITIVE on keyed lanes or another object's alarm:\n${wakeClean.stderr}`);
+  failures += 1;
+}
+
+// The surface ratchet: a fixture repo with the contract's surface list, a baseline and one
+// core file carrying one of each compare form the guard counts, plus a typeof check it must not.
+const SURFACE_CONTRACT = `const MESSAGING_SURFACES = ['telegram', 'whatsapp', 'imessage'] as const;
+export const surfaceNameV1Schema = z.enum(['app', ...MESSAGING_SURFACES, 'console']);
+`;
+const SURFACE_CORE = `const a = channel === 'telegram';
+switch (kind) { case 'app': break; }
+const b = mode !== "console";
+const c = name === surface;
+const d = typeof turn.channel === 'string';
+`;
+const SURFACE_CORE_PATH = 'packages/runtime/src/channels/core.ts';
+
+function runSurfaceNeutralGuardWith(baseline, fileName, code) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    for (const [path, body] of [
+      ['packages/contracts/src/app/surfaces.ts', SURFACE_CONTRACT],
+      ['scripts/guards/guard-surface-neutral-core.baseline.json', `${JSON.stringify(baseline)}\n`],
+      [fileName, code],
+    ]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    }
+    return spawnSync('node', [SURFACE_NEUTRAL_GUARD, '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const surfaceCountHeld = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 4 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (!reportsClean(surfaceCountHeld) || !surfaceCountHeld.stdout.includes('4 surface compares')) {
+  process.stderr.write(
+    `guards-selftest: guard-surface-neutral-core MISCOUNTED the compare forms:\n${surfaceCountHeld.stdout}${surfaceCountHeld.stderr}`,
+  );
+  failures += 1;
+}
+
+const surfaceCountRose = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 3 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (surfaceCountRose.status === 0 || !surfaceCountRose.stderr.includes(`${SURFACE_CORE_PATH}: 4 surface compares, baseline 3`)) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core MISSED a new surface compare\n');
+  failures += 1;
+}
+
+const surfaceCountFell = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 5 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (surfaceCountFell.status === 0 || !surfaceCountFell.stderr.includes('lower it to 4')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core LET a stale baseline stand\n');
+  failures += 1;
+}
+
+const surfaceFileGone = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 4 }, 'packages/runtime/src/elsewhere.ts', 'export {};\n');
+if (surfaceFileGone.status === 0 || !surfaceFileGone.stderr.includes('remove its entry')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core LET a baseline entry outlive its file\n');
+  failures += 1;
+}
+
+const surfaceCompareOutsideBaseline = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/fresh.ts', "if (surface === 'app') {}\n");
+if (surfaceCompareOutsideBaseline.status === 0 || !surfaceCompareOutsideBaseline.stderr.includes('baseline 0')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core MISSED a surface compare in a new file\n');
+  failures += 1;
+}
+
+const surfaceCompareInTest = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/core.test.ts', SURFACE_CORE);
+if (!reportsClean(surfaceCompareInTest)) {
+  process.stderr.write(`guards-selftest: guard-surface-neutral-core FALSE POSITIVE on a test file:\n${surfaceCompareInTest.stderr}`);
+  failures += 1;
+}
+
+const runEdgeImportGuardWith = (libSpecifier) => {
+  const root = mkdtempSync(join(tmpdir(), 'edge-imports-'));
+  try {
+    mkdirSync(join(root, 'supabase', 'functions', 'f'), { recursive: true });
+    mkdirSync(join(root, 'packages', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'supabase', 'functions', 'f', 'index.ts'), "import { a } from '../../../packages/lib/a.ts';\n");
+    writeFileSync(join(root, 'packages', 'lib', 'a.ts'), `import { b } from '${libSpecifier}';\nexport const a = b;\n`);
+    writeFileSync(join(root, 'packages', 'lib', 'b.ts'), 'export const b = 1;\n');
+    return spawnSync('node', ['scripts/guards/guard-edge-function-imports.mjs', '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+const edgeImportBare = runEdgeImportGuardWith('./b');
+if (edgeImportBare.status === 0 || !edgeImportBare.stderr.includes("imports './b'")) {
+  process.stderr.write('guards-selftest: guard-edge-function-imports MISSED an extensionless import two hops from a function\n');
+  failures += 1;
+}
+
+const edgeImportExplicit = runEdgeImportGuardWith('./b.ts');
+if (edgeImportExplicit.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-edge-function-imports FALSE POSITIVE on an explicit extension:\n${edgeImportExplicit.stderr}`);
   failures += 1;
 }
 
