@@ -185,3 +185,45 @@ describe('withReplyStream', () => {
     }
   });
 });
+
+describe('the activity beside the draft', () => {
+  const tracked = () => {
+    const seen: unknown[] = [];
+    const clock = fakeClock();
+    const draft: ReplyDraftSurface = { show: async (text) => { seen.push(`show:${text}`); }, activity: (kind) => { seen.push(`activity:${kind}`); }, minIntervalMs: 0, maxUpdates: 1000, maxChars: 4096 };
+    return { seen, clock, draft };
+  };
+
+  it('shows the kind while tools run and clears it before the first words of the answer', async () => {
+    const { seen, clock, draft } = tracked();
+    const stream = createReplyStream(draft, clock);
+    stream.activity('mail');
+    stream.activity('calendar');
+    stream.begin(passAll);
+    stream.deltas.delta('Here is your afternoon plan ');
+    await settleWrites();
+    stream.deltas.delta('and the rest ');
+    await settleWrites();
+    await stream.settle('Here is your afternoon plan and the rest');
+    expect(seen.slice(0, 4)).toEqual(['activity:mail', 'activity:calendar', 'activity:null', 'show:Here is your afternoon plan']);
+    expect(seen.filter((entry) => String(entry).startsWith('activity:'))).toEqual(['activity:mail', 'activity:calendar', 'activity:null']);
+  });
+
+  it('clears it when the turn settles without an answer, and ignores a kind after settling', async () => {
+    const { seen, clock, draft } = tracked();
+    const stream = createReplyStream(draft, clock);
+    stream.activity('web');
+    await stream.settle(null);
+    stream.activity('mail');
+    await settleWrites();
+    expect(seen).toEqual(['activity:web', 'activity:null']);
+  });
+
+  it('is a no-op on a surface that shows no activity', async () => {
+    const { shown, clock, draft } = surface();
+    const stream = createReplyStream(draft, clock);
+    stream.activity('mail');
+    expect(await stream.settle(null)).toMatchObject({ outcome: 'none' });
+    expect(shown).toEqual([]);
+  });
+});

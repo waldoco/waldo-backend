@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChatRequestError, ChatSignInRequired, fetchChatPage, readChatPage, readReceipt, sendChatMessage, visibleText, type ChatMessage } from './chat-model';
+import { CHAT_ACTIVITY_KINDS, ChatRequestError, ChatSignInRequired, fetchChatPage, readChatPage, readReceipt, sendChatMessage, visibleText, type ChatMessage } from './chat-model';
 
 const row = (over: Record<string, unknown> = {}) => ({ id: 'app-1', role: 'assistant', text: 'Hello', parts: [{ type: 'text', text: 'Hello' }], channel: 'app', parent_id: 'app-0', created_at: 1_760_000_000_000, ...over });
 afterEach(() => vi.unstubAllGlobals());
@@ -21,6 +21,14 @@ describe('reading the app chat page', () => {
     expect(() => readReceipt({ accepted: true, message_id: 'app-9', state: 'done' })).toThrow();
     expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', draft: 'Here is the plan' })).toMatchObject({ state: 'running', draft: 'Here is the plan' });
     expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', draft: 7 })).not.toHaveProperty('draft');
+  });
+  it('reads what a running turn is doing, and drops a kind or shape it does not know rather than refusing the receipt', () => {
+    expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', activity: { kind: 'mail', since: 1_761_400_000_000 } })).toMatchObject({ activity: { kind: 'mail', since: 1_761_400_000_000 } });
+    for (const activity of [{ kind: 'teleport', since: 1 }, { kind: 'mail' }, { kind: 'mail', since: -1 }, 'mail', null])
+      expect(readReceipt({ accepted: true, message_id: 'app-9', state: 'running', activity })).not.toHaveProperty('activity');
+  });
+  it('knows the same kinds as the app contract (packages/contracts/src/app/core.ts APP_CHAT_ACTIVITY_KINDS)', () => {
+    expect(CHAT_ACTIVITY_KINDS).toEqual(['mail', 'calendar', 'tasks', 'web', 'files', 'health', 'memory', 'reminders', 'artifacts', 'settings', 'skills', 'actions', 'working']);
   });
 });
 

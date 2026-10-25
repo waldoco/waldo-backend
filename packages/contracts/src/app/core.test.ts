@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -137,6 +137,24 @@ describe('chat revision 2: the reply draft on a running receipt', () => {
 
   it('rejects an empty, oversized or non-string draft', () => {
     for (const draft of ['', 'x'.repeat(REPLY_TEXT_MAX_CHARS + 1), 42, null, ['Here']]) expect([draft, appMessageReceiptV1Schema.safeParse({ ...running, draft }).success]).toEqual([draft, false]);
+  });
+});
+
+describe('chat revision 2: what a running turn is doing, on its receipt', () => {
+  const running = { accepted: true, message_id: 'm', state: 'running' } as const;
+  it('accepts each kind of the closed vocabulary with the time it began, beside a draft or alone', () => {
+    expect(APP_CHAT_ACTIVITY_KINDS).toContain('mail');
+    expect(APP_CHAT_ACTIVITY_KINDS).toContain('working');
+    for (const kind of APP_CHAT_ACTIVITY_KINDS) expect(appMessageReceiptV1Schema.safeParse({ ...running, activity: { kind, since: 1_761_400_000_000 } }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse({ ...running, draft: 'Here', activity: { kind: 'mail', since: 0 } }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse(running).success).toBe(true);
+  });
+
+  it('rejects an unknown kind, free text, an extra key, a bad time or a bare string', () => {
+    for (const activity of [
+      { kind: 'gmail', since: 1 }, { kind: 'Searching alice@example.com', since: 1 }, { kind: 'mail', since: 1, tool: 'search_communication' },
+      { kind: 'mail', since: -1 }, { kind: 'mail', since: 1.5 }, { kind: 'mail' }, { since: 1 }, 'mail', null,
+    ]) expect([activity, appMessageReceiptV1Schema.safeParse({ ...running, activity }).success]).toEqual([activity, false]);
   });
 });
 
