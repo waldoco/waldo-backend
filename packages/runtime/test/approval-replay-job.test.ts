@@ -8,7 +8,7 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, type TaskHost } from '../src/tasks/brain';
-import { jobBook, REPLAY_DEADLINE_MS, replayKey, TASK_LEASE_MS, type JobBook, type TaskTicket } from '../src/tasks/jobs';
+import { applyInterrupted, jobBook, REPLAY_DEADLINE_MS, replayKey, TASK_LEASE_MS, type JobBook, type TaskTicket } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { BROWSER_TOOLS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
@@ -310,4 +310,30 @@ describe('an approved browser card runs as a replay job', () => {
       expect(book.byKey(replayKey(id))).toBeNull();
     });
   });
+  it('a replay\'s own intent is never read as a report\'s apply intent: a call lost mid-run reaches the owner as the replay\'s unknown outcome, and no apply turn runs or overwrites it', async () => {
+    await withReplay(async ({ desk, book, sql, clock, ran, sent, log, card, pass, browser, restart }) => {
+      const id = await card();
+      await desk.decide(id, 'a', 'tap');
+      let release!: () => void;
+      browser.gate = new Promise<void>(resolve => { release = resolve; });
+      await pass();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      restart();
+      clock.at += TASK_LEASE_MS + 1;
+      // The lane parks the lost call; its receipt fails to queue in this pass.
+      await expect(pass({ deliver: async () => { throw new Error('outbox unavailable'); } })).rejects.toThrow('outbox unavailable');
+      const parked = book.byKey(replayKey(id))!;
+      expect(parked).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(JSON.parse(parked.inflight_json!)).toMatchObject({ tool: 'browse_act', call_id: replayKey(id) });
+      expect(applyInterrupted(parked)).toBe(false);
+      await pass();
+      expect(sent.get(replayKey(id))).toMatch(/^The outcome is unknown: Run browse_act/);
+      expect(status(sql, id)).toBe('uncertain');
+      expect(log.map(entry => entry.hop)).not.toContain('task_apply_uncertain');
+      release();
+      await pass();
+      expect(ran.filter(step => step === 'browse_act')).toHaveLength(1);
+    });
+  });
+
 });
