@@ -30,7 +30,7 @@ it('a request that declares no contract revision gets the calendar approval list
     await desk.propose({ action: 'create', title: 'Design review', start: '2036-01-17T10:00:00+05:30' as never, end: '2036-01-17T10:30:00+05:30' as never, reason: 'Sam asked',
       account: 'owner@example.com', attendees: ['sam@example.com', 'pat@example.org'], send_updates: 'all', location: 'Room 4' });
     await desk.propose({ action: 'cancel', event_id: 'e2', title: 'Standup', calendar_id: 'primary', reason: 'off' });
-    const host = { csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000 }], desk };
     const text = await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).text();
     expect(captured).toBeDefined();
     expect(digestless(text)).toBe(digestless(captured!.trimEnd()));

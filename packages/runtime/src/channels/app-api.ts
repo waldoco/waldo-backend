@@ -2,7 +2,7 @@ import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
 import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
-import { consoleAuth, sessionFamily, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
 import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -140,11 +140,14 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+  // A link code or a provider connection outlives this session, so it needs a sign-in from the last two hours. Throws when
+  // the directory cannot list the sessions.
+  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.created_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
-    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret });
+    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, signedInRecently: signedIn });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
@@ -169,6 +172,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
       // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
       const { iMessageNumberView } = await import('./imessage/enrollment');
+      if (!await signedIn()) return ok({ error: 'step_up_required', code: 'step_up_required' }, 403);
       const address = (await iMessageNumberView(env as never, who.doName)).number;
       if (!address) return fail(503);
       const code = await auth.issueProviderLinkCode(who.doName, 'imessage');

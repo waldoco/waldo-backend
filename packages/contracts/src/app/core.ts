@@ -88,8 +88,9 @@ export const appRatingRequestV1Schema = z.strictObject({ request_id: z.string().
 export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingRequestV1Schema.shape.request_id, message_id: appMessageIdV1Schema, rating: appRatingRequestV1Schema.shape.rating });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
-// pre-authentication answer cannot say whether an address is invited.
-export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+// pre-authentication answer cannot say whether an address is invited. step_up_required (403): the action needs a sign-in
+// from the last two hours; the app signs in again with an email code and retries it.
+export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
 // "Connect iMessage": a one-time code the owner sends from their own iPhone to the Waldo iMessage address, which
