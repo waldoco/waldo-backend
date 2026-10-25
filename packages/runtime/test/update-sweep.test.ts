@@ -193,6 +193,18 @@ describe('the sweep check writes a machine job', () => {
     });
   });
 
+  it('a change carrying a topic the owner is forgetting writes nothing and moves no watermark; once it settles the next tick writes the job', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      expect((await h.check({ held: () => ['Quote signed'] })).code).toBe('held_topic');
+      expect([h.jobs(), h.rows(), h.since()]).toEqual([[], [], [T0 - 600_000, T0 - 600_000]]);
+      expect(h.sql.exec('SELECT COUNT(*) AS n FROM observed_mail').one()).toEqual({ n: 0 });
+      const result = await h.check({ held: () => [] });
+      expect(result.code).toBe('enqueued');
+      expect(h.jobs().map(job => job.idempotency_key)).toEqual([`machine:update_sweep:${T0 - 600_000}:${T0 - 600_000}`]);
+    });
+  });
+
   it('a mail carrying a health value keeps its ref in the brief and drops its words', async () => {
     await withSweep(async (h) => {
       h.mail.push({ ...MAIL, subject: 'Your results', snippet: 'Your HRV 38 ms and resting heart rate 52 bpm look fine.' });

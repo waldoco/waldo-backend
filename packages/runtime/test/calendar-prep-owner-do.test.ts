@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import type { CalendarItem, CalendarChange } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -330,4 +330,65 @@ it.each(['accepted', 'quiet'] as const)('an accepted meeting\'s prep runs throug
       expect(state.storage.sql.exec('SELECT status FROM task_jobs').toArray()).toEqual([{ status: 'applied' }]);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
+});
+
+// The owner is forgetting a topic: a meeting whose event carries it gets no reader job, so nothing the worker would read is
+// written while the forget runs; the sweep after the forget settles writes it. The topic stays held here because one copy of
+// it, spelled by an escape, is one the purge cannot clean yet.
+describe('meeting prep while the owner is forgetting a topic', () => {
+  const TOPIC = 'onboarding mocks';
+  const withHeld = (name: string, work: (o: Readonly<{ state: DurableObjectState; fire(): Promise<void>; jobs(): unknown[]; settle(): Promise<void> }>) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const originalNow = Date.now;
+      const now = Date.parse('2026-10-03T04:30:00Z');
+      Date.now = () => now;
+      fixture.sent = []; fixture.requests = []; fixture.mutate = null; fixture.decision = 'notify'; fixture.ack = true; fixture.changes = [];
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false,
+        description: `Bring the ${TOPIC}`, etag: 'r1', attendee_emails: ['pat@example.test', 'owner@example.test'], owner_status: 'accepted' };
+      const owner = new OwnerDO(state, { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+      state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      claimStore(state.storage.sql);
+      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES ('fp-onboarding', ?, ?, 'everywhere')", TOPIC, new Date(now).toISOString());
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+      state.storage.sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'stuck', String.raw`bring the onboarding mocks`, now);
+      let update = 100;
+      try {
+        await work({
+          state,
+          fire: async () => {
+            const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
+            expect(response.status).toBe(200);
+          },
+          jobs: () => state.storage.sql.exec('SELECT origin, status FROM task_jobs').toArray(),
+          settle: async () => {
+            state.storage.sql.exec("DELETE FROM reminder_notes WHERE id = 'stuck'");
+            await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+            expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM topic_purge_pending').one()).toEqual({ n: 0 });
+          },
+        });
+      } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+    });
+
+  it('a meeting whose event carries the topic writes no reader job, and logs only a code', () => withHeld('calendar-prep-held', async ({ state, fire, jobs }) => {
+    await fire();
+    expect(jobs()).toEqual([]);
+    expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check'").toArray()).toEqual([{ note: 'held_topic' }]);
+    expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM trace_log').toArray())).not.toContain(TOPIC);
+  }));
+
+  it('the same meeting gets its reader job once the forget settles', () => withHeld('calendar-prep-held-settled', async ({ fire, jobs, settle }) => {
+    await fire();
+    expect(jobs()).toEqual([]);
+    await settle();
+    await fire();
+    expect(jobs()).toEqual([{ origin: 'machine:meeting_prep', status: 'queued' }]);
+  }));
+
+  it('a meeting that does not carry the topic gets its reader job meanwhile', () => withHeld('calendar-prep-held-unrelated', async ({ fire, jobs }) => {
+    fixture.event = { ...fixture.event!, id: 'event-2', title: 'Budget sync', description: 'Bring the numbers' };
+    await fire();
+    expect(jobs()).toEqual([{ origin: 'machine:meeting_prep', status: 'queued' }]);
+  }));
 });

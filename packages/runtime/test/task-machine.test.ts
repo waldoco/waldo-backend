@@ -155,6 +155,33 @@ describe('a machine job is written', () => {
   });
 });
 
+// The owner is forgetting a topic: a machine job whose inputs carry it is held before anything is written, so the forget wins,
+// and the next tick asks again once the forget settles. Its inputs are everything the job would be written from: the brief,
+// its machine block, and the source text it was given, including a detail the brief leaves out.
+describe('a machine job whose inputs carry a topic the owner is forgetting', () => {
+  it('is not written, and says so with a content-free code', async () => {
+    await withBook(async ({ book, sql }) => {
+      expect(enqueueMachine(book, spec(), ['quote from Asha'])).toEqual({ code: 'held_topic' });
+      expect(sql.exec('SELECT COUNT(*) AS n FROM task_jobs').one()).toEqual({ n: 0 });
+    });
+  });
+
+  it('is held by a topic in a detail the brief drops for its health value', async () => {
+    await withBook(async ({ book, sql }) => {
+      const items = [{ ref: 'l1', detail: 'Ask Dr Rao about my HRV 38 ms this week' }];
+      expect(enqueueMachine(book, spec({ items }), ['Dr Rao'])).toEqual({ code: 'held_topic' });
+      expect(sql.exec('SELECT COUNT(*) AS n FROM task_jobs').one()).toEqual({ n: 0 });
+    });
+  });
+
+  it('is written once the forget has settled, and a job that does not carry the topic is written meanwhile', async () => {
+    await withBook(async ({ book }) => {
+      expect(enqueueMachine(book, spec({ job: 'meeting_prep', scope: 'evt-2', key: 'machine:meeting_prep:evt-2', items: [{ ref: 'e2', detail: 'Budget sync' }] }), ['quote from Asha']).code).toBe('enqueued');
+      expect(enqueueMachine(book, spec(), []).code).toBe('enqueued');
+    });
+  });
+});
+
 describe('a machine job never takes the owner\'s place', () => {
   it('does not count against the owner\'s task slots, and starts while every slot is taken', async () => {
     await withBook(async (h) => {
