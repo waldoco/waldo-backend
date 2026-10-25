@@ -178,6 +178,22 @@ const vitalsOf = (rs: readonly Reading[], night: readonly Reading[], sleep: DayR
   };
 };
 
+const MIN_ASLEEP_HOURS = 3;
+const LOW_HOURS = 2;
+// A night with no measured resting heart rate takes one from its own heart-rate hours: the mean of the two lowest hour means
+// among the hours wholly inside the sleep's span (its time-asleep reading's start to end), from at least three such hours. A
+// resting rate lies at the night's low, and it takes two hours, not one, because the read returns each hour's mean without
+// its number of readings, so one sparsely read hour must not set it alone. An hour partly outside the span is left out. The
+// span decides, not the date, so the hour before midnight, dated the day before, counts. A night touching a day with an
+// overlapping window, or begun before the first hour the read holds, was not read whole and takes none.
+const asleepLow = (sleep: DayRecord['sleep'], hours: readonly Reading[], overlapped: ReadonlySet<string>, firstHourMs: number): MethodReading<RestingMethod>[] => {
+  if (!sleep || Date.parse(sleep.startAt) < firstHourMs) return [];
+  const from = Date.parse(sleep.startAt), to = Date.parse(sleep.endAt);
+  const asleep = hours.filter(r => Date.parse(r.startAt!) >= from && Date.parse(r.endAt!) <= to);
+  if (asleep.length < MIN_ASLEEP_HOURS || asleep.some(r => overlapped.has(r.day))) return [];
+  return [{ value: meanOf(asleep.map(r => r.value).sort((a, b) => a - b).slice(0, LOW_HOURS))!, method: 'asleep_hours_low' }];
+};
+
 // Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged. A day
 // holding an overlapping window keeps no hourly windows, so its window-based parts read as unknown, never doubled.
 const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
@@ -186,14 +202,18 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
   const zoneChanged = new Set<string>();
   const overlapped = overlappingWindowDays(readings);
   const night = readings.filter(r => NIGHT_SIGNALS.includes(r.signal));
+  // One reading per hour, the later of a repeat, as the hourly buckets take it.
+  const heartHours = [...new Map(readings.filter(r => r.signal === 'heart_rate_window' && r.startAt && r.endAt).map(r => [r.startAt, r])).values()];
+  const firstHourMs = Math.min(...heartHours.map(r => Date.parse(r.startAt!)));
   const days = [...byDay].map(([day, rs]): DayRecord => {
     const zones = new Set(rs.flatMap(r => (r.timezone ? [r.timezone] : [])));
     if (zones.size > 1) zoneChanged.add(day);
     const sleep = sleepOf(rs);
+    const measured = perMethod(rs.filter(r => r.signal === 'resting_heart_rate'), restingMethod);
     return {
       day, timezone: newest(rs.filter(r => r.timezone))?.timezone ?? fallbackZone, sleep,
       overnightHrv: perMethod(rs.filter(r => r.signal === 'overnight_hrv'), hrvMethod),
-      restingHeartRate: perMethod(rs.filter(r => r.signal === 'resting_heart_rate'), restingMethod), hourly: overlapped.has(day) ? [] : hourlyOf(rs),
+      restingHeartRate: measured.length ? measured : asleepLow(sleep, heartHours, overlapped, firstHourMs), hourly: overlapped.has(day) ? [] : hourlyOf(rs),
       workouts: rs.filter(r => r.signal === 'workout').flatMap(r => span(r) ?? []), demand: null, vitals: vitalsOf(rs, night, sleep),
     };
   });

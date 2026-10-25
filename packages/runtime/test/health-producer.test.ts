@@ -361,7 +361,7 @@ describe('produceHealthScores', () => {
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
       // Admitting fewer inputs is a new Form version under ADR-0081.
-      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v5');
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v8');
     });
   });
 
@@ -580,7 +580,7 @@ describe('produceHealthScores', () => {
     const today = h.writes[1]!;
     expect(today.read_at).toBe(realSeries.read_at);
     expect(today.basis).toEqual([{ source: 'apple', consent_epoch: 1 }]);
-    expect(today.recovery).toMatchObject({ zone: expect.stringMatching(/^(low|moderate|good|high)$/), algorithm_version: 'recovery.candidate.v2' });
+    expect(today.recovery).toMatchObject({ zone: expect.stringMatching(/^(low|moderate|good|high)$/), algorithm_version: 'recovery.candidate.v4' });
     expect(today.weight).toEqual({ reason: 'calendar_demand_unavailable' });
   });
 
@@ -695,6 +695,129 @@ describe('produceHealthScores', () => {
       const today = h.inputs[0]!.days.find(d => d.day === TODAY)!;
       expect(today.overnightHrv.map(entry => entry.method).sort()).toEqual(['rmssd', 'sdnn']);
       expect(today.restingHeartRate.map(entry => entry.method).sort()).toEqual(['overnight_resting', 'unknown']);
+    });
+  });
+
+  describe('a night with no measured resting heart rate', () => {
+    // A Health Connect phone whose watch writes no resting rate and no HRV: each night's sleep and a heart-rate window for
+    // every hour, lower while asleep (23:00 to 07:00) than awake. Every value is synthetic.
+    const HOUR = 3_600_000;
+    const heartHour = (day: string, startMs: number, value: number, over: Sample = {}) =>
+      sample('heart_rate_window', day, { start_at: new Date(startMs).toISOString(), end_at: new Date(startMs + HOUR).toISOString(), value, min: value - 6, max: value + 9, n_samples: 40, ...over });
+    const night = (day: string, i: number, from = `${addDays(day, -1)}T23:00:00.000Z`, to = `${day}T07:00:00.000Z`, over: Sample = {}) => [
+      sample('sleep_duration', day, { start_at: from, end_at: to, value: 450 + wobble(i, 20), method: 'asleep_duration', ...over }),
+      sample('sleep_midpoint', day, { start_at: from, end_at: to, value: 180 + wobble(i, 15), method: 'sleep_midpoint', ...over }),
+    ];
+    const hcDay = (day: string, i: number, lastHour = 23): Sample[] => [
+      ...night(day, i),
+      ...Array.from({ length: lastHour + 1 }, (_, h) => heartHour(day, Date.parse(`${day}T00:00:00Z`) + h * HOUR, h < 7 || h === 23 ? 52 + wobble(h + i, 3) : 74 + wobble(h + i, 3))),
+    ];
+    // Today's hours run up to the read, which is at noon unless a test reads later.
+    const hcHistory = (nights: number, lastToday = 11) => Array.from({ length: nights }, (_, i) => hcDay(addDays(TODAY, -i), i, i === 0 ? lastToday : 23)).flat();
+    const hc = (samples: Sample[], readAt = READ_AT) => ({ ...seriesOf(samples, { source: 'health_connect' }), read_at: readAt });
+    const dayIn = (h: Harness, day: string) => h.inputs[0]!.days.find(d => d.day === day)!;
+    const todayRow = (h: Harness) => h.writes.find(w => w.day === TODAY)!;
+
+    it('scores Recovery from the night\'s asleep heart-rate hours, recorded as a method of their own', async () => {
+      const h = harness(hc(hcHistory(25)));
+      expect(await run(h)).toBe('written');
+      expect(dayIn(h, TODAY).restingHeartRate).toEqual([{ value: expect.any(Number), method: 'asleep_hours_low' }]);
+      expect(todayRow(h).recovery).toMatchObject({ score: expect.any(Number), confidence: 0.7, algorithm_version: 'recovery.candidate.v4', hrv_method: null });
+      // With no daylight or movement, Form's daytime input is stress, which needs eight settled waking hours: at noon today
+      // has five, while yesterday, a finished day, has them all.
+      expect(todayRow(h).form).toEqual({ reason: 'baseline_immature' });
+      expect(h.writes.find(w => w.day === addDays(TODAY, -1))!.form).toMatchObject({ score: expect.any(Number), algorithm_version: 'form.candidate.v8' });
+    });
+
+    it('never takes a stored reading labelled with the producer\'s own method for a measured one', async () => {
+      const computed = harness(hc(hcHistory(25)));
+      await run(computed);
+      const planted = harness(hc([...hcHistory(25), sample('resting_heart_rate', TODAY, { start_at: `${TODAY}T05:00:00.000Z`, end_at: `${TODAY}T05:00:00.000Z`, value: 40, method: 'asleep_hours_low' })]));
+      await run(planted);
+      expect(dayIn(planted, TODAY).restingHeartRate).toEqual(dayIn(computed, TODAY).restingHeartRate);
+      expect(planted.writes).toEqual(computed.writes);
+    });
+
+    it('takes the mean of the two lowest hours wholly inside the asleep span, across local midnight, never a waking or half-asleep hour', async () => {
+      // Asleep 23:00 to 06:30 in Kolkata. The 23:00 hour is dated the day before; the 06:00 hour is half awake.
+      const local = (day: string, h: number) => Date.parse(`${day}T00:00:00Z`) + h * HOUR - 330 * 60_000;
+      const zone = { timezone: 'Asia/Kolkata', utc_offset_minutes: 330 };
+      const YESTERDAY = addDays(TODAY, -1);
+      const samples = [
+        ...night(TODAY, 0, new Date(local(YESTERDAY, 23)).toISOString(), new Date(local(TODAY, 6) + HOUR / 2).toISOString(), zone),
+        heartHour(YESTERDAY, local(YESTERDAY, 23), 50, zone),
+        ...[58, 55, 53, 57, 60, 59].map((value, h) => heartHour(TODAY, local(TODAY, h), value, zone)),
+        heartHour(TODAY, local(TODAY, 6), 44, zone),
+        heartHour(TODAY, local(TODAY, 8), 42, zone),
+      ];
+      const h = harness(hc(samples));
+      await run(h, 'Asia/Kolkata');
+      expect(dayIn(h, TODAY).restingHeartRate).toEqual([{ value: 51.5, method: 'asleep_hours_low' }]);
+    });
+
+    it('never takes the place of a measured resting rate, so a night that has one writes exactly as before', async () => {
+      const asleepHours = Array.from({ length: 25 }, (_, i) => addDays(TODAY, -i))
+        .flatMap((day, i) => [0, 1, 2, 3, 4, 5, 6].map(h => heartHour(day, Date.parse(`${day}T00:00:00Z`) + h * HOUR, 50 + wobble(h + i, 3))));
+      const measured = harness(seriesOf(history(25)));
+      await run(measured);
+      const withHours = harness(seriesOf([...history(25), ...asleepHours]));
+      await run(withHours);
+      expect(dayIn(withHours, TODAY).restingHeartRate).toEqual(dayIn(measured, TODAY).restingHeartRate);
+      expect(dayIn(withHours, TODAY).restingHeartRate.map(entry => entry.method)).toEqual(['unknown']);
+      expect(withHours.writes).toEqual(measured.writes);
+    });
+
+    it('never reads a derived night against measured nights', async () => {
+      // A second watch measured a resting rate on the older nights only: nine derived nights back today, too few for a baseline.
+      const measuredFrom = 10;
+      const samples = [...hcHistory(25), ...Array.from({ length: 25 - measuredFrom }, (_, k) => {
+        const day = addDays(TODAY, -(measuredFrom + k));
+        return sample('resting_heart_rate', day, { start_at: `${day}T05:00:00.000Z`, end_at: `${day}T05:00:00.000Z`, value: 54 + wobble(k, 2) });
+      })];
+      const h = harness(hc(samples));
+      await run(h);
+      expect(dayIn(h, addDays(TODAY, -12)).restingHeartRate.map(entry => entry.method)).toEqual(['unknown']);
+      expect(dayIn(h, TODAY).restingHeartRate.map(entry => entry.method)).toEqual(['asleep_hours_low']);
+      expect(todayRow(h).recovery).toEqual({ reason: 'baseline_immature' });
+    });
+
+    it('leaves a night with fewer than three asleep hours, or no sleep, unavailable with its reason', async () => {
+      // Last night keeps two asleep hours, 00:00 and 01:00; the hour before midnight and 02:00 to 07:00 are gone.
+      const asleepOutside = (entry: Sample) => {
+        const at = Date.parse(String(entry.start_at));
+        return entry.signal === 'heart_rate_window' && at >= Date.parse(`${addDays(TODAY, -1)}T23:00:00Z`) && at < Date.parse(`${TODAY}T07:00:00Z`)
+          && at !== Date.parse(`${TODAY}T00:00:00Z`) && at !== Date.parse(`${TODAY}T01:00:00Z`);
+      };
+      const few = harness(hc(hcHistory(25).filter(entry => !asleepOutside(entry))));
+      await run(few);
+      expect(dayIn(few, TODAY).restingHeartRate).toEqual([]);
+      expect(todayRow(few).recovery).toEqual({ reason: 'missing_resting_signal' });
+      const unslept = harness(hc(hcHistory(25).filter(entry => !(entry.day === TODAY && entry.signal === 'sleep_duration'))));
+      await run(unslept);
+      expect(todayRow(unslept).recovery).toEqual({ reason: 'missing_sleep' });
+    });
+
+    it('derives nothing for a night touching a day with an overlapping window, or begun before the first hour read', async () => {
+      const overlapped = harness(hc([...hcHistory(25), heartHour(TODAY, Date.parse(`${TODAY}T08:30:00Z`), 74)]));
+      await run(overlapped);
+      expect(dayIn(overlapped, TODAY).restingHeartRate).toEqual([]);
+      expect(dayIn(overlapped, addDays(TODAY, -1)).restingHeartRate).toHaveLength(1);
+      // The oldest night read began the evening before the read's first day, so only part of it was read.
+      const h = harness(hc(hcHistory(25)));
+      await run(h);
+      expect(dayIn(h, addDays(TODAY, -24)).restingHeartRate).toEqual([]);
+      expect(dayIn(h, addDays(TODAY, -23)).restingHeartRate).toHaveLength(1);
+    });
+
+    it('scores Form on a day with only sleep and heart-rate hours once those hours are fresh, and not on stale ones', async () => {
+      const evening = '2026-03-20T20:00:00.000Z';
+      const fresh = harness(hc(hcHistory(25, 19), evening));
+      await produceHealthScores(fresh.deps, { now: Date.parse(evening), timezone: 'UTC' });
+      expect(todayRow(fresh).form).toMatchObject({ score: expect.any(Number), algorithm_version: 'form.candidate.v8', hrv_method: null });
+      const stale = harness(hc(hcHistory(25, 9), evening));
+      await produceHealthScores(stale.deps, { now: Date.parse(evening), timezone: 'UTC' });
+      expect(todayRow(stale).form).toEqual({ reason: 'stale_inputs' });
+      expect(todayRow(stale).recovery).toHaveProperty('score');
     });
   });
 });

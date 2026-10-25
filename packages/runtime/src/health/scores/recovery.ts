@@ -7,14 +7,16 @@ import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableRea
 // earlier days, and judges a finished day on the hours it has. Recovery v2 reads HRV and resting heart rate against a
 // baseline of their own method only, with a fallback method; Form v5 is Form v4 on Recovery v2's inputs, and also clears a
 // day whose active-energy windows overlap. Weight v4 reads physical load as the day's active energy, falling back to
-// minutes. A change in which inputs are admitted is a new version.
-export const ALGORITHM = { recovery: 'recovery.candidate.v2', form: 'form.candidate.v5', weight: 'weight.candidate.v4', sleepDebt: 'sleep-debt.candidate.v1' } as const;
+// minutes. Recovery v4 also admits a night with no measured resting heart rate, through the producer's low from its
+// asleep heart-rate hours, a method of its own; Form v8 is Form v5 on Recovery v4's inputs. A change in which inputs are
+// admitted is a new version.
+export const ALGORITHM = { recovery: 'recovery.candidate.v4', form: 'form.candidate.v8', weight: 'weight.candidate.v4', sleepDebt: 'sleep-debt.candidate.v1' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 // RMSSD is the canonical HRV method and SDNN its labelled fallback. A nightly minimum is the closest resting measure, then a
-// platform's daily estimate, then a spot measurement.
+// platform's daily estimate, then a spot measurement, and last the low the producer takes from a night's heart-rate hours.
 const HRV_ORDER: readonly HrvMethod[] = ['rmssd', 'sdnn'];
-const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown'];
+const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown', 'asleep_hours_low'];
 
 export interface RecoveryBasis {
   readonly components: readonly Component[];
