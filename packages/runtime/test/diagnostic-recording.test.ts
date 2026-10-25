@@ -101,3 +101,15 @@ describe('an owner\'s capture needs both the environment and their agreement', (
     expect(resolveOwnerCapture(environment, agreed)).toBe(expected);
   });
 });
+
+describe('the wording an owner agrees to', () => {
+  it('states the approved retention, under a new version that an earlier agreement does not reach', async () => {
+    expect(DIAGNOSTIC_RECORDING_WORDING.version).toBe('beta-2026-10-25');
+    expect(DIAGNOSTIC_RECORDING_WORDING.detail).toContain('Diagnostic records are kept for 30 days');
+    expect(DIAGNOSTIC_RECORDING_WORDING.detail).toContain('service logs for up to 7 days');
+    expect(DIAGNOSTIC_RECORDING_WORDING.detail).toContain('deleted within 7 days');
+    expect(DIAGNOSTIC_RECORDING_WORDING.detail).toContain('in the app');
+    const { directory } = recorder({ ...current, version: 'beta-2026-10-22' });
+    expect(await readDiagnosticAgreement(directory, 'owner-a')).toBe(false);
+  });
+});
