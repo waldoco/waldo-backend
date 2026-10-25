@@ -1,3 +1,4 @@
+import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
 import { replaceLiteralText } from '@waldo/contracts';
 import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
@@ -6,7 +7,11 @@ import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget
 import { MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
-export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
+// confirmed: the owner said it is right. waldo_confirmed: the nightly model read the owner's day as confirming it, which
+// stays Waldo's read until the owner confirms it.
+export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferred'] as const;
+// What the owner may still confirm as theirs.
+export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null }>;
@@ -18,9 +23,10 @@ export type PinBlock = (typeof PIN_BLOCKS)[number];
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
 export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
+// A claim Waldo inferred or confirmed waits for the owner's own confirm.
 const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
 const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
-  PROFILE_KINDS.includes(claim.kind) && claim.source !== 'inferred' && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
+  PROFILE_KINDS.includes(claim.kind) && !awaitsOwnerConfirm(claim) && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
 // Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
@@ -461,8 +467,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     seen(id: number, at: string): void {
       sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
     },
+    // The nightly model's confirm.
     confirm(id: number, evidence: string, at: string): void {
-      sql.exec(`UPDATE claims SET source = 'confirmed', evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+      sql.exec(`UPDATE claims SET source = 'waldo_confirmed', evidence = evidence || ' | Waldo confirmed: ' || ?, last_seen_at = ? WHERE id = ? AND source = 'inferred'`, evidence, at, id);
+    },
+    // The one place a live claim becomes the owner's: their own act (the console's "That's right"), named by `how` in its
+    // evidence and, when it had no owner source, as its source.
+    ownerGround(id: number, at: string, how: string): boolean {
+      return sql.exec(`UPDATE claims SET origin = 'owner', verification_status = 'owner-grounded',
+        source = CASE WHEN source IN ('inferred', 'waldo_confirmed') THEN 'confirmed' ELSE source END,
+        source_ref = COALESCE(source_ref, ?), evidence = evidence || ' | confirmed: ' || ?, last_seen_at = ?
+        WHERE id = ? AND status IN ('active', 'promoted')`, how, how, at, id).rowsWritten === 1;
     },
     correct(id: number, claim: NewClaim, at: string): boolean {
       // Two writes must never leave contradictory active claims. A caller without a DO
@@ -511,7 +526,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     barrier,
     recordHold(kind: string, reason: string, text: string, at: string): void {
-      sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
+      // A held reading keeps no fingerprint of its words: a short templated reading could be recovered from its hash.
+      sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, reason === 'numeric-health' ? 'withheld' : textFingerprint(text.trim()), at);
     },
     holds: () => sql.exec<{ id: number; kind: string; reason: string; fingerprint: string; created_at: string }>('SELECT * FROM claim_holds ORDER BY id').toArray(),
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
@@ -1004,7 +1020,7 @@ const PROFILE_SECTIONS: readonly (readonly [string, readonly string[]])[] = [
 ];
 
 export const profile = (claims: readonly Claim[]): readonly Readonly<{ title: string; lines: readonly string[] }>[] => {
-  const owned = claims.filter((claim) => claim.source !== 'inferred');
+  const owned = claims.filter((claim) => !awaitsOwnerConfirm(claim));
   return PROFILE_SECTIONS.map(([title, kinds]) => ({ title, lines: owned.filter((claim) => kinds.includes(claim.kind)).map((claim) => claim.text) }))
     .filter((section) => section.lines.length > 0);
 };
@@ -1119,12 +1135,22 @@ export const NIGHTLY_MEMORY_INSTRUCTION = [
   ...PIN_RULES,
 ].join('\n');
 
+// Older conversation is about to leave Waldo's view (compaction): what the owner said there that should stay true is saved
+// now, rather than waiting for the night. Nothing is forgotten or pinned from here.
+export const FLUSH_INSTRUCTION = [
+  'The earlier part of this conversation between the owner and Waldo is about to leave Waldo\'s view. Save what the owner said in it that should stay true and is not already a claim, so it is not lost.',
+  'Mark claims it repeated as seen. dismiss stays empty.',
+  ...CLAIM_RULES,
+  'forget_claims, forget_nodes, pin and unpin stay empty, and forget_topic is null.',
+].join('\n');
+
 export const MIGRATION_INSTRUCTION = [
   'Waldo is moving its memory from four notes files into claims. Split the files into claims, one fact per claim.',
   'MEMORY_CORE, MEMORY_GOALS and MEMORY_FOLLOWUPS were written from the owner\'s own words: mark those stated. intelligence-summary is Waldo\'s inference: mark those inferred.',
   'Each evidence cites the file and revision and quotes the line, like: MEMORY_CORE r3: "Gym usually 11am".',
   'Skip anything an existing claim already covers, and anything the owner asked to forget.',
   ...CLAIM_RULES.slice(1, 2),
+  ...HEALTH_MEMORY_RULES,
   'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty and forget_topic is null.',
   'pin and unpin stay empty.',
 ].join('\n');
@@ -1156,8 +1182,20 @@ const pinnedUsage = (store: ClaimStore): string => {
   return `Pinned blocks now: ${usage.join('; ')}.`;
 };
 
-export const nightlyInput = (store: ClaimStore, day: string): string =>
-  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+// The owner's health notes setting, told to the model: which claims are about health is its judgment, whatever kind it would
+// file one under. The kind filter below backs it for claims filed as health.
+export const HEALTH_NOTES_OFF = 'The owner turned health notes off: save nothing about their health, body, sleep, energy, mood or symptoms, whatever kind you would file it under.';
+export const nightlyInput = (store: ClaimStore, day: string, health = true): string =>
+  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+export const flushInput = (store: ClaimStore, span: string, health = true): string =>
+  [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The conversation leaving Waldo's view:\n<conversation>\n${fence(span)}\n</conversation>`].join('\n\n');
+
+// The owner turned health notes off for memory Waldo writes on its own: health claims and corrections to them are dropped
+// before admission, so none is written or held.
+export const withoutHealthClaims = (raw: string): string => {
+  const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
+  return JSON.stringify({ ...ops, add: ops.add.filter((claim) => claim.kind !== 'health'), corrections: (ops.corrections ?? []).filter((item) => item.kind !== 'health') });
+};
 
 // Slice 4 admission gate: candidate claims are grounded against the exchange sections before
 // admission. 'stated' must ground in the owner's own words; evidence that only matches Waldo's
@@ -1185,6 +1223,12 @@ export const normalizeForGrounding = (text: string): string => text.toLowerCase(
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
 // The quoted spans of an evidence string, raw: straight or curly double quotes.
 const quotedSpans = (evidence: string): readonly string[] => [...evidence.matchAll(/"([^"]+)"|“([^”]+)”/g)].map((match) => match[1] ?? match[2] ?? '');
+// The owner's words an evidence string quotes: its quoted spans, or all of it when it quotes none. A number in the citation
+// around a quote ("owner, tg-16") is not one the owner said.
+const quotedWords = (evidence: string): string => {
+  const spans = quotedSpans(evidence);
+  return spans.length > 0 ? spans.join('\n') : evidence;
+};
 const groundingTargets = (evidence: string): readonly string[] => {
   const spans = quotedSpans(evidence).map(normalizeForGrounding).filter(Boolean);
   const whole = normalizeForGrounding(evidence);
@@ -1246,12 +1290,16 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
-    const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
+    const owned = grounding !== undefined && ground(correction.evidence, grounding) === 'owner';
+    const ref = owned ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
-    // closed reason, so the reply can say the memory was not updated instead of the skip being silent.
-    if (ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim()))) {
-      store.recordHold(correction.kind, 'correction-not-applied', correction.text, at);
-      holdReasons.add('correction-not-applied');
+    // closed reason, so the reply can say the memory was not updated instead of the skip being silent. A replacement
+    // carrying a reading whose numbers its owner-grounded quote does not carry is held as one, as an add would be.
+    const reason = [correction.text, correction.evidence].some((text) => readingBeyondOwner(text, owned ? quotedWords(correction.evidence) : undefined)) ? 'numeric-health'
+      : ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim())) ? 'correction-not-applied' : undefined;
+    if (reason) {
+      store.recordHold(correction.kind, reason, correction.text, at);
+      holdReasons.add(reason);
       heldCorrections += 1;
       replacements.set(normalizeForGrounding(correction.text), 'held');
       continue;
@@ -1274,6 +1322,18 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     let origin: string | null = null;
     const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
     if (replacement === 'held' && verdict !== 'owner') continue;
+    // A health reading is kept only as something the owner said: stated, on evidence in their own words, with every number
+    // of the reading in the words that evidence quotes. A number only in shared content (forwarded mail, a file), Waldo's
+    // reply (a relayed device reading) or something else the owner typed is held, keyed on that source, never on wording;
+    // so is a reading from an ungrounded paraphrase or an inference. One whose evidence grounds only in Waldo's reply is
+    // held below as a self-report.
+    const texts = [claim.text, claim.evidence, ...(claim.aliases ?? [])];
+    if (verdict !== 'waldo' && texts.some(numericHealthIn) && (verdict !== 'owner' || claim.source === 'inferred' || texts.some((text) => readingBeyondOwner(text, quotedWords(claim.evidence))))) {
+      store.recordHold(claim.kind, 'numeric-health', claim.text, at);
+      held.push(claim);
+      holdReasons.add('numeric-health');
+      continue;
+    }
     if (verdict !== undefined) {
       if (verdict === 'waldo') {
         // Self-report: evidence grounds only in Waldo's own reply. Held, never written -

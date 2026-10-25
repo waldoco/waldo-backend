@@ -40,7 +40,7 @@ describe('health providers: connect and disconnect', () => {
   });
 
   it('names closed error codes', () => {
-    for (const error of ['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable']) expect(healthProviderErrorV1Schema.safeParse({ error }).success, error).toBe(true);
+    for (const error of ['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable', 'step_up_required']) expect(healthProviderErrorV1Schema.safeParse({ error }).success, error).toBe(true);
     rejected(healthProviderErrorV1Schema, [{ error: 'teapot' }, { error: 'unavailable', detail: 'x' }, {}]);
   });
 
