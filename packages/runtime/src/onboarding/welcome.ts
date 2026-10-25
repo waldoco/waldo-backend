@@ -12,7 +12,7 @@ type Settled = Exclude<StageState, 'pending' | 'reading'>;
 // What one source gives the build: text for the model with the sources and item ids it may cite, or a state with nothing to read.
 export type StageInput =
   | Readonly<{ kind: 'input'; text: string; sources: readonly AppNodeSourceV1[]; pointers: ReadonlySet<string> }>
-  | Readonly<{ kind: 'settled'; state: Exclude<Settled, 'done'> }>;
+  | Readonly<{ kind: 'settled'; state: Settled }>;
 
 export const WELCOME_MAX_NODES = 15;
 export const WELCOME_STAGE_MAX_NODES = 5;
