@@ -99,6 +99,9 @@ describe('photonAttachmentSource', () => {
     expect(await photonAttachmentSource(ENV, streamed.fetcher)!({ ...request(), maxBytes: 8 })).toEqual({ ok: false, code: 'too_large' });
     const together = photon();
     expect(await photonAttachmentSource(ENV, together.fetcher)!({ ...request(['att-photo', 'att-pdf']), maxBytes: PNG.length + PDF.length - 1 })).toEqual({ ok: false, code: 'too_large' });
+    // With no declared sizes, the bound over a whole message is what the files stream, each one under it on its own.
+    const undeclared = photon({ message: () => Response.json({ message: { sender: { address: SENDER }, content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png' }, { guid: 'att-pdf', mimeType: 'application/pdf' }] } } }) });
+    expect(await photonAttachmentSource(ENV, undeclared.fetcher)!({ ...request(['att-photo', 'att-pdf']), maxBytes: Math.max(PNG.length, PDF.length) + 1 })).toEqual({ ok: false, code: 'too_large' });
   });
 
   it.each([
