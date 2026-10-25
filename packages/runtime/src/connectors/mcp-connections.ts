@@ -8,6 +8,7 @@ import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorization
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
 import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
+import { isGranolaHost, isGranolaRead } from './granola-mcp';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
@@ -43,8 +44,9 @@ export type McpConnectionView = Readonly<{
   server_url: string;
   auth: 'oauth' | 'none';
   registration: RegistrationMode | 'none';
-  // Owner-added servers are not reviewed by Waldo: their descriptions are the server's own words.
-  risk: 'unreviewed';
+  // Owner-added servers are not reviewed by Waldo: their descriptions are the server's own words. A reviewed
+  // server (Granola) offers only the reads Waldo checked, and those run without asking.
+  risk: 'unreviewed' | 'reviewed';
   issuer: string | null;
   scopes: readonly string[];
   // Scopes a tool asked for that the grant lacks; a reconnect requests them.
@@ -98,7 +100,8 @@ type Attempt = Readonly<{
   registration: RegistrationMode;
   scope?: string;
 }>;
-export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string } | { kind: 'denied' } | { kind: 'expired' } | { kind: 'invalid' } | { kind: 'failed'; reason: string }>;
+// reviewed: a server Waldo reviewed (Granola), whose reads run without asking; its sign-in page says so.
+export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string; reviewed?: true } | { kind: 'denied' } | { kind: 'expired' } | { kind: 'invalid' } | { kind: 'failed'; reason: string }>;
 export type BeginResult = Readonly<{ kind: 'redirect'; path: string } | { kind: 'connected'; id: string; name: string } | { kind: 'already'; id: string; name: string } | { kind: 'failed'; reason: string }>;
 
 // The one shape handlers turn into a tool refusal. cause is safe to show the model; nothing here is a
@@ -166,6 +169,8 @@ const nameFor = (host: string, taken: ReadonlySet<string>) => {
   return name;
 };
 
+// Refused before the network and before any card: nothing ran.
+const notGranolaRead = (server: string, tool: string) => new McpRefusal('forbidden', `${server}'s ${tool} is not a read Waldo allows. Waldo reads Granola and never changes notes, folders, workspaces or sign-in there.`, true);
 const proxyCause = (failure: OAuthProxyFailure, server: string): McpRefusal => {
   const refusal = refusalFor(failure, server);
   return new McpRefusal(refusal.code, refusal.message, NOT_APPLIED.has(failure.code));
@@ -220,6 +225,9 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const byName = (name: string) => sql.exec<Row>('SELECT * FROM mcp_connections WHERE name = ?', name).toArray()[0];
   const toolRows = (connection: string) => sql.exec<{ name: string; digest: string; def: string }>('SELECT name, digest, def FROM mcp_tools WHERE connection = ? ORDER BY position', connection).toArray();
   const reads = (connection: string) => new Map(sql.exec<{ name: string; digest: string }>('SELECT name, digest FROM mcp_tool_reads WHERE connection = ?', connection).toArray().map((r) => [r.name, r.digest]));
+  // A reviewed server's reads run without a card; on any other server only the owner's grant for this exact definition does.
+  const runsWithoutAsking = (r: Row, name: string, digest: string, granted: ReadonlyMap<string, string>) =>
+    (isGranolaHost(r.server_url) && isGranolaRead(name)) || granted.get(name) === digest;
   const update = (id: string, fields: Partial<Row>) => {
     const keys = Object.keys(fields);
     if (keys.length) sql.exec(`UPDATE mcp_connections SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields as Record<string, unknown>)[k] as string | number | null), id);
@@ -230,8 +238,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const defs = tools.map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
     return {
       id: r.id, name: r.name, host: new URL(r.server_url).hostname, server_url: r.server_url, auth: r.auth as 'oauth' | 'none', registration: r.registration as RegistrationMode | 'none',
-      risk: 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
-      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => granted.get(t.name) === t.digest).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
+      risk: isGranolaHost(r.server_url) ? 'reviewed' : 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
+      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.name, t.digest, granted)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
       tools_changed: [...granted].some(([name, digest]) => !tools.some((t) => t.name === name && t.digest === digest)), connected_at: r.connected_at,
     };
   };
@@ -322,6 +330,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       ttl ??= parsed.ttlMs;
       hidden += parsed.dropped.length;
       for (const tool of parsed.tools) {
+        // Granola's other tools change the owner's notes or account: never kept, so never offered.
+        if (isGranolaHost(r.server_url) && !isGranolaRead(tool.name)) continue;
         if (seen.has(tool.name) || JSON.stringify(tool).length > MAX_TOOL_DEF_CHARS) { hidden += 1; continue; }
         if (tools.length === MAX_TOOLS_PER_SERVER) { capped = true; break; }
         seen.add(tool.name); tools.push(tool);
@@ -521,7 +531,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
         if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
         await refreshTools(r).catch(() => undefined);
-        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name };
+        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isGranolaHost(r.server_url) ? { reviewed: true as const } : {}) };
         settle(nonce, outcome);
         log('mcp_consent', started);
         return outcome;
@@ -555,7 +565,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // 'changed' means they moved since the owner looked, and nothing was granted.
     async setRuns(id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> {
       const r = row(id);
-      if (!r) return false;
+      // A reviewed server's permissions are Waldo's review, not a per-tool choice.
+      if (!r || isGranolaHost(r.server_url)) return false;
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
       if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;
@@ -576,7 +587,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const granted = reads(r.id);
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       return {
-        tools: tools.map((t) => ({ tool: t.name, runs: granted.get(t.name) === t.digest ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
+        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
         read_only_digest: await readOnlyDigest(tools.filter((t) => marksReadOnly(t.def))),
       };
     },
@@ -593,7 +604,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const page = pool.slice(offset, offset + SEARCH_PAGE);
       const asked = waiting().filter((q) => !input.server || q.server === input.server);
       return {
-        tools: page.map((item) => card(item.r, item.def, item.digest, item.granted)),
+        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
         servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
@@ -605,11 +616,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // The definition a card freezes: its digest, and whether the owner lets it run without asking.
     async describe(server: string, tool: string): Promise<Readonly<{ connection: string; def: McpToolDef; digest: string; runs: 'without_asking' | 'asks_first' }>> {
       const r = live(server);
+      if (isGranolaHost(r.server_url) && !isGranolaRead(tool)) throw notGranolaRead(r.name, tool);
       await freshTools(r).catch(() => undefined);
       let found = toolOf(r, tool);
       if (!found) { await refreshTools(r).catch(() => undefined); found = toolOf(r, tool); }
       if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`, true);
-      return { connection: r.id, def: found.def, digest: found.digest, runs: reads(r.id).get(tool) === found.digest ? 'without_asking' : 'asks_first' };
+      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, tool, found.digest, reads(r.id)) ? 'without_asking' : 'asks_first' };
     },
 
     // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed.
@@ -621,11 +633,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const r = input.mode === 'read' ? live(input.server) : row(input.connection);
       if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
       if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
+      if (isGranolaHost(r.server_url) && !isGranolaRead(input.tool)) throw notGranolaRead(r.name, input.tool);
       try {
         let found = toolOf(r, input.tool);
         if (!found && input.mode === 'read') { await refreshTools(r).catch(() => undefined); found = toolOf(r, input.tool); }
         if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`, true);
-        if (input.mode === 'read' && reads(r.id).get(input.tool) !== found.digest) {
+        if (input.mode === 'read' && !runsWithoutAsking(r, input.tool, found.digest, reads(r.id))) {
           throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${reads(r.id).has(input.tool) ? ' (its definition changed since the owner allowed it)' : ''}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
         }
         if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
@@ -660,7 +673,7 @@ export const connectorsLine = (views: readonly McpConnectionView[]): string => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const readOnlyDigest = (tools: readonly Readonly<{ name: string; digest: string }>[]) => sha256(tools.map((t) => `${t.name}:${t.digest}`).join('\n'));
-const card = (r: Readonly<{ name: string }>, def: McpToolDef, digest: string, granted: ReadonlyMap<string, string>): McpToolCard => ({
-  server: r.name, tool: def.name, runs: granted.get(def.name) === digest ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(def),
+const card = (r: Readonly<{ name: string }>, def: McpToolDef, withoutAsking: boolean): McpToolCard => ({
+  server: r.name, tool: def.name, runs: withoutAsking ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(def),
   server_text: { ...(def.title ? { title: def.title } : {}), ...(def.description ? { description: def.description } : {}) }, input_schema: def.inputSchema,
 });

@@ -18,6 +18,8 @@ export type FakeOptions = {
   grantedScope?: string;
   revocation: boolean;
   results: (name: string, args: Record<string, unknown>) => unknown;
+  // Where the MCP server answers; the server path stays /mcp.
+  origin: string;
 };
 
 export const defaultTools: FakeTool[] = [
@@ -31,8 +33,10 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
   const options: FakeOptions = {
     era: 'modern', auth: true, registration: 'cimd', issParameter: true, pkce: true, tools: defaultTools, accessTtlSeconds: 3600, revocation: true,
     results: (name, args) => ({ content: [{ type: 'text', text: `${name} ran with ${JSON.stringify(args)}` }] }),
+    origin: new URL(MCP_URL).origin,
     ...overrides,
   };
+  const mcpUrl = `${options.origin}/mcp`, metadata = `${options.origin}/.well-known/oauth-protected-resource/mcp`;
   let now = Date.parse('2026-10-21T12:00:00Z');
   const codes = new Map<string, { verifier_challenge: string; resource: string; scope: string; client_id: string; redirect_uri: string }>();
   const access = new Map<string, { expires: number; scope: string }>();
@@ -66,10 +70,10 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     calls.push({ method: body.method, name: body.params?.name as string | undefined, headers, ...(bearer ? { bearer } : {}), body });
     if (options.auth) {
       const token = bearer ? access.get(bearer) : undefined;
-      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="pages:read pages:write"` } });
+      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metadata}", scope="pages:read pages:write"` } });
       const toolName = body.params?.name as string | undefined;
       if (body.method === 'tools/call' && toolName === 'create_page' && !token.scope.split(' ').includes('pages:write')) {
-        return new Response('forbidden', { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="pages:write", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"' } });
+        return new Response('forbidden', { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="pages:write", resource_metadata="${metadata}"` } });
       }
     }
     if (rateLimited) return new Response('slow down', { status: 429, headers: { 'retry-after': '30' } });
@@ -100,8 +104,8 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     hits.push(`${request.method} ${url.origin}${url.pathname}`);
-    if (url.origin === 'https://mcp.example.com') {
-      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: MCP_URL, authorization_servers: [ISSUER], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
+    if (url.origin === options.origin) {
+      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [ISSUER], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
       if (url.pathname === '/mcp') return mcp(request);
       return new Response('not found', { status: 404 });
     }
@@ -125,7 +129,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
       }
       if (url.pathname === '/token') {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
-        if (form.get('resource') !== MCP_URL) return json({ error: 'invalid_target' }, 400);
+        if (form.get('resource') !== mcpUrl) return json({ error: 'invalid_target' }, 400);
         if (form.get('grant_type') === 'authorization_code') {
           const code = codes.get(form.get('code') ?? '');
           if (!code || code.client_id !== form.get('client_id') || code.redirect_uri !== form.get('redirect_uri') || code.verifier_challenge !== await challenge(form.get('code_verifier') ?? '')) return json({ error: 'invalid_grant' }, 400);

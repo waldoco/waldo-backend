@@ -23,7 +23,7 @@ export const appControlQueryV1Schema = z.strictObject({
   if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
 });
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -33,6 +33,10 @@ export const appControlActionV1Schema = z.strictObject({
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  // Granola is one fixed, reviewed server, so its actions name nothing. A connect receipt's navigation is the first-party
+  // /c/<ticket>?handoff=<code> path; disconnect revokes at Granola where it can and says when it could not.
+  const granola = action.action === 'granola.connect' || action.action === 'granola.disconnect';
+  if (granola && (action.view !== 'connections' || (action.id ?? action.value) !== undefined)) ctx.addIssue({ code: 'custom', path: ['view'], message: 'granola actions start from the connections view and carry no id or value' });
   // Deletion signs out every session, so its recorded receipt cannot be read back: a replay is refused
   // as signed out. An unconfirmed receipt can be read back, and resending the same request_id never
   // runs a second deletion.
@@ -91,6 +95,9 @@ export const appChannelStatusV1Schema = z.strictObject({
 }).refine(status => (status.masked_label !== null) === (status.state === 'linked' || status.state === 'blocked'), { error: 'masked_label is present exactly while linked or blocked', path: ['masked_label'] });
 export const appControlConnectionsDataV1Schema = z.strictObject({
   google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })) }),
+  // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo
+  // can no longer read it and connecting again fixes that. connected_at is epoch ms.
+  granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
   telegram: z.strictObject({ linked: z.boolean(), unlinkAvailable: z.boolean() }),
   sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean() })) }),
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)

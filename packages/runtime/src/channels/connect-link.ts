@@ -3,6 +3,9 @@
 // only in the redirect. The ticket itself is never stored - only its sha256 hash.
 import { GOOGLE_AUTH_ORIGIN, GOOGLE_CALLBACK_PATH } from '../connectors/google';
 import { CONSENT_TTL_MS } from '../connectors/google-consent';
+import { GRANOLA_AUTH_ORIGIN } from '../connectors/granola-mcp';
+import { MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
+import { MCP_ATTEMPT_TTL_MS } from '../connectors/mcp-connections';
 import { startRedirect } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -21,9 +24,17 @@ export const newTicket = (): string => b64url(crypto.getRandomValues(new Uint8Ar
 export const ticketHash = async (ticket: string): Promise<string> =>
   hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ticket)));
 
+// Each provider a ticket can name: what the confirm page calls it, the origin its consent lives on (the page's form-action
+// allows only that one), and the browser binding and callback its sign-in finishes on. Granola rides the MCP sign-in.
+const PROVIDERS = {
+  google: { name: 'Google', origin: GOOGLE_AUTH_ORIGIN, binding: 'google', callback: GOOGLE_CALLBACK_PATH, ttlMs: CONSENT_TTL_MS },
+  granola: { name: 'Granola', origin: GRANOLA_AUTH_ORIGIN, binding: 'mcp', callback: MCP_CALLBACK_PATH, ttlMs: MCP_ATTEMPT_TTL_MS },
+} as const;
+const providerOf = (value: string | undefined) => (value === 'granola' ? PROVIDERS.granola : value === 'google' ? PROVIDERS.google : null);
+
 type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown }>;
-const USED = { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Ask Waldo to connect Google for a fresh one.' };
-const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Google was not connected. You can close this tab.' };
+const used = (provider: string) => ({ status: 410, title: 'This link was already used', body: `Each connect link starts one sign-in. Ask Waldo to connect ${provider} for a fresh one.` });
+const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Nothing was connected. You can close this tab.' };
 
 const hop = (status: string, hashPrefix: string) =>
   console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: status === 'ok', detail: status }));
@@ -60,17 +71,18 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     hop('expired', hashPrefix);
     return consentPage({ kind: 'expired' }, null);
   }
-  if (session.status !== 'ok' || !session.do_name) {
+  const provider = providerOf(session.provider);
+  if (session.status !== 'ok' || !session.do_name || !provider) {
     hop(session.status, hashPrefix);
     return consentPage({ kind: 'invalid' }, null);
   }
   if (session.begun) {
     hop('used', hashPrefix);
-    return callbackPage(false, USED, '', '');
+    return callbackPage(false, used(provider.name), '', '');
   }
   let handed: HandOff = { ok: true };
   if (session.handoff) {
-    try { handed = await handOff(request, call, bindingSecret, hash, CONSENT_TTL_MS); } catch (error) { return failed(error, 'handoff failed'); }
+    try { handed = await handOff(request, call, bindingSecret, hash, provider.ttlMs); } catch (error) { return failed(error, 'handoff failed'); }
     if (!handed.ok) {
       hop('unhanded', hashPrefix);
       return callbackPage(false, UNHANDED, '', '');
@@ -78,7 +90,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (request.method === 'GET') {
     hop('confirm', hashPrefix);
-    const page = confirmPage({ provider: 'Google', providerOrigin: GOOGLE_AUTH_ORIGIN, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+    const page = confirmPage({ provider: provider.name, providerOrigin: provider.origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
     if (handed.setCookie) page.headers.append('set-cookie', handed.setCookie);
     return page;
   }
@@ -94,7 +106,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (!begun?.do_name) {
     hop('used', hashPrefix);
-    return callbackPage(false, USED, '', '');
+    return callbackPage(false, used(provider.name), '', '');
   }
   try {
     const reply = await owners.get(owners.idFromName(begun.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {
@@ -103,8 +115,10 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     const { url: consent, nonce } = await reply.json() as { url?: string; nonce?: string };
     // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.
     if (!consent || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error('no consent url minted');
+    // The confirm page told the owner where Continue goes; a consent address anywhere else is refused, not followed.
+    if (new URL(consent).origin !== provider.origin) throw new Error('consent url off the named provider');
     hop('ok', hashPrefix);
-    const redirect = await startRedirect(bindingSecret, 'google', nonce, consent, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS);
+    const redirect = await startRedirect(bindingSecret, provider.binding, nonce, consent, provider.callback, provider.ttlMs);
     if (session.handoff) redirect.headers.append('set-cookie', await releaseHandOff(request, hash));
     return redirect;
   } catch (error) {

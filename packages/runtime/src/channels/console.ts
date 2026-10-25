@@ -141,7 +141,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'granola.connect', 'granola.disconnect'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -212,6 +212,8 @@ export type ConsoleView = Readonly<{
   csrf: string;
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
+  granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
   imessage?: Readonly<{ linked: boolean }>;
