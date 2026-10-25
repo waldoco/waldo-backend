@@ -1,12 +1,12 @@
-import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired, createThread, deleteThread, fetchChatPage, fetchReceipt, fetchThreadPage, fetchThreads, newClientId, renameThread, sendChatMessage, type ChatMessage, type ChatPage, type ChatReceipt, type ChatThread, type RunState } from './chat-model';
+import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired, createThread, deleteThread, fetchChatPage, fetchReceipt, fetchThreadPage, fetchThreads, newClientId, renameThread, sendChatMessage, type ChatActivity, type ChatMessage, type ChatPage, type ChatReceipt, type ChatThread, type RunState } from './chat-model';
 
 // A message typed here, from the moment it is sent until history shows it and its turn has closed. `landed` means
 // the server's copy is in history, so only the turn's state is still drawn from here.
 export type LocalMessage = {
   clientId: string; text: string; sentAt: number; state: 'sending' | 'failed' | RunState; messageId: string | null;
   error: string | null; closedReason: string | null; effectsUnconfirmed: boolean; stopping: boolean; landed: boolean;
-  // The reply written so far, while the turn runs and the server streams replies.
-  draft?: string;
+  // The reply written so far, while the turn runs and the server streams replies; before it, what the turn's tools are on.
+  draft?: string; activity?: ChatActivity;
   // The newest history row when this was sent: only a row after it can be this message's server copy.
   after: string | null;
 };
@@ -133,7 +133,7 @@ export function createChatStore(deps: ChatDeps) {
     try {
       const receipt = await deps.receipt(clientId);
       entry.failures = 0;
-      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false, draft: receipt.draft });
+      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false, draft: receipt.draft, activity: receipt.activity });
       if (snap.notice) set({ notice: null });
       if (closed(receipt.state)) { polls.delete(clientId); await refresh(); scheduleIdle(); deps.settled?.(); return; }
       // Progress notes and earlier replies land in history while a long turn runs.
