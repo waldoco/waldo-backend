@@ -11,7 +11,8 @@ import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
 
-export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace }>;
+// `wait` is the pause between busy-slot polls; absent, it is a real timer.
+export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace; wait?: (ms: number) => Promise<void> }>;
 
 /** Fresh canonical authority for an inbox record: same owner DO, same revision, same exact binding. */
 // The sender's own authority: on an owner bridge it is the bridge authority for its bound sender; on a
@@ -80,14 +81,14 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
   outbox.dropProgress('progress_stale');
   // A bridge has one slot, so once a reply is still waiting after its polls the replies behind it on that bridge keep their
   // order and wait for the same retry, and a drain holds the owner's queue for one wait at most.
-  const waiting = new Set<string>();
+  const waiting = new Set<string>(), wait = host.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   for (const row of outbox.due()) {
     if (waiting.has(row.bridgeDoName)) { outbox.retryLater(row.replyRef, maxAgeMs, IMESSAGE_BUSY_RETRY_MS); continue; }
     let outcome;
     try {
       outcome = await handOff(host, row);
       for (let polls = 0; outcome.kind === 'busy' && polls < BUSY_POLLS; polls++) {
-        await new Promise(resolve => setTimeout(resolve, BUSY_POLL_MS));
+        await wait(BUSY_POLL_MS);
         outcome = await handOff(host, row);
       }
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }

@@ -9,6 +9,8 @@ export type DayRecord = Base<'day', {
   proactivity: { quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' };
   // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
   proactive_surface?: ProactiveSurface;
+  // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
+  health_memory?: boolean;
 }>;
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
@@ -20,10 +22,11 @@ export type ConnectionsRecord = Base<'connections', {
 }>;
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
 export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
-export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
+export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
+  | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
-export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.skip' | 'approval.undo')[] }[] }>;
+export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
 export type ActivityCursors = { trace_before?: number | null; runs_before?: number | null };
 export type LastRequest = { at: string; ok: boolean; partial: boolean; recorded_steps: number; hops: { hop: string; ok: boolean; ms: number; note: string }[] };
 export type ActivityRecord = Base<'activity', {
@@ -57,7 +60,7 @@ export type PhoneRecord = Base<'phone', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -83,8 +86,10 @@ const listed = (v: unknown, known: readonly string[]): v is string[] => strings(
 function readProposalReview(value: unknown): ProposalReview | null {
   if (value === null) return null;
   if (!obj(value)) throw shapeError();
-  if (value.kind === 'email_send' && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body)) return { kind: value.kind, to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body };
+  if (value.kind === 'email_send' && (value.account === undefined || string(value.account)) && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body) && (value.earlier_unknown_at === undefined || string(value.earlier_unknown_at)))
+    return { kind: value.kind, ...(value.account === undefined ? {} : { account: value.account }), to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body, ...(value.earlier_unknown_at === undefined ? {} : { earlier_unknown_at: value.earlier_unknown_at }) };
   if (value.kind === 'message_send' && string(value.channel) && string(value.content)) return { kind: value.kind, channel: value.channel, content: value.content };
+  if ((value.kind === 'mcp_call' || value.kind === 'tainted_action' || value.kind === 'browser_submit') && string(value.text)) return { kind: value.kind, text: value.text };
   if (value.kind === 'calendar_change' && ['create', 'move', 'cancel'].includes(String(value.action)) && [value.title, value.event_id, value.start, value.end].every(optionalString) && string(value.reason)) return { kind: value.kind, action: value.action as 'create' | 'move' | 'cancel', title: value.title as string | null, event_id: value.event_id as string | null, start: value.start as string | null, end: value.end as string | null, reason: value.reason };
   throw shapeError();
 }
@@ -98,12 +103,14 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
+    if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
+      ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
@@ -123,9 +130,12 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     // An absent or unreadable zone is carried as null; the panel then says its illustration is in UTC.
     const timezone = string(data.timezone) && validZone(data.timezone) ? data.timezone : null;
     const proposals = data.proposals.map(item => {
-      if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
+      if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.send', 'approval.edit', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
       const review = readProposalReview(item.review);
-      if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change') || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
+      // Send and Change it need the open draft itself on the page; approving a calendar change needs its change.
+      const draft = item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && review?.kind === item.kind;
+      if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change')
+        || (item.actions.includes('approval.send') || item.actions.includes('approval.edit')) && !draft || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions: [...item.actions] };
     });
     return { ...base, view: 'waiting', data: { timezone, proposals } } as Records[V];

@@ -16,6 +16,10 @@ type Card = Readonly<{ id: string; name: string }>;
 type Grant = Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
 type Trace = Readonly<{ at: number; hop: string; ok: boolean }>;
 
+// What the Today page counts as waiting on the owner. The day cards are told the same list, so they cannot contradict it.
+export const waitingApprovals = (approvals: readonly ApprovalItem[]): readonly ApprovalItem[] =>
+  approvals.filter((item) => ['open', 'review_only', 'unconfirmed'].includes(item.state));
+
 // Projection from owner-DO state only. In particular, never recycle ConsoleView: it contains
 // CSRF, memory, other private data and a paginated (not newest) activity slice.
 export const dashboardOverview = (input: Readonly<{
@@ -28,7 +32,7 @@ export const dashboardOverview = (input: Readonly<{
   const { now, timezone } = input;
   const planned = new Map(input.plans.map((row) => [row.card, row]));
   const brief = planned.get('card:brief');
-  const waiting = input.approvals.filter((item) => ['open', 'review_only', 'unconfirmed'].includes(item.state));
+  const waiting = waitingApprovals(input.approvals);
   const next = input.cards.flatMap((card) => {
     const row = planned.get(card.id);
     if (!row || row.sent || row.time === null || input.unconfirmed?.has(card.id)) return [];

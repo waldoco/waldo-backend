@@ -435,6 +435,26 @@ describe('the WHOOP start link the app opens with its one-time code', () => {
     expect((await app.send(`?handoff=${CODE}`)).status).toBe(200);
   });
 
+  it('never lets a POST redeem the code: the code stays unspent for the app\'s own GET', async () => {
+    sessionAnswer = HANDED; handoffHashLive = await handoffHash(CODE);
+    const posted = await browser().send(`?handoff=${CODE}`, 'POST');
+    expect([posted.status, posted.headers.get('location'), setCookies(posted)]).toEqual([403, null, []]);
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve']);
+    expect((await browser().send(`?handoff=${CODE}`)).status).toBe(200);
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve', 'connect_session_resolve', 'connect_session_hand_off']);
+  });
+
+  it('answers a cancel with its own page before asking the directory anything, even for a coded link in a browser that never took it', async () => {
+    for (const answer of [LIVE, HANDED]) {
+      sessionAnswer = answer;
+      const response = await start(`${WHOOP_START_PATH}AbCd1234?cancelled`);
+      const html = await response.text();
+      expect([response.status, response.headers.get('location'), setCookies(response)]).toEqual([200, null, []]);
+      expect(html).toContain('Nothing was connected. You can go back to the app.');
+      expect(rpcs).toEqual([]);
+    }
+  });
+
   it('refuses a Continue from a browser that built the hop binding from the link, after the app redeemed the code', async () => {
     sessionAnswer = HANDED; handoffHashLive = await handoffHash(CODE);
     expect((await browser().send(`?handoff=${CODE}`)).status).toBe(200);

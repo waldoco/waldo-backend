@@ -1,15 +1,16 @@
 // A forget that has not finished withholds only what carries its topic: the nightly pass still runs and learns from every
 // other turn, and neither the consolidation model nor the promotion model ever reads the held topic. A pending topic whose
-// stores now verify clean finishes on the next turn with no new forget, and unrelated words survive. Synthetic topics only.
+// stores now verify clean is settled by the purge job, and unrelated words survive. Synthetic topics only.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID, scrubEpisodeTexts } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { forgetPurge, type ForgetStore } from '../src/memory/forget-purge';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -91,7 +92,7 @@ describe('the nightly pass with a forget still pending', () => {
   it('runs, learns from every other turn, and sends the held turns only once the purge has redacted them', async () => {
     await withOwner('nightly-held-topic', async (state, fire) => {
       const sql = state.storage.sql;
-      const memory = claimStore(sql);
+      const memory = claimStore(sql, work => state.storage.transactionSync(work));
       holdTopic(sql, 'tea', '2026-10-18T08:00:00Z');
       memory.backup('escaped-copy', { note: 'x' }, '2026-10-18T08:00:00Z');
       sql.exec('UPDATE memory_backups SET payload = ?', ESCAPED_COPY);
@@ -103,12 +104,19 @@ describe('the nightly pass with a forget still pending', () => {
       episodes.add('app-3', OWNER_SAID, UNRELATED, NOW - 3 * HOUR);
       const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       let logged: string[] = [];
-      try { await fire(); logged = lines.mock.calls.map(call => String(call[0])); } finally { lines.mockRestore(); }
-      // The Patrol line says how many turns waited, never which. The consolidation retries the pending purge, which redacts the
-      // held turns, so the same pass learns them as redacted.
+      try {
+        await fire();
+        // The purge job, not the nightly pass, redacts the held turns; the escaped backup is derived and is deleted.
+        const stores: ForgetStore[] = [{ name: 'episodes', run: (texts) => { scrubEpisodeTexts(sql, texts, FORGOTTEN); return 0; } }];
+        expect(await forgetPurge({ sql, store: memory, stores, now: Date.now, arm: async () => undefined }).run()).toEqual({ settled: 1, pending: 0 });
+        await fire();
+        logged = lines.mock.calls.map(call => String(call[0]));
+      } finally { lines.mockRestore(); }
+      // The Patrol line says how many turns waited, never which; the next pass learns them as redacted.
       const nightly = logged.filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { ok: boolean; detail?: string });
       expect(nightly).toMatchObject([
         { ok: true, detail: expect.stringMatching(/^2 turns, 2 withheld while a forget finishes; /) },
+        { ok: true, detail: 'quiet day' },
         { ok: true, detail: expect.stringMatching(/^2 turns; /) },
       ]);
       expect(model.nights).toHaveLength(2);
@@ -121,8 +129,8 @@ describe('the nightly pass with a forget still pending', () => {
       // The pass finished: what it learned is stored and the mark moved past the withheld turns.
       expect(memory.claims().map(claim => claim.text)).toEqual(['Swims every Friday before work']);
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 3 * HOUR);
-      // A copy the purge cannot reach keeps the forget pending.
-      expect(memory.pendingTopics()).toEqual(['tea']);
+      expect(memory.pendingTopics()).toEqual([]);
+      expect(memory.backups().map(backup => backup.reason)).not.toContain('escaped-copy');
       expect(model.promotions.join('\n')).not.toMatch(/green tea/i);
     });
   });
@@ -221,7 +229,7 @@ describe('the owner turn with a forget still pending', () => {
       expect(memory.nodes()).toEqual([]);
     });
   });
-  it('a pending short topic whose stores now verify clean finishes on the next turn, and unrelated words survive', async () => {
+  it('a pending short topic whose stores now verify clean is settled by the purge job, and unrelated words survive', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('recover-held-topic')), async (_i, state) => {
       const sql = state.storage.sql;
       const memory = claimStore(sql, work => state.storage.transactionSync(work));
@@ -229,9 +237,8 @@ describe('the owner turn with a forget still pending', () => {
       memory.add({ kind: 'fact', text: 'Works with a team', source: 'stated', evidence: 'The team holds steady', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-19T08:00:00Z');
       await state.storage.put('conv:1', { id: 'c1', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: UNRELATED, appPayload: UNRELATED, modelProjection: { mode: 'include' }, role: 'user' });
       holdTopic(sql, 'tea', '2026-10-18T08:00:00Z');
-      const redact = (texts: readonly string[]) => redactConversationEntries(state.storage, texts, FORGOTTEN);
-      const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, redact);
-      await responder.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'What is on today?' }), timer);
+      const stores: ForgetStore[] = [{ name: 'conversation', run: async (texts) => (await redactConversationEntries(state.storage, texts, FORGOTTEN)).remaining }];
+      expect(await forgetPurge({ sql, store: memory, stores, now: Date.now, arm: async () => undefined }).run()).toEqual({ settled: 1, pending: 0 });
       expect(memory.pendingTopics()).toEqual([]);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(UNRELATED);
       expect(memory.allClaims().map(claim => [claim.text, claim.evidence])).toEqual([['Works with a team', 'The team holds steady']]);

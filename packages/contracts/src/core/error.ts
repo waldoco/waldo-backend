@@ -54,9 +54,11 @@ export const toolErrorCodeSchema = z.enum([
 ]);
 export type ToolErrorCode = z.infer<typeof toolErrorCodeSchema>;
 
-// Why a page or site stopped a read, when the tool knows it for certain (an HTTP 401, a bot-check header, an engine's
-// own verdict), never guessed from wording. Each one names a different next rung, so the model climbs on evidence.
-export const rungBlockedOutcomeSchema = z.enum(['challenge', 'login_required', 'js_required']);
+// Why a rung stopped a call, when the tool knows it for certain, never guessed from wording. The first three are a page or
+// site's own block (an HTTP 401, a bot-check header, an engine's own verdict); device_offline is the owner's paired Mac not
+// connected when use_mac was called, so nothing was sent. Each one names a different next step, so the model moves on
+// evidence. Members are only ever added: a value recorded before stays valid.
+export const rungBlockedOutcomeSchema = z.enum(['challenge', 'login_required', 'js_required', 'device_offline']);
 export type RungBlockedOutcome = z.infer<typeof rungBlockedOutcomeSchema>;
 
 // The fix a blocked outcome carries in place of its code's generic one: what the block means and which rung to try next.
@@ -65,6 +67,7 @@ export const RUNG_BLOCKED_FIX: Readonly<Record<RungBlockedOutcome, string>> = Ob
   login_required: 'The page needs the owner signed in. Do not retry it signed out. Use the service\'s own connected tool or MCP server if there is one; otherwise offer the owner a sign-in hand-off they complete themselves, or another source. Never ask for a password or code.',
   js_required: 'The page only shows its content in a real browser. Read it with browse_page, or use another source.',
   challenge: 'The site answered with a bot check, which a read cannot pass. Do not retry it. Use another source for the same fact; if the owner wants this site, they can pass the check themselves.',
+  device_offline: 'The owner\'s Mac is asleep or offline, so nothing was sent and nothing will run there. Do not say it was sent and do not retry it this turn. Do it on a lower rung if one can; otherwise tell the owner the Mac needs to be awake with Kennel running, and ask again once they say it is.',
 });
 
 export const toolErrorSchema = z.strictObject({

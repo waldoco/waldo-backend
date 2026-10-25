@@ -10,7 +10,7 @@ export const oauthStateSecret = (env: OAuthStateEnv): string | null => {
   if (secret) return secret;
   if (!warned) {
     warned = true;
-    console.warn(JSON.stringify({ event: 'oauth_state_secret_missing', effect: 'google_and_mcp_sign_in_off' }));
+    console.warn(JSON.stringify({ event: 'oauth_state_secret_missing', effect: 'connector_connect_off' }));
   }
   return null;
 };

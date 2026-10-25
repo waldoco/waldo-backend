@@ -22,6 +22,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
+  WALDO_COMPACTION?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -30,6 +32,9 @@ export type TelegramWebhookEnv = Readonly<{
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;
+  // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
+  // earlier rule, which withholds a whole read that mentions the topic.
+  WALDO_FORGET_BARRIER?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).

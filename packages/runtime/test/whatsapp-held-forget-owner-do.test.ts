@@ -460,7 +460,7 @@ describe('the job-report redactor covers heartbeat check-backs and reminders', (
 
 // A job whose message waits for WhatsApp keeps its run open, with no summary yet, for as long as the message waits.
 describe('a forget while a job\'s run is still open', () => {
-  it('scrubs finished runs and settles, instead of failing on the open run\'s empty summary', async () => {
+  it('clears finished runs\' summaries and settles, instead of failing on the open run\'s empty summary', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-open-run')), async (_instance, state) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
       const runs = runBook(state.storage.sql, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
@@ -469,8 +469,9 @@ describe('a forget while a job\'s run is still open', () => {
       memory.add({ kind: 'fact', text: SECRET, source: 'stated', evidence: `"${SECRET}"`, origin: 'owner' }, new Date().toISOString());
       const purge = memory.purge([memory.claims()[0]!.id], new Date().toISOString());
       expect({ ready: purge.ready, failed: purge.failed, remaining: purge.remaining }).toEqual({ ready: true, failed: [], remaining: {} });
-      expect(state.storage.sql.exec<{ summary: string | null }>('SELECT summary FROM background_runs ORDER BY started_at, kind').toArray().map(row => row.summary).sort())
-        .toEqual([`Checked the ${FORGOTTEN}`, null].sort());
+      // A run's summary is Waldo's own derived text, so one that carries the topic is cleared, not redacted.
+      expect(state.storage.sql.exec<{ summary: string | null }>('SELECT summary FROM background_runs ORDER BY started_at, kind').toArray().map(row => row.summary))
+        .toEqual([null, null]);
     });
   });
 });

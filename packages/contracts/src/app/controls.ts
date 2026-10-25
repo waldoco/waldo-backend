@@ -33,7 +33,7 @@ export const appControlActionV1Schema = z.strictObject({
 }).superRefine((action, ctx) => {
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
-  // browser session: its one-time code binds that browser to the link. The backend decides which features exist.
+  // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
   // Deletion signs out every session, so its recorded receipt cannot be read back: a replay is refused
   // as signed out. An unconfirmed receipt can be read back, and resending the same request_id never
