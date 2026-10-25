@@ -195,6 +195,10 @@ it('react_to_message is offered on an iMessage turn only while the host reports 
   expect(await offered({ ...TAPBACKS, send: false })).toBe(false);
   expect(await offered(TAPBACKS)).toBe(true);
   expect(proof.tools.at(-1)!.includes('send_message')).toBe(true);
+  // The console's row says so too, from the same reading.
+  expect(await w.bridgeStub().status()).toMatchObject({ textReady: true, tapbacksReady: true });
+  expect((await w.host.capabilities(true, { ...TAPBACKS, verified: false })).status).toBe(200);
+  expect(await w.bridgeStub().status()).toMatchObject({ textReady: true, tapbacksReady: false });
 });
 
 it('a tapback the model sends goes out once, on the owner\'s own message, through the outbox before the reply', async () => {
