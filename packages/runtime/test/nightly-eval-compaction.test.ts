@@ -95,6 +95,13 @@ describe('the long conversation compaction is measured on', () => {
     expect(off).not.toHaveProperty('compaction');
   });
 
+  it('an ablated compaction run keeps compaction on, and its card names the compaction baseline it is compared with', () => {
+    const ablated = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_COMPACTION: 'on', WALDO_EVAL_ABLATE: '0badc0de' });
+    expect(ablated.compaction).toEqual(ON);
+    expect(ablated.candidate).toBe('recorded+compaction+ablate:0badc0de');
+    expect(ablated.candidate.split('+ablate:')[0]).toBe(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_COMPACTION: 'on' }).candidate);
+  });
+
   it('a turn read of the long chat with compaction on and no summary yet stops at the window, as with it off', async () => {
     // Six times the seeded history, so the chain is well past one page of rows.
     const history = Array.from({ length: 6 }, () => LONG_HISTORY).flat();
