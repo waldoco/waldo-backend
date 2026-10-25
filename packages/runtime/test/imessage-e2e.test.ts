@@ -27,7 +27,7 @@ import { loopBook } from '../src/channels/loops';
 import { ensureSchema } from '../src/tracer/schema';
 import { TelegramFinalOutbox, outboxRunNotes } from '../src/channels/telegram-final-outbox';
 import { observeIMessageReports } from '../src/channels/imessage/scheduled-route';
-import { TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
+import { armTaskJobsWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { jobBook } from '../src/tasks/jobs';
 import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
@@ -1788,6 +1788,61 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
     expect(owners[0]!.owner).toBe(owners[1]!.owner);
   });
 });
+
+// R-4 on iMessage. When no model answers an iMessage-only owner, the floor reply promises a time in the owner's own zone, and
+// the retried turn's late answer comes back on iMessage. If the retry finds no model either, the owner is still told.
+const OWNER_ZONE = 'Asia/Kolkata';
+const zoneTime = (at: number, timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+type RetryRow = { id: string; status: string; park_reason: string | null; brief_json: string };
+const retryRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
+  state.storage.sql.exec<RetryRow>("SELECT id, status, park_reason, brief_json FROM task_jobs WHERE kind = 'retry_turn'").toArray());
+// The retry is due two minutes after the floor; the test brings that time to now rather than moving the clock. `promisedBy`
+// moves the promised time too, so this try is the last one.
+const retryDueNow = (w: Awaited<ReturnType<typeof world>>, promisedBy?: number) => runInDurableObject(w.ownerStub, async (_i, state) => {
+  const now = Date.now();
+  if (promisedBy === undefined) state.storage.sql.exec("UPDATE task_jobs SET due_at = ? WHERE kind = 'retry_turn'", now);
+  else state.storage.sql.exec("UPDATE task_jobs SET due_at = ?, deadline_at = ?, brief_json = json_set(brief_json, '$.promised_by', ?) WHERE kind = 'retry_turn'", now, promisedBy, promisedBy);
+  await armTaskJobsWake(state.storage, now);
+});
+const modelDownOnIMessage = async (w: Awaited<ReturnType<typeof world>>) => {
+  await iMessageOnly(w);
+  await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('timezone', OWNER_ZONE); });
+  modelDown();
+  await replyFor(w, 'Move my 3pm to Friday');
+  const floor = JSON.parse((await sendNext(w)).body).text as string;
+  const [job] = await retryRows(w);
+  return { floor, job: job! };
+};
+
+it('R-4 on iMessage: the floor promises a time in the owner\'s zone, and the retried turn\'s late answer comes back on iMessage', async () => {
+  const w = await world();
+  const { floor, job } = await modelDownOnIMessage(w);
+  const promised = (JSON.parse(job.brief_json) as { promised_by: number }).promised_by;
+  expect(floor).toBe(`I can't answer properly right now. I'll come back to you by ${zoneTime(promised, OWNER_ZONE)}.`);
+  expect(zoneTime(promised, OWNER_ZONE)).not.toBe(zoneTime(promised, 'UTC'));
+  expect(job.status).toBe('queued');
+  proof.hold = null;
+  await retryDueNow(w);
+  const late = 'Done late: your 3pm is now on Friday.';
+  const delivery = await scheduledOnIMessage(w, late);
+  await hostReports(w, delivery);
+  expect(sentTexts(w).slice(-2)).toEqual([floor, late]);
+  expect((await retryRows(w)).map(row => row.status)).toEqual(['applied']);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+it('R-4 on iMessage: a retry that finds no model either still tells the owner, on iMessage, once', async () => {
+  const w = await world();
+  const { job } = await modelDownOnIMessage(w);
+  const said = zoneTime(Date.now(), OWNER_ZONE);
+  await retryDueNow(w, Date.now() - 1_000);
+  const notice = `I still can't reach my model, so I couldn't answer your message from ${said}. Could you send it again in a little while?`;
+  const delivery = await scheduledOnIMessage(w, notice);
+  await hostReports(w, delivery);
+  expect(sentTexts(w).filter(text => text === notice)).toHaveLength(1);
+  expect((await retryRows(w)).map(row => [row.id, row.status, row.park_reason])).toEqual([[job.id, 'parked', 'provider_unavailable']]);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
 
 // A Mac result reaches the owner where their proactive work goes: on iMessage for an owner whose only surface it is, and in
 // the app with one iMessage copy for an owner who chose both. The device directory answers for the owner's paired Mac.
