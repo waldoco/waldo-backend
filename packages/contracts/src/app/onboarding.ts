@@ -41,6 +41,23 @@ export const appConsentStateV1Schema = z.strictObject({
   if (state.withdrawn_at !== null && state.granted_at !== null && state.withdrawn_at < state.granted_at) ctx.addIssue({ code: 'custom', path: ['withdrawn_at'], message: 'withdrawal cannot precede grant' });
   if (state.status === 'withdrawn' && state.purpose !== 'owner_lookup') ctx.addIssue({ code: 'custom', path: ['status'], message: 'only owner_lookup can be withdrawn; terms and the notice end with the account' });
 });
+// Beta diagnostic recording, consents revision 2: whether the Waldo team may read this owner's chats with Waldo to find and fix
+// problems. Optional, not agreed until the owner says yes, and a yes counts only for the wording version it was given to. The
+// owner directory holds the record, not the ledger above, so it is its own purpose with its own shapes: listed only for a
+// request whose x-waldo-app-contract names consents=2, and granted or withdrawn on the same routes. state on is a live yes to
+// the current wording; off is no yes, a withdrawn one or a yes to older wording; unknown is a record the directory could not
+// read just now, never shown as off. recorded_here is false where this server records no chat text whatever the owner chooses.
+// version, label and detail are the current wording: the app shows label and detail, and a grant names version.
+export const APP_CONSENTS_DIAGNOSTIC_REVISION_V1 = 2;
+export const appDiagnosticRecordingPurposeV1Schema = z.literal('diagnostic_recording');
+export const appDiagnosticRecordingVersionV1Schema = z.string().regex(/^[a-z0-9][a-z0-9.-]{0,39}$/);
+export const appDiagnosticRecordingStateV1Schema = z.strictObject({
+  state: z.enum(['on', 'off', 'unknown']),
+  recorded_here: z.boolean(),
+  version: appDiagnosticRecordingVersionV1Schema,
+  label: z.string().min(1).max(300),
+  detail: z.string().min(1).max(2000),
+});
 // age_attested_18_plus is true once the owner has said they are 18 or over; it is recorded on the account, never only ticked.
 // agreements_offered is false while this server holds back the terms and the notice (until their copy is approved): the app
 // then shows no agreements step, terms and privacy_notice are refused not_offered, and the steps after the agreements run with
@@ -53,6 +70,8 @@ export const appConsentListV1Schema = z.strictObject({
   owner_lookup_offered: z.boolean(),
   consents: z.array(appConsentStateV1Schema).length(appConsentPurposeV1Schema.options.length)
     .refine(rows => new Set(rows.map(row => row.purpose)).size === rows.length, 'each purpose is listed once'),
+  // Absent below consents revision 2, and where this server has no owner directory to hold the agreement.
+  diagnostic_recording: appDiagnosticRecordingStateV1Schema.optional(),
 });
 export const appConsentGrantV1Schema = z.strictObject({
   request_id: requestId, purpose: appConsentPurposeV1Schema, version: z.int().positive(), age_attested_18_plus: z.literal(true),
@@ -60,6 +79,14 @@ export const appConsentGrantV1Schema = z.strictObject({
 export const appConsentWithdrawV1Schema = z.strictObject({ request_id: requestId, purpose: z.literal('owner_lookup') });
 // findings_erased counts the look-up findings a withdrawal removed; it is 0 for a grant and for a replay.
 export const appConsentChangeV1Schema = z.strictObject({ consent: appConsentStateV1Schema, replayed: z.boolean(), findings_erased: count });
+// A diagnostic recording grant needs no 18+ attestation: it is not an agreement to the terms. Its answer is the state the
+// directory recorded, so it is never unknown; a change the directory could not confirm answers unavailable instead.
+export const appDiagnosticRecordingGrantV1Schema = z.strictObject({ request_id: requestId, purpose: appDiagnosticRecordingPurposeV1Schema, version: appDiagnosticRecordingVersionV1Schema });
+export const appDiagnosticRecordingWithdrawV1Schema = z.strictObject({ request_id: requestId, purpose: appDiagnosticRecordingPurposeV1Schema });
+export const appDiagnosticRecordingChangeV1Schema = z.strictObject({
+  diagnostic_recording: appDiagnosticRecordingStateV1Schema.refine(recording => recording.state !== 'unknown', 'a recorded change is on or off'),
+  replayed: z.boolean(),
+});
 
 // First run. Three questions at most, each skippable: name, brief_time and priority are the only steps that ask the owner
 // anything. google and health are connections the owner may decline; channel is a choice among fixed surfaces, with the app
@@ -214,7 +241,9 @@ export const appSetupAnswersResultV1Schema = z.strictObject({
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
 // channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
 // request_id came back with a different body. not_found: no such finding. step_up_required (403): a link code needs a sign-in
-// from the last two hours.
+// from the last two hours. For diagnostic_recording: stale_version is a grant naming wording that is no longer current;
+// not_offered is a server with no owner directory to hold it; unavailable is a change the directory refused or could not
+// confirm, after which the app reads the list again.
 export const appOnboardingErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable', 'step_up_required']),
   message: z.string().max(1000).optional(),
@@ -227,14 +256,15 @@ export const appOnboardingRoutesV1 = [
   { method: 'GET', path: '/app/v1/onboarding/channels', response: appOnboardingChannelsV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/channel-link', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema, authenticated: true, success_status: 200, max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/consents', response: appConsentListV1Schema, authenticated: true, success_status: 200 },
-  { method: 'POST', path: '/app/v1/consents', request: appConsentGrantV1Schema, response: appConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
-  { method: 'POST', path: '/app/v1/consents/withdraw', request: appConsentWithdrawV1Schema, response: appConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/consents', request: z.union([appConsentGrantV1Schema, appDiagnosticRecordingGrantV1Schema]), response: z.union([appConsentChangeV1Schema, appDiagnosticRecordingChangeV1Schema]), authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/consents/withdraw', request: z.union([appConsentWithdrawV1Schema, appDiagnosticRecordingWithdrawV1Schema]), response: z.union([appConsentChangeV1Schema, appDiagnosticRecordingChangeV1Schema]), authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/findings', query: appFindingListQueryV1Schema, response: appFindingListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/findings/actions', request: appFindingActionV1Schema, response: appFindingResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
 ] as const;
 
 export type AppConsentPurposeV1 = z.infer<typeof appConsentPurposeV1Schema>;
 export type AppConsentStateV1 = z.infer<typeof appConsentStateV1Schema>;
+export type AppDiagnosticRecordingStateV1 = z.infer<typeof appDiagnosticRecordingStateV1Schema>;
 export type AppOnboardingV1 = z.infer<typeof appOnboardingV1Schema>;
 export type AppOnboardingActionV1 = z.infer<typeof appOnboardingActionV1Schema>;
 export type AppOnboardingStepV1 = z.infer<typeof appOnboardingStepV1Schema>;
