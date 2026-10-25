@@ -7,8 +7,8 @@ import { EGRESS_READ_TOOLS, MACHINE_READER } from '../src/tasks/profiles';
 // An unattended turn that starts on someone else's text could be steered into putting the owner's private data in a
 // search query or an MCP call; nothing cards a read, so those turns must not hold the reads that send text out.
 describe('unattended turns on outside text hold no egress reads', () => {
-  it('names the egress reads once: web search and MCP reads', () => {
-    expect([...EGRESS_READ_TOOLS].sort()).toEqual(['read_mcp_tool', 'web_search']);
+  it('names the egress reads once: web search, page reads and MCP reads', () => {
+    expect([...EGRESS_READ_TOOLS].sort()).toEqual(['browse_page', 'read_mcp_tool', 'web_search']);
     for (const name of EGRESS_READ_TOOLS) expect(MACHINE_READER).not.toContain(name);
   });
 
