@@ -159,10 +159,10 @@ describe('a tainted turn sends every write to the owner card', () => {
     const carded: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
-      'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
+      'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
       'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
       'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'skills_load',
+      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'skills_load', 'start_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
