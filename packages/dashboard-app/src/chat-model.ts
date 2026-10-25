@@ -14,7 +14,8 @@ export type ChatPart =
 export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; parts: ChatPart[]; channel: string; parent_id: string | null; created_at: number | null };
 export type ChatPage = { messages: ChatMessage[]; next_cursor: string | null };
 export type RunState = 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
-export type ChatReceipt = { message_id: string; state: RunState; closed_reason: string | null; effects_unconfirmed: boolean };
+// draft: the reply written so far, while the turn runs (chat contract revision 2).
+export type ChatReceipt = { message_id: string; state: RunState; closed_reason: string | null; effects_unconfirmed: boolean; draft?: string };
 
 export class ChatSignInRequired extends Error { constructor() { super('Sign in to chat with Waldo.'); } }
 // status 0 is the network; retryAfter is in seconds when the server named one.
@@ -60,7 +61,7 @@ export const readChatPage = (value: unknown): ChatPage => {
 
 export const readReceipt = (value: unknown): ChatReceipt => {
   if (!obj(value) || value.accepted !== true || !str(value.message_id) || !runState(value.state)) throw new ChatRequestError(200, 'Waldo sent a message status this console cannot read.');
-  return { message_id: value.message_id, state: value.state, closed_reason: str(value.closed_reason) ? value.closed_reason : null, effects_unconfirmed: value.effects_unconfirmed === true };
+  return { message_id: value.message_id, state: value.state, closed_reason: str(value.closed_reason) ? value.closed_reason : null, effects_unconfirmed: value.effects_unconfirmed === true, ...(str(value.draft) && value.draft ? { draft: value.draft } : {}) };
 };
 
 const CHANGED = 'This chat changed in another window. Try again.';
@@ -116,7 +117,8 @@ export const sendChatMessage = async (clientId: string, text: string, thread: st
   if (!obj(value) || value.accepted !== true || !str(value.message_id)) throw new ChatRequestError(202, 'Waldo took the message but its receipt was unreadable.');
   return { message_id: value.message_id, state: runState(value.state) ? value.state : 'admitted', closed_reason: null, effects_unconfirmed: false };
 };
-export const fetchReceipt = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}`));
+// The console reads chat revision 2, so a running reply's receipt carries the text written so far.
+export const fetchReceipt = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}`, { headers: { 'x-waldo-app-contract': 'chat=2' } }));
 export const cancelChatMessage = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}/cancel`, { method: 'POST' }));
 
 // The owner's chats beside main. Titles and previews are owner or model text and render as plain text.

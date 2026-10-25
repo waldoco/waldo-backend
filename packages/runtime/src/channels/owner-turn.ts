@@ -52,6 +52,7 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { replyGate, withReplyStream } from '../conversation/reply-gate';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
@@ -252,7 +253,9 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const adapter = gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const streamed = ownerCall && purpose === 'reply' ? activeOwnerTurn?.replyStream : undefined;
+    const adapter = withReplyStream(gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } }),
+      streamed, () => replyGate({ sanitise: safety.sanitise, canaries: CANARIES, topics: heldTopics() }));
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -315,6 +318,7 @@ export const createOwnerResponder = (
     else log({
       trace, hop: `llm_${purpose}`, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
       ...(result.tool_search_degraded ? { tool_search_degraded: true } : {}),
+      ...(response?.ttft_ms === undefined ? {} : { ttft_ms: response.ttft_ms }),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
       ...(floor ? { code: 'template_floor' } : { usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
         web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 } }),

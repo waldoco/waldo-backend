@@ -6,7 +6,7 @@ import { chatChannelLinks } from './chat-channel-links';
 import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
-import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox';
+import { APP_TURN_DEADLINE_MS, AppInbox, wantsReplyDraft, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
@@ -179,7 +179,7 @@ import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
-import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
+import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
@@ -1363,7 +1363,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const client=path.slice(APP_CHAT_SEND_PATH.length+1);
       if(!/^[A-Za-z0-9_-]{8,64}$/.test(client))return fail(404);
       this.recoverApp();
-      const receipt=this.appInbox.receipt(name,client,mainRef);return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
+      const receipt=this.appInbox.receipt(name,client,mainRef,wantsReplyDraft(request));return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
     }
     if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&path.endsWith('/cancel')&&request.method==='POST'){
       const client=path.slice(APP_CHAT_SEND_PATH.length+1,-'/cancel'.length);
@@ -1466,7 +1466,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
         return result;
       },
-      receipt:(ref,clientId)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref);},
+      receipt:(ref,clientId,withDraft)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref,withDraft);},
       cancel:(ref,clientId)=>{
         this.recoverApp();
         const row=this.appInbox.cancel(name,clientId,ref);if(!row)return null;
@@ -3749,6 +3749,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'memory_migration', ms: Date.now() - started, ok: false, error: String(error) });
       }
     };
+    // Off unless WALDO_STREAM_REPLIES=on. The surfaces that show a reply while it is written; WhatsApp and iMessage take it whole.
+    const replyDraft = this.env.WALDO_STREAM_REPLIES === 'on' ? ({
+      telegram: (turn: import('./telegram-polling').TelegramInboundTurn) => telegramReplyDraft(routedCall, turn.chatId, turn.updateId),
+      app: () => this.appInbox.replyDraft(this.activeApp),
+    } as Partial<Record<ChannelKind, (turn: import('./telegram-polling').TelegramInboundTurn) => import('../conversation/reply-stream').ReplyDraftSurface | undefined>>)[channel] : undefined;
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
       // Native chat has no reaction surface; do not start a parallel unbound model call.
@@ -3791,6 +3796,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
+      ...(replyDraft ? { streamReply: (turn: import('./telegram-polling').TelegramInboundTurn) => probeCapture.current === null ? replyDraft(turn) : undefined } : {}),
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
         trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,
