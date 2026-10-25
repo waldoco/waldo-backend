@@ -130,7 +130,9 @@ const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
 // The minute signals get_health returns beside sleep.
 const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;
 // Hours and minutes together ("1h 35m"), the way a sleep stage is relayed; ordinary plans rarely take that shape.
-const STAGE_DURATION = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*\d{1,2}\s*m(?:ins?|inutes?)?\b`;
+const STAGE_HOURS = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*`;
+const STAGE_MINUTES = String.raw`\d{1,2}\s*m(?:ins?|inutes?)?\b`;
+const STAGE_DURATION = `${STAGE_HOURS}${STAGE_MINUTES}`;
 const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
@@ -234,6 +236,39 @@ export const readingBeyondOwner = (text: string, owner: string | undefined): boo
 
 // The readings in the owner's words, as text: what vouches for a summary, which quotes no evidence of its own.
 export const ownerReadings = (owner: string | undefined): string | undefined => owner === undefined ? undefined : numericHealthReadings(owner).join('\n');
+
+// The same floor as a redaction, for text that leaves for a trace store: each reading becomes `marker`. A duration the floor
+// matches by one half takes the other half too, so neither "slept 7h 22m" nor "7h 22m of sleep" leaves a half behind.
+const ENDS_IN_HOURS = new RegExp(String.raw`\d\s*h(?:rs?|ours?)?$`, 'i');
+const STARTS_IN_MINUTES = new RegExp(String.raw`^${STAGE_MINUTES}`, 'i');
+const HOURS_BEFORE = new RegExp(String.raw`${STAGE_HOURS}$`, 'i');
+export const redactNumericHealth = (text: string, marker: string): string => {
+  const spans: Array<[number, number]> = [];
+  const minutesAfter = new RegExp(String.raw`\s*${STAGE_MINUTES}`, 'iy');
+  const tail = (end: number): number => { minutesAfter.lastIndex = end; return minutesAfter.exec(text)?.[0].length ?? 0; };
+  const head = (start: number): number => HOURS_BEFORE.exec(text.slice(Math.max(0, start - 16), start))?.[0].length ?? 0;
+  const collect = (pattern: RegExp, kept: (match: string) => boolean = () => true) => {
+    for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))) {
+      if (!kept(match[0])) continue;
+      const end = match.index + match[0].length;
+      spans.push([
+        match.index - (STARTS_IN_MINUTES.test(match[0]) ? head(match.index) : 0),
+        end + (ENDS_IN_HOURS.test(match[0]) ? tail(end) : 0),
+      ]);
+    }
+  };
+  for (const pattern of OWNER_HEALTH_READINGS) collect(pattern);
+  for (const pattern of RAW_SENSOR_PATTERNS) collect(pattern, (field) => SERIALIZED_FIELD.test(field));
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
+  let out = '', at = 0;
+  for (const [start, end] of spans) {
+    if (end <= at) continue;
+    out += start >= at ? `${text.slice(at, start)}${marker}` : '';
+    at = end;
+  }
+  return out + text.slice(at);
+};
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,

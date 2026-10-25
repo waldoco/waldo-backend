@@ -1209,15 +1209,15 @@ describe('decisions from any surface', () => {
   it('a WhatsApp reply, which carries message_id 0, decides through the WhatsApp card it answers', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-whatsapp-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
-      const sent: string[] = []; const answers: string[] = [];
-      const desk = approvalDesk(state.storage.sql, { owner: 447700900123, surface: 'whatsapp', google: async () => null, newId: () => 'wa1', now: () => NOW, timezone: 'UTC', log: () => {},
-        call: async (method: string, body: object) => { if (method === 'answerCallbackQuery') answers.push(String((body as { text?: string }).text)); return method === 'sendMessage' ? { messaging_product: 'whatsapp', messages: [{ id: 'wamid.card-1' }] } : undefined; },
-        sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: 'wamid.sent-1' }; } });
-      const id = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'On my way', idempotency_key: 'wa-1' });
+      const held: string[] = []; const answers: string[] = [];
+      const client = { createEvent: async (input: { title: string }) => { held.push(input.title); return { id: 'ev1', title: input.title, start: '', end: '', all_day: false, etag: 'v1' }; } } as unknown as GoogleClient;
+      const desk = approvalDesk(state.storage.sql, { owner: 447700900123, surface: 'whatsapp', google: async () => client, newId: () => 'wa1', now: () => NOW, timezone: 'UTC', log: () => {},
+        call: async (method: string, body: object) => { if (method === 'answerCallbackQuery') answers.push(String((body as { text?: string }).text)); return method === 'sendMessage' ? { messaging_product: 'whatsapp', messages: [{ id: 'wamid.card-1' }] } : undefined; } });
+      const id = await desk.propose({ action: 'create', title: 'Focus', start: iso('2026-10-11T09:00:00Z'), end: iso('2026-10-11T10:00:00Z'), reason: 'deep work' });
       expect(state.storage.sql.exec<{ surface: string; message_ref: string }>('SELECT surface, message_ref FROM approval_presentations WHERE approval_id = ?', id).toArray()).toEqual([{ surface: 'whatsapp', message_ref: 'wamid.card-1' }]);
       await desk.callback({ id: 'wa-reply', from: { id: 447700900123 }, data: `a:${id}`, message: { message_id: 0, chat: { id: 447700900123 } } }, 'trace');
-      expect(answers).toEqual(['Sent']);
-      expect(sent).toEqual(['On my way']);
+      expect(answers).toEqual(['Done']);
+      expect(held).toEqual(['Focus']);
     });
   });
 

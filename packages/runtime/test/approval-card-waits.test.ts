@@ -2,6 +2,8 @@
 // 24-hour window), through the real window layer. A card the surface cannot take now is neither held as text nor recorded as
 // presented: it waits, and goes out once the owner writes there, which is when its presentation is recorded, in the same commit
 // as the row opening. A card is sent at most once, and never for an approval that is no longer waiting on the owner.
+// A send to another person is approved only in the app, so it always opens there at once; the cards that can wait unpresented
+// are the ones chat approves, such as a hold on the owner's own calendar.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +11,7 @@ import { approvalDesk, endCardWaits, forgetWaitingCards, PROPOSAL_TTL_MS, propos
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import { WhatsAppApiError } from '../src/channels/whatsapp-api';
 import { whatsappWindowCaller, whatsappWindowOpen } from '../src/channels/whatsapp-window';
-import { sha256Hex } from '../src/connectors/google';
+import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import { stableJson } from '../src/context-composer/canonical';
 
 const NOW = Date.UTC(2026, 9, 18, 9, 0, 0);
@@ -22,7 +24,8 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   let now = NOW, wamid = 0, next: 'unknown' | 'refused' | null = null, n = 0;
   // The owner last wrote 30 hours ago, so the window is closed.
   kv.put('wa_last_inbound_ms', NOW - 30 * HOUR);
-  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [], ran: string[] = [], logs: TurnLogEntry[] = [];
+  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [], ran: string[] = [], holds: string[] = [], logs: TurnLogEntry[] = [];
+  const calendar = { createEvent: async (input: { title: string }) => { holds.push(input.title); return { id: `ev-${holds.length}`, title: input.title, start: '', end: '', all_day: false, etag: 'v1' }; } } as unknown as GoogleClient;
   let duringSend: ((text: string) => void) | null = null;
   const inner = async (method: string, body: object) => {
     if (method === 'sendTemplate') { delivered.push('knock'); return { messages: [{ id: 'wamid.knock' }] }; }
@@ -39,12 +42,12 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   };
   const call = whatsappWindowCaller(inner, { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => now, log: () => undefined });
   const desk = approvalDesk(sql, { owner: OWNER, surface: 'whatsapp', call, writesFirstNow: () => whatsappWindowOpen(kv, now),
-    google: async () => null, newId: () => `w${++n}`, now: () => now, timezone: 'UTC', log: entry => { logs.push(entry); }, commit: work => state.storage.transactionSync(work),
+    google: async () => calendar, newId: () => `w${++n}`, now: () => now, timezone: 'UTC', log: entry => { logs.push(entry); }, commit: work => state.storage.transactionSync(work),
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `wamid.sent-${sent.length}` }; },
     replayTaintedAction: async proposal => { ran.push(proposal.tool); return { status: 'done', message: 'Created.' }; },
     ...(options.app ? { appIdentity: () => true } : {}) });
   return {
-    desk, attempts, delivered, sent, ran, logs, sql,
+    desk, attempts, delivered, sent, ran, holds, logs, sql,
     now: () => now,
     // Runs while WhatsApp accepts a card, as a decision made elsewhere during the pass would.
     onSend: (work: (text: string) => void) => { duringSend = work; },
@@ -60,6 +63,8 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   };
 };
 const message = (content: string) => ({ channel: 'whatsapp', content, idempotency_key: `key-${content}` });
+// A hold on the owner's own calendar, which chat approves in one tap.
+const hold = (title: string) => ({ action: 'create' as const, title, start: new Date(NOW + 72 * HOUR).toISOString() as never, end: new Date(NOW + 73 * HOUR).toISOString() as never, reason: 'focus' });
 const email = async () => {
   const raw = 'To: sam@example.test\r\nSubject: Weekly numbers\r\nMessage-ID: <weekly@waldo-send>\r\n\r\nHi Sam';
   return { to: ['sam@example.test'], subject: 'Weekly numbers', body: 'Hi Sam', message_id: '<weekly@waldo-send>', raw, digest: await sha256Hex(raw) };
@@ -76,18 +81,18 @@ describe('an approval card the surface cannot send now', () => {
   it('waits: it is not held as text, has no presentation, stays unconfirmed, and the tool and ledger say it waits', async () => {
     await owner('approval-card-waits', async state => {
       const f = fixture(state);
-      const proposal = await email();
-      const id = await f.desk.proposeSendEmail(proposal);
-      // The window layer refused the card and knocked once; the email's chat receipt was not sent either.
+      const id = await f.desk.propose(hold('Weekly review'), 'turn-1');
+      // The window layer refused the card and knocked once.
       expect(f.delivered).toEqual(['knock']);
       expect(f.held()).toBe(0);
       expect(f.status(id)).toBe('card_unconfirmed');
       expect(f.shown(id)).toEqual([]);
       expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false, waitsHere: true });
       expect(proposalStatus(f.desk.placement(id), SHOWN_HERE, 'Nothing was sent.')).toBe('The review card goes out here when the owner next writes, so it cannot be approved yet. Nothing was sent.');
-      expect(f.desk.ledger([])).toContain('- Send email to sam@example.test: "Weekly numbers" (review card goes out when you next write; cannot approve yet)');
+      expect(f.desk.ledger([])).toContain('- Add "Weekly review"');
+      expect(f.desk.ledger([])).toContain('(review card goes out when you next write; cannot approve yet)');
       // A replay of the same proposal finds the waiting card, instead of reading it as a card whose delivery is unknown.
-      expect(await f.desk.proposeSendEmail(proposal)).toBe(id);
+      expect(await f.desk.propose(hold('Weekly review'), 'turn-1')).toBe(id);
       expect(f.attempts).toEqual([]);
     });
   });
@@ -95,10 +100,10 @@ describe('an approval card the surface cannot send now', () => {
   it('goes out once the owner writes, with its presentation recorded then, and is decided once', async () => {
     await owner('approval-card-goes-out', async state => {
       const f = fixture(state);
-      const id = await f.desk.proposeSendMessage(message('On my way'));
+      const id = await f.desk.propose(hold('Focus'));
       f.tick(2 * HOUR); f.writes();
       await f.desk.ownerWrote();
-      expect(f.delivered).toEqual(['knock', expect.stringContaining('Send this message on whatsapp?')]);
+      expect(f.delivered).toEqual(['knock', expect.stringContaining('Add "Focus"')]);
       expect(f.shown(id)).toEqual([{ surface: 'whatsapp', message_ref: 'wamid.card-1', approvable: 1, presented_at: NOW + 2 * HOUR }]);
       expect(f.status(id)).toBe('open');
       expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false });
@@ -108,36 +113,36 @@ describe('an approval card the surface cannot send now', () => {
 
       await f.reply(`a:${id}`);
       await f.reply(`a:${id}`);
-      expect(f.sent).toEqual(['On my way']);
+      expect(f.holds).toEqual(['Focus']);
       expect(f.status(id)).toBe('done');
-      expect(f.delivered.slice(2)).toEqual([expect.stringContaining('Sent:'), 'Already handled.']);
+      expect(f.delivered.slice(2)).toEqual([expect.stringContaining('Done: Add "Focus"'), 'Already handled.']);
     });
   });
 
-  it('a tainted action\'s card follows the same rule: it waits unpresented, goes out when the owner writes, and runs once on approval', async () => {
+  it('a tainted action opens in the app at once; its chat card waits, goes out without an approval, and the app runs it once', async () => {
     await owner('approval-card-tainted-action', async state => {
       const f = fixture(state);
       const id = await f.desk.proposeTaintedAction(await tainted());
       expect(f.delivered).toEqual(['knock']);
       expect(f.held()).toBe(0);
-      expect(f.status(id)).toBe('card_unconfirmed');
-      expect(f.shown(id)).toEqual([]);
-      expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false, waitsHere: true });
-      expect(proposalStatus(f.desk.placement(id), 'sent to the owner with Do it / Not now buttons', 'Nothing ran.')).toBe('The review card goes out here when the owner next writes, so it cannot be approved yet. Nothing ran.');
-      // Before the card goes out it cannot be approved here.
-      expect((await f.desk.decide(id, 'a', 'trace', { surface: 'whatsapp', messageRef: `${OWNER}:0` })).toast).not.toBe('Done');
+      expect(f.status(id)).toBe('open');
+      expect(f.shown(id)).toMatchObject([{ surface: 'app', approvable: 1 }]);
+      expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: true, appApprovable: true, waitsHere: true, handsToApp: true });
+      expect(proposalStatus(f.desk.placement(id), 'sent to the owner with Do it / Not now buttons', 'Nothing ran.')).toBe('The review card is in the Waldo app; here it goes out when the owner next writes. Nothing ran.');
+      expect((await f.desk.decide(id, 'a', 'trace', { surface: 'whatsapp', messageRef: `${OWNER}:0` })).toast).toBe('Review it in the app');
       expect(f.ran).toEqual([]);
-      expect(f.status(id)).toBe('card_unconfirmed');
       expect(f.attempts).toEqual([]);
 
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
       expect(f.attempts).toEqual([expect.stringContaining('Run this action?')]);
-      expect(f.shown(id)).toEqual([{ surface: 'whatsapp', message_ref: expect.stringMatching(/^wamid\.card-/), approvable: 1, presented_at: NOW + HOUR }]);
-      expect(f.status(id)).toBe('open');
+      expect(f.attempts[0]).toContain('approved in the Waldo app');
+      expect(f.shown(id).map(row => [row.surface, row.approvable])).toEqual([['app', 1], ['whatsapp', 0]]);
 
       await f.reply(`a:${id}`);
-      await f.reply(`a:${id}`);
+      expect(f.ran).toEqual([]);
+      await f.desk.decide(id, 'a', 'trace', { surface: 'app' });
+      await f.desk.decide(id, 'a', 'trace', { surface: 'app' });
       expect(f.ran).toEqual(['create_task']);
       expect(f.status(id)).toBe('done');
     });
@@ -146,8 +151,8 @@ describe('an approval card the surface cannot send now', () => {
   it('is sent at most once: a send that ends unknown is not tried again, and a card refused again waits again', async () => {
     await owner('approval-card-at-most-once', async state => {
       const f = fixture(state);
-      const first = await f.desk.proposeSendMessage(message('first'));
-      const second = await f.desk.proposeSendMessage(message('second'));
+      const first = await f.desk.propose(hold('first'));
+      const second = await f.desk.propose(hold('second'));
       f.tick(HOUR); f.writes();
       f.failNext('unknown');
       await f.desk.ownerWrote();
@@ -171,7 +176,7 @@ describe('an approval card the surface cannot send now', () => {
       expect(f.attempts).toEqual([expect.stringContaining('first'), expect.stringContaining('second'), expect.stringContaining('second')]);
       expect(f.status(second)).toBe('open');
       expect(f.status(first)).toBe('card_unconfirmed');
-      expect(f.desk.ledger([])).toContain('- Send this on whatsapp: "first" (review card delivery unconfirmed; cannot approve)');
+      expect(f.desk.ledger([])).toMatch(/- Add "first".*\(review card delivery unconfirmed; cannot approve\)/);
     });
   });
 
@@ -196,7 +201,7 @@ describe('an approval card the surface cannot send now', () => {
   it('waits beside the app card: the row opens through the app at once, and the chat card follows when the owner writes', async () => {
     await owner('approval-card-beside-app', async state => {
       const f = fixture(state, { app: true });
-      const id = await f.desk.proposeSendMessage(message('Running late'));
+      const id = await f.desk.propose(hold('Running'));
       expect(f.status(id)).toBe('open');
       expect(f.shown(id)).toMatchObject([{ surface: 'app', approvable: 1 }]);
       expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: true, appApprovable: true, waitsHere: true });
@@ -214,7 +219,7 @@ describe('an approval card the surface cannot send now', () => {
   it('goes out once when it is raised after being put off: the raise sends it, and the owner\'s next message does not', async () => {
     await owner('approval-card-raised', async state => {
       const f = fixture(state, { app: true });
-      const id = await f.desk.proposeSendMessage(message('Raised later'));
+      const id = await f.desk.propose(hold('Raised later'));
       await f.desk.decide(id, 'd', 'trace', { surface: 'app' });
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
@@ -231,7 +236,7 @@ describe('an approval card the surface cannot send now', () => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, { owner: OWNER, surface: 'whatsapp', call: async () => undefined, writesFirstNow: () => true,
         google: async () => null, newId: () => `b${++n}`, now: () => NOW, timezone: 'UTC', log: () => undefined });
-      await expect(desk.proposeSendMessage(message('blocked'))).rejects.toThrow('Approval card not confirmed');
+      await expect(desk.propose(hold('blocked'))).rejects.toThrow('Approval card not confirmed');
       expect(desk.placement('pb1')).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
       expect(desk.ledger([])).toContain('(review card delivery unconfirmed; cannot approve)');
     });
@@ -242,8 +247,8 @@ describe('a waiting approval card the owner can no longer be shown', () => {
   it('is ended by a forget that names it, so the owner\'s next message never sends it; one that does not name it still goes out', async () => {
     await owner('approval-card-forget', async state => {
       const f = fixture(state);
-      const named = await f.desk.proposeSendEmail(await email());
-      const other = await f.desk.proposeSendMessage(message('Running late'));
+      const named = await f.desk.propose(hold('Weekly numbers'));
+      const other = await f.desk.propose(hold('Running late'));
       expect(forgetWaitingCards(f.sql, ['weekly numbers'], f.now())).toEqual({ ended: 1, remaining: 0 });
       expect(f.status(named)).toBe('skipped');
       expect(f.desk.placement(named)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
@@ -267,13 +272,13 @@ describe('a waiting approval card the owner can no longer be shown', () => {
   it('stops waiting when the surface is bound to another number: the new number never gets a card made before it was linked', async () => {
     await owner('approval-card-rebind', async state => {
       const f = fixture(state);
-      const id = await f.desk.proposeSendMessage(message('Made for the old number'));
+      const id = await f.desk.propose(hold('Made for the old number'));
       endCardWaits(f.sql, 'whatsapp');
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
       expect(f.attempts).toEqual([]);
       expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
-      expect(f.desk.ledger([])).toContain('- Send this on whatsapp: "Made for the old number" (review card delivery unconfirmed; cannot approve)');
+      expect(f.desk.ledger([])).toMatch(/- Add "Made for the old number".*\(review card delivery unconfirmed; cannot approve\)/);
     });
   });
 
@@ -296,7 +301,7 @@ describe('a waiting approval card the owner can no longer be shown', () => {
       const f = fixture(state);
       // The owner wrote 23 hours ago, so the card goes out at once, and the window closes an hour later.
       f.writes(); f.tick(23 * HOUR);
-      const id = await f.desk.proposeSendMessage(message('shown once'));
+      const id = await f.desk.propose(hold('shown once'));
       expect(f.shown(id)).toHaveLength(1);
       await f.desk.decide(id, 'd', 'trace', { surface: 'whatsapp', messageRef: `${OWNER}:0` });
       f.tick(2 * HOUR);
@@ -312,11 +317,11 @@ describe('a waiting approval card the owner can no longer be shown', () => {
   it('answers a decision on a card that has not gone out yet with when it will, not "Already handled."', async () => {
     await owner('approval-card-decide-waiting', async state => {
       const f = fixture(state);
-      const id = await f.desk.proposeSendMessage(message('not out yet'));
+      const id = await f.desk.propose(hold('not out yet'));
       const out = await f.desk.decide(id, 'a', 'trace', { surface: 'app' });
       expect(out.message).not.toBe('Already handled.');
       expect(out.message).toContain('when you next write');
-      expect(f.sent).toEqual([]);
+      expect(f.holds).toEqual([]);
       expect(f.status(id)).toBe('card_unconfirmed');
     });
   });

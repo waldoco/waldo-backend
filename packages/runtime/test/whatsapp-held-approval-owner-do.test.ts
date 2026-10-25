@@ -1,7 +1,7 @@
 // An approval card raised for an owner whose only surface is WhatsApp, by a standing order that runs while the 24-hour window
-// is closed, through the real scheduler, desk, window layer and webhook admission. The card is not held as text and not recorded
-// as presented: it waits, and goes out on the owner's next message, which is when its presentation is recorded and the approval
-// opens. Approving it then sends the email once.
+// is closed, through the real scheduler, desk, window layer and webhook admission. An email to another person is approved only
+// in the app, so the approval opens there at once. The WhatsApp card is not held as text and not recorded as presented: it
+// waits, and goes out on the owner's next message with the review and the app link, and no reply in chat sends the email.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,7 +81,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Approval = { id: string; kind: string; status: string };
 type Shown = { surface: string; message_ref: string; approvable: number; presented_at: number };
-const isCard = (id: string) => (event: string) => event.startsWith('text:Send this email?') && event.includes(`reply "a:${id}"`);
+const isCard = (id: string) => (event: string) => event.startsWith('text:Send this email?') && event.includes(`waldo://approvals/${id}`);
 
 // Unless a test says otherwise the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so
 // the runtime's boot neither plans nor arms them: only the standing order fires.
@@ -174,20 +174,20 @@ const owned = async (name: string, script: (steps: Readonly<{
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('an approval card for a WhatsApp-only owner raised while the 24-hour window is closed', { timeout: 30_000 }, () => {
-  it('is neither held nor recorded as presented; it goes out on the next message, opens then, and is decided once', async () => {
+  it('opens in the app at once; its chat card is neither held nor recorded as presented, goes out on the next message, and never sends from chat', async () => {
     await owned('wa-held-approval', async ({ alarms, order, reply, approvals, shown, held }) => {
       await order();
       await alarms(4);
       expect(model.orders).toBe(1);
       const [approval] = approvals();
-      expect(approval).toMatchObject({ kind: 'email_send', status: 'card_unconfirmed' });
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'open' });
       const id = approval!.id;
-      expect(shown(id)).toEqual([]);
+      expect(shown(id)).toMatchObject([{ surface: 'app', approvable: 1 }]);
       // Only the knock reached WhatsApp; the card is not waiting as held text either.
       expect(wire.events).toEqual(['template:waldo_update_ready']);
       expect(held().some(text => text.includes('Send this email?'))).toBe(false);
-      // The proposing tool told the model the card waits, not that it is in the chat.
-      expect(model.toolResults.join('\n')).toContain('goes out here when the owner next writes');
+      // The proposing tool told the model the card is in the app and goes out here later, not that it is in the chat.
+      expect(model.toolResults.join('\n')).toContain('The review card is in the Waldo app; here it goes out when the owner next writes.');
       expect(model.toolResults.join('\n')).not.toContain('review card requested in chat');
 
       const replied = Date.now();
@@ -196,20 +196,18 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
       expect(cards).toHaveLength(1);
       // The card goes out before the reply's own turn, after the report the order queued.
       expect(wire.events.slice(0, 4)).toEqual(['template:waldo_update_ready', `text:${REPORT}`, cards[0], 'turn']);
+      expect(cards[0]).not.toContain(`reply "a:${id}"`);
       expect(approvals()).toMatchObject([{ id, status: 'open' }]);
-      const [presentation] = shown(id);
-      expect(shown(id)).toHaveLength(1);
-      expect(presentation).toMatchObject({ surface: 'whatsapp', message_ref: wire.ids.get(cards[0]!), approvable: 1 });
+      const presentation = shown(id).find(row => row.surface === 'whatsapp');
+      expect(shown(id)).toHaveLength(2);
+      expect(presentation).toMatchObject({ surface: 'whatsapp', message_ref: wire.ids.get(cards[0]!), approvable: 0 });
       expect(presentation!.presented_at).toBeGreaterThanOrEqual(replied);
 
       await reply(`a:${id}`);
-      expect(mail.sent).toHaveLength(1);
-      expect(approvals()).toMatchObject([{ id, status: 'done' }]);
-      expect(wire.events.filter(event => event.startsWith('text:Sent: Send email from owner@example.test to sam@example.test'))).toHaveLength(1);
       await reply(`a:${id}`);
-      expect(mail.sent).toHaveLength(1);
-      expect(wire.events.filter(event => event === 'text:Already handled.')).toHaveLength(1);
-      expect(wire.events.filter(event => event.startsWith('text:Sent: '))).toHaveLength(1);
+      expect(mail.sent).toEqual([]);
+      expect(approvals()).toMatchObject([{ id, status: 'open' }]);
+      expect(wire.events.filter(event => event.startsWith('text:It reaches other people') && event.includes(`waldo://approvals/${id}`))).toHaveLength(2);
       // A later message sends nothing that waited, and the card never went out twice.
       await reply(OWNER_SAYS);
       expect(wire.events.filter(isCard(id))).toHaveLength(1);
@@ -224,7 +222,7 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
       expect(approval).toMatchObject({ kind: 'email_send', status: 'open' });
       const cards = wire.events.filter(isCard(approval!.id));
       expect(cards).toHaveLength(1);
-      expect(shown(approval!.id)).toMatchObject([{ surface: 'whatsapp', message_ref: wire.ids.get(cards[0]!), approvable: 1 }]);
+      expect(shown(approval!.id).find(row => row.surface === 'whatsapp')).toMatchObject({ message_ref: wire.ids.get(cards[0]!), approvable: 0 });
       expect(wire.events).not.toContain('template:waldo_update_ready');
     }, HOUR);
   });
@@ -234,12 +232,12 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
       await order();
       await alarms(4);
       const [approval] = approvals();
-      expect(approval).toMatchObject({ status: 'card_unconfirmed' });
+      expect(approval).toMatchObject({ status: 'open' });
 
       await later(13 * HOUR, () => reply(OWNER_SAYS));
       expect(wire.events.some(isCard(approval!.id))).toBe(false);
       expect(approvals()).toMatchObject([{ id: approval!.id, status: 'expired' }]);
-      expect(shown(approval!.id)).toEqual([]);
+      expect(shown(approval!.id).map(row => row.surface)).toEqual(['app']);
     });
   });
 });
@@ -250,7 +248,7 @@ describe('a waiting approval card the owner may no longer be shown', { timeout: 
       await order();
       await alarms(4);
       const [approval] = approvals();
-      expect(approval).toMatchObject({ kind: 'email_send', status: 'card_unconfirmed' });
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'open' });
       expect(await forget(kind, 'Weekly numbers')).toBe(true);
       expect(approvals()).toMatchObject([{ id: approval!.id, status: 'skipped' }]);
       await reply(OWNER_SAYS);
@@ -266,7 +264,7 @@ describe('a waiting approval card the owner may no longer be shown', { timeout: 
       await order();
       await alarms(4);
       const [approval] = approvals();
-      expect(approval).toMatchObject({ kind: 'email_send', status: 'card_unconfirmed' });
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'open' });
       purging('Weekly numbers');
       await reminder();
       await alarms(3);
@@ -282,12 +280,12 @@ describe('a waiting approval card the owner may no longer be shown', { timeout: 
       await order();
       await alarms(4);
       const [approval] = approvals();
-      expect(approval).toMatchObject({ status: 'card_unconfirmed' });
+      expect(approval).toMatchObject({ status: 'open' });
       rebind(NEW);
       await replyFrom(NEW, OWNER_SAYS);
       expect(wire.events.some(isCard(approval!.id))).toBe(false);
-      expect(shown(approval!.id)).toEqual([]);
-      expect(approvals()).toMatchObject([{ id: approval!.id, status: 'card_unconfirmed' }]);
+      expect(shown(approval!.id).map(row => row.surface)).toEqual(['app']);
+      expect(approvals()).toMatchObject([{ id: approval!.id, status: 'open' }]);
     });
   });
 });

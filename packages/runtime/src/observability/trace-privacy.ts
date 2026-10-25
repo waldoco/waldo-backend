@@ -4,6 +4,7 @@ import {
   turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
 } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
+import { scrubTraceHealth } from './trace-health-scrub';
 
 // The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
 // pair survives capture-off. A malformed caller cannot smuggle free-form provider text past
@@ -41,8 +42,12 @@ const HEALTH_READ = /^(?:present|absent|read_failed)$/;
 const withholdEmail = (entry: TurnLogEntry): TurnLogEntry => entry.owner_email === undefined ? entry
   : { ...entry, owner_email: 'unknown', owner_identity: entry.owner_identity === 'verified' ? 'email_unavailable' : entry.owner_identity };
 
+// Capture on still keeps health values out: the scrub withholds them from text, detail, error and code. A scrub that
+// throws sends the entry through the capture-off gate with no text at all, since a capture-on sink would export it raw.
 export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
-  if (captureText) return entry;
+  if (captureText) {
+    try { return scrubTraceHealth(entry); } catch { return { ...gateWithoutCapture(withholdEmail(typedFieldsOnly(entry))), text: undefined }; }
+  }
   return gateWithoutCapture(withholdEmail(typedFieldsOnly(entry)));
 };
 

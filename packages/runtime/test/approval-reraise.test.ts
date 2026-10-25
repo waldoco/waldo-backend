@@ -161,12 +161,12 @@ it('a review-only Telegram card offers Not now and Don\'t do this', async () => 
   });
 });
 
-it('on WhatsApp, a raise sends a fresh card and the model is told so', async () => {
+it('on WhatsApp, a raise sends a fresh card, with the email again in the app where it is approved, and the model is told so', async () => {
   await deskOn('whatsapp', 'raise-whatsapp', async ({ desk, sent, raise, propose }) => {
     const id = await propose('Wa');
     await desk.decide(id, 'd', 't', { surface: 'whatsapp' });
     const before = sent.filter(message => message.method === 'sendMessage').length;
-    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp'], note: 'A fresh card with its buttons was sent to the owner.' });
+    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp', 'app'], note: 'A fresh card with its buttons was sent to the owner.' });
     expect(sent.filter(message => message.method === 'sendMessage').length).toBe(before + 1);
   });
 });
