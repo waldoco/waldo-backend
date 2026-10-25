@@ -42,8 +42,7 @@ describe('surfaceCapabilitiesV1', () => {
   it('claims files and voice only where Waldo handles them', () => {
     const { app, imessage } = SURFACE_CAPABILITIES_V1;
     expect([app.files, app.voice]).toEqual([false, false]);
-    // iMessage opens files only where a deploy sets IMESSAGE_MEDIA=1, and every deploy declares it "0"; a static table
-    // claims files there only once the flag is on everywhere.
+    // iMessage opens files only behind the runtime's IMESSAGE_MEDIA flag, which a static table cannot see.
     expect([imessage.files, imessage.voice]).toEqual([false, false]);
   });
 

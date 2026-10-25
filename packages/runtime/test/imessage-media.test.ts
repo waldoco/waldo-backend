@@ -4,6 +4,7 @@ import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
+import { iMessageConsolePage } from '../src/channels/imessage/console';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { IMESSAGE_MEDIA_MAX_BYTES } from '../src/channels/imessage/photon-media';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
@@ -105,7 +106,7 @@ async function world() {
   };
   const counts = async () => (await bridgeStub().status()).events;
   const inbox = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
-  const page = async () => (await call(new Request(`${HOST_ORIGIN}/console/imessage`, { headers: { cookie } }))).text();
+  const page = async () => (await iMessageConsolePage(env as never, ownerName, 'csrf-fixture')).text();
   return { host, photon, pump, media, reply, counts, inbox, page };
 }
 
