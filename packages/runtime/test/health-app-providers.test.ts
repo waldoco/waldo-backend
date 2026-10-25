@@ -5,7 +5,7 @@ const SECRET = 'fictional-router-secret-00000000000000000';
 const connect = { request_id: 'provider-connect-1', provider: 'whoop' };
 
 // The owner object's answer to the Worker, scripted per operation.
-const run = async (method: string, route: string, over: { body?: unknown; headers?: Record<string, string>; answer?: (op: string) => Response | Promise<Response>; secret?: string | undefined; query?: string } = {}) => {
+const run = async (method: string, route: string, over: { body?: unknown; headers?: Record<string, string>; answer?: (op: string) => Response | Promise<Response>; secret?: string | undefined; query?: string; recent?: boolean } = {}) => {
   const sent: { op: string; text: string; doName: string }[] = [];
   const owners = { idFromName: (name: string) => name as never, get: (name: never) => ({ fetch: async (request: Request) => {
     sent.push({ op: request.headers.get('x-waldo-provider-op')!, text: await request.text(), doName: name as string });
@@ -14,7 +14,7 @@ const run = async (method: string, route: string, over: { body?: unknown; header
   const url = new URL(`https://w.test${APP_PROVIDERS_PATH}${route}${over.query ?? ''}`);
   const response = await handleAppHealthProviders({
     request: new Request(url, { method, headers: { 'x-waldo-app-contract': 'health=2', ...(over.body === undefined ? {} : { 'content-type': 'application/json' }), ...over.headers }, ...(over.body === undefined ? {} : { body: typeof over.body === 'string' ? over.body : JSON.stringify(over.body) }) }),
-    url, doName: 'owner-1', owners: owners as never, secret: 'secret' in over ? over.secret : SECRET,
+    url, doName: 'owner-1', owners: owners as never, secret: 'secret' in over ? over.secret : SECRET, signedInRecently: async () => over.recent ?? true,
   });
   return { response, sent, json: await response.clone().json().catch(() => null) };
 };
@@ -32,6 +32,13 @@ describe('the app provider routes', () => {
     const { response, json, sent } = await run('POST', '/connect', { body: connect, headers: { 'idempotency-key': connect.request_id }, answer: () => Response.json(answer) });
     expect([response.status, json]).toEqual([200, answer]);
     expect(sent[0]).toMatchObject({ op: 'connect', text: '{}' });
+  });
+
+  it('starts no connection for a session signed in over two hours ago, and still disconnects for it', async () => {
+    const { response, json, sent } = await run('POST', '/connect', { body: connect, recent: false });
+    expect([response.status, json, sent]).toEqual([403, { error: 'step_up_required' }, []]);
+    const off = await run('POST', '/disconnect', { body: connect, recent: false, answer: () => Response.json({ provider: 'whoop', state: 'not_connected', revoked_at_provider: true }) });
+    expect(off.response.status).toBe(200);
   });
 
   it('disconnects and answers with the state and whether WHOOP confirmed', async () => {

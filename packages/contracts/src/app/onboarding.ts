@@ -185,9 +185,10 @@ export const appFindingResultV1Schema = z.strictObject({
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
 // channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
-// request_id came back with a different body. not_found: no such finding.
+// request_id came back with a different body. not_found: no such finding. step_up_required (403): a link code needs a sign-in
+// from the last two hours.
 export const appOnboardingErrorV1Schema = z.strictObject({
-  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable']),
+  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable', 'step_up_required']),
   message: z.string().max(1000).optional(),
 });
 

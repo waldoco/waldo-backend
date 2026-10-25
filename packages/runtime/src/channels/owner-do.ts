@@ -88,7 +88,7 @@ import { checkBackReply, loopCheckBackText, LOOP_CHECK_BACK_TOOLS } from './chec
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
-import { consoleAuth, fromAnotherSite, OWNER_COOKIE, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
+import { consoleAuth, fromAnotherSite, OWNER_COOKIE, presenceRecheck, signedInRecently, type OwnerSettings } from '../identity/console-auth';
 import { consoleStepUpRefusal } from './console-step-up';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
@@ -1299,6 +1299,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
+            signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.created_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{
               this.bindAppSubject(name);
@@ -1320,7 +1321,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
           const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
-          const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
+          const host={...session,signedInAt:row.created_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},

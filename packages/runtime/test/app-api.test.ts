@@ -252,6 +252,19 @@ describe('Connect iMessage from the app', () => {
     expect(issued).toEqual(['owner-1:imessage']); // always the authenticated owner's own code
   });
 
+  it('issues no code to a session signed in over two hours ago, or whose sign-in time cannot be read', async () => {
+    const issued: string[] = [];
+    const issueProviderLinkCode = async (doName: string, provider: string) => { issued.push(`${doName}:${provider}`); return 'ABCDEFGHJK'; };
+    const signedIn = (created_at: string) => fakeAuth({ issueProviderLinkCode, listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at, last_seen_at: created_at }] } as never).auth;
+    const old = await handleApp(authed(), withAddress(), signedIn(new Date(Date.now() - 3 * 60 * 60_000).toISOString()));
+    expect([old!.status, await old!.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode, listSessions: async () => [] } as never).auth))!.status).toBe(403);
+    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode, listSessions: async () => { throw new Error('directory down'); } } as never).auth))!.status).toBe(503);
+    expect(issued).toEqual([]);
+    expect((await handleApp(authed(), withAddress(), signedIn(new Date(Date.now() - 90 * 60_000).toISOString())))!.status).toBe(200);
+    expect(issued).toEqual(['owner-1:imessage']);
+  });
+
   it('refuses without a session, other methods, and where the Waldo number is not configured', async () => {
     const { auth } = fakeAuth({ issueProviderLinkCode: async () => 'ABCDEFGHJK' } as never);
     expect((await handleApp(new Request(`https://w.test${route}`, { method: 'POST' }), withAddress(), auth))!.status).toBe(401);

@@ -13,7 +13,7 @@ import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently'>>;
 const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
@@ -21,6 +21,7 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
     let clock = 1_000;
     const deps: OwnerOnboardingDeps = {
       storage: state.storage, doName: 'owner-name', now: fakes.now ?? (() => clock++), assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
+      signedInRecently: fakes.signedInRecently ?? (async () => true),
       lookupOffered: fakes.lookupOffered ?? true, agreementsOffered: fakes.agreementsOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }),
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
@@ -220,6 +221,21 @@ describe('chat channels in the first run', () => {
     const response = await send('/app/v1/onboarding/channel-link', { provider: 'telegram' });
     expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
   }, { chat: { offered: async () => true, linked: async () => 'not_linked', issue: async () => null } }));
+  it('issues no code to a session signed in over two hours ago, and asks it to confirm', () => {
+    const { issued, channels } = chat({});
+    let recent = true;
+    return owner(async ({ send, act }) => {
+      await act({ action: 'start' }); await act(agree);
+      recent = false;
+      for (const provider of ['imessage', 'whatsapp', 'telegram']) {
+        const response = await send('/app/v1/onboarding/channel-link', { provider });
+        expect([provider, response.status, await response.json()]).toEqual([provider, 403, { error: 'step_up_required' }]);
+      }
+      expect(issued).toEqual([]);
+      recent = true;
+      expect((await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' })).status).toBe(200);
+    }, { chat: channels, signedInRecently: async () => recent });
+  });
   it('issues nothing when the app session is no longer current', () => {
     const { issued, channels } = chat({});
     let ended = false;
