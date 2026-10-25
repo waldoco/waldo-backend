@@ -145,16 +145,19 @@ const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
 // Reads run outside any SQLite transaction; only the admission and the state change commit. A stage that fails settles
 // unavailable and leaves the others standing.
 const runStage = async (deps: WelcomeDeps, stage: WelcomeStage): Promise<void> => {
-  let state: Settled, added = 0;
+  let state: Settled, added = 0, late = false;
   try {
     state = await within((async () => {
       const input = await deps.read[stage]();
       if (input.kind === 'settled') return input.state;
+      // The budget cannot cancel a read or a model call, so work that finishes after the stage settled must not write.
+      if (late) return 'unavailable' as const;
       const raw = await deps.ask(stage, `${WELCOME_STAGE_HEADER[stage]}\n\n${input.text}`);
+      if (late) return 'unavailable' as const;
       added = deps.transaction(() => admitWelcomeNodes(deps.claims, deps.build, stage, input, raw, new Date(deps.now()).toISOString()));
       return added > 0 ? 'done' as const : 'empty' as const;
     })(), WELCOME_STAGE_BUDGET_MS);
-  } catch { state = 'unavailable'; }
+  } catch { late = true; state = 'unavailable'; }
   deps.transaction(() => deps.build.settle(stage, state, added));
 };
 const WELCOME_STAGE_HEADER: Readonly<Record<WelcomeStage, string>> = {

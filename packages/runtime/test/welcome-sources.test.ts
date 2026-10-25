@@ -86,6 +86,14 @@ describe('welcome calendar stage', () => {
     expect(result.text).not.toMatch(/SECRET|someone@example\.com|evt_gone/);
   });
 
+  it('is empty when the connected calendars and task lists hold nothing', async () => {
+    const g = google([account('a@x.com', { tasks: true })], { 'a@x.com': {
+      calendarPage: async () => ({ events: [], next_page_token: null, fetched_count: 0, account: { connection_id: null, email: 'a@x.com' }, observed_at: '' }),
+      allTasksPage: async () => ({ tasks: [], next_page_token: null }) as never,
+    } });
+    expect(await calendarStage(g, () => NOW)()).toEqual({ kind: 'settled', state: 'empty' });
+  });
+
   it('a failing read that is not revoked access fails the stage', async () => {
     await expect(calendarStage(google([account('a@x.com')], { 'a@x.com': new GoogleError(500, 'down') }), () => NOW)()).rejects.toThrow('down');
   });
@@ -101,6 +109,11 @@ describe('welcome mail stage', () => {
     expect([...result.pointers]).toEqual(['thr_1', 'thr_2']);
     expect(result.text).toContain('[thr_1] Ana Diaz (design.example) · Review thr_1');
     expect(result.text).not.toMatch(/SECRET|ana@/);
+  });
+
+  it('says revoked when the mail grant is dead or its scope was taken back, and reads nothing then', async () => {
+    expect(await mailStage(google([account('a@x.com', { error: 'invalid_grant' })], {}))()).toEqual({ kind: 'settled', state: 'revoked' });
+    expect(await mailStage(google([account('a@x.com')], { 'a@x.com': new GoogleError(403, 'scope', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') }))()).toEqual({ kind: 'settled', state: 'revoked' });
   });
 
   it('skips with no mail account, and is empty when nothing came back', async () => {

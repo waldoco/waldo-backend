@@ -1,13 +1,13 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { appWelcomeBuildV1Schema, type AppNodeSourceV1 } from '../../contracts/src/app/controls';
 import { applyPromotion, claimStore, textFingerprint, turnMemoryPrompt, type ClaimStore } from '../src/memory/claims';
 import { nodeConfirmation, nodeSources } from '../src/memory/node-sources';
 import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import {
-  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_MAX_NODES, WELCOME_SCHEMA, welcomeBuild, welcomeSupportIds,
+  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 
@@ -119,6 +119,29 @@ describe('welcome build: sources', () => {
       build.start();
       await runWelcome(d);
       expect(build.view().stages).toMatchObject({ health: 'unavailable', calendar: 'done', mail: 'unavailable' });
+    });
+  });
+
+  it('an answer that comes back after the stage budget writes nothing: the stage already settled unavailable', async () => {
+    await withSql(async (sql, transaction) => {
+      let reply: (text: string) => void = () => {};
+      const { build, claims, deps: d } = deps(sql, transaction, {
+        read: { health: async () => input(['apple_health'], ['sleep_midpoint']), calendar: async () => ({ kind: 'settled', state: 'skipped' }), mail: async () => ({ kind: 'settled', state: 'skipped' }), web: async () => ({ kind: 'settled', state: 'skipped' }) },
+        ask: () => new Promise<string>((resolve) => { reply = resolve; }),
+      });
+      build.start();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const run = runWelcome(d);
+        await vi.advanceTimersByTimeAsync(WELCOME_STAGE_BUDGET_MS);
+        await run;
+      } finally { vi.useRealTimers(); }
+      expect(build.view()).toMatchObject({ state: 'done', nodes: 0, stages: { health: 'unavailable' } });
+      reply(answer(healthNode()));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(claims.nodes()).toEqual([]);
+      expect(claims.allClaims()).toEqual([]);
+      expect(build.view()).toMatchObject({ nodes: 0, stages: { health: 'unavailable' } });
     });
   });
 });
