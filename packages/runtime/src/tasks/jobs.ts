@@ -310,10 +310,15 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     due: (): readonly JobRow[] => sql.exec<JobRow>(
       "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
     ).toArray(),
-    // An apply that could not run (no model to write the report) waits like a deferred attempt. updated_at keeps the time
-    // the job was reported, which bounds how long its apply is retried.
+    // Intent before a report's apply turn, which holds the owner's tools: a reported row still carrying it was lost partway
+    // through that turn (applyInterrupted), and the lane does not run the turn again.
+    beginApply(id: string): boolean {
+      return sql.exec("UPDATE task_jobs SET inflight_json = ? WHERE id = ? AND status = 'reported'", JSON.stringify({ turn: 'task_report', at: deps.now() }), id).rowsWritten > 0;
+    },
+    // An apply that could not run (no model to write the report) waits like a deferred attempt; it failed in this pass, so it
+    // left no turn in flight. updated_at keeps the time the job was reported, which bounds how long its apply is retried.
     postpone(id: string, dueAt: number): boolean {
-      return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1 WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
+      return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1, inflight_json = NULL WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
     },
     // The next moment the brain has something to do: a queued job's due time, a running attempt's lease end, or now for a report.
     // While every task slot is taken, a queued task waits for a report rather than its due time. A job in `busy` has a call
@@ -397,4 +402,7 @@ export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(
 export const taskBrief = (row: JobRow): TaskBrief => JSON.parse(row.brief_json) as TaskBrief;
 export const retryBrief = (row: JobRow): RetryBrief => JSON.parse(row.brief_json) as RetryBrief;
 export const jobCheckpoint = (row: JobRow): Checkpoint => row.checkpoint_json === null ? { turns: [] } : JSON.parse(row.checkpoint_json) as Checkpoint;
+// A reported row's intent is its apply turn's (a worker's in-flight step, kept on a parked row, names a tool instead).
+export const applyInterrupted = (row: Pick<JobRow, 'status' | 'inflight_json'>): boolean =>
+  row.status === 'reported' && row.inflight_json !== null && (JSON.parse(row.inflight_json) as { turn?: unknown }).turn === 'task_report';
 export const jobResult = (row: JobRow): TaskResult | null => row.result_json === null ? null : JSON.parse(row.result_json) as TaskResult;

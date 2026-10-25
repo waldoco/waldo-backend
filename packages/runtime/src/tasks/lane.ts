@@ -3,8 +3,8 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
-import { fixedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
+import { applyInterrupted, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { fixedReport, interruptedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
 import { retryTurnText } from './retry-turn';
 import { quoted } from '../prompt/turn-prompt';
 
@@ -106,18 +106,24 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     }
     const trace = `task:${row.id}:apply`;
     let reply: string | null;
-    try {
-      // A worker that read the owner's mail, files or the web reports what those said, so its report gets the ceiling of any
-      // job over outside text: reads, and the owner's card for a change.
-      const tools = row.taint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : deps.applyTools();
-      reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, tools));
-    } catch (error) {
-      if (error instanceof ClosedRunError) return;
-      if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) {
-        hop(row, 'task_apply_deferred', { ok: false });
-        return;
+    if (applyInterrupted(row)) {
+      hop(row, 'task_apply_uncertain', { ok: false });
+      reply = interruptedReport(row, deps.timezone);
+    } else {
+      if (!book.beginApply(row.id)) return;
+      try {
+        // A worker that read the owner's mail, files or the web reports what those said, so its report gets the ceiling of any
+        // job over outside text: reads, and the owner's card for a change.
+        const tools = row.taint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : deps.applyTools();
+        reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, tools));
+      } catch (error) {
+        if (error instanceof ClosedRunError) return;
+        if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) {
+          hop(row, 'task_apply_deferred', { ok: false });
+          return;
+        }
+        reply = fixedReport(row, deps.timezone);
       }
-      reply = fixedReport(row, deps.timezone);
     }
     try {
       if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row));
@@ -138,7 +144,11 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       if (parked?.status === 'reported' && parked.park_reason) { hop(row, 'retry_turn_parked', { ok: false, code: parked.park_reason }); await apply(parked); }
       return;
     }
-    const current = async () => { if (book.get(row.id)?.lease_token !== ticket.token) throw new ClosedRunError(); };
+    // Intent before the turn, which holds the owner's tools: an attempt lost partway (its lease lapsing with this recorded)
+    // parks as an uncertain effect and the owner hears so; it is never run again. Each check-in renews the lease, so a long
+    // turn that keeps calling in is not taken for a lost one.
+    if (!book.beginEffect(ticket, { tool: 'retry_turn', call_id: row.id })) return;
+    const current = async () => { if (!book.touch(ticket, null)) throw new ClosedRunError(); };
     let reply: string | null;
     try {
       // The owner's own message, answered late: the tools their turn would hold, under the taint that message carried, so the
@@ -146,6 +156,8 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone, { asked: row.surface, here: deps.surface }), current, row.taint, deps.applyTools()));
     } catch (error) {
       if (error instanceof ClosedRunError) return;
+      // The turn failed in this pass rather than being lost: it waits for its next try as before.
+      if (!book.endEffect(ticket)) return;
       const last = deps.now() >= brief.promised_by;
       if (last) book.park(row.id, 'provider_unavailable');
       else book.defer(ticket, Math.min(deps.now() + deferDelay(row.deferrals + 1), brief.promised_by), NO_SPEND);
