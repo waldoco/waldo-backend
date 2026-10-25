@@ -6,7 +6,7 @@ import { ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
-import { carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
+import { applyInterrupted, carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
 
 // Machine jobs: reader tasks the brain starts on its own schedule, so the reading runs on a worker and not in the owner's
 // alarm pass. The brain decides deterministically that the data changed before it writes one; the worker judges whether
@@ -107,11 +107,17 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   // A hook that could not run (no model, a source that did not answer) is retried like a task report, then dropped silently,
   // so a row that keeps failing never holds up the rows behind it.
   const unavailable = (error: unknown) => {
-    if (error instanceof ClosedRunError) return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+    if (error instanceof ClosedRunError) {
+      book.endApply(row.id);
+      return deps.hop(row, 'machine_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });
+    }
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
     return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
   };
   if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
+  // A pass lost inside the apply turn left its intent: the turn may have raised a card or opened a loop, so it is not run
+  // again. The owner never asked for this work, so nothing names it; the trigger's next tick asks again.
+  if (applyInterrupted(row)) return quietly('machine_apply_uncertain', { ok: false });
   const handler = deps.appliers[taskBrief(row).machine!.job];
   const result = jobResult(row)!;
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
@@ -124,6 +130,7 @@ export const applyMachineJob = async (row: JobRow, deps: Readonly<{
   if (!handler) return quietly('machine_held', { code: 'no_applier' });
   const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
   let applied: MachineApplied;
+  if (!book.beginApply(row.id)) return;
   try {
     applied = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
   } catch (error) { return unavailable(error); }
