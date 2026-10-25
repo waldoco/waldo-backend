@@ -6,11 +6,10 @@ import { z } from 'zod';
 export const sendConsoleLinkArgsSchema = z.strictObject({});
 export type SendConsoleLinkArgs = z.infer<typeof sendConsoleLinkArgsSchema>;
 
-export const CONSOLE_LINK_SURFACES = ['telegram', 'imessage'] as const;
+export const CONSOLE_LINK_SURFACES = ['telegram', 'imessage', 'app', 'whatsapp'] as const;
 export const CONSOLE_LINK_UNSENT_REASONS = [
-  // The app has no in-app route for the link yet; it is never sent into chat there.
+  // No longer produced: every surface carries the link now. Both stay so a recorded result still parses.
   'app_unsupported',
-  // A surface with no console-link delivery.
   'surface_unsupported',
   // Not the owner's own typed words: a job turn, or a forwarded, quoted or transcribed request.
   'not_owner_typed',

@@ -4,18 +4,18 @@
 // spot.forget), which carry the session CSRF the console page already issues. `allowed_actions`
 // mirrors exactly what the console renders for each row. Spot text, evidence and profile lines are
 // owner-visible memory content and may hold untrusted-derived text: render as inert text.
-import type { Claim } from '../memory/claims';
+import { awaitsOwnerConfirm, type Claim } from '../memory/claims';
 
 export const DASHBOARD_MEMORY_PATH = '/console/dashboard/api/v1/memory';
 
-const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: "Waldo's inference" };
+const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', waldo_confirmed: 'Waldo confirmed', inferred: "Waldo's inference" };
 const day = (iso: string) => iso.slice(0, 10);
 type Action = 'spot.confirm' | 'spot.dismiss' | 'spot.forget';
 
 const spot = (claim: Claim, allowed: readonly Action[]) => ({
   id: claim.id, kind: claim.kind, text: claim.text, evidence: claim.evidence, status: claim.status,
   source: claim.source, source_label: SOURCE_LABEL[claim.source] ?? 'Source unverified',
-  provisional: claim.source === 'inferred' || !SOURCE_LABEL[claim.source],
+  provisional: awaitsOwnerConfirm(claim) || !SOURCE_LABEL[claim.source],
   from_shared_content: claim.origin === 'untrusted',
   provenance: claim.verification_status === 'owner-grounded' ? 'owner-grounded' as const : 'unverified' as const,
   // Same shape gate as the console: only an owner Telegram source id is ever shown.
@@ -32,7 +32,7 @@ export const dashboardMemory = (input: Readonly<{
 }>) => ({
   version: 1 as const,
   as_of: new Date(input.now).toISOString(),
-  spots: input.spots.map((claim) => spot(claim, claim.source === 'inferred' ? ['spot.confirm', 'spot.dismiss', 'spot.forget'] : ['spot.dismiss', 'spot.forget'])),
+  spots: input.spots.map((claim) => spot(claim, awaitsOwnerConfirm(claim) ? ['spot.confirm', 'spot.dismiss', 'spot.forget'] : ['spot.dismiss', 'spot.forget'])),
   // Console parity: dismissed/promoted rows show only the text and status; no evidence, source or provenance.
   retired: input.retired.map((claim) => ({ id: claim.id, text: claim.text, status: claim.status, allowed_actions: [] as readonly Action[] })),
   // A removal stuck mid-scrub stays visible with a retry; the console shows the text and Forget, nothing else.

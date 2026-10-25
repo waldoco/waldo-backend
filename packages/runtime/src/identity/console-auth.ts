@@ -13,6 +13,9 @@ export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
 // Sheet asks for current credentials before sensitive features. Unlike GitHub's, the window does not restart with each
 // sensitive action: it runs from the code.
 export const CONSOLE_STEP_UP_MS = 2 * 60 * 60_000;
+// The app proves a recent email code by its session's sign-in time: every app session starts from one, so the row's
+// created_at is the console's verified_at. A missing row or an unreadable time is never recent.
+export const signedInRecently = (createdAt: string | undefined, now: number): boolean => now - Date.parse(createdAt ?? '') < CONSOLE_STEP_UP_MS;
 // A sign-in in a browser that holds a live session (a confirm, or a link or signup there) does not end that session: by
 // owner ruling it keeps ordinary access, without its code, for 5 more minutes, so a turn running or queued under it
 // finishes, and then it ends. The directory holds the same 5 minutes in console_session_cap.
