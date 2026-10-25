@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ActivityControls, activityPageCursors, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
+import { readControls } from './controls-model';
 import type { ActivityRecord, FilesRecord, ProfileRecord, SetupRecord, UsageRecord, WaitingRecord } from './controls-model';
 
 const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repeat(64), revision: 'a'.repeat(64) };
@@ -153,4 +154,23 @@ it('does not offer calendar approval when a recorded time is invalid',()=>{
  const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
  expect(html).toContain(start);expect(html).not.toContain('Approve this calendar change');
  }
+});
+
+describe('a waiting tool or action review', () => {
+  const record = (kind: string, text: string) => readControls({ ...base, view: 'waiting', data: { timezone: null, proposals: [
+    { id: kind, kind, summary: 'Run list_events on the calendar MCP server', state: 'open', actions: [], review: { kind, text } },
+  ] } }, 'waiting');
+  it('parses and renders the frozen review instead of saying details are unavailable', () => {
+    for (const kind of ['mcp_call', 'tainted_action', 'browser_submit']) {
+      const html = renderToStaticMarkup(<WaitingControls record={record(kind, 'Run this MCP tool? Run list_events on the calendar MCP server\n\nArgs:\n{"day":"<b>today</b>"}')} busy={false} onAction={noop}/>);
+      expect(html).toContain('Run this MCP tool? Run list_events on the calendar MCP server');
+      expect(html).toContain('&lt;b&gt;today&lt;/b&gt;');
+      expect(html).not.toContain('<b>today</b>');
+      expect(html).not.toContain('Full details aren’t available');
+      expect(html).toContain('Approve or skip it on its card in chat or the Waldo app.');
+    }
+  });
+  it('rejects a text review on a kind that never carries one', () => {
+    expect(() => record('email_send', 'not a draft')).toThrow();
+  });
 });
