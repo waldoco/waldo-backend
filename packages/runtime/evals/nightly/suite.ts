@@ -23,6 +23,8 @@ export type NightlyRun = Readonly<{
   candidate: string;
   judgeModel: string;
   model?: ModelName;
+  // Set on an ablation run: how many reply calls could not drop the named rules (absent, or a hard boundary).
+  ablationMisses?: () => number;
   // The brain's flag-on menu: core tools up front, the rest found by tool search.
   toolSearch?: boolean;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
@@ -49,8 +51,11 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
+      const missed = run.ablationMisses?.() ?? 0;
       const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
+      // A trial whose rules were not all dropped measured nothing about them.
+      if ((run.ablationMisses?.() ?? 0) > missed) { outcomes.push('harness_error'); errors.push('AblationMiss'); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       // What the judges alone made of the trial, before receipts: the figure two memory modes can be compared on.
       let judged: TrialOutcome = verdict.outcome;
