@@ -1,0 +1,44 @@
+{
+  "summary_building": {
+    "version": 1, "state": "available", "view": "constellation", "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "data": {
+      "version": 1, "state": "available", "complete": true, "unavailable_claim_count": 0, "memory_view": "summary",
+      "counts": { "claims": 3, "interpretations": 2, "associations": 0 },
+      "welcome": { "state": "building", "started_at": 1761400000000, "finished_at": null, "nodes": 2,
+        "stages": { "health": "done", "calendar": "reading", "mail": "reading", "web": "skipped" } }
+    }
+  },
+  "summary_done": {
+    "version": 1, "state": "available", "view": "constellation", "revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "data": {
+      "version": 1, "state": "available", "complete": true, "unavailable_claim_count": 0, "memory_view": "summary",
+      "counts": { "claims": 9, "interpretations": 6, "associations": 0 },
+      "welcome": { "state": "done", "started_at": 1761400000000, "finished_at": 1761400095000, "nodes": 6,
+        "stages": { "health": "done", "calendar": "done", "mail": "done", "web": "skipped" } }
+    }
+  },
+  "interpretations_after_welcome": {
+    "version": 1, "state": "available", "view": "constellation", "revision": "3333333333333333333333333333333333333333333333333333333333333333",
+    "data": {
+      "version": 1, "state": "available", "complete": true, "unavailable_claim_count": 0, "memory_view": "interpretations",
+      "items": [
+        { "id": "memory:node:12", "type": "interpretation", "label": "Late weekend sleeper", "summary": "Sleeps in on Saturdays and Sundays, then starts slowly.",
+          "domain": "health", "stored_status": "active", "recorded_active_at": "2026-10-25T13:40:00.000Z", "estimate": 0.5, "estimate_kind": "uncalibrated_model_estimate",
+          "support": { "state": "stored_links", "claim_ids": ["memory:claim:41"], "unavailable_count": 0, "distinct_source_refs": 1, "independent_observations": "unverified" },
+          "sources": ["apple_health"], "confirmation": "waldos_read" },
+        { "id": "memory:node:13", "type": "interpretation", "label": "Monday planning ritual", "summary": "Blocks Monday mornings to plan the week with the team.",
+          "domain": "work", "stored_status": "active", "recorded_active_at": "2026-10-25T13:40:05.000Z", "estimate": 0.5, "estimate_kind": "uncalibrated_model_estimate",
+          "support": { "state": "stored_links", "claim_ids": ["memory:claim:42"], "unavailable_count": 0, "distinct_source_refs": 1, "independent_observations": "unverified" },
+          "sources": ["calendar"], "confirmation": "confirmed" }
+      ],
+      "page": { "limit": 50, "returned": 2, "total": 2, "next_cursor": null }
+    }
+  },
+  "actions": [
+    { "view": "constellation", "action": "node.confirm", "id": "memory:node:12", "revision": "3333333333333333333333333333333333333333333333333333333333333333", "request_id": "welcome-confirm-0001" },
+    { "view": "constellation", "action": "node.correct", "id": "memory:node:12", "value": "I sleep in on Sundays only", "revision": "3333333333333333333333333333333333333333333333333333333333333333", "request_id": "welcome-correct-0001" },
+    { "view": "constellation", "action": "node.forget", "id": "memory:node:13", "revision": "3333333333333333333333333333333333333333333333333333333333333333", "request_id": "welcome-forget-0001" }
+  ],
+  "action_result": { "request_id": "welcome-confirm-0001", "receipt": { "state": "recorded", "message": "Confirmed." }, "duplicate": false },
+  "step_up_refusal": { "status": 403, "body": { "error": "step_up_required", "code": "step_up_required" }, "applies_to": ["node.correct"] }
+}
