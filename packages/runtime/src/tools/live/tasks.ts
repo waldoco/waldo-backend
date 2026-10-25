@@ -14,6 +14,7 @@ export const googleTaskHandlers = (desk: TaskProposalDesk): readonly ToolHandler
   trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('propose_google_task_change')),
   autonomy_gated: false,
   mutates_state: true,
+  proposal_only: true,
   requires_connector: true,
   async handle(args, ctx) {
     try {

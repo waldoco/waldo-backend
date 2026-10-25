@@ -1,6 +1,7 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
+import { toolsWhere } from '../tools/records';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -49,16 +50,9 @@ const TOOL_TIME_WARN_MS = 15_000;
 // back to back is a loop. A write never runs twice, and the browse tools keep their own session rule.
 export const READ_REPEAT_AFTER_MS = MODEL_CALL_TIMEOUT_MS;
 
-// Reads one model response may dispatch together. Each was checked to change nothing a later call can observe: no store
-// write that spans an await, no send, no session, no tool-menu change. Running them at once leaves every effect where it
-// was. The Google reads and read_drive stay out: their client stamps probe and health state across awaits and can send a
-// reconnect link, so two at once could send it twice. read_thread can relay a message, and read_tool_output reads a store
-// that sibling calls evict from. Anything not listed, and every write, approval or browse call, runs alone in model order.
-export const CONCURRENT_READ_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
-  'get_context', 'get_health', 'read_owner_context', 'read_memory', 'search_episodes', 'web_search',
-  'list_artifacts', 'read_artifact', 'list_reminders', 'list_responsibilities', 'list_health_logs',
-  'list_standing_orders', 'workspace_list', 'workspace_read', 'workspace_search', 'skills_list',
-]);
+// Reads one model response may dispatch together: the records marked concurrent. Running them at once leaves every effect
+// where it was. Anything else, and every write, approval or browse call, runs alone in model order.
+export const CONCURRENT_READ_TOOLS: ReadonlySet<ToolName> = toolsWhere((record) => record.concurrent);
 export const MAX_CONCURRENT_READS = 4;
 
 // 'completed' means the model closed while resources remained. 'budget_exhausted'
@@ -388,7 +382,9 @@ export async function runToolLoop(input: Readonly<{
       batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
        input.onSettle?.('completed');
-       return `Sent to your Mac for approval. Request: ${result.data.request_id}`;
+       // The handler's status says whether the Mac took the request (and whether it asks for approval) or it is still queued.
+       const status='status' in result.data && typeof result.data.status==='string' ? result.data.status : 'Sent to your Mac.';
+       return `${status} Request: ${result.data.request_id}`;
       }
     }
   }

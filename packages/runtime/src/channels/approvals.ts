@@ -101,7 +101,8 @@ const isToolError = (value: unknown): value is { tool_error: string } => typeof 
 const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.server, tool: p.tool, args: p.args, connection: p.connection ?? null, tool_digest: p.tool_digest ?? null, answers: p.answers ?? null }));
 // A privileged tool call whose arguments came from external content (ADR-0049), frozen for the owner's approval: the
 // tool, its validated arguments and their digest. On approval the host replays exactly that call once.
-// preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget removes).
+// preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget
+// removes, the loop a close ends).
 // It is shown on the card and never replayed; the frozen args and their digest are what runs.
 export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[] }>;
 // What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
@@ -117,6 +118,8 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string; earlier_unknown_at?: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
+  // A tool or action approval: the same frozen review its card and the app show (tool, masked arguments, what approving runs).
+  | Readonly<{ kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
       calendar_id?: string; attendees?: readonly string[]; send_updates?: 'all' | 'none'; location?: string; description?: string; add_meet_link?: boolean }>;
@@ -145,6 +148,8 @@ export type ApprovalDesk = Readonly<{
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
+  // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
+  waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: DeskAction, trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
@@ -208,6 +213,8 @@ const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
 const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
 // The statuses a request can still be decided or edited from, which its expiry closes.
 const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
+// task_sources requests have no writer any more and approving one only answers that it expired, so they expire like the rest.
+const EXPIRING_KINDS: readonly string[] = [...PROPOSAL_KINDS, 'task_sources'];
 // The scope a browser approval names: the page without credentials, query string or fragment.
 const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
 const describeBrowser = (p: BrowserSubmitProposal) => {
@@ -215,7 +222,16 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
   return `${p.action.description} on ${maskedUrl(p.url)}${p.request ? ` via ${p.request.method} ${maskedUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
-const describeTaintedAction = (p: TaintedActionProposal) => `Run ${p.tool}: ${p.reasoning.length > 120 ? `${p.reasoning.slice(0, 117)}...` : p.reasoning}`;
+// The heading over what the proposal read from the owner's own stores when it was made.
+const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It forgets', close_loop: 'It closes' };
+const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...` : text;
+// The reasoning was written in a turn that read outside text and can name anything, so a card that read the owner's own
+// stores leads with that read, and the reasoning follows it as Waldo's.
+const describeTaintedAction = (p: TaintedActionProposal) => p.preview?.length
+  ? `${PREVIEW_HEADING[p.tool] ?? 'It changes'}: ${p.preview[0]}${p.preview.length > 1 ? ` and ${p.preview.length - 1} more` : ''}`
+  : `Run ${p.tool}: ${clipped(p.reasoning)}`;
+const reviewTaintedAction = (p: TaintedActionProposal) => !p.preview?.length ? describeTaintedAction(p)
+  : `${p.preview.length === 1 ? describeTaintedAction(p) : `${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${p.preview.map((line) => `- ${line}`).join('\n')}`}\n\nWaldo's reasoning: ${clipped(p.reasoning)}`;
 const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
 // masked too. A payload that no longer parses shows the card title, never the stored summary.
@@ -230,7 +246,7 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
-  if (entry.kind === 'tainted_action') return `Run this action? ${describeTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}${p.preview?.length ? `\n\nIt forgets:\n${(p.preview as string[]).map((line) => `- ${line}`).join('\n')}` : ''}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'tainted_action') return `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
@@ -524,8 +540,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // gates on status, and a messaging card keeps its buttons until a tap, which answers with the expiry.
   const expireDue = (id?: string) => {
     const now = deps.now();
-    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
-      ...PROPOSAL_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
+    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${EXPIRING_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
+      ...EXPIRING_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
     let closed = 0;
     for (const entry of rows) {
       let closes: boolean;
@@ -1190,6 +1206,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await present(id);
       return id;
     },
+    waitingTaintedActions(tool) {
+      expireDue();
+      return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'tainted_action' AND json_extract(payload_json, '$.tool') = ? AND status IN ('open', 'review_only', 'card_unconfirmed') ORDER BY created_at", tool).toArray()
+        .filter(entry => entry.status !== 'card_unconfirmed' || cardWaits(entry))
+        .map(entry => ({ approval_id: entry.id, args: (JSON.parse(entry.payload_json) as TaintedActionProposal).args }));
+    },
     async propose(p, turnKey, operationRef) {
       const originRunRef = deps.currentRunRef?.();
       if (proposalTurn !== turnKey) { calendarProposals.clear(); proposalTurn = turnKey; }
@@ -1249,6 +1271,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const p = JSON.parse(r.payload_json) as MessageSendProposal;
             return typeof p.channel === 'string' && typeof p.content === 'string' ? { kind: 'message_send', channel: p.channel, content: p.content } : null;
           }
+          if (r.kind === 'mcp_call' || r.kind === 'tainted_action' || r.kind === 'browser_submit') return { kind: r.kind, text: appReview(r).text };
           if (r.kind === 'google_task_change') {
             const proposal = googleTaskProposalSchema.parse(JSON.parse(r.payload_json));
             return r.proposal_digest ? { kind: 'google_task_change', account: proposal.account.email, proposal, proposal_digest: r.proposal_digest } : null;
@@ -1323,7 +1346,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [

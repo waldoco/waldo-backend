@@ -8,9 +8,9 @@ export const BRAIN_NAMESPACES = {
   calendar: 'Calendar changes and Google Tasks: free and busy time across all calendars, propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
   mail: 'Mail beyond search: read a whole message, send_email to propose an email the owner approves on a card, draft_email for a Gmail draft they edit themselves, and contacts.',
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
-  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, past conversations, stored tool output and chat threads.',
+  memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, read_tool_output for stored tool output, and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
-  reminders: 'Follow-ups: list or cancel reminders, close an open loop when it is done, and tracked responsibilities.',
+  reminders: 'Follow-ups: list or cancel reminders, close_loop when an open loop is done, and tracked responsibilities.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
   skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
@@ -40,10 +40,34 @@ export type ToolReplayRow = { readonly replay: ToolReplayClass; readonly basis: 
 //          allow = reads no owner or outside content: the clock, the owner's own reminder and standing-order lists
 //          (needed to act on what the owner asks), tool and skill catalog metadata, and writers and proposals that read
 //          nothing back.
+//  concurrent  one model response may run it beside other concurrent reads: it changes nothing a later call can
+//          observe (no store write that spans an await, no send, no session, no tool-menu change). The Google reads and
+//          read_drive are not: their client stamps probe and health state across awaits and can send a reconnect link.
+//          read_thread can relay a message, and read_tool_output reads a store sibling calls evict from.
+//  probe   strip = a synthetic capture probe never reaches it: Google reads and writes (private data), the browser,
+//          the MCP bridge, the connect flow and the console link (a capture probe hands its sends to the probe caller).
+//  paid    held past the owner's monthly spend ceiling: it bills browser or sandbox time on top of the model call.
+//  ownerTurnOnly  held only while the owner's own turn runs, never by a machine turn.
 //  claim   which effect the tool's receipt can back in a "done" claim; null = no claimable effect (a read, a lookup,
 //          or a proposal that changes nothing).
 //  replay  what a crash between its effect and the turn's persisted completion means, and why (`basis`).
-export type ToolRecord = Readonly<{ brain: BrainPlacement; scope: 'deny' | 'allow'; claim: string | null; replay: ToolReplayRow }>;
+//  tainted why a tool with a claim needs no owner card in a turn that has read outside text. Absent, it needs one: the
+//          owner ruled that such a turn sends every change to their card (hooks/registry.ts taintedCallNeedsOwnerApproval),
+//          so a new write tool is carded until its record names a reason here.
+export type ToolRecord = Readonly<{
+  brain: BrainPlacement; scope: 'deny' | 'allow'; concurrent: boolean; probe: 'strip' | 'keep'; paid: boolean; ownerTurnOnly: boolean;
+  claim: string | null; replay: ToolReplayRow; tainted?: TaintedWriteExemption;
+}>;
+// The kinds of reason, each with the record's own words for it:
+//  draft          it sends and commits nothing; the owner reviews the result before anything leaves.
+//  honest_origin  its handler keeps what a tainted turn writes as Waldo's read, with its source, never as the owner's word.
+//  source_bound   a write bound to an observed mail source runs without a card; any other call to it is carded.
+//  own_card       its handler only raises the owner's own approval card. The gate admits it through the handler's
+//                 proposal_only declaration, read per call, so a host wiring an executing handler under the name is carded.
+//  commits_on_card  a typed browser step that commits nothing (hooks/registry.ts NON_COMMITTING_BROWSER_OPERATIONS): the
+//                 owner's browser host sends no request but GET and holds every submit for the owner's own browser card.
+//                 Any other operation, or a call with no typed command, is carded.
+export type TaintedWriteExemption = Readonly<{ exempt: 'draft' | 'honest_origin' | 'source_bound' | 'own_card' | 'commits_on_card'; reason: string }>;
 
 const read = (basis = 'no claimable effect; handler only reads'): ToolReplayRow => ({ replay: 'safe_read', basis });
 const unknown = (basis: string): ToolReplayRow => ({ replay: 'non_replayable_uncertain', basis });
@@ -52,102 +76,105 @@ const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 
 export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim null: a note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
-  send_progress_note: { brain: 'actions', scope: 'allow', claim: null, replay: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again') },
+  send_progress_note: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again') },
   // claim null: queued is not sent; the file leaves after the reply is written, so no done-claim can rest on this receipt.
-  attach_file: { brain: 'actions', scope: 'allow', claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
+  attach_file: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
   // claim null: its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
-  send_console_link: { brain: 'settings', scope: 'allow', claim: null, replay: unknown('mints the one console grant and sends it; a re-run voids the link already sent, so it never auto-retries') },
-  use_mac: { brain: 'actions', scope: 'deny', claim: 'mac_action_requested', replay: { replay: 'provider_idempotent', basis: 'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.', evidence: { file: 'tools/live/use-mac.ts', needle: 'request_id' } } },
-  get_crs: { brain: 'health', scope: 'deny', claim: null, replay: read() },
-  get_health: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  query_calendar: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  get_communication: { brain: 'mail', scope: 'deny', claim: null, replay: read() },
-  search_communication: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  search_contacts: { brain: 'mail', scope: 'deny', claim: null, replay: read() },
-  read_thread: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  get_tasks: { brain: 'calendar', scope: 'deny', claim: null, replay: read() },
-  get_master_metrics: { brain: 'health', scope: 'deny', claim: null, replay: read() },
-  get_context: { brain: 'core', scope: 'allow', claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
-  query_availability: { brain: 'calendar', scope: 'deny', claim: null, replay: read() },
-  read_owner_context: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
-  read_memory: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  search_episodes: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
+  send_console_link: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('mints the one console grant and sends it; a re-run voids the link already sent, so it never auto-retries') },
+  use_mac: { brain: 'actions', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'mac_action_requested', replay: { replay: 'provider_idempotent', basis: 'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.', evidence: { file: 'tools/live/use-mac.ts', needle: 'request_id' } } },
+  get_crs: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_health: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  query_calendar: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_communication: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_communication: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_contacts: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_thread: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_tasks: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_master_metrics: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_context: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
+  query_availability: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_memory: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_episodes: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.
-  propose_action: { brain: 'core', scope: 'allow', claim: null, replay: unknown('proposal only: each call inserts a fresh tainted_action card; approval replays the frozen call once under the approval effect key, and a re-run raises a second card') },
-  web_search: { brain: 'core', scope: 'deny', claim: null, replay: read() },
-  read_document: { brain: 'web', scope: 'deny', claim: null, replay: read() },
-  list_artifacts: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
-  read_artifact: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
-  read_mcp_tool: { brain: 'web', scope: 'deny', claim: null, replay: read('deploy-configured Google MCP reads carry a host-derived read intent through the connector-proxy; reads on owner-connected servers run only for tools the owner allowed at their current definition digest and have no intent ledger, so a replay runs the read again (tools/live/mcp.ts); either way the remote server is trusted to be read-only') },
-  search_mcp_tools: { brain: 'web', scope: 'deny', claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
-  read_drive: { brain: 'web', scope: 'deny', claim: null, replay: read() },
-  search_connector: { brain: 'web', scope: 'deny', claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
-  propose_schedule: { brain: 'calendar', scope: 'allow', claim: null, replay: unknown('proposal handler not inspected') },
-  search_tools: { brain: 'skills', scope: 'allow', claim: null, replay: read() },
-  list_reminders: { brain: 'reminders', scope: 'allow', claim: null, replay: read() },
-  read_tool_output: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
-  connect_service: { brain: 'core', scope: 'allow', claim: null, replay: unknown('starts a connection flow; not inspected') },
-  browse_page: { brain: 'core', scope: 'deny', claim: null, replay: read('starts and ends a vendor browser session and reads a public page; page-load side effects not verifiable') },
-  list_health_logs: { brain: 'health', scope: 'deny', claim: null, replay: read() },
-  list_standing_orders: { brain: 'settings', scope: 'allow', claim: null, replay: read() },
-  workspace_list: { brain: 'workspace', scope: 'deny', claim: null, replay: read() },
-  workspace_read: { brain: 'workspace', scope: 'deny', claim: null, replay: read() },
-  workspace_search: { brain: 'workspace', scope: 'deny', claim: null, replay: read() },
-  skills_list: { brain: 'skills', scope: 'allow', claim: null, replay: read() },
+  propose_action: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposal only: each call inserts a fresh tainted_action card; approval replays the frozen call once under the approval effect key, and a re-run raises a second card') },
+  web_search: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_document: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  list_artifacts: { brain: 'artifacts', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_artifact: { brain: 'artifacts', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('deploy-configured Google MCP reads carry a host-derived read intent through the connector-proxy; reads on owner-connected servers run only for tools the owner allowed at their current definition digest and have no intent ledger, so a replay runs the read again (tools/live/mcp.ts); either way the remote server is trusted to be read-only') },
+  search_mcp_tools: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
+  read_drive: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_connector: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
+  propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposal handler not inspected') },
+  search_tools: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  list_reminders: { brain: 'reminders', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_tool_output: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  connect_service: { brain: 'core', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('starts a connection flow; not inspected') },
+  browse_page: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: true, ownerTurnOnly: false, claim: null, replay: read('starts and ends a vendor browser session and reads a public page; page-load side effects not verifiable') },
+  list_health_logs: { brain: 'health', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  list_standing_orders: { brain: 'settings', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  workspace_list: { brain: 'workspace', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  workspace_read: { brain: 'workspace', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  workspace_search: { brain: 'workspace', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  skills_list: { brain: 'skills', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   // claim: loading selects ephemeral catalog metadata; it does not certify instruction admission.
-  skills_install: { brain: 'skills', scope: 'allow', claim: 'skill_enabled', replay: unknown(NOT_INSPECTED) },
-  skills_disable: { brain: 'skills', scope: 'allow', claim: 'skill_disabled', replay: unknown(NOT_INSPECTED) },
-  skills_load: { brain: 'skills', scope: 'allow', claim: 'skill_selected', replay: unknown(NOT_INSPECTED) },
+  skills_install: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_enabled', replay: unknown(NOT_INSPECTED) },
+  skills_disable: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_disabled', replay: unknown(NOT_INSPECTED) },
+  skills_load: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'skill_selected', replay: unknown(NOT_INSPECTED) },
   // claim: verified against each handler (mutates_state, and the result says what happened). Proposals are labelled as
   // proposals: the owner-channel handlers only request an approval card.
-  send_message: { brain: 'actions', scope: 'allow', claim: 'message_send_proposed', replay: unknown('proposal only, but each call inserts a fresh ledger row and card; the model-supplied idempotency_key collapses only at approval after status done (approvals.ts). A crash after the send and before done can resend. No lookup reconciles it') },
-  send_email: { brain: 'mail', scope: 'allow', claim: 'email_send_proposed', replay: { replay: 'reconcilable_write', basis: 'proposal only; a replay of the same turn+args reuses the proposal through dedupe_key, and the desk reconciles an ambiguous send through the Message-ID it sets', evidence: { file: 'tools/live/google.ts', needle: 'dedupe_key' } } },
-  propose_calendar_change: { brain: 'calendar', scope: 'allow', claim: 'calendar_change_proposed', replay: unknown('proposal desk dedupe not inspected') },
-  propose_google_task_change: { brain: 'calendar', scope: 'deny', claim: 'google_task_change_proposed', replay: unknown('exact provider proposal and shared approval receipt required') },
-  draft_email: { brain: 'mail', scope: 'allow', claim: 'email_drafted', replay: { replay: 'non_replayable_uncertain', basis: 'proxy intent id from user+turn+toolCall: a replay returns the stored result or intent_pending; an uncertain dispatch stays pending and there is no remote draft lookup', evidence: { file: 'connectors/proxy-intent.ts', needle: 'intent_pending' } } },
-  create_artifact: { brain: 'artifacts', scope: 'allow', claim: 'artifact_created', replay: unknown(NOT_INSPECTED) },
-  revise_artifact: { brain: 'artifacts', scope: 'allow', claim: 'artifact_revised', replay: unknown(NOT_INSPECTED) },
-  export_artifact: { brain: 'artifacts', scope: 'allow', claim: 'artifact_exported', replay: unknown(NOT_INSPECTED) },
-  browse_act: { brain: 'web', scope: 'deny', claim: 'browser_acted', replay: unknown('real browser actions on a public page; page effects cannot be reconciled') },
-  workspace_write: { brain: 'workspace', scope: 'allow', claim: 'workspace_file_written', replay: { replay: 'provider_idempotent', basis: 'operation_id derived from user+turn+toolCall plus expected_revision; collapse is at the workspace store, not a remote provider', evidence: { file: 'tools/live/workspace.ts', needle: 'operation_id' } } },
-  workspace_render: { brain: 'workspace', scope: 'allow', claim: 'workspace_document_rendered', replay: unknown('not inspected') },
-  set_reminder: { brain: 'core', scope: 'allow', claim: 'reminder_set', replay: unknown(NOT_INSPECTED) },
-  cancel_reminder: { brain: 'reminders', scope: 'allow', claim: 'reminder_cancelled', replay: unknown(NOT_INSPECTED) },
-  open_loop: { brain: 'core', scope: 'allow', claim: 'loop_opened', replay: unknown(NOT_INSPECTED) },
-  close_loop: { brain: 'reminders', scope: 'allow', claim: 'loop_closed', replay: unknown(NOT_INSPECTED) },
-  raise_approval: { brain: 'actions', scope: 'allow', claim: null, replay: unknown(NOT_INSPECTED) },
-  track_responsibility: { brain: 'reminders', scope: 'allow', claim: 'responsibility_tracked', replay: unknown(NOT_INSPECTED) },
-  update_todo: { brain: 'actions', scope: 'allow', claim: 'todo_updated', replay: unknown(NOT_INSPECTED) },
-  list_responsibilities: { brain: 'reminders', scope: 'allow', claim: null, replay: read() },
-  close_responsibility: { brain: 'reminders', scope: 'allow', claim: 'responsibility_closed', replay: unknown(NOT_INSPECTED) },
-  set_proactivity: { brain: 'settings', scope: 'allow', claim: 'proactivity_set', replay: unknown(NOT_INSPECTED) },
-  set_schedule_preference: { brain: 'settings', scope: 'allow', claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
-  log_meal: { brain: 'health', scope: 'allow', claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
-  log_workout: { brain: 'health', scope: 'allow', claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
-  set_standing_order: { brain: 'settings', scope: 'allow', claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
-  cancel_standing_order: { brain: 'settings', scope: 'allow', claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
+  send_message: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'message_send_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('proposal only, but each call inserts a fresh ledger row and card; the model-supplied idempotency_key collapses only at approval after status done (approvals.ts). A crash after the send and before done can resend. No lookup reconciles it') },
+  send_email: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: 'email_send_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: { replay: 'reconcilable_write', basis: 'proposal only; a replay of the same turn+args reuses the proposal through dedupe_key, and the desk reconciles an ambiguous send through the Message-ID it sets', evidence: { file: 'tools/live/google.ts', needle: 'dedupe_key' } } },
+  propose_calendar_change: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: 'calendar_change_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('proposal desk dedupe not inspected') },
+  propose_google_task_change: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'google_task_change_proposed', tainted: { exempt: 'own_card', reason: 'its handler only proposes; the owner approves the exact change on its own card' }, replay: unknown('exact provider proposal and shared approval receipt required') },
+  draft_email: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: 'email_drafted', tainted: { exempt: 'draft', reason: 'a Gmail draft sends nothing; the owner reviews and sends it themselves' }, replay: { replay: 'non_replayable_uncertain', basis: 'proxy intent id from user+turn+toolCall: a replay returns the stored result or intent_pending; an uncertain dispatch stays pending and there is no remote draft lookup', evidence: { file: 'connectors/proxy-intent.ts', needle: 'intent_pending' } } },
+  create_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'artifact_created', replay: unknown(NOT_INSPECTED) },
+  revise_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'artifact_revised', replay: unknown(NOT_INSPECTED) },
+  export_artifact: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'artifact_exported', replay: unknown(NOT_INSPECTED) },
+  browse_act: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: true, ownerTurnOnly: false, claim: 'browser_acted', tainted: { exempt: 'commits_on_card', reason: 'its steps change only the page in Waldo\'s own browser; anything that would send or submit waits on the owner\'s browser card' }, replay: unknown('real browser actions on a public page; page effects cannot be reconciled') },
+  workspace_write: { brain: 'workspace', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workspace_file_written', replay: { replay: 'provider_idempotent', basis: 'operation_id derived from user+turn+toolCall plus expected_revision; collapse is at the workspace store, not a remote provider', evidence: { file: 'tools/live/workspace.ts', needle: 'operation_id' } } },
+  workspace_render: { brain: 'workspace', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workspace_document_rendered', replay: unknown('not inspected') },
+  set_reminder: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'reminder_set', replay: unknown(NOT_INSPECTED) },
+  cancel_reminder: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'reminder_cancelled', replay: unknown(NOT_INSPECTED) },
+  open_loop: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'loop_opened', tainted: { exempt: 'source_bound', reason: 'the mail follow-through opens a loop on the mail source it observed; it only checks back, and its title never reads as the owner\'s' }, replay: unknown(NOT_INSPECTED) },
+  close_loop: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'loop_closed', tainted: { exempt: 'source_bound', reason: 'a loop the mail follow-through opened from an observed source closes as it opened; the owner\'s own loops close only from their card' }, replay: unknown(NOT_INSPECTED) },
+  raise_approval: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown(NOT_INSPECTED) },
+  track_responsibility: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'responsibility_tracked', replay: unknown(NOT_INSPECTED) },
+  update_todo: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'todo_updated', replay: unknown(NOT_INSPECTED) },
+  list_responsibilities: { brain: 'reminders', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  close_responsibility: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'responsibility_closed', replay: unknown(NOT_INSPECTED) },
+  set_proactivity: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'proactivity_set', replay: unknown(NOT_INSPECTED) },
+  set_schedule_preference: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'schedule_preference_set', replay: unknown(NOT_INSPECTED) },
+  log_meal: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'meal_logged', replay: unknown(NOT_INSPECTED) },
+  log_workout: { brain: 'health', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'workout_logged', replay: unknown(NOT_INSPECTED) },
+  set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
+  cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
-  call_mcp_tool: { brain: 'web', scope: 'deny', claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown') },
+  call_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown') },
   // scope allow: the source guard is applied to the child's handlers too. claim null: it runs a read-only subagent.
-  delegate_task: { brain: 'actions', scope: 'allow', claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
-  remember: { brain: 'core', scope: 'allow', claim: 'memory_stored', replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },
+  delegate_task: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)') },
+  remember: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'memory_stored', tainted: { exempt: 'honest_origin', reason: 'under outside text it saves the owner\'s quoted words as Waldo\'s inference until the owner confirms them, and never changes what the owner told Waldo' }, replay: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } } },
   // claim: a finding is stored unconfirmed; it says what Waldo found, never that the owner agreed.
-  record_owner_finding: { brain: 'memory', scope: 'allow', claim: 'owner_finding_recorded', replay: { replay: 'provider_idempotent', basis: 'a finding is keyed by its source URL and normalised text, so a re-run returns the stored finding', evidence: { file: 'onboarding/findings.ts', needle: 'duplicate' } } },
-  list_owner_findings: { brain: 'memory', scope: 'deny', claim: null, replay: read() },
-  forget_memory: { brain: 'memory', scope: 'allow', claim: 'memory_forgotten', replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
+  record_owner_finding: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'owner_finding_recorded', tainted: { exempt: 'honest_origin', reason: 'it keeps a public-web finding unconfirmed, with its page and quote, until the owner keeps, corrects or forgets it; it never stands as the owner\'s word' }, replay: { replay: 'provider_idempotent', basis: 'a finding is keyed by its source URL and normalised text, so a re-run returns the stored finding', evidence: { file: 'onboarding/findings.ts', needle: 'duplicate' } } },
+  list_owner_findings: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  forget_memory: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'memory_forgotten', replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
   // No live handler in this tree, so the effect is unverified: give each a claim label when its handler ships.
-  execute_action: { brain: 'actions', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  write_task: { brain: 'calendar', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  update_task: { brain: 'calendar', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  draft_document: { brain: 'artifacts', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  write_sheet_cell: { brain: 'artifacts', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  execute_code: { brain: 'actions', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  create_thread: { brain: 'memory', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  delete_message: { brain: 'mail', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  restore_message: { brain: 'mail', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  archive_thread: { brain: 'mail', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
-  update_thread_topics: { brain: 'memory', scope: 'allow', claim: null, replay: unknown(NO_HANDLER) },
+  execute_action: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  write_task: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  update_task: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  draft_document: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  write_sheet_cell: { brain: 'artifacts', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  execute_code: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: true, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  create_thread: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  delete_message: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  restore_message: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  archive_thread: { brain: 'mail', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
+  update_thread_topics: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER) },
 };
+
+// The tools whose record says yes to one fact, for the callers that hold a set.
+export const toolsWhere = (fact: (record: ToolRecord) => boolean): ReadonlySet<ToolName> =>
+  new Set((Object.keys(TOOL_RECORDS) as ToolName[]).filter((name) => fact(TOOL_RECORDS[name])));
 
 // A column of the records as its own table, for the callers that read one decision.
 export const toolRecordColumn = <K extends keyof ToolRecord>(column: K): Readonly<Record<ToolName, ToolRecord[K]>> =>

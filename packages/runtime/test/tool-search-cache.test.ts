@@ -6,7 +6,7 @@ import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import { OpenAIResponsesAdapter, type OpenAIResponsesClient } from '../src/llm/openai';
-import type { LLMGatewayAdapter } from '../src/llm/provider';
+import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { ownerTyped } from './helpers/owner-typed';
 
 // With tool search on, the provider caches a request by its leading bytes, tools first. The tools array must therefore
@@ -135,4 +135,25 @@ describe('tool search keeps the tools array byte-identical across rounds and tur
     expect(JSON.parse(tools[0]!).find((tool: { name: string }) => tool.name === 'list_reminders').defer_loading).toBe(true);
     expect(bodies.every((body) => body.model === ANTHROPIC_CLAUDE_OPUS_5_5_MODEL)).toBe(true);
   });
+});
+
+// Search shapes the owner's reply rounds only. A delegated child is a short read list the model must see whole.
+it('a delegated child gets its tools up front, with no tool search', async () => {
+  const requests: LLMGatewayRequest['request'][] = [];
+  const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+    requests.push(request);
+    const delegates = request.tools?.some((tool) => tool.name === 'delegate_task') === true && !request.tool_turns?.length;
+    return { ok: true, data: { model: request.model, text: delegates ? '' : 'Done.', ...(delegates ? { tool_calls: [{ call_id: 'd1', name: 'delegate_task', arguments: JSON.stringify({ task: 'read the synthetic thread and report what it says' }) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+  } };
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'synthetic-key-0123456789', toolSearch: true }];
+  args[5] = handlers as never; args[6] = OPENAI_GPT_6_1_SOL_MODEL; args[10] = gateway;
+  await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'child-1', conversationRef: 'child', surface: 'app', text: 'have someone read the thread', memoryWrites: false }), time);
+  const offered = requests.filter((request) => request.tools?.length);
+  const child = offered.filter((request) => !request.tools!.some((tool) => tool.name === 'delegate_task'));
+  expect(child.length, 'the child ran').toBeGreaterThan(0);
+  for (const request of child) {
+    expect(request.tool_search).toBeUndefined();
+    expect(request.tools!.some((tool) => tool.namespace !== undefined || tool.defer_loading !== undefined)).toBe(false);
+  }
+  expect(offered.find((request) => request.tools!.some((tool) => tool.name === 'delegate_task'))!.tool_search).toBeDefined();
 });

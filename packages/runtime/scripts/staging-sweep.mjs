@@ -15,6 +15,7 @@
 //   --delay-ms <n>        pause between prompts (default 4000; the endpoint allows 20 per minute)
 //   --out <file>          also write the JSON report to this file
 //
+// The worker runs every prompt as its designated synthetic probe owner and refuses rather than reach a real owner.
 // Default capture mode (live:false) strips live provider tools and suppresses memory writes, so a
 // prompt that needs those tools is marked requires_live and is skipped without --live.
 import { readFileSync, writeFileSync } from 'node:fs';

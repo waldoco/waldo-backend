@@ -1,3 +1,4 @@
+import { healthReadSignalSchema, type HealthReadSignal } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 
@@ -51,6 +52,11 @@ describe('the numeric health floor', () => {
     'Oven temp 180 degrees for the cake',
     'Goa is 32 degrees, temperature 32C at noon',
     'The cabin sleeps 6',
+    'The movement meets in 30 minutes',
+    'Daylight saving ends in 2 weeks',
+    'Booked a 45-minute workout with the trainer at 6',
+    'Booked a 45 minute workout for Friday',
+    'Midpoint review at 3:30',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
@@ -98,6 +104,41 @@ describe('the numeric health floor', () => {
     'calories burned 540',
   ])('holds a reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
+  });
+
+  // Every signal get_health returns, in the units it returns it in, as Waldo relays it or the owner repeats it.
+  const GET_HEALTH_READINGS: Record<HealthReadSignal, readonly string[]> = {
+    sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
+    sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
+    hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],
+    resting_hr: ['resting heart rate 58 bpm', 'resting HR 58'],
+    heart_rate: ['mean heart rate 72.4 bpm', 'average heart rate 72'],
+    movement: ['movement 45 minutes', '45 minutes of movement', '45 movement minutes'],
+    daylight: ['daylight 30 min', '30 minutes of daylight', '30 daylight minutes'],
+    workouts: ['45 workout minutes', 'workouts: 45 min', '45 minutes of workouts'],
+    sleep_light: ['light sleep 210 min', '210 minutes of light sleep'],
+    sleep_deep: ['deep sleep 85 min', '85 minutes of deep sleep'],
+    sleep_rem: ['REM sleep 95 min', '95 minutes of REM sleep', 'REM 95 min'],
+    sleep_awake: ['awake 25 min overnight', '25 minutes awake overnight', 'time awake 25 min'],
+    sleep_efficiency: ['sleep efficiency 0.91', 'sleep efficiency 91%', '91% sleep efficiency'],
+    respiratory_rate: ['respiratory rate 14.2 breaths per minute', '14 breaths per minute', 'breathing rate 15'],
+    spo2: ['SpO2 97%', 'blood oxygen 96 percent', 'oxygen saturation 95%'],
+    wrist_temperature: ['wrist temperature 36.4 °C', 'wrist temperature +0.3 °C from baseline', 'wrist temp 0.3 degrees above baseline'],
+    walking_hr: ['walking heart rate 98 bpm', 'walking HR 98'],
+    hr_recovery: ['heart rate recovery 24 bpm', 'HR recovery 24', 'heart rate recovery was 24'],
+    vo2_max: ['VO2 max 42', 'VO2 max 42.5 ml/kg/min'],
+    steps: ['8,500 steps', 'steps 8500', '8.5k steps'],
+    active_energy: ['active energy 540 kcal', '540 kcal of active energy', 'active energy 540'],
+    mindful: ['mindful minutes 15', '15 minutes of mindfulness', 'mindful 15 min'],
+  };
+  it('covers every signal get_health returns', () => {
+    expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());
+  });
+  it.each(Object.entries(GET_HEALTH_READINGS).flatMap(([signal, texts]) => texts.map((text) => [signal, text])))('holds a %s reading: %s', (_signal, text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  it('holds a VO2 max reading', () => {
+    expect(numericHealthIn('VO2 max 45')).toBe(true);
   });
 
   // A serialized field (a quoted key, an `=`, or a glued snake or camel key) carrying a number is a payload's shape; a

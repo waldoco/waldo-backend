@@ -1,4 +1,5 @@
 import { withRequestTimeout } from './request-timeout';
+import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
@@ -13,6 +14,9 @@ export const CONSOLE_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
 // Sheet asks for current credentials before sensitive features. Unlike GitHub's, the window does not restart with each
 // sensitive action: it runs from the code.
 export const CONSOLE_STEP_UP_MS = 2 * 60 * 60_000;
+// The app proves a recent email code by its session's sign-in time: every app session starts from one, so the row's
+// created_at is the console's verified_at. A missing row or an unreadable time is never recent.
+export const signedInRecently = (createdAt: string | undefined, now: number): boolean => now - Date.parse(createdAt ?? '') < CONSOLE_STEP_UP_MS;
 // A sign-in in a browser that holds a live session (a confirm, or a link or signup there) does not end that session: by
 // owner ruling it keeps ordinary access, without its code, for 5 more minutes, so a turn running or queued under it
 // finishes, and then it ends. The directory holds the same 5 minutes in console_session_cap.
@@ -49,6 +53,8 @@ export type ConsoleAuth = Readonly<{
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
+  /** Spend across every owner for the last 30 days; null unless the database admits the caller as an admin. */
+  adminCostSummary(doName: string): Promise<AdminCostSummary | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
@@ -230,6 +236,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
+    adminCostSummary: async (doName) => {
+      const summary = await rpc('admin_cost_summary', `admincost.${doName}`, { p_do_name: doName });
+      return summary === null ? null : adminCostSummarySchema.parse(summary);
+    },
     invite: async (doName, email, code) => {
       const address = email.trim().toLowerCase();
       const hash = await linkCodeHash(code);

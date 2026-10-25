@@ -11,7 +11,8 @@ const proof = vi.hoisted(() => ({
   outputs: [] as any[][], tools: [] as string[][], telegram: [] as { method: string; body: any }[], moved: 0, sentRaw: [] as string[], eventTag: 'etag-3pm',
 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
-  proof.tools.push((input.tools ?? []).map((tool: { name?: string }) => tool.name ?? ''));
+  // With tool search on, OpenAI nests a deferred tool inside its namespace.
+  proof.tools.push((input.tools ?? []).flatMap((tool: { type?: string; tools?: unknown[] }) => tool.type === 'namespace' ? tool.tools ?? [] : [tool]).map((tool: { name?: string }) => tool.name ?? ''));
   const format = input.text?.format?.name;
   return { id: 'approvals-fixture-reply', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : 'I proposed moving it to 4.', usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));

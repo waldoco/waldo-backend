@@ -8,6 +8,10 @@ import { DeviceCommandStore } from '../src/devices/command-store';
 import { claimStore } from '../src/memory/claims';
 import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { presenceAuthority } from './helpers/directory-presence';
+import { traceBook } from '../src/channels/harness';
+import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
+import { bindWhatsAppNumber } from '../src/channels/whatsapp-window';
+import { ensureSchema } from '../src/tracer/schema';
 
 const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
 vi.mock('openai', () => ({ default: class {
@@ -19,6 +23,7 @@ vi.mock('openai', () => ({ default: class {
 } }));
 afterEach(() => vi.unstubAllGlobals());
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { OwnerDO: OwnerObject } = await import('../src/channels/owner-do');
 
 it('recovers a saved Mac summary after restart without a second model call', async () => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mac_summary_recovery'));
@@ -115,7 +120,7 @@ describe('a Mac result follow-up on a directory-backed deploy', () => {
   }));
   const clear = (name: string) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => { await state.storage.deleteAlarm(); });
 
-  it.each([['Telegram-bound', false], ['dual-bound', true]] as const)('a %s owner gets the report as the admitted owner, on the Telegram chain, recalling no health claim by the result\'s words', async (_label, dual) => {
+  it.each([['Telegram-bound', false], ['dual-bound', true]] as const)('a %s owner gets the report as the admitted owner, on the chain of the surface it lands on, recalling no health claim by the result\'s words', async (_label, dual) => {
     const name = `mac_followup_owner_${dual ? 'dual' : 'telegram'}`, asked: string[] = [], sent: string[] = [];
     model.calls = 0; model.requests = [];
     directory(name, 'current', asked, sent);
@@ -129,7 +134,8 @@ describe('a Mac result follow-up on a directory-backed deploy', () => {
       expect((JSON.parse(request!) as { prompt_cache_key?: string }).prompt_cache_key).toBe(`waldo:${PRINCIPAL}`);
       expect(request).not.toContain('prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
       expect(request).not.toContain('Knee physio exercises every morning');
-      expect((await inspect(name)).chain).toEqual([{ chatId: `telegram-${SUBJECT}`, ownerId: PRINCIPAL }]);
+      // A Telegram-only owner reads it on Telegram; one who also uses the app reads it in the app, and Telegram has a copy.
+      expect((await inspect(name)).chain).toEqual([{ chatId: dual ? `owner:${PRINCIPAL}` : `telegram-${SUBJECT}`, ownerId: PRINCIPAL }]);
       // The owner is asked through the binding that admits it, once per unit of work (the boot day plan is another unit).
       expect([...new Set(asked)]).toEqual([dual ? 'owner_runtime_authority' : 'common_owner_authority']);
     } finally { await clear(name); }
@@ -152,4 +158,136 @@ describe('a Mac result follow-up on a directory-backed deploy', () => {
       expect(sent).toEqual([]);
     } finally { await clear(name); }
   }, 20_000);
+});
+
+// Where a Mac follow-up goes for an owner off Telegram: the surfaces the owner's proactive setting picks, through the real alarm,
+// owner runtimes and delivery outbox, exactly as a check-back does. The app is the default; WhatsApp instead of it or as a copy.
+describe('a Mac result follow-up goes where the owner\'s proactive work goes', () => {
+  const OWNER_ID = '7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f';
+  const WA = '15550003333';
+  const HASH = 'b'.repeat(64);
+  const AT = Date.parse('2026-10-03T09:00:00Z');
+  const NOTICE = 'Mac request request_surface: completed (exit code 0).\nFixture result summary.';
+  const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
+  const whatsappEnv = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+  type Wire = { whatsapp: string[]; telegram: string[] };
+  type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void>; admitMacDelivery(value: unknown): Promise<boolean> }>;
+  const result = (name: string) => ({ kind: 'result' as const, request_id: 'request_surface', device_id: `device_${name}`, owner_id: OWNER_ID,
+    payload: { status: 'completed', exit_code: 0, output_tail: 'fixture output', truncated: false } });
+  const stub = (name: string, wire: Wire) => vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input), path = new URL(url).pathname;
+    const fn = /\/rest\/v1\/rpc\/([a-z0-9_]+)$/.exec(path)?.[1];
+    const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
+    if (fn === 'device_for_auth_v030') return Response.json([{ owner_id: OWNER_ID, do_name: name, contract_version: '0.3.0', pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'shell_exec' }]);
+    if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
+    if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+    if (fn === 'health_log_recent') return Response.json([]);
+    if (fn === 'health_context_read') return Response.json(null);
+    if (/\/fictional-phone-id\/messages$/.test(path)) {
+      const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
+      wire.whatsapp.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.whatsapp.length}` }] });
+    }
+    if (/\/sendMessage$/.test(path)) {
+      const sent = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
+      wire.telegram.push(sent.text);
+      return Response.json({ ok: true, result: { message_id: wire.telegram.length, chat: { id: sent.chat_id } } });
+    }
+    return Response.json(true);
+  });
+  // An owner on the app (and WhatsApp, when bound) with no Telegram link, the clock pinned and no scheduled jobs, so each pass
+  // runs only the Mac lane and the delivery outbox.
+  const withOwner = (name: string, binding: Readonly<{ whatsapp?: boolean; surface?: string; telegramUnlinked?: boolean; telegram?: boolean }>, run: (owner: Owner, state: DurableObjectState, wire: Wire, pass: (lane: 'mac' | 'outbox') => Promise<void>) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const originalNow = Date.now, wire: Wire = { whatsapp: [], telegram: [] };
+      let now = AT;
+      Date.now = () => now;
+      stub(name, wire);
+      try {
+        ensureSchema(state.storage); traceBook(state.storage.sql);
+        const { kv } = state.storage;
+        kv.put('do_name', name);
+        kv.put('app_subject', String(appSubjectFor(name)));
+        if (binding.whatsapp) bindWhatsAppNumber(kv, WA);
+        if (binding.telegramUnlinked) { kv.put('telegram_subject', '700000002'); kv.put('telegram_unlinked', true); }
+        if (binding.telegram) kv.put('telegram_subject', '700000003');
+        if (binding.surface) kv.put(PROACTIVE_SURFACE_KEY, binding.surface);
+        kv.put('timezone', 'UTC'); kv.put('timezone_confirmed', true);
+        kv.put('wa_last_inbound_ms', AT - 60 * 60_000);
+        const owner = new OwnerObject(state, { ...env, ...directory, ...(binding.whatsapp ? whatsappEnv : {}), TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
+          WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+        await owner.setup('app').ready;
+        if (binding.whatsapp) await owner.setup('whatsapp').ready;
+        state.storage.sql.exec('DELETE FROM schedule');
+        // 'mac' runs a pass whose round robin finds nothing else due; 'outbox' runs one that picks the delivery outbox.
+        const pass = async (lane: 'mac' | 'outbox') => { now += 1000; kv.put('owner_alarm_last_v1', lane === 'outbox' ? 0 : 1); await owner.alarm(); };
+        await run(owner, state, wire, pass);
+      } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+    });
+  const appChat = async (owner: Owner, name: string) => {
+    const response = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': HASH } }));
+    expect(response.status).toBe(200);
+    return (await response.json() as { messages: { role: string; text: string }[] }).messages.filter(m => m.role === 'assistant').map(m => m.text);
+  };
+  const inboxStates = (state: DurableObjectState) => state.storage.sql.exec<{ state: string }>('SELECT state FROM mac_result_inbox').toArray().map(row => row.state);
+  const deliverAll = async (pass: (lane: 'mac' | 'outbox') => Promise<void>) => { await pass('mac'); await pass('outbox'); await pass('outbox'); };
+
+  it('an app-only owner gets the report in the app chat, not on Telegram', async () => {
+    const name = 'mac_surface_app';
+    await withOwner(name, {}, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(await appChat(owner, name)).toEqual([NOTICE]);
+      expect(wire.telegram).toEqual([]);
+    });
+  }, 30_000);
+
+  it('an owner who unlinked Telegram and uses the app still gets the report, in the app', async () => {
+    const name = 'mac_surface_unlinked';
+    await withOwner(name, { telegramUnlinked: true }, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(await appChat(owner, name)).toEqual([NOTICE]);
+      expect(wire.telegram).toEqual([]);
+    });
+  }, 30_000);
+
+  it('an owner linked on Telegram who also uses the app gets the report in the app, with Telegram\'s plain copy, as scheduled work does', async () => {
+    const name = 'mac_surface_app_telegram';
+    await withOwner(name, { telegram: true }, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(await appChat(owner, name)).toEqual([NOTICE]);
+      expect(wire.telegram).toEqual([NOTICE]);
+    });
+  }, 30_000);
+
+  it('an owner who chose WhatsApp gets the report on WhatsApp and the app chat stays empty', async () => {
+    const name = 'mac_surface_whatsapp';
+    await withOwner(name, { whatsapp: true, surface: 'whatsapp' }, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(wire.whatsapp).toEqual([`text:${NOTICE}`]);
+      expect(await appChat(owner, name)).toEqual([]);
+      expect(wire.telegram).toEqual([]);
+    });
+  }, 30_000);
+
+  it('an owner who chose both gets the report in the app and one WhatsApp copy', async () => {
+    const name = 'mac_surface_both';
+    await withOwner(name, { whatsapp: true, surface: 'both' }, async (owner, state, wire, pass) => {
+      expect(await owner.admitMacDelivery(result(name))).toBe(true);
+      await deliverAll(pass);
+      await pass('outbox');
+      expect(inboxStates(state)).toEqual(['finished']);
+      expect(await appChat(owner, name)).toEqual([NOTICE]);
+      expect(wire.whatsapp).toEqual([`text:${NOTICE}`]);
+      expect(wire.telegram).toEqual([]);
+    });
+  }, 30_000);
 });
