@@ -203,6 +203,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     beginEffect(ticket: TaskTicket, call: Readonly<{ tool: string; call_id: string }>): boolean {
       return renew(ticket, ', inflight_json = ?', JSON.stringify({ ...call, at: deps.now() }));
     },
+    // A step refused before its handler ran (the taint gate, a hook, its schema) left nothing uncertain: its intent goes.
+    endEffect(ticket: TaskTicket): boolean {
+      return renew(ticket, ', inflight_json = NULL');
+    },
     // A worker (re)joining its attempt: the lease renews, and the job's brief and last checkpoint come back. A rejoin while
     // an effect is still recorded in flight means the worker lost the effect's result, so the job parks instead.
     claim(ticket: TaskTicket): JobRow | Fenced | 'parked' {

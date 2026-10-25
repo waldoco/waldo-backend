@@ -175,12 +175,16 @@ export const taskHost = (deps: TaskHostDeps) => {
         session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
       };
       const effect = unreplayable(call.name);
+      // Whether the step's handler was reached: the dispatcher can refuse a call before it (the taint gate, a hook, its schema).
+      let entered = false;
+      const reached = effect ? handlers.map(handler => handler.name !== call.name ? handler
+        : { ...handler, handle: (...args: Parameters<typeof handler.handle>) => { entered = true; return handler.handle(...args); } }) : handlers;
       // The intent is written once the call can start, after any wait for the serial lane, with a fresh lease: a job that
       // waited behind a long turn did nothing yet and must not look like an interrupted effect.
       const run = async () => {
         scope.admit();
         if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
-        return dispatchLoopTool(call, { handlers, ctx });
+        return dispatchLoopTool(call, { handlers: reached, ctx });
       };
       try {
         result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
@@ -197,6 +201,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         hop(row, 'task_parked', { ok: false, code: 'uncertain_effect', detail: call.name });
         return 'fenced';
       }
+      if (effect && !entered && !deps.book.endEffect(ticket)) return 'fenced';
     }
     if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
     deps.log({

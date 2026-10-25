@@ -22,7 +22,10 @@ const T0 = 1_800_000_000_000;
 const brief: TaskBrief = { title: 'Book a table', goal: 'Find a table for two tonight.', context: 'Near Bandra.', done_when: 'A shortlist.', effort: 'standard', timezone: 'UTC', started_at: T0 };
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
-const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.' } };
+const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
+// An errand step that types nothing past Waldo's own page: the tainted-write law admits it from a worker. A step with no
+// typed command takes the legacy path and goes to the owner's card (below).
+const UNTYPED_BROWSE = { call_id: 'c-untyped', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/book', task: 'Book a table for two at 8pm.' }) };
 const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.stringify(VALID_ARGS[name] ?? {}) });
 
 type Harness = Readonly<{
@@ -83,6 +86,22 @@ describe('the task brain host', () => {
       expect(refused).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
       expect(ran).toEqual([]);
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+    });
+  });
+
+  // A worker has always read outside content, and it cannot raise a card: a free-form browser step, which may commit, is
+  // refused toward the owner's card before it runs, with no effect intent written.
+  it('an errand worker\'s untyped browser step is refused toward the owner\'s card: nothing runs and no effect intent is written', async () => {
+    await withHost(async ({ host, ticket, ran, book }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      const refused = await host.tool(t, UNTYPED_BROWSE, CANARIES);
+      expect(refused).toMatchObject({ ok: false });
+      expect(JSON.stringify(refused)).toContain('propose_action');
+      expect(ran).toEqual([]);
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
     });
   });
 
@@ -351,8 +370,8 @@ describe('the task brain host', () => {
   });
 
   it('an errand step that already succeeded is refused when repeated, in the same slice and after a resume', async () => {
-    const act = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Book the 8pm table for two.' } };
-    const other = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Add a note: window seat.' } };
+    const act = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Book the 8pm table for two.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
+    const other = { call: 'browse_act', args: { url: 'https://example.com/book', task: 'Add a note: window seat.', command: { operation: 'click', element_ref: 'e2', intent: 'read' } } };
     const finish = { call: FINISH_TASK, args: { status: 'done', summary: 'Booked.', findings: [], proposals: [], left: [] } };
     const model = (script: readonly Readonly<{ call: string; args: unknown }>[]): TaskModel => {
       let n = 0;
@@ -396,8 +415,8 @@ describe('the task brain host', () => {
   });
 
   it('a resumed errand step whose arguments were not kept (a reading) is not run again; a step without a reading still runs', async () => {
-    const withReading = { url: 'https://example.com/clinic', task: 'Book the follow-up; pulse at check-in was 88 bpm.' };
-    const plain = { url: 'https://example.com/clinic', task: 'Add the owner\'s phone number to the booking.' };
+    const withReading = { url: 'https://example.com/clinic', task: 'Book the follow-up; pulse at check-in was 88 bpm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } };
+    const plain = { url: 'https://example.com/clinic', task: 'Add the owner\'s phone number to the booking.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } };
     await withHost(async ({ host, ticket, ran, book }) => {
       const t = ticket('errand');
       let n = 0;

@@ -17,6 +17,7 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
+import { HEALTH_MEMORY_KEY } from '../src/channels/health-memory';
 import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
 import { standingOrderBook } from '../src/channels/standing-orders';
@@ -666,6 +667,20 @@ describe('the console control', () => {
       // A request against the read before the change is stale.
       expect((await post(stub, token, before, { value: 'whatsapp', request_id: 'surface-request-02' })).status).toBe(409);
       expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'both' });
+    });
+  });
+
+  // Health notes in memory Waldo keeps on its own: on until the owner turns them off, in one action on the same read.
+  it('reads health notes as on, turns them off in one action, and refuses anything but on or off', async () => {
+    await withConsole('health-memory-console', async (stub, token) => {
+      const before = await read(stub, token) as Read & { data: { health_memory?: unknown } };
+      expect(before.data.health_memory).toBe(true);
+      const odd = await post(stub, token, before, { action: 'health_memory.set', value: 'later', request_id: 'health-request-01' });
+      expect(await odd.json()).toMatchObject({ receipt: { state: 'rejected' } });
+      const off = await post(stub, token, before, { action: 'health_memory.set', value: 'off', request_id: 'health-request-02' });
+      expect(await off.json()).toMatchObject({ receipt: { state: 'recorded' } });
+      expect(((await read(stub, token)) as Read & { data: { health_memory?: unknown } }).data.health_memory).toBe(false);
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(HEALTH_MEMORY_KEY)).toBe(false));
     });
   });
 

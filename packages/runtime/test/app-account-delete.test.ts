@@ -17,11 +17,11 @@ type Seen = { deletes: number; state: DurableObjectState; name: string; owner?: 
 
 // delete_owner revokes every session and the owner's authority, as the SQL function does, so the
 // signed-out assertions observe the fixture's directory rather than a constant.
-const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<void>) => {
+const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<void>, signedInAgo = 0) => {
   const name = `app-delete-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false, owned = true;
-    const created = new Date().toISOString(), expires = Date.now() + 3_600_000, seen: Seen = { deletes: 0, state, name };
+    const created = new Date(Date.now() - signedInAgo).toISOString(), expires = Date.now() + 3_600_000, seen: Seen = { deletes: 0, state, name };
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body));
       if (url.pathname === '/auth/v1/otp') return Response.json({});
@@ -118,6 +118,20 @@ it('deleting the account leaves no episodes row holding an app reply that carrie
     expect(seen.state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n).toBe(0);
     expect(stored(seen.state)).toBe(0);
   });
+});
+
+it('a session signed in over two hours ago cannot delete the account: it is asked to confirm and nothing reaches the directory', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const view = await account(app, credential);
+    const before = stored(seen.state);
+    const response = await app('/actions', remove(view.revision), credential);
+    expect([response.status, await response.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(seen.deletes).toBe(0);
+    expect(stored(seen.state)).toBe(before);
+    expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(404);
+    expect((await app('/controls?view=day', undefined, credential)).status).toBe(200);
+  }, 3 * 60 * 60_000);
 });
 
 it('a deletion without the typed confirmation, or against a stale read, never reaches the directory', async () => {

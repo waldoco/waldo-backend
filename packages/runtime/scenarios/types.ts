@@ -31,7 +31,9 @@ export type ModelInputAssert = Readonly<{
 
 export type StateAssert =
   | Readonly<{ kind: 'reminder_count'; equals: number }>
-  | Readonly<{ kind: 'reminder_note'; matches: RegExp }>;
+  | Readonly<{ kind: 'reminder_note'; matches: RegExp }>
+  | Readonly<{ kind: 'health_log_count'; equals: number }>
+  | Readonly<{ kind: 'workspace_file_count'; equals: number }>;
 
 export type FixtureEvent = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean }>;
 export type FixtureMail = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;

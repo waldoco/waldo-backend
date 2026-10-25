@@ -88,7 +88,7 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
 // The apply turn's tools: with source follow-ups it may open a source-bound loop (a card, since the turn is tainted);
 // otherwise it reads, and asks the owner on a card for any change.
 export const updateSweepTools = (sourceFollowups: boolean): readonly ToolName[] =>
-  sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : OUTSIDE_TEXT_JOB_TOOLS;
+  sourceFollowups ? ['get_context', 'read_memory', 'search_episodes', 'open_loop'] : OUTSIDE_TEXT_JOB_TOOLS;
 
 export const updateSweepApplyText = (localNow: string, changes: readonly Change[], context: Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups: boolean }>,
   result: Parameters<typeof machineResultText>[0], withheld: readonly string[] = []): string =>

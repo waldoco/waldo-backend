@@ -31,6 +31,8 @@ export type EpisodeIndex = Readonly<{
   search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
   since(at: number, maxChars: number): readonly Episode[];
   after(at: number, maxChars: number): readonly Episode[];
+  // The rows stored for these entries, oldest first; the newest are the ones left out past maxChars.
+  of(entryIds: readonly string[], maxChars: number): readonly Episode[];
 }>;
 
 export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
@@ -92,6 +94,23 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
         const last = kept.at(-1);
         if (last && row.at !== last.at && total + row.text.length > maxChars) break;
         kept.push(episodeOf(row)); total += row.text.length;
+      }
+      return kept;
+    },
+    of(entryIds, maxChars) {
+      const ids = [...new Set(entryIds)];
+      const rows: (StoredEpisode & { rid: number })[] = [];
+      // Bound parameters per statement are limited, so the lookup goes in batches.
+      for (let start = 0; start < ids.length; start += 50) {
+        const batch = ids.slice(start, start + 50);
+        rows.push(...sql.exec<StoredEpisode & { rid: number }>(`SELECT rowid AS rid, entry_id, speaker, at, text FROM episodes WHERE entry_id IN (${batch.map(() => '?').join(',')})`, ...batch).toArray());
+      }
+      const kept: Episode[] = [];
+      let total = 0;
+      for (const { rid: _rid, ...row } of rows.sort((a, b) => a.rid - b.rid)) {
+        total += row.text.length;
+        if (total > maxChars) break;
+        kept.push(episodeOf(row));
       }
       return kept;
     },

@@ -51,8 +51,9 @@ export type OwnerResponder = Readonly<{
   // answers the owner's own message late, never for one Waldo starts itself.
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
-  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
-  migrate(trace: string, input: string): Promise<string>;
+  // policy.health false keeps no health notes from this pass, or from the migration.
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
   promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
