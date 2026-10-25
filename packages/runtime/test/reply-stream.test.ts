@@ -153,6 +153,13 @@ describe('replyGate', () => {
     const unchanged = hook.ok && (hook.payload as { text?: unknown }).text === text;
     expect((await gate()(text)).ok).toBe(unchanged);
   });
+
+  // Delivery shows the sanitiser's rewrite, so a draft of the text before the rewrite would show what the owner never gets.
+  it('stops when the sanitiser rewrites the text, even though it allows it', async () => {
+    const rewriting = replyGate({ canaries: CANARIES, topics: [], sanitise: (input) => { const real = sanitise(input); return real.ok ? { ...real, payload: { text: String((real.payload as { text: string }).text).replace('Priya', '[name]') } } : real; } });
+    expect(await rewriting('Lunch with Priya at noon.')).toEqual({ ok: false, reason: 'scribe_rewrite' });
+    expect((await rewriting('Lunch at noon.')).ok).toBe(true);
+  });
 });
 
 describe('withReplyStream', () => {
