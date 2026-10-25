@@ -251,6 +251,32 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
   } finally { vi.useRealTimers(); }
 }, 20_000);
 
+it('a card made outside an iMessage turn waits for the owner\'s next message, and a "1" in that message is a normal turn, not its approval', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Hello');
+  const delivered = (await w.host.pull()).delivery!;
+  expect((await w.host.postResult(delivered, await w.host.execute(delivered))).status).toBe(200);
+  await w.pump(2);
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    await state.storage.put('origin', 'https://imessage.fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    const desk = (instance as unknown as { setup(channel: string): { desk: import('../src/channels/approvals').ApprovalDesk } }).setup('imessage').desk;
+    await desk.propose({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z' as never, end: '2030-01-02T17:00:00Z' as never, reason: 'A standing order asked' });
+    expect(state.storage.sql.exec("SELECT 1 FROM approval_presentations WHERE surface = 'imessage'").toArray()).toEqual([]);
+  });
+  const modelCalls = proof.turns.length;
+  await replyFor(w, '1');
+  // The owner had not seen the card, so "1" ran as their message; the card went out ahead of that turn's reply.
+  expect(proof.turns.length).toBeGreaterThan(modelCalls);
+  expect(proof.moved).toEqual([]);
+  const card = (await w.host.pull()).delivery!;
+  expect(JSON.parse(card.body).text).toMatch(/Reply 1 to move it, or 2 to skip\.$/);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
+  });
+});
+
 const outbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 const inbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
 const replyFor = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
