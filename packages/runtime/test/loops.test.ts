@@ -26,6 +26,27 @@ describe('open loops', () => {
       expect(loopsSection(book, 'Asia/Kolkata')).toBe('Waldo is on\n- Check how the late call went (due 2026-09-24 18:00) [o2]\n- done: Find a physio near Indiranagar (2026-09-24)');
     });
   });
+
+  // An approved close card replays close_loop. When the loop already closed some other way, the replay must fail so the
+  // owner is told nothing changed, and the reason never repeats a title that may have come from a mail.
+  it('close_loop fails when nothing closes: an unknown id, or a loop already closed as done or dropped', async () => {
+    await withSql(async (sql) => {
+      let id = 0;
+      const book = loopBook(sql, { newId: () => String(++id), now: () => at('2026-09-24T04:00:00Z') });
+      const close = loopHandlers(book).find((handler) => handler.name === 'close_loop')!;
+      const paid = book.open({ title: 'Pay City Power', due: null });
+      const passport = book.open({ title: 'Renew the passport', due: null });
+      book.close(paid.id, 'done');
+      book.close(passport.id, 'dropped');
+      for (const [loopId, why] of [[paid.id, 'already closed as done'], [passport.id, 'already closed as dropped'], ['o-unknown', 'no loop with']] as const) {
+        const result = await run(close, { id: loopId, outcome: 'done' });
+        expect(result).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(why) });
+        expect(JSON.stringify(result)).not.toContain('City Power');
+        expect(JSON.stringify(result)).not.toContain('passport');
+      }
+      expect([book.get(paid.id)?.status, book.get(passport.id)?.status]).toEqual(['done', 'dropped']);
+    });
+  });
 });
 
 describe('proactive follow-ups are on by default, per-owner opt-out', () => {

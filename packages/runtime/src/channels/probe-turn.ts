@@ -1,5 +1,6 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { sameSecret } from './telegram-webhook';
+import { toolsWhere } from '../tools/records';
 
 // Staging-only synthetic turn trigger: lets the probe harness run one real owner turn on
 // waldo-runtime-staging without the Telegram webhook secret and without touching the update-id
@@ -34,31 +35,8 @@ const MAX_PROBE_TEXT = 4_000;
 // probes only). Real turns never touch the slot.
 export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
 
-// Live provider surfaces a synthetic probe must never reach in capture mode: Google reads and
-// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, the
-// connect flow, and the console link (a capture probe hands its sends to the probe caller).
-// Kept: get_context, web_search (synthetic queries, our own API), memory and
-// episode reads of the staging DO, reminders/loops.
-export const PROBE_STRIPPED_TOOLS: readonly string[] = [
-  'query_calendar',
-  'query_availability',
-  'read_owner_context',
-  'get_communication',
-  'search_communication',
-  'search_contacts',
-  'read_thread',
-  'get_tasks',
-  'propose_calendar_change',
-  'draft_email',
-  'send_email',
-  'browse_page',
-  'browse_act',
-  'call_mcp_tool',
-  'read_mcp_tool',
-  'search_mcp_tools',
-  'connect_service',
-  'send_console_link',
-];
+// Live provider surfaces a synthetic probe must never reach in capture mode: the records marked probe strip.
+export const PROBE_STRIPPED_TOOLS: readonly string[] = [...toolsWhere((record) => record.probe === 'strip')];
 
 // DO-side rate limit for the probe endpoint (Codex hold: the route had none). Per-minute
 // window, 20 probes per window per owner DO - generous for suites, tight against a leaked token.

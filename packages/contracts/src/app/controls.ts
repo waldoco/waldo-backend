@@ -5,13 +5,20 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
 const memoryCursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/);
 const memoryId = text.min(1).max(256);
 const memoryViews = z.enum(['summary', 'claims', 'interpretations', 'detail', 'pattern']);
+// Controls revision 2 (`x-waldo-app-contract: controls=2`): a constellation claim carries `pinned`, and the constellation
+// view takes the owner's claim actions (claim.pin, claim.unpin, claim.edit). Revision 1 clients never receive the field.
+export const APP_CONTROLS_MEMORY_REVISION = 2;
+// An edited claim's text, trimmed. A pinned line rides every turn, so it stays well inside the profile block's room.
+export const APP_CLAIM_TEXT_MAX_V1 = 1000;
+const claimId = /^memory:claim:[1-9][0-9]{0,15}$/;
+const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit'];
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
 // id for detail and pattern, max_nodes and max_links for pattern. Ids and cursors are opaque.
 export const appControlQueryV1Schema = z.strictObject({
@@ -25,10 +32,12 @@ export const appControlQueryV1Schema = z.strictObject({
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'session.revoke']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'session.revoke', 'phone.sms_send', 'phone.sms_check']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
+  // The six digits Twilio texted, for phone.sms_check only. Never the number: the backend texts the number on file.
+  code: z.string().regex(/^\d{6}$/).optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
@@ -44,7 +53,20 @@ export const appControlActionV1Schema = z.strictObject({
   const deletion = action.action === 'account.delete';
   if (deletion !== (action.view === 'account') || deletion !== (action.confirmation === 'DELETE')) ctx.addIssue({ code: 'custom', path: ['confirmation'], message: 'account.delete alone uses the account view, with confirmation DELETE' });
   if (deletion && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume) !== undefined) ctx.addIssue({ code: 'custom', message: 'account.delete carries only its confirmation' });
-  if (action.view === 'constellation') ctx.addIssue({ code: 'custom', path: ['view'], message: 'The constellation view is read-only' });
+  // The owner's claim actions name one claim from the constellation view: pin it to the profile or facts block, unpin it,
+  // or replace its text with what the owner typed. Each counts as the owner's own word for that claim.
+  const claim = CLAIM_ACTIONS.includes(action.action);
+  if (claim !== (action.view === 'constellation')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The constellation view takes only the claim actions, and they only it' });
+  if (claim && !claimId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A claim action names one claim, memory:claim:<n>' });
+  if (claim && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A claim action carries only its id and value' });
+  if (action.action === 'claim.pin' && action.value !== 'profile' && action.value !== 'facts') ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.pin names the block, profile or facts' });
+  if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
+  const edited = action.value?.trim() ?? '';
+  if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
+  const phone = action.action === 'phone.sms_send' || action.action === 'phone.sms_check';
+  if (phone !== (action.view === 'phone')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The phone actions alone use the phone view' });
+  if ((action.code !== undefined) !== (action.action === 'phone.sms_check')) ctx.addIssue({ code: 'custom', path: ['code'], message: 'phone.sms_check alone carries the code, and always does' });
+  if (phone && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code' });
 });
 
 // The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
@@ -123,6 +145,9 @@ const memoryClaim = z.strictObject({
   evidence: z.strictObject({ kind: z.literal('writer_note'), text }),
   source_reference: z.strictObject({ state: z.enum(['unverified', 'unavailable']), link: z.null(), visibility: z.literal('withheld_unverified_pointer'), retrievable: z.literal(false) }),
   recorded_at: text, writer_seen_count: z.int().positive().nullable(),
+  // Controls revision 2: the block this claim is pinned to, shown on every turn, or null. Revision 2 also reads source
+  // waldo_confirmed for a claim the nightly model confirmed, which stays Waldo's read; revision 1 reads it as confirmed.
+  pinned: z.enum(['profile', 'facts']).nullable().optional(),
 });
 const memoryNode = z.strictObject({
   id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
@@ -143,6 +168,16 @@ export const appControlConstellationDataV1Schema = z.union([
     expand: z.strictObject({ next_cursor: memoryCursor.nullable(), links_capped: z.boolean(), capped_links_recoverable: z.literal(false), capped_links: count }),
   }),
 ]);
+// The owner's number on file and how to prove it: texting a code is listed only while it is offered and would be
+// accepted now, checking only while a code waits with checks left. Times are epoch seconds; retry_at null means now.
+export const appControlPhoneDataV1Schema = z.strictObject({
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/).nullable(), verified: z.boolean(), sms: z.boolean(),
+  challenge: z.strictObject({
+    state: z.enum(['sending', 'pending', 'checking', 'approved', 'expired', 'unknown']), expires_at: z.int().positive(),
+    retry_at: z.int().positive().nullable(), checks_left: z.int().min(0).max(5),
+  }).nullable(),
+  actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check'])),
+});
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -150,6 +185,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('activity'), data: appControlActivityDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
 ]);
 export const appControlReceiptV1Schema = z.strictObject({ state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional() });
 export const appControlResultV1Schema = z.strictObject({ request_id: appControlRequestIdV1Schema, receipt: appControlReceiptV1Schema, duplicate: z.boolean() });
