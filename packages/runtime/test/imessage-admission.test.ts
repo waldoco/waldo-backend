@@ -178,3 +178,9 @@ it('account replacement while reading media invalidates the old grant before adm
   await expect(admitIMessageOwnerTurn(f.event, f, f.admitted)).rejects.toThrow('not admitted');
   expect(f.media.content).not.toHaveBeenCalled(); expect(f.admitted).not.toHaveBeenCalled();
 });
+// The relay's hold policy reads this refusal; the bridge carries a host's files as references and admits the words alone.
+it('without a media store, files are refused as media unavailable, never dropped', async () => {
+  const f = fixture();
+  await expect(admitIMessageOwnerTurn(syntheticIMessageEvents.multipleFiles, f, f.admitted)).rejects.toThrow('iMessage media unavailable');
+  expect(f.admitted).not.toHaveBeenCalled();
+});
