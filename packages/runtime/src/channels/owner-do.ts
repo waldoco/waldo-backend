@@ -166,6 +166,7 @@ import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
+import { ownerPush } from './expo-push';
 import { googleProxy } from '../connectors/connections';
 import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
@@ -3389,6 +3390,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
+    // The app's push: fixed text to the owner's own devices, read from the directory for each send.
+    const pushDirectory = () => {
+      const call = signedRpc(this.env), doName = identity.get<string>('do_name');
+      if (!call || !doName) throw new Error('push directory unavailable');
+      return { call, doName };
+    };
+    const push = ownerPush({ accessToken: this.env.EXPO_ACCESS_TOKEN, kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
+      targets: async () => { const { call, doName } = pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
+      retire: async ({ installation_id: installation, device_epoch: epoch }) => {
+        const { call, doName } = pushDirectory();
+        return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
+      },
+      log: (code, count) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` }) });
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
     const download = nativeSurface(channel)
@@ -4270,12 +4284,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: `${card.id} queued`, text: { input: said, output: text } });
           return log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
         }
+        let appRow: string | undefined;
         if (!skipped) {
           const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
-          if (typeof receipt.app_row_id === 'string') recordCardDelivery(this.ctx.storage.kv, day, card.id, receipt.app_row_id, Date.now());
+          if (typeof receipt.app_row_id === 'string') { appRow = receipt.app_row_id; recordCardDelivery(this.ctx.storage.kv, day, card.id, appRow, Date.now()); }
         }
         if (skipped) plans.skipped(day, card.id); else plans.sent(day, card.id);
         updates.fold(now);
+        // Pushed only once the Brief has a row in the app chat and is recorded as sent, so a push can never cause a second Brief.
+        if (appRow !== undefined && card.id === 'card:brief') await push('brief');
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
       } catch (error) {
