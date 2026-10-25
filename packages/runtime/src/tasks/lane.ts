@@ -182,12 +182,17 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     logSettled();
   };
 
+  // A job carrying a topic the owner is forgetting stops: its worker, if running, holds a copy.
+  const forgotten = (row: JobRow): boolean => {
+    if (!topics.length || !heldTopicIn(row, topics)) return false;
+    if (book.cancel(row.id, 'forgotten')) { deps.host.cancelled(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
+    return true;
+  };
+  for (const row of topics.length ? book.running() : []) forgotten(row);
+
   let leftOver = false, slotsFull = false;
   for (const row of book.due()) {
-    if (topics.length && heldTopicIn(row, topics)) {
-      if (book.cancel(row.id, 'forgotten')) { deps.host.cancelled(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
-      continue;
-    }
+    if (forgotten(row)) continue;
     // A task's report and a retried message each take a model turn; a parked retry's notice and a worker start do not.
     const needsTurn = row.kind === 'retry_turn' ? row.status !== 'reported' : row.status === 'reported';
     if (needsTurn && !deps.room()) { leftOver = true; continue; }

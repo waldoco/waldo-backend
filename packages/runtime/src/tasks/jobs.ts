@@ -337,7 +337,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // a copy; then the text leaves the brief, progress and result of every row. Only after the cancel, so no open job is ever
     // rewritten under its worker. A settled copy the literal redaction cannot rewrite (an escape that spells the text, a key)
     // is dropped from the row: a settled row needs none of it. Answers the jobs cancelled, for the caller to fence, and how
-    // many copies remain.
+    // many copies remain, counting each running task.
     forget(texts: readonly string[]): Readonly<{ cancelled: readonly string[]; remaining: number }> {
       const topics = forgetTopics(texts);
       if (!topics.length) return { cancelled: [], remaining: 0 };
@@ -358,7 +358,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
           sql.exec(`UPDATE task_jobs SET ${column} = ? WHERE id = ?`, kept, row.id);
         }
       }
-      const remaining = copies(sql).reduce((count, row) => count + columns(row).filter(holds).length, 0);
+      // A running worker may hold the text in memory without any row showing it, so each running task counts as a copy
+      // until it stops: the topic stays held, and the brain refuses a checkpoint that would write it back.
+      const unseen = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task'").toArray()[0]?.n ?? 0;
+      const remaining = copies(sql).reduce((count, row) => count + columns(row).filter(holds).length, unseen);
       return { cancelled, remaining };
     },
     // TTL sweep: a settled row still holding its whole brief (a forget's cancel, a row settled before briefs were dropped)

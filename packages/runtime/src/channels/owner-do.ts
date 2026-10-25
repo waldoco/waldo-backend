@@ -500,6 +500,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
+      heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
     });
   })();
 
