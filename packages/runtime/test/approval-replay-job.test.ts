@@ -190,6 +190,21 @@ describe('an approved browser card runs as a replay job', () => {
     });
   });
 
+  it('a running replay takes neither an owner task slot nor a machine slot', async () => {
+    await withReplay(async ({ desk, card, pass, settle, browser, book }) => {
+      const id = await card();
+      await desk.decide(id, 'a', 'tap');
+      let release!: () => void;
+      browser.gate = new Promise(resolve => { release = resolve; });
+      await pass();
+      expect(book.byKey(replayKey(id))!.status).toBe('running');
+      expect(book.runningTasks()).toBe(0);
+      expect(book.runningMachine()).toBe(0);
+      release();
+      await settle();
+    });
+  });
+
   it('a forget before the replay runs cancels it: nothing runs, the card closes, and no receipt repeats the forgotten words', async () => {
     await withReplay(async ({ desk, book, sql, ran, sent, card, pass, settle }) => {
       const id = await card();
