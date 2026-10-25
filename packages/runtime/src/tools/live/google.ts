@@ -527,6 +527,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     requires_connector: true,
     eligible: granted(google, 'calendar'),
     mutates_state: true,
+    proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
       const result = await withGoogle(google, 'calendar', ctx, async client => {
         const proposal_id = await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx));
@@ -574,6 +575,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     requires_connector: true,
     eligible: granted(google, 'mail'),
     mutates_state: true,
+    proposal_only: true,
     // The tool only proposes: it canonicalizes the MIME bytes, binds them with a sha256 digest
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the

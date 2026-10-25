@@ -116,6 +116,8 @@ it('read-time filtering drops held episode rows and aliases but keeps unrelated 
     await responder.respond(ownerTyped({ traceId: 'tg-read', conversationRef: 'owner', surface: 'telegram', text: 'What do you remember?', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('Unrelated amber meeting');
     expect(seen.inputs.at(-1)).not.toMatch(/coffee/i);
+    // A claim whose held topic lives only in an alias never reaches the model through read_memory, which strips aliases.
+    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
   });
 });
 // A search hit is re-read from its stored row while a topic is held; a re-read that fails drops that hit alone.

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { ActionReveal, ControlAction, ControlFields, DevicesRecord, IMessageRecord } from './controls-model';
+import type { ActionReveal, ControlAction, ControlFields, DevicesRecord, IMessageRecord, PhoneRecord } from './controls-model';
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 
@@ -147,4 +147,29 @@ export function DevicesControls({ record, busy, onAction }: { record: DevicesRec
     {data.devices.length ? <div className="tile disclosures">{data.devices.map(device => <DeviceRow key={`${record.revision}:${device.id}`} device={device} live={live.get(device.id)} kinds={data.query_kinds} bodies={data.notification_bodies} busy={busy} onAction={onAction}/>)}</div>
       : <section className="panel"><h2>No devices yet.</h2><p>Paired Macs appear here once Kennel connects with a code.</p></section>}
   </>;
+}
+
+const clockTime = (seconds: number) => new Date(seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+// The number on file and how to prove it. The code lives only in this form's state and the one request that checks it.
+export function PhoneControls({ record, busy, onAction }: { record: PhoneRecord } & Actions) {
+  const { data } = record, challenge = data.challenge;
+  const [code, setCode] = useState('');
+  const offered = (action: PhoneRecord['data']['actions'][number]) => data.actions.includes(action);
+  const digits = code.replace(/\s/g, '');
+  return <section className="tile" aria-labelledby="phone-title">
+    <div className="chart-head"><h2 id="phone-title">Your phone</h2>{data.phone && <span className={`access-label${data.verified ? ' done' : ' needs'}`}>{data.verified ? 'Verified' : 'Not verified yet'}</span>}</div>
+    {!data.phone ? <p>There is no phone number on file.</p> : data.verified ? <p>Your number on file, <strong>{data.phone}</strong>, is verified.</p> : <>
+      <p>Your number on file, <strong>{data.phone}</strong>, is not verified yet. Waldo sends nothing to it until it is.</p>
+      <p>To verify it, <a href="#/connections/imessage">link iMessage</a> and text your link code to Waldo from that number.{data.sms && ' Or have a six-digit code texted to it: Twilio sends the text.'}</p>
+      {challenge?.state === 'pending' && <p>A code was texted to this number. It works until {clockTime(challenge.expires_at)}.</p>}
+      {challenge?.state === 'unknown' && <p>Twilio did not confirm the last text.</p>}
+      {challenge?.state === 'expired' && <p>No code is waiting for this number.</p>}
+      {data.sms && !offered('phone.sms_send') && challenge?.retry_at && <p className="meta">You can ask for another code after {clockTime(challenge.retry_at)}. Refresh then.</p>}
+      {offered('phone.sms_send') && <div className="control-actions"><button disabled={busy} onClick={() => onAction('phone.sms_send')}>{challenge?.state === 'pending' ? 'Text the code again' : 'Text me a code'}</button></div>}
+      {offered('phone.sms_check') && <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('phone.sms_check', { code: digits }); }}>
+        <label>Code from the text<input inputMode="numeric" autoComplete="one-time-code" maxLength={11} value={code} disabled={busy} onChange={event => setCode(event.target.value)} required/></label>
+        <div className="control-actions"><button className="primary" disabled={busy || !/^\d{6}$/.test(digits)}>Verify my number</button></div>
+      </form>}
+    </>}
+  </section>;
 }

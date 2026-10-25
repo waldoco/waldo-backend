@@ -10,6 +10,7 @@ import { sha256Hex } from '../../connectors/google';
 import { ProxyIntentError, type ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_UNAVAILABLE, googleMcpServer, isGoogleHost, isGoogleMcpRead } from '../../connectors/google-mcp';
+import { isGranolaHost, isGranolaRead } from '../../connectors/granola-mcp';
 import { callMcpToolArgsSchema, searchMcpToolsArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type SearchMcpToolsArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import { McpRefusal, type McpConnections } from '../../connectors/mcp-connections';
 import { checkArgs } from '../../connectors/mcp-tools';
@@ -84,6 +85,8 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 // auth mode and runs the call, throwing McpConnectError for owner-actionable auth states.
 export const executeMcp = async (config: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
   if (isGoogleHost(config.url) && !isGoogleMcpRead(config.url, tool)) throw new McpReadOnlyError(config.name, tool);
+  // Granola is read-only on every rail, deploy config included.
+  if (isGranolaHost(config.url) && !isGranolaRead(tool)) throw new ToolExecutionError(`tool "${tool}" on MCP server "${config.name}" is not a read Waldo allows. Waldo reads Granola and never changes notes, folders, workspaces or sign-in there.`);
   // Deploy-config servers meet the owner servers' address rule: https on the default port, a public host.
   try { egressTarget(config.url); } catch { throw new ToolExecutionError(`MCP server "${config.name}" has an address Waldo does not reach (https on the standard port, public host only).`); }
   const server = governed(config);
@@ -209,6 +212,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
       return { ok: false, code: 'not_found', error: servers.length ? `Unknown MCP server "${server}". Configured: ${servers.map((s) => s.name).join(', ')}` : 'No MCP servers are configured on this Waldo yet.', source_taint: 'external' };
     }
     if (isGoogleHost(found.url) && !isGoogleMcpRead(found.url, tool)) return refusal(new McpReadOnlyError(server, tool))!;
+    if (isGranolaHost(found.url) && !isGranolaRead(tool)) return { ok: false, code: 'forbidden', error: `tool "${tool}" on MCP server "${server}" is not a read Waldo allows. Waldo reads Granola and never changes notes, folders, workspaces or sign-in there.`, source_taint: 'external' };
     if (desk) {
       const proposal_id = await desk.proposeMcpCall({ server, tool, args, operation_ref: await ownerEffectOperationRef(ctx) });
       // call_mcp_tool is external-origin by contract: the stamp holds even though nothing

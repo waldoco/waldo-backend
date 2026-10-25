@@ -3,7 +3,7 @@ import {
   appHealthRoutesV1, checkHealthChangeV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthChangeRejectionReasonV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
-  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
+  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -112,6 +112,116 @@ describe('health samples', () => {
   });
 });
 
+// The Apple Watch wellness tier (ADR-0081 amendment, AW-1). Every value here is synthetic.
+describe('watch wellness signals', () => {
+  const temperature = { ...common, signal: 'wrist_temperature', unit: 'celsius', method: 'absolute', value: 34.2 };
+  const walking = { ...common, signal: 'walking_heart_rate_average', unit: 'beats_per_minute', value: 101 };
+  const fitness = { ...common, signal: 'vo2_max', unit: 'ml_per_kg_min', value: 41.5 };
+  const cardioRecovery = { ...common, signal: 'heart_rate_recovery', unit: 'beats_per_minute', value: 24 };
+  const mindful = { ...common, signal: 'mindful_duration', unit: 'minutes', value: 10 };
+
+  it('takes sleeping wrist temperature, walking heart rate, VO2 max, one-minute heart-rate recovery and mindful minutes', () => {
+    for (const sample of [temperature, { ...temperature, method: 'baseline_delta', value: -0.4 }, walking, fitness, cardioRecovery, mindful]) {
+      expect(healthSampleV1Schema.safeParse(sample).success, `${sample.signal} ${JSON.stringify(sample.value)}`).toBe(true);
+    }
+    expect(healthIngestV1Schema.safeParse({ ...batch, samples: [temperature, walking, fitness, cardioRecovery, mindful] }).success).toBe(true);
+  });
+  it('keeps each temperature method to its own scale, so a Fahrenheit reading or a delta labelled absolute is refused', () => {
+    rejected(healthSampleV1Schema, [
+      { ...temperature, value: 95 }, { ...temperature, value: 0.5 }, { ...temperature, method: 'baseline_delta', value: 34.2 }, { ...temperature, method: 'baseline_delta', value: 5.5 },
+      { ...temperature, method: undefined }, { ...temperature, method: 'skin' }, { ...temperature, unit: 'fahrenheit' }, { ...temperature, value: Number.NaN },
+    ]);
+  });
+  it('bounds the others as unit-mistake catches, never as medical thresholds', () => {
+    rejected(healthSampleV1Schema, [
+      { ...walking, value: 0 }, { ...walking, value: 301 }, { ...walking, unit: 'count' },
+      { ...fitness, value: 5 }, { ...fitness, value: 95 }, { ...fitness, unit: 'ml_per_min' },
+      { ...cardioRecovery, value: -1 }, { ...cardioRecovery, value: 121 },
+      { ...mindful, value: -1 }, { ...mindful, value: 1441 }, { ...mindful, unit: 'seconds' }, { ...mindful, method: 'breathe' },
+    ]);
+  });
+  it('lets a deletion name every new signal', () => {
+    const deletions = ['wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration'].map((signal, index) => ({ sample_id: `HK:gone-${index}`, signal, revision: 2 }));
+    expect(healthIngestV1Schema.safeParse({ ...batch, samples: [], deletions }).success).toBe(true);
+  });
+  it('checks a new signal per sample like any other, so a newer build loses only the bad reading', () => {
+    expect(checkHealthChangeV1('sample', 0, temperature)).toEqual({ ok: true, change: temperature });
+    expect(checkHealthChangeV1('sample', 1, { ...temperature, value: 95 })).toEqual({ ok: false, rejection: { change: 'sample', index: 1, signal: 'wrist_temperature', reason: 'invalid_sample' } });
+  });
+});
+
+// Sleep stages (reducer v2). The phone and the backend run the same reducer, so the totals cannot drift.
+describe('sleep stages', () => {
+  const at = (clock: string, day = '2026-10-10') => `${day}T${clock}:00+05:30`;
+  const ids = ['HK:bed', 'HK:s1', 'HK:s2', 'HK:s3', 'HK:s4', 'HK:s5'];
+  const interval = (contributor_id: string, from: string, to: string, kind: string, stage?: string, fromDay = '2026-10-10', toDay = '2026-10-10') =>
+    ({ contributor_id, start_at: at(from, fromDay), end_at: at(to, toDay), kind, ...(stage ? { stage } : {}) });
+  // 23:00 to 06:30 across midnight: 120 light, 60 deep, 20 awake, 60 REM, 190 unstaged asleep.
+  const night = [
+    interval('HK:bed', '22:50', '06:40', 'in_bed', undefined, '2026-10-09'),
+    interval('HK:s1', '23:00', '01:00', 'asleep', 'light', '2026-10-09'),
+    interval('HK:s2', '01:00', '02:00', 'asleep', 'deep'),
+    interval('HK:s3', '02:00', '02:20', 'awake'),
+    interval('HK:s4', '02:20', '03:20', 'asleep', 'rem'),
+    interval('HK:s5', '03:20', '06:30', 'asleep'),
+  ];
+  const context = (intervals: unknown[], reducer_version = 'asleep-interval-union.v2') =>
+    ({ source_ref: 'HK:watch', session_ref: 'HK:night-10', waking_day: '2026-10-10', reducer_version, contributor_ids: ids, intervals });
+  const stages = { light: 120, deep: 60, rem: 60, unspecified: 190, awake: 20 };
+  const staged = { ...common, sample_id: 'HK:night-10:sleep_duration', start_at: at('23:00', '2026-10-09'), end_at: at('06:30'), signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 430, sleep_context: context(night), stages };
+
+  it('reduces asleep to the union of asleep time, each stage to its own union, and awake to waking time inside the night only', () => {
+    expect(reduceSleepContextV2(context(night) as never)).toEqual({ asleep: 430, ...stages });
+    // Awake time before the first sleep, after the last, or under an asleep interval is not time awake in the night.
+    const edges = [...night, interval('HK:s5', '06:30', '06:50', 'awake'), interval('HK:s3', '22:40', '23:00', 'awake', undefined, '2026-10-09', '2026-10-09'), interval('HK:s3', '00:50', '01:10', 'awake')];
+    expect(reduceSleepContextV2(context(edges) as never)).toEqual({ asleep: 430, ...stages });
+    // Two intervals of one stage that overlap count once.
+    const repeated = [...night, interval('HK:s1', '00:00', '00:30', 'asleep', 'light')];
+    expect(reduceSleepContextV2(context(repeated) as never)).toEqual({ asleep: 430, ...stages });
+    expect(reduceSleepContextV2(context([night[0]]) as never)).toEqual({ asleep: 0, light: 0, deep: 0, rem: 0, unspecified: 0, awake: 0 });
+  });
+  it('takes a staged night whose totals are the reducer output, to within a minute', () => {
+    expect(healthSampleV1Schema.safeParse(staged).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...staged, value: 429.6, stages: { ...stages, light: 119.6 } }).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...staged, method: undefined }).success).toBe(true);
+    // The other readings of the night may carry the same context.
+    expect(healthSampleV1Schema.safeParse({ ...common, signal: 'sleep_efficiency', unit: 'ratio', value: 0.91, sleep_context: context(night) }).success).toBe(true);
+  });
+  it('refuses totals that disagree with their intervals, and stages without the intervals they come from', () => {
+    rejected(healthSampleV1Schema, [
+      { ...staged, stages: { ...stages, deep: 75 } }, { ...staged, stages: { ...stages, awake: 0 } }, { ...staged, value: 440 },
+      { ...staged, stages: undefined }, { ...staged, sleep_context: undefined }, { ...staged, sleep_context: context(night.map(({ stage: _stage, ...rest }) => (rest.kind === 'awake' ? { ...rest, kind: 'asleep' } : rest)), 'asleep-interval-union.v1') },
+      { ...staged, method: 'time_in_bed' }, { ...staged, stages: { ...stages, core: 10 } }, { ...staged, stages: { ...stages, rem: -1 } },
+    ]);
+  });
+  it('refuses two differently staged intervals that overlap, with no rule to pick one', () => {
+    const clash = [...night.slice(0, 2), interval('HK:s2', '00:50', '02:00', 'asleep', 'deep'), ...night.slice(3)];
+    expect(reduceSleepContextV2(context(clash) as never)).toBeNull();
+    rejected(healthSampleV1Schema, [{ ...staged, sleep_context: context(clash) }, { ...common, signal: 'sleep_efficiency', unit: 'ratio', value: 0.9, sleep_context: context(clash) }]);
+    const unstagedUnderStage = [...night, interval('HK:s5', '01:30', '01:40', 'asleep')];
+    rejected(healthSampleV1Schema, [{ ...staged, sleep_context: context(unstagedUnderStage) }]);
+  });
+  it('keeps reducer v1 exactly as it was: no stage, no awake interval', () => {
+    const v1 = night.filter(entry => entry.kind !== 'awake').map(({ stage: _stage, ...rest }) => rest);
+    expect(healthSampleV1Schema.safeParse({ ...sleep, sleep_context: context(v1, 'asleep-interval-union.v1') }).success).toBe(true);
+    rejected(healthSampleV1Schema, [
+      { ...sleep, sleep_context: context(night, 'asleep-interval-union.v1') },
+      { ...sleep, sleep_context: context([...v1, interval('HK:s3', '02:00', '02:20', 'awake')], 'asleep-interval-union.v1') },
+      { ...sleep, sleep_context: context(v1, 'asleep-interval-union.v1'), stages },
+      { ...sleep, sleep_context: context(night, 'asleep-interval-union.v3') },
+    ]);
+  });
+  it('gives a stage only to asleep time, and keeps every interval inside the contributors it names', () => {
+    rejected(healthSampleV1Schema, [
+      { ...staged, sleep_context: context([...night, interval('HK:s3', '02:00', '02:20', 'awake', 'light')]) },
+      { ...staged, sleep_context: context([...night, interval('HK:bed', '22:50', '23:00', 'in_bed', 'rem', '2026-10-09', '2026-10-09')]) },
+      { ...staged, sleep_context: context([...night, interval('HK:s1', '23:00', '01:00', 'asleep', 'core', '2026-10-09')]) },
+      { ...staged, sleep_context: context([...night, interval('HK:other', '02:00', '02:20', 'awake')]) },
+      { ...staged, sleep_context: context([...night, interval('HK:s3', '02:20', '02:00', 'awake')]) },
+    ]);
+  });
+});
+
 describe('health ingest batch', () => {
   it('allows a zero-change acknowledged anchor advance and caps combined changes at 128', () => {
     expect(healthIngestV1Schema.safeParse({ ...batch, samples: [] }).success).toBe(true);
@@ -142,7 +252,7 @@ describe('per-sample rejection', () => {
     expect([HEALTH_PROVIDER_REVISION_V1, HEALTH_PER_SAMPLE_REVISION_V1]).toEqual([2, 3]);
   });
   it('reads the envelope strictly and leaves each change to be checked on its own', () => {
-    const changes = [sleep, { signal: 'wrist_temperature', value: 'x' }, 7, null];
+    const changes = [sleep, { signal: 'blood_glucose', value: 'x' }, 7, null];
     expect(healthIngestEnvelopeV1Schema.safeParse({ ...batch, samples: changes, deletions: [{ nonsense: true }] }).success).toBe(true);
     // The server sets the per-sample mode itself; a client cannot name it, or any other key.
     rejected(healthIngestEnvelopeV1Schema, [
@@ -155,8 +265,8 @@ describe('per-sample rejection', () => {
     const deletion = { sample_id: 'HK:gone', signal: 'spo2', revision: 3 };
     expect(checkHealthChangeV1('deletion', 0, deletion)).toEqual({ ok: true, change: deletion });
     expect(checkHealthChangeV1('sample', 4, { ...sleep, value: 1441 })).toEqual({ ok: false, rejection: { change: 'sample', index: 4, signal: 'sleep_duration', reason: 'invalid_sample' } });
-    expect(checkHealthChangeV1('sample', 5, { ...sleep, signal: 'wrist_temperature', unit: 'celsius' })).toEqual({ ok: false, rejection: { change: 'sample', index: 5, signal: null, reason: 'unsupported_signal' } });
-    expect(checkHealthChangeV1('deletion', 1, { ...deletion, signal: 'vo2_max' })).toEqual({ ok: false, rejection: { change: 'deletion', index: 1, signal: null, reason: 'unsupported_signal' } });
+    expect(checkHealthChangeV1('sample', 5, { ...sleep, signal: 'blood_glucose', unit: 'mmol_per_l' })).toEqual({ ok: false, rejection: { change: 'sample', index: 5, signal: null, reason: 'unsupported_signal' } });
+    expect(checkHealthChangeV1('deletion', 1, { ...deletion, signal: 'atrial_fibrillation_burden' })).toEqual({ ok: false, rejection: { change: 'deletion', index: 1, signal: null, reason: 'unsupported_signal' } });
     expect(checkHealthChangeV1('deletion', 2, { ...deletion, revision: -1 })).toEqual({ ok: false, rejection: { change: 'deletion', index: 2, signal: 'spo2', reason: 'invalid_sample' } });
     for (const hostile of [null, 7, 'sleep', [], { signal: 42 }, { signal: '__proto__' }, { ...sleep, extra: 'x' }, { ...sleep, unit: 'hours' }]) {
       const verdict = checkHealthChangeV1('sample', 0, hostile);
@@ -170,7 +280,7 @@ describe('per-sample rejection', () => {
     expect(healthIngestReceiptV1Schema.safeParse({ ...receipt, rejected: [rejection, { ...rejection, change: 'deletion', index: 0, signal: null, reason: 'unsupported_signal' }, { ...rejection, reason: 'revision_conflict' }] }).success).toBe(true);
     rejected(healthIngestReceiptV1Schema, [
       { ...receipt, rejected: [{ ...rejection, value: 97 }] }, { ...receipt, rejected: [{ ...rejection, index: 128 }] }, { ...receipt, rejected: [{ ...rejection, index: -1 }] },
-      { ...receipt, rejected: [{ ...rejection, reason: 'too_high' }] }, { ...receipt, rejected: [{ ...rejection, signal: 'wrist_temperature' }] },
+      { ...receipt, rejected: [{ ...rejection, reason: 'too_high' }] }, { ...receipt, rejected: [{ ...rejection, signal: 'blood_glucose' }] },
       { ...receipt, rejected: Array.from({ length: 129 }, () => rejection) },
     ]);
     expect(healthChangeRejectionReasonV1Schema.options).toEqual(['invalid_sample', 'unsupported_signal', 'revision_conflict']);

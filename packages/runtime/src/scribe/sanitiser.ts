@@ -122,6 +122,16 @@ const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?cl
 // A weight that follows a bag or a parcel is the luggage's.
 const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
+// REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
+const casedReading = (source: string): RegExp => new RegExp(source);
+// HRV with the method get_health labels it by, or the method alone.
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*\(?\s*(?:rmssd|sdnn)\b\s*\)?)?|(?:rmssd|sdnn)\b)`;
+const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
+// The minute signals get_health returns beside sleep.
+const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;
+// Hours and minutes together ("1h 35m"), the way a sleep stage is relayed; ordinary plans rarely take that shape.
+const STAGE_DURATION = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*\d{1,2}\s*m(?:ins?|inutes?)?\b`;
+const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
 // count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
@@ -133,7 +143,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   // "1 hr 30" is an hour, and "HR of 12 people" a team.
   reading(String.raw`(?<!\d\s?)\b(?:hr|pulse)\b${BARE_GAP}${BARE_VALUE}(?!\s*(?:people|staff|employees|members|%))`),
-  reading(String.raw`\b(?:hrv|heart\s+rate\s+variability)\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
+  reading(String.raw`\bvo2\s*max\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b(?:spo2|sp\s*o2|o2\s+sat(?:uration)?|oxygen\s+(?:saturation|level|sat)|blood\s+oxygen)\b${BARE_GAP}${BARE_VALUE}`),
   // A systolic of 60 to 249 over a diastolic of 30 to 149, so a date ("12/10") or "24/7" is not a pressure.
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
@@ -141,8 +153,30 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
   reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|deep\s+sleep|rem\s+sleep)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*(?:h|hr|hrs|hours?|m|min|mins|minutes?)\b`),
-  reading(String.raw`\b${READING_NUMBER}\s*(?:h|hrs?|hours?)\s+(?:of\s+)?(?:sleep|asleep)\b`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
+  // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
+  // a sleep word, and REM only in capitals.
+  casedReading(String.raw`\bREM\b(?:\s*[:=]\s*|\s+(?:was|were|is|of|averaged|about|around)\s+|\s+)(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  casedReading(String.raw`\b(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})\s+(?:of\s+)?REM\b`),
+  casedReading(String.raw`\bREM\b${BARE_GAP}\d{1,2}(?:[.,]\d+)?\s*%`),
+  reading(String.raw`\b(?:deep|core|light)\s+sleep\b${BARE_GAP}\d{1,2}(?:[.,]\d+)?\s*%`),
+  reading(String.raw`\b(?:sleep|slept|asleep)\b[^.;\n]{0,60}?\b(?:deep|core|light)\b${READING_GAP}${STAGE_DURATION}`),
+  reading(String.raw`\b(?:deep|core|light)\b${READING_GAP}${STAGE_DURATION}(?=[^.;\n]{0,60}\b(?:sleep|slept|asleep)\b)`),
+  // Time awake counts only as part of the night, so "awake 20 minutes before the call" or "50% awake" is not a reading.
+  reading(String.raw`\b(?:time\s+awake|awake\s+time)\b${READING_GAP}${READING_NUMBER}\s*${DURATION}(?!\s+(?:before|after|until|till|to|for)\b)`),
+  reading(String.raw`\bawake\b(?:\s+for)?${READING_GAP}${READING_NUMBER}\s*${DURATION}\s+${AT_NIGHT}|\b${READING_NUMBER}\s*${DURATION}\s+awake\s+${AT_NIGHT}`),
+  reading(String.raw`\b\d{1,2}(?:[.,]\d+)?\s*%\s+(?:awake\s+time|time\s+awake|awake\s+${AT_NIGHT})\b`),
+  // get_health gives sleep efficiency as a ratio; it is relayed as that or as a percentage.
+  reading(String.raw`\bsleep\s+efficiency\b${BARE_GAP}(?:0?[.,]\d+|\d{2,3}(?:[.,]\d+)?\s*(?:%|percent\b)|${BARE_VALUE})|\b\d{2,3}(?:[.,]\d+)?\s*(?:%|percent)\s+sleep\s+efficiency\b`),
+  reading(String.raw`\bslept\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:%|percent)\s+efficiency\b`),
+  // get_health gives the midpoint as a minute of the day; it is relayed as that or as a clock time.
+  reading(String.raw`\bsleep\s+mid-?point\b${READING_GAP}(?:\d{1,2}[:.]\d{2}|\d{1,4})\b`),
+  // Needs a unit or a minutes metric, and "of" before the signal, so a booked "45 minute workout" is a plan, not a reading.
+  reading(String.raw`\b${MINUTE_SIGNAL}(?:\s+(?:time|duration))?\b${READING_GAP}${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+of\s+${MINUTE_SIGNAL}\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+mindfulness\b`),
+  reading(String.raw`\b(?:${READING_NUMBER}\s+(?:movement|daylight|workout|mindful)\s+(?:minutes|mins)\b|(?:movement|daylight|workout|mindful)\s+(?:minutes|mins)\b${BARE_GAP}${READING_NUMBER}\b)`),
   reading(String.raw`\b(?:\d{1,3}(?:,\d{3})+|\d{4,}|${READING_NUMBER}\s*k)\s*steps\b`),
   reading(String.raw`\bsteps\b${READING_GAP}(?:\d{1,3}(?:,\d{3})+|\d{4,})\b`),
   // A plain "temperature" is as often the weather or an oven, so only a fever or a body temperature, or a value in the
@@ -150,9 +184,21 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:fever|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
   reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*°?\s*c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*°?\s*f\b`),
   reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${BARE_GAP}\d+(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
-  reading(String.raw`\b(?:respiratory|breathing)\s+rate\b${BARE_GAP}${BARE_VALUE}`),
-  reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+energy)\b${BARE_GAP}\d`),
+  reading(String.raw`\b(?:respiratory|breathing|resp\.?|respiration)\s+rate\b${BARE_GAP}${BARE_VALUE}`),
+  reading(String.raw`\brespiration\b${BARE_GAP}${READING_NUMBER}\s*(?:\/\s*min(?:ute)?\b|breaths?\b)`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:breaths?\s*(?:per|a|\/)\s*min(?:ute)?|brpm)\b`),
+  reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
+  // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
+  reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?(?:${READING_GAP}|\s*\b(?:up|down|rose|fell|dropped|climbed|by)\b\s*)*[+\-−]?${READING_NUMBER}\b`),
+  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
+  // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
+  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
+  reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+(?:energy|kcal|cal(?:ories)?))\b${BARE_GAP}\d`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:active\s+(?:kcal|cal(?:ories)?)|(?:kcal|cal(?:ories)?)\s+active)\b`),
+  // Apple's Move ring counts active energy.
+  reading(String.raw`\bmove\b${BARE_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
   reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal|calories)\s+(?:of\s+active\s+energy\b(?!\s+drinks?\b)|burned\b(?!\s+off\b))`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:recovery|readiness|strain)\b${READING_GAP}${READING_NUMBER}\s*%`),
@@ -162,16 +208,32 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
 // "Motion 2". Here a match counts only as a serialized field: a quoted key, an `=`, or a snake or camel key
 // (a quoted `"steps"`, `heartRate=`, `hrv_ms:`); prose readings are OWNER_HEALTH_READINGS' job.
 const SERIALIZED_FIELD = /["'=_]|[a-z][A-Z]/;
-const serializedSensorField = (text: string): boolean =>
-  RAW_SENSOR_PATTERNS.some((pattern) => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].some(([field]) => SERIALIZED_FIELD.test(field)));
+const everyMatch = (pattern: RegExp, text: string): string[] => [...text.matchAll(new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`))].map(([match]) => match);
+// Each reading in text, as the words the floor matched.
+const numericHealthReadings = (text: string): string[] => [
+  ...OWNER_HEALTH_READINGS.flatMap((pattern) => everyMatch(pattern, text)),
+  ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
+];
 
 // The one numeric health floor for memory written from outside content and for stored summaries, where a match drops the
 // write. What the owner says goes into memory without it. Precision wins over recall here: a false match loses an ordinary
 // fact, so it is narrower than the egress scans, which may over-redact. It decides only whether text carries a reading,
 // never whether text is about health; that is the model's judgment. Fresh regexes per call, so a shared `g` pattern never
 // carries lastIndex from one call into the next.
-export const numericHealthIn = (text: string): boolean =>
-  OWNER_HEALTH_READINGS.some((pattern) => matches(pattern, text)) || serializedSensorField(text);
+export const numericHealthIn = (text: string): boolean => numericHealthReadings(text).length > 0;
+
+// Whether text carries a reading with a number not in `owner`, the owner's words that vouch for it: a reading that came
+// from shared content, Waldo's reply or a device. It keys on where a reading's numbers came from, never on its wording; a
+// date beside a reading is not part of it. With no owner words, every reading is one. The caller keeps `owner` narrow (a
+// claim's own quote, or the owner's own readings), since a number the owner typed about anything else vouches for nothing.
+const NUMBER = /\d+(?:[.,]\d+)*/g;
+export const readingBeyondOwner = (text: string, owner: string | undefined): boolean => {
+  const said = new Set(owner?.match(NUMBER) ?? []);
+  return numericHealthReadings(text).some((reading) => (reading.match(NUMBER) ?? []).some((number) => !said.has(number)));
+};
+
+// The readings in the owner's words, as text: what vouches for a summary, which quotes no evidence of its own.
+export const ownerReadings = (owner: string | undefined): string | undefined => owner === undefined ? undefined : numericHealthReadings(owner).join('\n');
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,

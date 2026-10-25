@@ -21,7 +21,7 @@ it('a build that declares no revision, revision 1 or revision 2 gets the send ap
       google: async () => null, newId: () => `fx${++n}`, now: () => now, timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
     await desk.proposeSendEmail(await emailProposal({ to: ['sam@example.com'], cc: ['pat@example.org'], subject: 'Friday deck', body: 'Hi Sam,\n\nThe deck is ready — see slide 3.\n\nThanks', message_id: '<fixture@waldo-send>', account: 'owner@example.com' }));
     await desk.proposeSendMessage({ channel: 'telegram', content: 'Running ten minutes late.', idempotency_key: 'fixture-message-0001' });
-    const host = { csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 3_600_000 }], desk };
     const list = async (header?: string) => (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', { headers: header === undefined ? {} : { 'x-waldo-app-contract': header } }), host)).text();
     expect(captured).toBeDefined();
     for (const header of [undefined, 'approvals=1', 'approvals=2', 'threads=3']) expect([header, digestless(await list(header))]).toEqual([header, digestless(captured!.trimEnd())]);

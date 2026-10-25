@@ -123,6 +123,8 @@ export const llmResponseSchema = z
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
     truncated: z.boolean().optional(),
+    // A streamed call's time from sending the request to the model's first output, in ms.
+    ttft_ms: z.int().nonnegative().optional(),
   })
   .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
     error: 'a response carries text or tool calls',

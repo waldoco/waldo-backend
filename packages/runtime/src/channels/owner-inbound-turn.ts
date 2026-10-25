@@ -1,3 +1,4 @@
+import type { ReplyStream } from '../conversation/reply-stream';
 import type { RunEffectScope } from './run-effect-scope';
 import type { ReplyContext } from './owner-turn-envelope';
 import type { TelegramMedia } from './telegram-polling';
@@ -25,6 +26,8 @@ export type OwnerInboundTurn = Readonly<{
   runScope?: RunEffectScope;
   // The host declared a route that carries files with this turn's reply.
   canAttach?: boolean;
+  // The channel shows this turn's reply while it is written.
+  replyStream?: ReplyStream;
 }>;
 
 export const inboundTurn = (fields: Omit<OwnerInboundTurn, 'text'>): OwnerInboundTurn =>
