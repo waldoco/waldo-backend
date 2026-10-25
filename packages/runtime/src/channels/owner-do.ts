@@ -95,7 +95,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, clearConsoleCookie, consoleAccess, consoleCookie, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_START_PATH, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
-import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
+import { appConsoleLinks, appConsoleRoute, consoleLinkSender, whatsappConsoleRoute, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { iMessageScheduledRoute, observeIMessageReports } from './imessage/scheduled-route';
 import { consoleLinkHandler } from '../tools/live/console-link';
@@ -1354,7 +1354,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context,undefined,thread).readForDisplay();
       for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
       at.step='transcript';
-      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql));
+      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),appConsoleLinks(this.ctx.storage.kv));
     }finally{abort.abort();}
   }
   // The text the chat shows for each of a thread's messages that has any, from rows whose witness matches.
@@ -2915,12 +2915,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
     const storage = this.ctx.storage;
-    // The console link goes only to the surface this runtime serves; the app and WhatsApp say why they cannot carry it.
+    // The console link goes only to the surface this runtime serves.
     const consoleLinkRoutes: Record<ChannelKind, ConsoleLinkRoute> = {
       telegram: telegramConsoleRoute((body) => routedCall('sendMessage', { chat_id: owner, ...body }), identity),
       imessage: iMessageConsoleRoute(storage, () => this.activeIMessage),
-      app: { unsupported: 'app_unsupported' },
-      whatsapp: { unsupported: 'surface_unsupported' },
+      app: appConsoleRoute(storage.kv),
+      whatsapp: whatsappConsoleRoute((body) => routedCall('sendMessage', { chat_id: owner, ...body })),
     };
     const consoleLinkTool = consoleLinkHandler(consoleLinkSender({
       surface: channel, route: consoleLinkRoutes[channel], available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,

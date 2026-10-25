@@ -209,7 +209,10 @@ export type AppMessage = AppMessageV1;
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
 // to a run also carries the approval cards presented for that run.
 const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
+// to it and before that reply's receipt line, which stays last.
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
+  consoleLink: (parentId: string) => string | null = () => null): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
@@ -218,12 +221,15 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
-    const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    const newest = entry.parentId && newestReply.get(entry.parentId) === entry.id ? entry.parentId : null;
+    const presented = newest ? cards(newest) : NO_CARDS, link = newest ? consoleLink(newest) : null;
     // `text` keeps the receipt line at its end: a reader without the receipt part shows the line in the text, and a reader with the
     // part hides that one line, which the part repeats as its fallback byte for byte. Changing what `text` carries would change
     // what installed builds show, which the additive app.v1 rule forbids.
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
-    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
+    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
