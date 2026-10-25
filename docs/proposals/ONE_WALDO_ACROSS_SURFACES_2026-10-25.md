@@ -60,6 +60,9 @@ On the team's cross-surface tracker these items are row 1 (timeline), row 3 (app
 **What the model reads per turn [verified].**
 - The new owner row hangs on the leaf of the turn's own chain: `parentId: conversationLeaves.get(conversationRef)` (`channels/owner-turn.ts:749`).
 - The store's turn read walks back from that chain's newest owner row, and from the stored leaf, until the window budget (`conversation/canonical-owner-store.ts:112-116,150,161-165`). Compaction is off (`conversation/compaction.ts:7-9`), so the budget is `CONVERSATION_INPUT_BUDGET_TOKENS` (`conversation/window.ts:27`).
+- **Change after the pin.** `beta-mvp` `2c4672c9`, which merged #1458 after the pin, makes compaction a deploy switch (`WALDO_COMPACTION=on`). It keeps one live summary per chat under `compaction-live:<chat>`, and the turn read stops at the row that chat's summary covers [verified in the diff `296aee94..2c4672c9`, `conversation/compaction.ts` and `conversation/canonical-owner-store.ts`].
+  - With one timeline, main has one live summary that covers every surface's rows.
+  - Old surface chains keep theirs and are no longer read for turns.
 - Per-turn recall from main can reach any indexed message that isn't on a thread, whichever surface it came from (`channels/app-threads.ts:38-43`). Cross-surface continuity today rests on recall and memory, not on the window.
 
 **Facts the design relies on [verified].**
@@ -95,7 +98,7 @@ On the team's cross-surface tracker these items are row 1 (timeline), row 3 (app
 | `channels/owner-do.ts:3590,3596` (job host chain) | history chain | main for every user surface |
 | `channels/app-threads.ts:38-43` (`recallReach`) | thread scope | unchanged |
 | `channels/owner-do.ts:1277-1290` (app receipt and Stop on `mainRef`) | app inbox | unchanged |
-| compaction attempt key (`conversation/canonical-owner-store.ts:300-305`) | history chain | keyed by main; one key instead of one per surface chain |
+| compaction attempt key (`conversation/canonical-owner-store.ts:300-305`), and the live summary key `compaction-live:<chat>` (at `2c4672c9`) | history chain | keyed by main; one key instead of one per surface chain |
 
 **Rule:** the turn envelope's `conversationRef` stays the transport ref. Only `OwnerContextCapability.conversationRef`, set by the context host, becomes main.
 
