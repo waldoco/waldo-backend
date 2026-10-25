@@ -38,6 +38,11 @@ export class IMessageOwnerInbox {
     return [...this.storage.kv.list<IMessageInboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.updateId - b.updateId);
   }
   get(id: string): IMessageInboxRecord | null { return this.storage.kv.get<IMessageInboxRecord>(PREFIX + id) ?? null; }
+  /** The owner's latest iMessage, while its sender's authority stands: null once that record was revoked. */
+  latest(): IMessageInboxRecord | null {
+    const last = this.records().at(-1);
+    return last && last.state !== 'revoked' ? last : null;
+  }
 
   async admit(input: IMessageAdmitInput, assertCurrent?: () => void): Promise<{ kind: 'admitted' | 'duplicate'; record: IMessageInboxRecord } | { kind: 'conflict' | 'capacity' }> {
     return this.storage.transaction(async (txn) => {
@@ -59,12 +64,14 @@ export class IMessageOwnerInbox {
       return { kind: 'admitted' as const, record };
     });
   }
-  recover(live: ReadonlySet<string>): void {
+  // `interrupted` runs inside the closing transaction for each turn this call closes as interrupted, and only for those.
+  recover(live: ReadonlySet<string>, interrupted?: (record: IMessageInboxRecord) => void): void {
     this.storage.transactionSync(() => {
       const rows = this.records();
       for (const r of rows) if (r.state === 'running' && !live.has(r.attempt ?? '')) {
         r.state = 'interrupted'; r.closedReason = 'interrupted'; r.effectsUnconfirmed = true; r.closedAt = this.now(); clear(r);
         this.storage.kv.put(PREFIX + r.id, r);
+        interrupted?.(r);
       }
       this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(rows, this.now()));
     });
@@ -123,13 +130,14 @@ export class IMessageOwnerInbox {
     r.state = 'completed'; r.closedReason = 'final_committed'; r.closedAt = this.now(); clear(r);
     this.storage.kv.put(PREFIX + r.id, r);
   }
-  settle(record: IMessageInboxRecord, completed: boolean): void {
+  settle(record: IMessageInboxRecord, completed: boolean, interrupted?: (record: IMessageInboxRecord) => void): void {
     this.storage.transactionSync(() => {
       const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + record.id);
       if (!r || r.state !== 'running' || r.attempt !== record.attempt) return;
       r.state = completed ? 'completed' : 'interrupted'; r.closedAt = this.now(); clear(r);
       if (!completed) { r.closedReason = 'interrupted'; r.effectsUnconfirmed = true; }
       this.storage.kv.put(PREFIX + r.id, r); this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
+      if (!completed) interrupted?.(r);
     });
   }
 }

@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
@@ -9,6 +10,7 @@ export type TelegramWebhookEnv = Readonly<{
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
   DEVICE_BRIDGE_DO?: DurableObjectNamespace<import('../devices/device-bridge-do').DeviceBridgeDO>;
+  TASK_WORKER_DO?: DurableObjectNamespace<import('../tasks/worker-do').TaskWorkerDO>;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   // Signs connector OAuth state (Google, MCP). Without it connector sign-in is off; it never falls back to another secret.
@@ -21,6 +23,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
+  WALDO_COMPACTION?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -29,6 +33,11 @@ export type TelegramWebhookEnv = Readonly<{
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;
+  // 'on' shows owner replies while they are written (Telegram drafts, the app's receipt draft). Off when unset.
+  WALDO_STREAM_REPLIES?: string;
+  // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
+  // earlier rule, which withholds a whole read that mentions the topic.
+  WALDO_FORGET_BARRIER?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
@@ -39,8 +48,12 @@ export type TelegramWebhookEnv = Readonly<{
   BROWSER?: import('@cloudflare/playwright').BrowserWorker;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
+  // Expo's access token for app push. Missing means push is not configured.
+  EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
+  // '0' turns off progress notes on long iMessage turns.
+  WALDO_IMESSAGE_PROGRESS?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   WHOOP_CLIENT_ID?: string;
@@ -54,14 +67,20 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
+  // The Google Cloud project holding Waldo's Gmail push topic in this environment; unset keeps Gmail push off.
+  GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
+  APP_AGREEMENTS?: string;
+  // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
+  OWNER_LOOKUP?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
-}> & OwnerDirectoryEnv;
+}> & PhoneSmsEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 

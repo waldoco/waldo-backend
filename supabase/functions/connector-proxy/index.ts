@@ -2,7 +2,7 @@
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod, type GoogleProfile } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
-import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
+import { GOOGLE_REVOKE_OUTCOMES, googleAccessToken, GoogleTokenError, revokeGoogleGrant } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpHttpError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 import { GOOGLE_MCP_READ_ONLY, googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
@@ -43,7 +43,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes, ...(profile ? { profile } : {}) }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop' | 'gmail_watch'; topic?: string; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean; calendar_owner_status?: boolean }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop' | 'gmail_watch' | 'revoke'; topic?: string; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean; calendar_owner_status?: boolean }>;
 // Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
@@ -57,12 +57,15 @@ const LOGGED_CODES = new Set([...READ_FAILURE_CODES, GOOGLE_MCP_READ_ONLY, 'unkn
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments. The operation and method come from the request body, so only known ones are logged.
-const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'gmail_watch', 'unconfigured', 'unsigned']);
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'gmail_watch', 'revoke', 'unconfigured', 'unsigned']);
+const REVOKE_OUTCOMES: ReadonlySet<unknown> = new Set(GOOGLE_REVOKE_OUTCOMES);
 const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
   const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
-  console.log(JSON.stringify({ hop: 'connector_proxy', op: LOGGED_OPS.has(op as string) ? op : 'unknown', ...(method !== undefined ? { method: METHODS.includes(method as Method) ? method : 'unknown' } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
+  // A revoke's answer is one word from a fixed set, so it is safe to log.
+  const revoked = op === 'revoke' && !outcome ? await response.clone().json().then(value => (value as {data?:{provider?:unknown}}).data?.provider).catch(() => undefined) : undefined;
+  console.log(JSON.stringify({ hop: 'connector_proxy', op: LOGGED_OPS.has(op as string) ? op : 'unknown', ...(method !== undefined ? { method: METHODS.includes(method as Method) ? method : 'unknown' } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(REVOKE_OUTCOMES.has(revoked) ? { outcome: revoked } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
 };
 
@@ -174,6 +177,17 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(error instanceof GoogleTokenError ? error.status : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
       }
     }
+    // A disconnect: Google is asked to revoke the grant before the Worker deletes its secret. The edge reads the secret as any
+    // call does (stamping its last use) and changes no grant; the Worker deletes it whatever Google answers. Google's
+    // revocation ends every grant on that Google user, so callers come through the Worker's googleProxy.revoke, which asks
+    // only for a mailbox no other owner holds.
+    if (body.op === 'revoke') {
+      if (!body.connection) return fail(404, 'unknown operation');
+      const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string}[];
+      const grant = Array.isArray(access) ? access[0] : undefined;
+      if (!grant || typeof grant.secret !== 'string' || !grant.secret) return reply({ data: { provider: 'not_held' } });
+      return reply({ data: { provider: await revokeGoogleGrant(fetch, grant.secret) } });
+    }
     if (body.op !== 'call' || !body.connection || !METHODS.includes(body.method as Method)) return fail(404, 'unknown operation');
     const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
     const grant=Array.isArray(access)?access[0]:undefined;
@@ -198,7 +212,7 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(refreshFailure ? refreshFailure.status : error instanceof DriveRestError ? error.status : 502, refreshFailure ? refreshFailure.kind === 'auth' ? 'drive_auth_failed' : 'google_refresh_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
       }
     }
-    if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
+    if((body.method==='calendarPage'||body.method==='restBlocks')&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
     if(body.method==='calendarListsPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar_list'))return fail(403,'insufficient scopes');
     if(body.method==='searchContacts'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'contacts'))return fail(403,'insufficient scopes');

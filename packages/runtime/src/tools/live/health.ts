@@ -3,7 +3,7 @@ import {
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type ToolHandler,
 } from '@waldo/contracts';
 import { md5Hex } from '../../channels/md5';
-import { parseSeries, type Reading } from '../../health/producer';
+import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -70,18 +70,33 @@ export const healthReadBook = (call: SignedCall | null, doName: string | null): 
   },
 });
 
-type Unit = 'minutes' | 'ms' | 'bpm' | 'minute_of_day';
-type Method = 'asleep' | 'rmssd' | 'sdnn';
+type Available = Extract<GetHealthResult, { state: 'available' }>['signals'][number];
+type Method = NonNullable<Available['method']>;
 type Fold = 'newest' | 'sum' | 'mean';
-const SIGNALS: Record<HealthReadSignal, Readonly<{ stored: string; unit: Unit; fold: Fold }>> = {
-  sleep: { stored: 'sleep_duration', unit: 'minutes', fold: 'newest' },
+// stored: the plane's signal. asleep: only time asleep is read, never time in bed. methods: a signal read one method at a
+// time, never blended. value: what the signal reads from the stored reading, when it is not the reading's own value.
+type Spec = Readonly<{ stored: string; unit: Available['unit']; fold: Fold; asleep?: true; methods?: readonly Method[]; value?: (reading: Reading) => number | null }>;
+const stage = (key: keyof SleepStages): Spec => ({ stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true, value: reading => reading.stages?.[key] ?? null });
+export const SIGNALS: Record<HealthReadSignal, Spec> = {
+  sleep: { stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true },
   sleep_midpoint: { stored: 'sleep_midpoint', unit: 'minute_of_day', fold: 'newest' },
-  hrv: { stored: 'overnight_hrv', unit: 'ms', fold: 'newest' },
+  hrv: { stored: 'overnight_hrv', unit: 'ms', fold: 'newest', methods: ['rmssd', 'sdnn'] },
   resting_hr: { stored: 'resting_heart_rate', unit: 'bpm', fold: 'newest' },
   heart_rate: { stored: 'heart_rate_window', unit: 'bpm', fold: 'mean' },
   movement: { stored: 'movement_duration', unit: 'minutes', fold: 'sum' },
   daylight: { stored: 'daylight_duration', unit: 'minutes', fold: 'sum' },
   workouts: { stored: 'workout', unit: 'minutes', fold: 'sum' },
+  sleep_light: stage('light'), sleep_deep: stage('deep'), sleep_rem: stage('rem'), sleep_awake: stage('awake'),
+  sleep_efficiency: { stored: 'sleep_efficiency', unit: 'ratio', fold: 'newest' },
+  respiratory_rate: { stored: 'respiratory_rate', unit: 'breaths_per_minute', fold: 'mean' },
+  spo2: { stored: 'spo2', unit: 'percent', fold: 'mean' },
+  wrist_temperature: { stored: 'wrist_temperature', unit: 'celsius', fold: 'newest', methods: ['absolute', 'baseline_delta'] },
+  walking_hr: { stored: 'walking_heart_rate_average', unit: 'bpm', fold: 'newest' },
+  hr_recovery: { stored: 'heart_rate_recovery', unit: 'bpm', fold: 'mean' },
+  vo2_max: { stored: 'vo2_max', unit: 'ml_per_kg_min', fold: 'newest' },
+  steps: { stored: 'steps_window', unit: 'count', fold: 'sum' },
+  active_energy: { stored: 'active_energy_window', unit: 'kcal', fold: 'sum' },
+  mindful: { stored: 'mindful_duration', unit: 'minutes', fold: 'sum' },
 };
 const FRESH_MS = 36 * 3_600_000;
 const STALE_MS = 72 * 3_600_000;
@@ -90,47 +105,49 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 // A reading's instant is when it ended, so a night's sleep ages from waking, not from falling asleep.
 const instantOf = (reading: Reading, timezone: string): number =>
   reading.endAt ? Date.parse(reading.endAt) : reading.startAt ? Date.parse(reading.startAt) : localDayWindow(reading.day, reading.timezone ?? timezone).end;
-const localDayOf = (now: Date, timeZone: string): string => {
+export const localDayOf = (now: Date, timeZone: string): string => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
   return `${get('year')}-${get('month')}-${get('day')}`;
 };
 
-type Group = Readonly<{ source: string; method: string | null; readings: readonly Reading[] }>;
-// One source per signal, the one with the most readings; for HRV one method as well, so rmssd and sdnn never blend.
-const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
-  const groups = new Map<string, { source: string; method: string | null; readings: Reading[] }>();
+type Group = Readonly<{ source: string; method: Method | null; readings: readonly Reading[] }>;
+// One source per signal, the one with the most readings; for a signal with methods one method as well, so they never blend.
+export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
+  const spec = SIGNALS[signal];
+  const groups = new Map<string, { source: string; method: Method | null; readings: Reading[] }>();
   for (const source of sources) {
     for (const reading of source.readings) {
-      if (reading.signal !== SIGNALS[signal].stored) continue;
-      if (signal === 'sleep' && reading.method !== null && reading.method !== 'asleep_duration') continue;
-      const method = signal === 'hrv' ? (reading.method === 'rmssd' || reading.method === 'sdnn' ? reading.method : null) : null;
-      if (signal === 'hrv' && method === null) continue;
+      if (reading.signal !== spec.stored) continue;
+      if (spec.asleep && reading.method !== null && reading.method !== 'asleep_duration') continue;
+      const method = spec.methods?.find(known => known === reading.method) ?? null;
+      if (spec.methods && method === null) continue;
+      const value = spec.value ? spec.value(reading) : reading.value;
+      if (value === null) continue;
       const key = `${source.source}\u0000${method ?? ''}`;
       const group = groups.get(key) ?? { source: source.source, method, readings: [] };
-      group.readings.push(reading);
+      group.readings.push({ ...reading, value });
       groups.set(key, group);
     }
   }
   return [...groups.values()].sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
 };
 
-const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
+export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
   if (readings.length === 0) return null;
   if (fold === 'sum') return Math.round(readings.reduce((total, reading) => total + reading.value, 0));
   if (fold === 'mean') return round1(readings.reduce((total, reading) => total + reading.value, 0) / readings.length);
   return [...readings].sort((a, b) => instantOf(b, timezone) - instantOf(a, timezone))[0]!.value;
 };
 
-const methodOf = (signal: HealthReadSignal, group: Group): Method | null =>
-  signal === 'sleep' ? 'asleep' : signal === 'hrv' ? (group.method as Method) : null;
+const methodOf = (signal: HealthReadSignal, group: Group): Method | null => (signal === 'sleep' ? 'asleep' : group.method);
 
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('get_health'));
 
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own readings from their health plane, by local day: time asleep (never time in bed), sleep midpoint, overnight HRV labelled rmssd or sdnn (never blended), resting heart rate, mean heart rate, and movement, daylight and workout minutes. Daily values or a summary, for at most 31 days ending no later than today. One source per signal. When unavailable, the reason says why: consent, link, no readings or a failed read. The numbers stay in this turn: nothing is stored or logged.",
+    "The owner's own health readings, by local day. Sleep is time asleep, never time in bed. Overnight HRV and wrist temperature carry their method and are never blended. heart_rate, respiratory_rate, spo2 and hr_recovery (the drop a minute after a workout) are day means. Daily values or a summary, up to 31 days ending today. One source per signal. The numbers stay in this turn: nothing is stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -145,7 +162,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const signals = [...new Set(args.signals)];
     let raw: unknown;
     try {
-      raw = await book.series({ from: args.from, to: args.to, signals: signals.map((signal) => SIGNALS[signal].stored) });
+      raw = await book.series({ from: args.from, to: args.to, signals: [...new Set(signals.map((signal) => SIGNALS[signal].stored))] });
     } catch {
       return unavailable('read_failed');
     }
@@ -153,7 +170,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const sources = parsed.series.sources.filter((source) => consent.sources.has(source.source));
+    const sources = untruncated(parsed.series, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;
@@ -171,7 +188,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       const values = days.map((day) => ({ day, value: foldDay(SIGNALS[signal].fold, byDay.get(day) ?? [], timezone) }));
       const present = values.map((entry) => entry.value).filter((value): value is number => value !== null);
       valued += present.length;
-      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as 'apple' | 'samsung' | 'health_connect' | 'whoop', method: methodOf(signal, group) };
+      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group) };
       series.push(args.aggregation === 'summary'
         ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }
         : { ...base, days: values });

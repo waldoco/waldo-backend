@@ -44,6 +44,12 @@ const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replac
 const random = (n: number) => b64url(crypto.getRandomValues(new Uint8Array(n)));
 const challenge = async (verifier: string) => b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
 
+/** Fixed reason codes only: never a code, token or secret. */
+const failed = (reason: string): 'failed' => {
+  console.log(JSON.stringify({ hop: 'photon_oauth_finish', ok: false, code: reason }));
+  return 'failed';
+};
+
 /** Thrown when Photon could not be reached or answered unexpectedly: the outcome is unknown, nothing was cleared. */
 export class PhotonUnavailable extends Error { constructor(readonly code: string) { super(code); } }
 
@@ -59,7 +65,8 @@ export class PhotonTokens {
     const nonce = random(32), verifier = random(48);
     this.kv.put(`photon.attempt.${nonce}`, { verifier, owner, redirectUri, expiresAt: this.now() + PHOTON_ATTEMPT_TTL_MS } satisfies Attempt);
     const url = new URL(`${ORIGIN}/api/auth/oauth2/authorize`);
-    for (const [k, v] of Object.entries({ response_type: 'code', client_id: this.config.clientId, redirect_uri: redirectUri, scope: SCOPE, state: nonce,
+    // prompt=consent: OpenID Connect issues a refresh token for offline_access only with it.
+    for (const [k, v] of Object.entries({ response_type: 'code', client_id: this.config.clientId, redirect_uri: redirectUri, scope: SCOPE, state: nonce, prompt: 'consent',
       code_challenge: await challenge(verifier), code_challenge_method: 'S256' })) url.searchParams.set(k, v);
     return { nonce, url: url.toString() };
   }
@@ -75,8 +82,9 @@ export class PhotonTokens {
     if (!code || code.length > 2048) return 'invalid';
     let tokens: Awaited<ReturnType<PhotonTokens['token']>>;
     try { tokens = await this.token({ grant_type: 'authorization_code', code, redirect_uri: attempt.redirectUri, code_verifier: attempt.verifier }); }
-    catch { return 'failed'; }
-    if (tokens === 'invalid_grant' || !tokens.refresh) return 'failed';
+    catch (error) { return failed(error instanceof PhotonUnavailable ? error.code : 'photon_token_error'); }
+    if (tokens === 'invalid_grant') return failed('photon_token_invalid_grant');
+    if (!tokens.refresh) return failed('photon_token_no_refresh_token');
     const at = this.now();
     this.kv.put('photon.refresh', { token: tokens.refresh, connectedAt: at, refreshedAt: at, owner: attempt.owner } satisfies Refresh);
     this.kv.put('photon.access', { token: tokens.access, expiresAt: at + tokens.expiresIn * 1000 } satisfies Access);
@@ -125,8 +133,10 @@ export class PhotonTokens {
   /** 'invalid_grant': Photon refused the code or refresh token. Any other failure throws PhotonUnavailable. */
   private async token(params: Record<string, string>): Promise<{ access: string; refresh: string | null; expiresIn: number } | 'invalid_grant'> {
     let response: Response;
+    // Called unbound: Workers' fetch throws "Illegal invocation" when called as a method of another object.
+    const fetcher = this.fetcher;
     try {
-      response = await this.fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
+      response = await fetcher(`${ORIGIN}/api/auth/oauth2/token`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
         body: new URLSearchParams({ ...params, client_id: this.config.clientId, client_secret: this.config.clientSecret }) });
     } catch { throw new PhotonUnavailable('photon_token_unreachable'); }

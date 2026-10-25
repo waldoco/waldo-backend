@@ -1,3 +1,4 @@
+import { jobBook } from '../src/tasks/jobs';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -74,12 +75,12 @@ it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it li
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
     add('[{"note":"plain private text"}]', 'plain card');
-    add('[{"note":"odd \\x41 escape PRIVATEWORDS"}]', 'a');
+    add('[{"note":"odd \\x44IFFTOPIC escape PRIVATEWORDS"}]', 'a');
     add('[{"n":"fine"}]', `SECRETTAIL\0nul ${topic}`);
     add('[{"note":"Meeting moved \\u2013 see agenda"}]', 'unrelated');
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
     sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'upper', null, 'ÉMILE visited', 0);
-    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'x\\y', 0);
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'D\\IFFTOPIC', 0);
     sql.exec('UPDATE day_plan SET rowid = -5 WHERE card = ?', 'neg');
     const real = realOf(state);
     const topics = [{ topic, state: 'pending' as const }, { topic: accented, state: 'pending' as const }];
@@ -111,7 +112,7 @@ it('HELDROWS budgets the scan, continues from a printed rowid, and keeps its not
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
-    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index}`, 0);
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a B\\UDGETTOPIC ${index}`, 0);
     const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
     const first = heldRowShapes(sql, 'day_plan', topics, 25, real);
     expect(first).toMatch(new RegExp(`${HELDROWS_SCAN_BUDGET} rows with a backslash or NUL; PARTIAL, continue with /heldrows day_plan \\d+`));
@@ -799,7 +800,8 @@ it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
  const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ROUND4-SPACE',JSON.stringify({gap,after}));
  state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
  });
-});import { loopBook } from '../src/channels/loops';
+});
+import { loopBook } from '../src/channels/loops';
 const realOf = (state: DurableObjectState) => (topic: string) => claimStore(state.storage.sql).forgetSources(topic, true);
 const T8 = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
 const sp = T8.indexOf(' about');
@@ -840,6 +842,27 @@ positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () =>
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
 positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
+
+positiveStore('task_jobs', 'POSTASK769', (sql, text) => {
+  const book = jobBook(sql, { now: () => Date.now(), newId: () => 'a1b2c3d4e5f6', newToken: () => 'token' });
+  const brief = { title: 'Read the backlog', goal: text, context: text, done_when: 'summarised', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+  book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'pos-769-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
+}, sql => JSON.stringify(sql.exec('SELECT status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()));
+
+it('forget_memory cancels an open task whose brief carried the topic, so its worker cannot report it back', async () => {
+  const name = 'memory-do-forget-open-task';
+  await turn(name, 1, 'Unrelated standup is at 09:10 UTC');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const book = jobBook(state.storage.sql, { now: () => Date.now(), newId: () => 'b1c2d3e4f5a6', newToken: () => 'token' });
+    const brief = { title: 'Read the backlog', goal: 'Find mail about OPENTASK770.', context: 'Private OPENTASK770 note', done_when: 'summarised', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+    book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'open-770-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
+  });
+  seen.outputs.push(tool('forget_memory', { topic: 'OPENTASK770', scope_note: 'remove OPENTASK770' }), []);
+  await turn(name, 2, 'Forget OPENTASK770');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+  });
+});
 
 // Full-store scan: after a successful forget and a DO eviction, no table or text column in the owner DO SQLite holds the forgotten text.
 // An exemption must name why the table cannot hold owner text; there is no skip.

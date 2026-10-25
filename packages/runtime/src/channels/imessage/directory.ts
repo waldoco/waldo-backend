@@ -23,7 +23,7 @@ export type BridgeListing = Readonly<{
 }>;
 
 /** What enrolling an owner with Photon needs, and their current enrollment. */
-export type EnrollmentContext = Readonly<{ email: string; phone: string | null; enrollment: Readonly<{ phone: string; assignedNumber: string; photonUserId: string }> | null }>;
+export type EnrollmentContext = Readonly<{ email: string; phone: string | null; phoneVerified: boolean; enrollment: Readonly<{ phone: string; assignedNumber: string; photonUserId: string }> | null }>;
 
 export class IMessageDirectoryUnavailable extends Error { constructor() { super('imessage_directory_unavailable'); } }
 
@@ -72,7 +72,9 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
         p_account_id: input.accountId, p_wrapped_credential: input.wrappedCredential, p_host_version: input.hostVersion, p_transport_version: input.transportVersion, p_generation: input.generation, p_pending_seconds: input.pendingSeconds });
       if (r === null) return null;
       const row = r as Record<string, unknown>;
-      return str(row.bridge_id) && str(row.account_id) && str(row.do_name) && row.bridge_id === input.bridgeId && row.account_id === input.accountId && typeof row.expires_at_ms === 'number' ? { doName: row.do_name, expiresAtMs: row.expires_at_ms } : null;
+      // A shared host goes live at redemption ('active'); an owner host starts 'pending' until its challenge.
+      return str(row.bridge_id) && str(row.account_id) && str(row.do_name) && row.bridge_id === input.bridgeId && row.account_id === input.accountId && typeof row.expires_at_ms === 'number'
+        ? { doName: row.do_name, expiresAtMs: row.expires_at_ms, state: row.state === 'active' ? 'active' as const : 'pending' as const } : null;
     },
     authority: async (environment: string, bridgeId: string, accountId: string) =>
       parseAuthority(await call('imessage_bridge_authority', 'authority', { p_environment: environment, p_bridge_id: bridgeId, p_account_id: accountId })),
@@ -98,7 +100,7 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
       if (r === null) return null;
       const row = r as Record<string, unknown> | null, e = row?.enrollment as Record<string, unknown> | null | undefined;
       if (!row || typeof row !== 'object' || !str(row.email)) throw new IMessageDirectoryUnavailable();
-      return { email: row.email, phone: nullable(row.phone),
+      return { email: row.email, phone: nullable(row.phone), phoneVerified: row.phone_verified === true,
         enrollment: e && str(e.phone) && str(e.assigned_number) && str(e.photon_user_id) ? { phone: e.phone, assignedNumber: e.assigned_number, photonUserId: e.photon_user_id } : null };
     },
     async enrollmentRecord(doName: string, environment: string, phone: string, photonUserId: string, assignedNumber: string, photonCreated: boolean)

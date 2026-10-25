@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const base = { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: () => {} };
 
@@ -84,8 +85,7 @@ it('failure reserving an effect after SQL approval claim must remain recoverable
   let sends = 0;
   const client = { sendRaw: async () => { sends++; return { message_id: 'p' }; }, findSentByMessageId: async () => false } as unknown as GoogleClient;
   const desk = approvalDesk(state.storage.sql, { ...base, effects, google: async () => client });
-  const raw = 'bytes';
-  const id = await desk.proposeSendEmail({ to: ['a@example.test'], subject: 'Hi', body: 'Hi', raw, digest: await sha256Hex(raw), message_id: '<id@waldo>' });
+  const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@example.test'], subject: 'Hi', body: 'Hi', message_id: '<id@waldo>' }));
   expect((await desk.decide(id, 'a', 'test')).toast).toBe('Outcome unknown');
   expect(sends).toBe(0);
   expect(effects.get(`approval:${id}:apply`)).toBeNull();

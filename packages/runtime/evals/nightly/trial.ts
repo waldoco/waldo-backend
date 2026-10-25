@@ -6,15 +6,21 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { HEALTH_TRIGGER_FORMAT } from '../../src/health/trigger';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
+import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
+import type { FloorTurn } from '../../src/llm/owner-routes';
+import type { JobBook, RetryBrief } from '../../src/tasks/jobs';
+import { promiseRetry, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
+  // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
+  | Readonly<{ late_answer: string }>
   | Readonly<{ health: 'shared' | 'withdrawn' }>
   // The owner's derived health moves zone and the health trigger runs, with one structured model call.
   | Readonly<{ health_change: true }>
@@ -28,13 +34,18 @@ export type TrialRecord = Readonly<{
   tools: JudgeInput['tools'];
   // Kept for a local look at one scenario; never written to the scorecard.
   toolOutputs: readonly Readonly<{ name: string; output: string }>[];
+  // Every request the model was sent, by the owner message it served (0 before the first), for receipts that read what
+  // the model was shown. Kept in memory for the trial; never written to the scorecard.
+  model_inputs: readonly Readonly<{ turn: number; text: string }>[];
   effects: readonly Effect[];
   final_state: unknown;
 }>;
 
 // Every model call the responder makes, the memory writer's included, counts against the run's budget.
-const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapter => ({
+// While `outage.down`, no model answers; the provider runtime then gives the owner's own reply its floor line.
+const metered = (inner: LLMGatewayAdapter, budget: CallBudget, outage: { down: boolean }): LLMGatewayAdapter => ({
   async complete(request) {
+    if (outage.down) return { ok: false, code: 'transient', error: 'no model is reachable' };
     if (!budget.take('candidate')) return { ok: false, code: 'rate_limited', error: 'the eval call budget is spent' };
     const result = await inner.complete(request);
     if (result.ok) budget.spent('candidate', result.data.input_tokens + result.data.output_tokens);
@@ -42,28 +53,53 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapte
   },
 });
 
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; memory?: MemoryMode }>): Promise<TrialRecord> => {
+// The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule.
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
-  const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
-    world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
+  let turn = 0;
+  const modelInputs: { turn: number; text: string }[] = [];
+  const shown: LLMGatewayAdapter = { complete: (request) => { modelInputs.push({ turn, text: JSON.stringify(request.request) }); return deps.gateway.complete(request); } };
+  // The floor promise goes through the production promiseRetry, over a book that only keeps the retry brief it writes.
+  const outage = { down: false };
+  let retry: RetryBrief | undefined;
+  const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
+  const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+    world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage), undefined, undefined, undefined, undefined,
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items' });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
   let error: string | undefined;
-  let turn = 0;
   try {
     for (const step of scenario.steps) {
       if ('say' in step) {
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
         transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        // The post-reply compaction hook; a store built with compaction off makes it a no-op.
+        await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
+      } else if ('late_answer' in step) {
+        // The owner's turn runs while no model answers, so its floor reply promises a time and writes the retry; the
+        // retry then runs as the owner object runs it once a model is back, with the tools an apply turn gets.
+        turn += 1;
+        transcript.push({ role: 'owner', text: step.late_answer });
+        outage.down = true;
+        retry = undefined;
+        try {
+          transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.late_answer) }), time) });
+        } finally { outage.down = false; }
+        if (!retry) throw new Error('the floor reply wrote no retry');
+        world.advance(new Date(world.clock.now().getTime() + RETRY_FIRST_TRY_MS).toISOString());
+        transcript.push({ role: 'world', text: `No model answered at the time. The time is now ${world.localNow()} (${TIMEZONE}) and models answer again.` });
+        const tools = world.handlers.map((handler) => handler.name).filter((name) => name !== 'start_task' && name !== 'cancel_task');
+        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.prompt(`${scenario.id}-retry-${turn}`, 1, retryTurnText(retry, TIMEZONE), time, tools as never, undefined, undefined, undefined, undefined, true) });
       } else if ('fire_due' in step) {
         for (const reminder of world.due()) {
           world.markFired(reminder.id);
@@ -93,6 +129,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     status, ...(error ? { error } : {}), transcript,
     tools: tools.map((entry) => ({ name: entry.hop.slice(5), ok: entry.ok })),
     toolOutputs: tools.map((entry) => ({ name: entry.hop.slice(5), output: entry.text?.output ?? '' })),
+    model_inputs: modelInputs,
     effects: world.effects(),
     final_state: world.finalState(),
   };

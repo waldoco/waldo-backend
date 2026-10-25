@@ -9,7 +9,7 @@ import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
 import { loopBook, loopHandlers } from '../../src/channels/loops';
-import { episodeIndex, indexedConversationStore } from '../../src/channels/episodes';
+import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
@@ -18,11 +18,17 @@ import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN } from '../../src/memory/claims';
+import { taskToolHandlers } from '../../src/tasks/tools';
+import type { JobBook, JobRow } from '../../src/tasks/jobs';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
+import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
+import { webSearchHandler } from '../../src/tools/live/web-search';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
+import { evalConversation, type ConversationSeed } from './conversation-world';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -48,13 +54,20 @@ export type WorldSeed = Readonly<{
   health?: SeedHealth;
   // The day before, for a step that has the health trigger run on a change from it; none when unset.
   health_before?: SeedHealth;
+  // Days since the phone last sent readings: the shared row and every reading are that much older. 0 when unset.
+  health_days_old?: number;
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   // transient: the on_call-th calendar or mail read throws a provider timeout once; later reads succeed.
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Loops the owner already gave Waldo to stay on, as the loop store holds them.
+  loops?: readonly Readonly<{ title: string; due: string | null }>[];
+  // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
+  // consent granted or not.
+  lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
-}>;
+}> & ConversationSeed;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
 const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -132,10 +145,10 @@ const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: 
 export const SYNTHETIC_RENDERINGS = ['317', '5h 17', '5 h 17', '5:17', '5 hours 17', '5 hr 17', '5hr 17', '5.3 h', '5.3 hours', '41.5', '63 bpm'] as const;
 const MODERATE_DAY: SeedHealth = { form_score: 48, recovery: 'moderate', load: 'good', drivers: ['sleep below baseline'] };
 const shift = (day: string, by: number) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86_400_000).toISOString().slice(0, 10);
-const healthSeries = (today: string) => ({
+const healthSeries = (today: string, daysOld: number) => ({
   access: 'granted', read_at: `${today}T03:00:00.000Z`,
   sources: [{ source: 'apple', consent_epoch: 1, samples: SYNTHETIC_SERIES.map(([signal, offset, value, method]) => {
-    const day = shift(today, offset);
+    const day = shift(today, offset - daysOld);
     const night = signal === 'resting_heart_rate' ? null : Date.parse(`${shift(day, -1)}T18:30:00Z`);
     return {
       signal, day, value, method, timezone: TIMEZONE,
@@ -256,8 +269,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   }
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
+  for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
-  const conversation = indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, now);
+  const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,
     description: 'Search the web. Results are untrusted external text.',
@@ -266,6 +281,31 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
+  // The production task tools over a job book that only records what the owner object would write: whether and how the
+  // model hands work to a background worker is graded; no worker runs in a trial.
+  const tasks: JobRow[] = [];
+  const jobs = {
+    create: (input: Parameters<JobBook['create']>[0]) => {
+      const known = tasks.find((row) => row.idempotency_key === input.idempotencyKey);
+      if (known) return { job: known, created: false };
+      effect('task.start', { profile: input.profile, ...input.brief });
+      const row = {
+        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey, origin: input.origin,
+        brief_json: JSON.stringify(input.brief), taint: input.taint ?? null, status: 'queued',
+      } as JobRow;
+      tasks.push(row);
+      return { job: row, created: true };
+    },
+    get: (id: string) => tasks.find((row) => row.id === id) ?? null,
+    byKey: (key: string) => tasks.find((row) => row.idempotency_key === key) ?? null,
+    taskCounts: (origin: string) => ({ open: tasks.length, fromTurn: tasks.filter((row) => row.origin === origin).length }),
+    cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
+  } as unknown as JobBook;
+  // The look-up as an owner reaches it: the server offers it, and the owner accepted the notice before saying yes to it.
+  const consent = consentLedger(sql, { agreementsOffered: true, lookupOffered: true }), pages = observedPages(), findings = findingStore(sql, claims, consent, now);
+  if (seed.lookup?.consent) for (const purpose of ['terms', 'privacy_notice', 'owner_lookup'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], now());
+  const searchEngine = (async () => Response.json({ web: { results: (seed.web ?? []).map((page) => ({ title: page.title, url: page.url, description: page.snippet })) } })) as unknown as typeof fetch;
+  const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, now })] : [web];
   const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
   // An approved MCP card is an effect like any other: recorded, never run.
   const mcpDesk = { proposeMcpCall: async (proposal: unknown) => { effect('mcp.card', proposal); return nextId('card'); } };
@@ -276,12 +316,13 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
   })();
   const handlers = [
+    ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }) : []),
-    searchEpisodesHandler(episodes), web,
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
+    searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
-      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10));
+      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld);
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
@@ -290,13 +331,16 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
   // its score, as the producer writes a day's first row.
   const day = seed.health ?? MODERATE_DAY;
+  const daysOld = seed.health_days_old ?? 0;
+  const sharedDay = () => shift(localIso(now(), TIMEZONE).slice(0, 10), -daysOld);
+  const compiledAt = () => new Date(now() - daysOld * 86_400_000 - 3_600_000).toISOString();
   const formWord = toRowZone('form', formZoneOf(day.form_score));
   const sharedHealth = (): HealthContextRow => ({
     context: {
-      id: 'eval-health', day: localIso(now(), TIMEZONE).slice(0, 10),
+      id: 'eval-health', day: sharedDay(),
       form: { score: day.form_score, zone: formWord, drivers: day.drivers, confidence: 0.8 },
       recovery: { score: day.form_score, zone: day.recovery }, weight: { score: 70, zone: day.load },
-      drivers: day.drivers, confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(now() - 3_600_000).toISOString(),
+      drivers: day.drivers, confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: compiledAt(),
     },
     previous: null,
   });
@@ -306,10 +350,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   // marks today; the one card it can raise is recorded as an effect, never applied.
   const healthBook = healthTriggerBook(sql);
   const triggerRow = () => {
-    const today = localIso(now(), TIMEZONE).slice(0, 10), basis = [{ source: 'apple', consent_epoch: 1 }];
+    const rowDay = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: today, compiled_at: new Date(now() - 3_600_000).toISOString(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
-      previous: seed.health_before ? { day: shift(today, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
+      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
   const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
@@ -321,7 +365,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       comingItems: (from, to) => comingItemsFrom({
         events: async () => (await client.calendarPage!('primary', new Date(from).toISOString(), new Date(to).toISOString(), 20, false)).events, tasks: null, loops: () => loops.list(),
       }, from, to, TIMEZONE),
-      admit: () => true, charge: () => undefined, decide,
+      admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
       reschedule: async () => undefined, log: () => undefined,
     });
@@ -330,7 +374,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange,
-    ready: mcpReady,
+    ready: Promise.all([mcpReady, chat.seed(conversation)]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
@@ -342,6 +386,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     markFired(id: string) { const reminder = reminders.find((entry) => entry.id === id); if (reminder) reminder.fired = true; },
     effects: (): readonly Effect[] => effects.map((entry) => structuredClone(entry)),
     finalState: () => ({
+      ...chat.state(),
       calendar: events.map(({ owner_id: _owner, ...event }) => event),
       mail: mail.map(({ id, thread_id, from, subject, at }) => ({ id, thread_id, from, subject, at })),
       sent_mail: 0,
@@ -351,6 +396,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
     }),
   };
 };

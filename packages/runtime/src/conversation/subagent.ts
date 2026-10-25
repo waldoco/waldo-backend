@@ -138,8 +138,7 @@ export const withDelegation = <H>(
   ownerTurn: boolean,
 ): readonly H[] => (ownerTurn ? [...handlers, delegate] : handlers);
 
-export type BackgroundStart = (job: Readonly<{ task: string; itemId: string; revision: number; tools?: readonly ToolName[] }>) => Promise<boolean>;
-export type DelegationDeps = Readonly<{ book?: ResponsibilityBook; startBackground?: BackgroundStart; newWorkerId?: () => string }>;
+export type DelegationDeps = Readonly<{ book?: ResponsibilityBook; newWorkerId?: () => string }>;
 
 const refusal = (error: string) => ({ ok: false as const, error, code: 'rejected' as const, source_taint: 'external' as const });
 
@@ -151,7 +150,7 @@ export const delegateTaskHandler = (
   return {
     name: 'delegate_task',
     description:
-      'Spawn a subagent for a self-contained research or reading subtask. It runs with read-only tools and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools, background to let it finish after this turn. Use it to isolate long lookups; keep owner-facing replies for yourself.',
+      'Spawn a subagent for a self-contained research or reading subtask whose answer this reply needs. It runs with read-only tools inside this turn and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools. For work that should outlive this reply, use start_task, one of the follow-ups and background work tools. Keep owner-facing replies for yourself.',
     schema: delegateTaskArgsSchema,
     trigger_allowlist: ['user_message'],
     autonomy_gated: false,
@@ -167,15 +166,6 @@ export const delegateTaskHandler = (
         if (!deps.book) return refusal('No todo is open for this turn.');
         started = deps.book.start(args.item_id, `worker:${deps.newWorkerId?.() ?? args.item_id}`);
         if (!started) return refusal('That step is finished, missing or waiting on another step.');
-      }
-      if (args.background) {
-        if (!started || !deps.startBackground) return refusal('Background work needs a todo step (item_id) and is not available here.');
-        const running = await deps.startBackground({ task: args.task, itemId: args.item_id!, revision: started.revision, ...(tools ? { tools } : {}) });
-        if (!running) {
-          deps.book!.finishWorker(args.item_id!, started.revision, { status: 'failed', result: 'Background worker did not start.' });
-          return refusal('The background worker could not be started.');
-        }
-        return { ok: true as const, data: { status: 'started' as const, item_id: args.item_id }, source_taint: 'external' as const };
       }
       const { exit, text } = await spawn(args.task, tools ? { tools } : undefined);
       const done = exit === 'completed';

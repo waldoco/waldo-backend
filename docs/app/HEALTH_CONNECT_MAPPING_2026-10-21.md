@@ -26,7 +26,7 @@ lane confirms each one on an Android build before it ships.
 |---|---|---|
 | Sleep session with stages | `sleep_duration` (`method: asleep_duration`), `sleep_efficiency`, `sleep_midpoint` | Carry `sleep_context` with `reducer_version: asleep-interval-union.v1`. Asleep, light, deep and REM stages are `asleep` intervals; the session span is the `in_bed` interval. Awake and out-of-bed time is neither. The contract defines `sleep_duration` as the minutes in the union of the asleep intervals, so overlapping contributors are not double counted. A session without stages sends `sleep_duration` with `method: time_in_bed` or `unknown` and no `sleep_context`. |
 | HRV RMSSD | `overnight_hrv` with `method: rmssd` | Health Connect's HRV record is RMSSD. An HRV reading with no method is refused: the baseline is per method and a reading with an unknown one would be blended into the wrong baseline. |
-| Resting heart rate | `resting_heart_rate` | `method` is `unknown` unless the source says how it was measured. |
+| Resting heart rate | `resting_heart_rate` | `method` is `unknown` unless the source says how it was measured. Samsung writes none. The app never computes one: it keeps sending `heart_rate_window` hours through the night, and the backend gives a night with no resting reading the low of its asleep hours (method `asleep_hours_low`, Recovery v4). |
 | Steps | `steps_window` | One reading per local hour, with the hour's bounds. Only the current hour grows; its `revision` is the observation time in epoch seconds. |
 | Heart rate, SpO2, respiratory rate, active energy, exercise sessions | `heart_rate_window`, `spo2`, `respiratory_rate`, `active_energy_window`, `workout` | As HealthKit's. |
 

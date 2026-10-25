@@ -1,5 +1,5 @@
 import { carriesTopic, hidesTopic } from './forget-guard';
-import { cardCarriesTopic, decodedLeafHit, LITERAL_REDACTED_STORES, likePrefilter, PROJECTION_STORES, projectionKeyHit, projectionPredicate, projectionRawHit, projectionValueHit } from './claims';
+import { cardCarriesTopic, decodedLeafHit, LITERAL_REDACTED_STORES, likePrefilter, PROJECTION_STORES, projectionValueHolds, projectionKeyHit, projectionPredicate, projectionRawHit, projectionValueHit } from './claims';
 
 // Owner-only diagnostic: the shape of stored rows that hold a forget, never their content.
 // A row is listed only when the real hold predicate is true for a pending topic (named t1, t2 by order, never by text):
@@ -9,6 +9,7 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
   core_file_revisions: ['content'], memory_backups: ['payload'], spots: ['text', 'evidence'],
   run_candidates: ['candidate_json'], held_candidates: ['candidate_json'], outbox: ['payload'], schedule: ['payload_json'],
   claims: ['text', 'evidence', 'aliases', 'source_ref'], thread_topic_index: ['topic'], patrol_log: ['summary'], goals: ['description', 'baseline', 'target', 'progress'],
+  task_jobs: ['brief_json', 'checkpoint_json', 'result_json'],
   // Mirrors the collect() list in claims.ts forgetSources (a hand copy; keep in step with it).
   episodes: ['text'], constellation_nodes: ['label', 'summary'], loops: ['title'], background_runs: ['summary'], reminder_notes: ['note'],
 };
@@ -113,12 +114,12 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
       if (cols.length) {
         const flags = cols.map(column => `${column} AS ${column}_v, length(${column}) AS ${column}_len, json_valid(${column}) AS ${column}_json, ${projectionRawHit(column)} AS ${column}_raw, ${projectionValueHit(column)} AS ${column}_val, ${projectionKeyHit(column)} AS ${column}_key`).join(', ');
         // update_cards: every row is a candidate and the same exact card test as the hold decides (the shape flags below still use the prefilter and are only descriptive).
-        // Other stores: every prefilter candidate holds the forget (same predicate as forgetSources).
+        // Other stores: a prefilter candidate holds when the shared guard says so (same test as forgetSources).
         const cardTable = table === 'update_cards';
         const flagParams = cols.flatMap(() => [like, like, like]);
         const candidates = sql.exec<Record<string, number | string | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE ${cardTable ? '1 = 1' : `(${projectionPredicate(cols)})`} AND rowid > ? ORDER BY rowid LIMIT ?`, ...flagParams, ...(cardTable ? [] : flagParams), after0, HELDROWS_SCAN_BUDGET + 1).toArray();
         const scanned = candidates.slice(0, HELDROWS_SCAN_BUDGET);
-        const rows = cardTable ? scanned.filter(row => cardCarriesTopic(row.changes_v, cols.includes('text') ? row.text_v : null, topic)) : scanned;
+        const rows = scanned.filter(row => cardTable ? cardCarriesTopic(row.changes_v, cols.includes('text') ? row.text_v : null, topic) : cols.some(column => projectionValueHolds(row[`${column}_v`], topic)));
         for (const row of rows.slice(0, limit)) extra.push(`#${String(row.rid)} t${index + 1}[projection ${cols.map(column => `${column} len=${row[`${column}_len`] ?? 'null'} json=${row[`${column}_json`] ? 1 : 0} raw=${row[`${column}_raw`] ? 1 : 0} val=${row[`${column}_val`] ? 1 : 0} key=${row[`${column}_key`] ? 1 : 0}`).join(' | ')}]`);
         if (rows.length > limit) notes.push(`t${index + 1}: more projection rows not shown, continue with /heldrows ${table} ${String(rows[limit - 1]!.rid)}`);
         else if (candidates.length > HELDROWS_SCAN_BUDGET) notes.push(`t${index + 1}: projection scan PARTIAL, continue with /heldrows ${table} ${String(scanned[HELDROWS_SCAN_BUDGET - 1]!.rid)}`);

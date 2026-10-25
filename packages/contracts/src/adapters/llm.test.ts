@@ -138,7 +138,13 @@ describe('llmResponse metering', () => {
       'latency_ms',
       'output_items',
       'truncated',
+      'ttft_ms',
     ]);
+  });
+
+  it('a streamed response may carry its time to first token as a whole, non-negative number of ms', () => {
+    expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms: 420 }).success).toBe(true);
+    for (const ttft_ms of [-1, 1.5, '420', null]) expect(llmResponseSchema.safeParse({ ...baseResponse, ttft_ms }).success, String(ttft_ms)).toBe(false);
   });
 
   it('requests may declare tools and replay prior tool turns', () => {
@@ -307,5 +313,10 @@ describe('toolParameters', () => {
     // nested anywhere - the values that broke request sanitisation and would ride the wire.
     expect(JSON.parse(JSON.stringify(params))).toEqual(params);
     expect(params.type).toBe('object');
+  });
+
+  // Every definition rides every round's tool list; a dialect URI tells the model nothing.
+  it('omits the $schema dialect marker', () => {
+    expect(toolParameters(z.strictObject({ q: z.string() }))).not.toHaveProperty('$schema');
   });
 });

@@ -13,15 +13,15 @@ const SECRET = 'fictional-delete-app-router-secret-00000000000', DIRECTORY = 'ht
 const OWNER = '10000000-0000-0000-0000-000000000003', AUTH = '20000000-0000-0000-0000-000000000003', EMAIL = 'delete-owner@example.test';
 type App = (path: string, body?: unknown, credential?: string) => Promise<Response>;
 type Outcome = 'deleted' | 'refused' | 'throws';
-type Seen = { deletes: number; state: DurableObjectState; name: string };
+type Seen = { deletes: number; state: DurableObjectState; name: string; owner?: InstanceType<typeof OwnerDO> };
 
 // delete_owner revokes every session and the owner's authority, as the SQL function does, so the
 // signed-out assertions observe the fixture's directory rather than a constant.
-const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<void>) => {
+const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<void>, signedInAgo = 0) => {
   const name = `app-delete-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false, owned = true;
-    const created = new Date().toISOString(), expires = Date.now() + 3_600_000, seen: Seen = { deletes: 0, state, name };
+    const created = new Date(Date.now() - signedInAgo).toISOString(), expires = Date.now() + 3_600_000, seen: Seen = { deletes: 0, state, name };
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body));
       if (url.pathname === '/auth/v1/otp') return Response.json({});
@@ -40,7 +40,7 @@ const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<
       if (fn === 'owner_for_auth') return Response.json(owned && a.p_auth_user === AUTH && a.p_email === EMAIL ? name : null);
       if (fn === 'console_session_open') { hash = a.p_session_hash; live = true; return Response.json(true); }
       if (fn === 'console_session_touch') return Response.json(live && a.p_session_hash === hash);
-      if (fn === 'console_session_list') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created }] : []);
+      if (fn === 'console_session_inventory') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created, expires_at: new Date(Date.parse(created) + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: created }] : []);
       if (fn === 'owner_runtime_authority') return Response.json(owned && a.p_do_name === name ? { owner_id: OWNER, auth_user_id: AUTH, do_name: name, state_version: 0, admission_revision: '1' } : null);
       if (fn === 'app_session_authority') return Response.json(live && a.p_do_name === name && a.p_session_hash === hash ? { owner_id: OWNER, do_name: name, session_hash: hash, state_version: 0, admission_revision: '1', expires_at: expires } : null);
       if (fn === 'workspace_owner_binding') return Response.json(owned ? { owner_id: OWNER, environment: 'staging', namespace: 'delete-app-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 } : null);
@@ -50,6 +50,7 @@ const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'delete-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
     const instance = new OwnerDO(state, settings as never);
+    seen.owner = instance;
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app: App = async (path, body, credential) => {
       const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
@@ -91,6 +92,14 @@ it('an app-only owner deletes their account from the app: the directory removes 
     expect((await app('/controls?view=day', undefined, credential)).status).toBe(401);
     expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(401);
     expect((await app('/chat/main/messages', { client_message_id: 'after-delete-0001', text: 'hello' }, credential)).status).toBe(401);
+    // A task worker still running when the account went calls in once more: it is fenced, and writes no table back.
+    const ticket = { jobId: 'job_000000000001', attempt: 1, token: 'tok-before-delete' };
+    const owner = seen.owner!;
+    expect(await owner.taskClaim(ticket)).toBe('fenced');
+    expect(await owner.taskTool(ticket, { call_id: 'c1', name: 'search_communication', arguments: '{}' }, [])).toBe('fenced');
+    expect(await owner.taskCheckpoint(ticket, 1, [], [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+    expect(await owner.taskReport(ticket, { kind: 'failed', code: 'gone' }, [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+    expect(await owner.taskHeartbeat(ticket)).toBe(false);
     expect(seen.deletes).toBe(1);
     expect(stored(seen.state)).toBe(0);
   });
@@ -109,6 +118,20 @@ it('deleting the account leaves no episodes row holding an app reply that carrie
     expect(seen.state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n).toBe(0);
     expect(stored(seen.state)).toBe(0);
   });
+});
+
+it('a session signed in over two hours ago cannot delete the account: it is asked to confirm and nothing reaches the directory', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const view = await account(app, credential);
+    const before = stored(seen.state);
+    const response = await app('/actions', remove(view.revision), credential);
+    expect([response.status, await response.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(seen.deletes).toBe(0);
+    expect(stored(seen.state)).toBe(before);
+    expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(404);
+    expect((await app('/controls?view=day', undefined, credential)).status).toBe(200);
+  }, 3 * 60 * 60_000);
 });
 
 it('a deletion without the typed confirmation, or against a stale read, never reaches the directory', async () => {

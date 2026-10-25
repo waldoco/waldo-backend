@@ -32,7 +32,7 @@ it('an owner-grounded health claim is stored by remember and read_memory returns
 
 it('remember rejects invented health evidence instead of downgrading and recalling it', async () => {
   await withMemory('claims-health-invented', async ({ store, call }) => {
-    expect(await call('remember', { kind: 'health', text: 'HbA1c was 7.2', evidence_quote: 'my HbA1c was 7.2 last month' }, HEALTH_SAID)).toMatchObject({ ok: false, code: 'invalid_args', error: 'Evidence quote is not grounded in an owner-authored message.' });
+    expect(await call('remember', { kind: 'health', text: 'HbA1c was 7.2', evidence_quote: 'my HbA1c was 7.2 last month' }, HEALTH_SAID)).toMatchObject({ ok: false, code: 'invalid_args', error: 'Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.' });
     expect(store.allClaims()).toEqual([]);
     expect(await call('read_memory', { query: 'HbA1c' }, 'what was my HbA1c?')).toMatchObject({ ok: true, data: { claims: [] } });
     expect(turnMemoryPrompt(store, 'HbA1c')).not.toContain('7.2');

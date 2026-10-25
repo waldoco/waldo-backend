@@ -1,4 +1,5 @@
 import { OUTBOX_CUSTODY, SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
+import { carriesTopic } from '../memory/forget-guard';
 import { rememberWhatsAppSubject, waitingForWhatsApp } from './proactive-surface';
 import { retireSurfaceRecords, type DeliveryReceipt, type FinalRecord, type TelegramFinalOutbox } from './telegram-final-outbox';
 import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
@@ -176,7 +177,7 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
     },
     lapsed: record => lapsed(record) || (route.lapsed?.(record) ?? false),
     allowed: async record => !lapsed(record) && route.allowed(record),
-    send: payload => route.send({ ...payload, [OUTBOX_CUSTODY]: true } as typeof payload),
+    send: (payload, record) => route.send({ ...payload, [OUTBOX_CUSTODY]: true } as typeof payload, record),
     receipt: ack => whatsappReceipt(ack, subject, now()),
   };
 };
@@ -201,12 +202,12 @@ export const whatsappWindowRefused = (kv: Kv, refusal: Readonly<{ providerMessag
 // Owner forget reaches held text the way it reaches a pending outbox record: a held message carrying a forgotten literal is
 // cancelled, never sent. Answers the outbox redactors' shape; nothing is left behind, so remaining is always 0.
 export const forgetHeldWhatsApp = (kv: Kv, texts: readonly string[]): Readonly<{ rewritten: number; remaining: number }> => {
-  const needles = [...new Set(texts.map(text => text.trim().toLowerCase()).filter(Boolean))];
+  const needles = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
   let rewritten = 0;
   if (needles.length) for (const [key, record] of kv.list<Held>({ prefix: WA_HELD_PREFIX })) {
     const { text, fallback_text } = record.body as { text?: unknown; fallback_text?: unknown };
-    const words = [text, fallback_text].filter((value): value is string => typeof value === 'string').map(value => value.toLowerCase());
-    if (needles.some(needle => words.some(value => value.includes(needle)))) { kv.delete(key); rewritten += 1; }
+    const words = [text, fallback_text].filter((value): value is string => typeof value === 'string');
+    if (needles.some(needle => words.some(value => carriesTopic(value, needle)))) { kv.delete(key); rewritten += 1; }
   }
   return { rewritten, remaining: 0 };
 };

@@ -3,7 +3,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { loopBook } from '../src/channels/loops';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
-import { dueFailureNotices, markFailureNoticed } from '../src/scheduler/failure-notice';
+import { dueFailureNotices, markFailureNoticed, pausedJobs } from '../src/scheduler/failure-notice';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -256,5 +256,66 @@ it('names only a job\'s own failed runs, each pause once, and keeps a pause the 
     expect(dueFailureNotices(sql, kv, saturday - 60 * 60_000, ZONE)).toEqual([]);
     pause('reminder:own', 'reminder', saturday + 3 * 60 * 60_000 + DAY_MS, 'quarantined', 'run');
     expect(dueFailureNotices(sql, kv, saturday + 3 * 60 * 60_000, ZONE).map(notice => notice.text)).toEqual([line('Sun 3 Nov, 12:00')]);
+  });
+});
+
+it('the overnight memory pass says so once, then stays quiet through later pauses until it has run well again', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('notice-house')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const { sql, kv } = state.storage;
+    const start = Date.parse('2030-11-01T07:00:00Z'); // 03:00 in New York
+    const run = (at: number, outcome: string, errorClass: string | null) =>
+      sql.exec('INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES (?, ?, ?, ?, 3, ?, ?, ?, 0)',
+        `nightly-memory:${at}:${outcome}`, 'nightly-memory', 'dreaming', at, outcome, errorClass, at);
+    const pause = (at: number) => {
+      sql.exec(`INSERT OR REPLACE INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, last_fired_at, quarantined_until, created_at, updated_at)
+        VALUES ('nightly-memory', 'dreaming', ?, ?, NULL, '{}', 'quarantined', 3, ?, ?, ?, ?)`, at, at, at, at + DAY_MS, at, at);
+      run(at, 'quarantined', 'run');
+    };
+    const notify = (at: number) => {
+      const due = dueFailureNotices(sql, kv, at, ZONE);
+      for (const notice of due) markFailureNoticed(kv, notice, at);
+      return due.map(notice => notice.text);
+    };
+    pause(start);
+    expect(notify(start)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 03:00."]);
+    expect(pausedJobs(sql, start, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }]);
+    // Paused again on each of the next nights, past the daily cap and the two days the per-pause record keeps: silent.
+    for (const night of [1, 2, 3]) { pause(start + night * DAY_MS); expect(notify(start + night * DAY_MS)).toEqual([null]); }
+    expect(pausedJobs(sql, start + 3 * DAY_MS, ZONE)).toEqual([{ name: 'My overnight memory pass', until: 'Tue 5 Nov, 02:00' }]);
+    // It runs well one night, then fails again: the owner hears once more.
+    run(start + 4 * DAY_MS, 'ok', null);
+    pause(start + 5 * DAY_MS);
+    expect(notify(start + 5 * DAY_MS)).toEqual(["My overnight memory pass failed 3 times in a row, so I've paused it. I'll try again around Thu 7 Nov, 02:00."]);
+  });
+});
+
+it('a reminder is not a house-keeping job: paused on a later day, it says so again', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('notice-house-reminder')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const { sql, kv } = state.storage;
+    const friday = Date.parse('2030-11-01T14:00:00Z');
+    for (const at of [friday, friday + DAY_MS]) {
+      sql.exec(`INSERT OR REPLACE INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, last_fired_at, quarantined_until, created_at, updated_at)
+        VALUES ('reminder:r', 'reminder', ?, ?, NULL, '{}', 'quarantined', 3, ?, ?, ?, ?)`, at, at, at, at + DAY_MS, at, at);
+      sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES (?, 'reminder:r', 'reminder', ?, 3, 'quarantined', 'run', ?, 0)", `r:${at}`, at, at);
+      const [notice] = dueFailureNotices(sql, kv, at, ZONE);
+      expect(notice?.text).toContain('One of your reminders failed');
+      markFailureNoticed(kv, notice!, at);
+    }
+  });
+});
+
+it('a paused forget cleanup is named to the owner and listed, without the topic', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('notice-forget-purge')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const { sql, kv } = state.storage;
+    const at = Date.parse('2030-11-01T14:00:00Z');
+    sql.exec(`INSERT INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, last_fired_at, quarantined_until, created_at, updated_at)
+      VALUES ('forget-purge', 'forget_purge', ?, ?, NULL, '{"id":"forget-purge"}', 'quarantined', 3, ?, ?, ?, ?)`, at, at, at, at + DAY_MS, at, at);
+    sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, error_class, settled_at, duration_ms) VALUES ('forget-purge:run', 'forget-purge', 'forget_purge', ?, 3, 'quarantined', 'run', ?, 0)", at, at);
+    const [notice] = dueFailureNotices(sql, kv, at, ZONE);
+    expect(notice?.text).toBe("My cleanup of something you asked me to forget failed 3 times in a row, so I've paused it. I'll try again around Sat 2 Nov, 10:00.");
+    expect(pausedJobs(sql, at, ZONE)).toEqual([{ name: 'My cleanup of something you asked me to forget', until: 'Sat 2 Nov, 10:00' }]);
   });
 });

@@ -55,7 +55,8 @@ export type IMessageTurnHandoff = Readonly<{
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
 export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string }>;
-export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' } | { kind: 'terminal'; result: IMessageResult };
+// busy: the one mailbox slot holds another command; the slot frees within a host pull and a send, so retry soon.
+export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' | 'busy' } | { kind: 'terminal'; result: IMessageResult };
 export interface OwnerIMessagePort {
   admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'>;
   recordIMessageResult(input: IMessageResultReport): Promise<boolean>;
@@ -67,6 +68,9 @@ const invalid = (): HostReply => fixed(401, 'invalid_request');
 const RETRY_MS = 5_000;
 /** System replies (onboarding, link results) have no owner: the bridge answers them itself. */
 const SYSTEM_REPLY_PREFIX = 'system:';
+// How long a reply that met a busy slot keeps notes off it: past the owner's 1 s retry, with room for its alarm.
+const REPLY_WAITING_MS = 5_000;
+const PROGRESS = 'progress:';
 export const SYSTEM_OWNER_ID = 'waldo-system';
 /** "waldo CODE": the one-time link code from the console (same alphabet as Telegram and WhatsApp codes). */
 const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
@@ -97,6 +101,9 @@ export const bindingDigest = (b: IMessageBinding) => sha256Hex(JSON.stringify(iM
 export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   private storeCache: BridgeStore | null = null;
   private draining = false;
+  // Until then a reply is waiting for the slot, so no progress note takes it. Memory only: an evicted bridge forgets it,
+  // and the waiting reply still takes the slot back from a note the host has not pulled.
+  private replyWaitingUntil = 0;
   constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, env); }
 
   private composition() { return iMessageComposition(this.env); }
@@ -207,6 +214,19 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (prior) return prior.result ? { kind: 'terminal', result: prior.result } : { kind: 'queued' };
     const environment = store.meta('environment'), bridgeId = store.meta('bridge_id'), accountId = store.meta('account_id');
     if (!environment || !bridgeId || !accountId) return { kind: 'retry' };
+    // Notes come last in this one-slot mailbox. A note goes only into a free slot no reply is waiting for, and never after its
+    // own owner's reply for that turn (turn ids are per owner). Every other message takes the slot from a note the host has
+    // not pulled; one already pulled goes out first, as the mailbox sends in order. The slot is read before any directory or
+    // signing work, so a reply waiting on it costs no lookup per retry.
+    const [kind, turn] = input.replyRef.split(':');
+    const progress = kind === 'progress';
+    const holder = store.outstanding();
+    if (holder && (progress || !queuedNote(holder))) {
+      if (progress) return { kind: 'terminal', result: replyNotStarted(input.commandId, null, 'progress_busy') };
+      this.replyWaitingUntil = Date.now() + REPLY_WAITING_MS;
+      return { kind: 'busy' };
+    }
+    if (progress && Date.now() < this.replyWaitingUntil) return { kind: 'terminal', result: replyNotStarted(input.commandId, null, 'progress_yields') };
     let found: SenderAuthority | null;
     try {
       found = input.subject !== undefined ? await this.directory().senderAuthority(environment, bridgeId, accountId, input.subject)
@@ -230,15 +250,32 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const body = JSON.stringify(command), commandDigest = await sha256Hex(body), now = Date.now(), deliveryId = crypto.randomUUID();
     const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
     const commitment = await signCommitment({ bridgeId, accountId, deliveryId, commandId: command.commandId, commandDigest, expiresAtMs: now + c.policy.commitmentMaxAgeMs }, key);
+    // Checked with no await before the enqueue, so a reply that landed during this call's awaits is seen.
+    if (progress && store.deliveriesFor(input.ownerDoName, `reply:${turn}`).length) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_superseded') };
+    if (progress && Date.now() < this.replyWaitingUntil) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_yields') };
     try {
+      if (!progress) this.takeFromNote(store, input.ownerDoName, `${PROGRESS}${turn}:`);
       store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: input.ownerDoName, replyRef: input.replyRef });
     } catch (error) {
       if (error instanceof BridgeStoreError && error.code === 'lane_quarantined') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'mutation_lane_poisoned') };
       if (error instanceof BridgeStoreError && error.code === 'command_conflict') return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'command_conflict') };
+      if (error instanceof BridgeStoreError && error.code === 'outstanding_command') {
+        if (progress) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'progress_busy') };
+        this.replyWaitingUntil = Date.now() + REPLY_WAITING_MS;
+        return { kind: 'busy' };
+      }
       return { kind: 'retry' };
     }
     await this.rearm(store);
     return { kind: 'queued' };
+  }
+
+  // A note the host has not pulled gives up the slot. It settles not_started for its own owner: superseded when it is this
+  // owner's note for this turn, preempted otherwise. Nothing else of that owner's is read or touched.
+  private takeFromNote(store: BridgeStore, owner: string, turnNotes: string | null): void {
+    const holder = store.outstanding();
+    if (!holder || !queuedNote(holder)) return;
+    store.withdraw(holder.deliveryId, turnNotes !== null && holder.ownerDoName === owner && holder.replyRef.startsWith(turnNotes) ? 'progress_superseded' : 'progress_preempted');
   }
 
   /** Console revoke (after the canonical revision changed): cancel never-delivered work, keep evidence. */
@@ -454,7 +491,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         return outcome.kind === 'redeemed' ? 'link_redeemed' : outcome.kind === 'claimed' ? 'link_claimed' : 'link_failed';
       }
       // A number its owner enrolled on Photon but has not linked: point them at their console, never at a Waldo.
-      const finish = onboardingUrl(this.env.IMESSAGE_CONSOLE_URL);
+      // Only Photon enrolls numbers: without it there is nothing to look up (and no enrollment table to depend on).
+      const finish = photonConfig(this.env) ? onboardingUrl(this.env.IMESSAGE_CONSOLE_URL) : null;
       if (finish && ready !== 'unavailable' && await directory.enrolledHandle(environment, event.senderHandle)) {
         const enrolledHash = await sha256Hex(JSON.stringify([bridgeId, 'enrolled', event.senderHandle]));
         if (!(await directory.onboardingAllowed(environment, bridgeId, accountId, enrolledHash))) return 'stranger_throttled';
@@ -496,7 +534,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
     const commitment = await signCommitment({ bridgeId, accountId, deliveryId, commandId, commandDigest, expiresAtMs: now + c.policy.commitmentMaxAgeMs }, key);
     // A lane taken in the meantime (or a full store) means no system reply: never a retry that could resend.
-    try { store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: '', replyRef: `${SYSTEM_REPLY_PREFIX}${commandId}` }); }
+    try { this.takeFromNote(store, '', null); store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: '', replyRef: `${SYSTEM_REPLY_PREFIX}${commandId}` }); }
     catch (error) { if (error instanceof BridgeStoreError) return; throw error; }
     await this.rearm(store);
   }
@@ -516,6 +554,7 @@ const replyNotStarted = (commandId: string, binding: IMessageBinding | null, rea
   state: 'rejected', disposition: 'not_started', reason,
 });
 
+const queuedNote = (d: DeliveryRow) => d.state === 'queued' && d.replyRef.startsWith(PROGRESS);
 const deliveryWire = (d: DeliveryRow) => ({ deliveryId: d.deliveryId, attempt: d.attempt, body: d.body, headers: d.headers, commitment: d.commitment });
 
 // Exported for the HTTP layer and tests; the host never chooses a key.

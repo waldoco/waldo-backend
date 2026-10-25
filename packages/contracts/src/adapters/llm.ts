@@ -34,10 +34,11 @@ export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
   // zod v4 stamps its output with a non-configurable '~standard' marker so the result can
   // double as a schema; that marker carries function values, which are not JSON. Tool
   // definitions ride the wire to providers and pass through request sanitisation, both of
-  // which require pure JSON.
+  // which require pure JSON. The '$schema' dialect URI is dropped too: every definition is
+  // sent every round, and the URI costs tokens while telling the model nothing.
   const clean: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(json)) {
-    if (key !== '~standard') clean[key] = value;
+    if (key !== '~standard' && key !== '$schema') clean[key] = value;
   }
   return clean;
 };
@@ -123,6 +124,8 @@ export const llmResponseSchema = z
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
     truncated: z.boolean().optional(),
+    // A streamed call's time from sending the request to the model's first output, in ms.
+    ttft_ms: z.int().nonnegative().optional(),
   })
   .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
     error: 'a response carries text or tool calls',

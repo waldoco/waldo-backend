@@ -72,6 +72,19 @@ const expectedMigrations = [
   '20261021170000_health_consent_copy_version.sql',
   '20261022040000_waldo_connect_session_begin.sql',
   '20261022120000_waldo_imessage_photon_enrollment.sql',
+  '20261022150000_waldo_imessage_shared_autoactivate.sql',
+  '20261022170000_health_per_sample_rejection.sql',
+  '20261023060000_waldo_connect_session_handoff.sql',
+  '20261023090000_waldo_console_session_lifetime.sql',
+  '20261023100000_waldo_phone_verified_by_link.sql',
+  '20261023120000_health_console_freshness.sql',
+  '20261023130000_health_watch_signals.sql',
+  '20261023140000_health_sleep_debt_drivers.sql',
+  '20261023150000_waldo_phone_sms_proof.sql',
+  '20261024010000_waldo_admin_cost_summary.sql',
+  '20261025120000_waldo_connect_session_granola.sql',
+  '20261025130000_app_session_thirty_days.sql',
+  '20261025140000_app_push_expo.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

@@ -131,13 +131,17 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
     if (this.revoked() || !identifier(input.device_id) || !this.env.DEVICE_BRIDGE_DO?.idFromName(input.device_id).equals(this.ctx.id)) return { accepted: false, reason: 'unavailable' };
     const auth = await deviceDirectory(this.env).deviceForAuth(input.device_id);
     if (!auth || auth.owner_id !== input.owner_id || this.revoked()) return { accepted: false, reason: 'unavailable' };
-    const result = await new DeviceCommandStore(this.ctx.storage).enqueue(input, Math.floor(Date.now() / 1000), auth.capabilities);
+    // A Mac request needs the Mac connected now: one queued for an offline Mac would only lapse into an "expired" notice.
+    // Console queries and notifications keep queuing for the next connection.
+    const store = new DeviceCommandStore(this.ctx.storage);
+    const result = await store.enqueue(input, Math.floor(Date.now() / 1000), auth.capabilities, !(await this.status()).online);
     if (result.accepted && !this.revoked()) for (const socket of this.ctx.getWebSockets()) {
       const binding = socket.deserializeAttachment() as Binding | null;
       if (binding) this.deliver(socket, binding);
     }
     await this.rearm();
-    return result;
+    // The state after the hand-over attempt: 'sent' only when a live socket took it, 'queued' while it still waits.
+    return result.accepted ? { ...result, state: store.state(result.command_id) ?? result.state } : result;
   }
   private deliver(socket: WebSocket, binding: Binding): void {
     // A new socket drains old results and reconciles accepted work before receiving new effects.

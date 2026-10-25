@@ -55,7 +55,7 @@ Worker secrets (wrangler secret put <NAME> --env <env>):
 - WALDO_ROUTER_HMAC_SECRET - signs runtime->Postgres routing calls; the matching value sits in Supabase Vault as waldo_router_hmac.
 - LANGFUSE_PUBLIC_KEY / SECRET_KEY / BASE_URL - traces; text-retention decision is an open owner call before beta users.
 - GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET - OAuth client for the connect flow (redirect: /oauth/google/callback on the same origin).
-- WALDO_OAUTH_STATE_SECRET - signs the OAuth state of Google and MCP server connects. Its own random value (32+ bytes), never a copy of another secret. Without it, Google and MCP sign-in are off and the Worker logs `oauth_state_secret_missing` once per isolate; nothing falls back to TELEGRAM_WEBHOOK_SECRET. Setting or rotating it invalidates connect links already in flight, so the owner starts those again.
+- WALDO_OAUTH_STATE_SECRET - signs the OAuth state of Google and MCP server connects and keys the browser binding every connect hop checks (Google, MCP, WHOOP, Photon and `/c/` links). Its own random value (32+ bytes), never a copy of another secret. Without it, all of those connects fail closed and the Worker logs `oauth_state_secret_missing` (`effect: connector_connect_off`) once per isolate; nothing falls back to TELEGRAM_WEBHOOK_SECRET. Setting or rotating it invalidates connect links already in flight, so the owner starts those again.
 - ELEVENLABS_API_KEY (STT), BRAVE_SEARCH_API_KEY or TAVILY_API_KEY (search).
 
 Worker vars (wrangler.toml [vars], not secrets): SUPABASE_PROJECT_URL, SUPABASE_PUBLISHABLE_KEY, WALDO_OWNER_TELEGRAM_ID (single-owner fallback until routing lands).

@@ -5,11 +5,13 @@ import OpenAI from 'openai';
 import { modelNameSchema, OPENAI_PROVIDER, PROVIDER_OF, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { OpenAIResponsesAdapter } from '../../src/llm/openai';
 import { scriptedGateway } from '../../src/testing/scripted-gateway';
+import { ablating, ablationLabel } from './ablation';
 import { callBudget } from './budget';
 import { assertIndependentJudge, liveJudge, type Judge } from './judge';
 import { liveVoiceJudge } from './voice';
 import { judgeModeOf } from './dimensions';
 import type { MemoryMode } from './world';
+import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
 import type { NightlyRun } from './suite';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -31,20 +33,42 @@ const required = (env: Env, name: string): string => {
 // rate at all. It proves the harness runs end to end, never the model's quality.
 const recordedJudge: Judge = async () => ({ outcome: 'judge_error' });
 
-export const nightlyConfig = (env: Env): NightlyRun => {
+// WALDO_EVAL_ABLATE=<rule id>[,<rule id>...] takes those behaviour rules out of every reply's system prompt (rules.ts lists
+// them); the scorecard's candidate names them, so it is compared only with an unablated run.
+const withAblation = (run: NightlyRun, env: Env): NightlyRun => {
+  const ids = (env.WALDO_EVAL_ABLATE ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+  if (!ids.length) return run;
+  if (!ids.every((id) => /^[0-9a-f]{8}$/.test(id))) throw new Error('WALDO_EVAL_ABLATE takes 8-hex rule ids');
+  let misses = 0;
+  return { ...run, gateway: () => ablating(run.gateway(), ids, () => { misses += 1; }), candidate: ablationLabel(run.candidate, ids), ablationMisses: () => misses };
+};
+
+export const nightlyConfig = (env: Env): NightlyRun => withAblation(baseConfig(env), env);
+
+const baseConfig = (env: Env): NightlyRun => {
   const mode = env.WALDO_EVAL_MODE;
   if (mode !== 'recorded' && mode !== 'live') throw new Error('WALDO_EVAL_MODE must be recorded or live');
   const trials = positive(env, 'WALDO_EVAL_TRIALS', '3');
+  // WALDO_EVAL_TOOL_SEARCH=on runs the brain's flag-on menu (core tools up front, the rest found by tool search), as
+  // WALDO_TOOL_SEARCH=on does for an owner; the scorecard names it so the two menus' results are never mixed up.
+  const toolSearch = env.WALDO_EVAL_TOOL_SEARCH === 'on';
+  const menu = toolSearch ? { toolSearch: true } : {};
+  // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, as WALDO_COMPACTION=on does
+  // for the app; the scorecard names it so the two runs are never mixed up.
+  const compaction: Readonly<{ compaction?: CompactionSettings }> = env.WALDO_EVAL_COMPACTION === 'on' ? { compaction: compactionSettings({ WALDO_COMPACTION: 'on' }) } : {};
   const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
   if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
   // The raw-history baseline's card names its mode, so it is never read as the normal run's.
-  const label = (name: string) => (memory === 'raw_history' ? `${name} (raw_history)` : name);
+  const label = (name: string) => {
+    const menuNamed = `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`;
+    return memory === 'raw_history' ? `${menuNamed} (raw_history)` : menuNamed;
+  };
   const memoryMode: Readonly<{ memory?: MemoryMode }> = memory === 'raw_history' ? { memory } : {};
   if (mode === 'recorded') {
     return {
       trials, budget: callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS', '10000')),
       gateway: () => scriptedGateway({ rules: [], unmatchedText: 'Recorded reply.' }),
-      judge: recordedJudge, candidate: label('recorded'), judgeModel: 'recorded', ...memoryMode,
+      judge: recordedJudge, candidate: label('recorded'), judgeModel: 'recorded', ...menu, ...memoryMode, ...compaction,
     };
   }
   const model = modelNameSchema.parse(env.WALDO_EVAL_MODEL ?? WALDO_CHAT_MODEL);
@@ -56,7 +80,7 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   const budget = callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS'));
   const judgeMode = judgeModeOf(env.WALDO_EVAL_JUDGE_MODE);
   return {
-    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, holdState: true, ...memoryMode,
+    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, holdState: true, ...menu, ...memoryMode, ...compaction,
     // No client retries: every attempt is one counted call.
     gateway: () => new OpenAIResponsesAdapter({ client: new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 }) }),
     judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),

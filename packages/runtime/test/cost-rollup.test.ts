@@ -4,6 +4,8 @@ import { md5Hex } from '../src/channels/md5';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { modelCost } from '../src/llm/pricing';
 import { COST_MONTH_KEY, COST_ROLLUP_KEY, COST_ROLLUP_MAX_ATTEMPTS, costRollup, costRollupDelta, costRollupEnabled } from '../src/observability/cost-rollup';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 
 const DAY = Date.UTC(2026, 9, 20, 10);
 const llm = (over: Partial<TurnLogEntry> = {}): TurnLogEntry => ({
@@ -61,6 +63,17 @@ describe('costRollupEnabled', () => {
     expect(costRollupEnabled({})).toBe(false);
     expect(costRollupEnabled({ WALDO_COST_LEDGER_SYNC: 'off' })).toBe(false);
     expect(costRollupEnabled({ WALDO_COST_LEDGER_SYNC: 'on' })).toBe(true);
+  });
+});
+
+describe('hosted config', () => {
+  type Vars = { WALDO_COST_LEDGER_SYNC?: string };
+  const parsed = parseJsonc(config) as { vars: Vars; env: { staging: { vars: Vars } } };
+  it('staging records spend', () => {
+    expect(costRollupEnabled(parsed.env.staging.vars)).toBe(true);
+  });
+  it('production keeps the ledger off', () => {
+    expect(costRollupEnabled(parsed.vars)).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import { driversOf } from './drivers';
 import { formScore } from './form';
 import { ALGORITHM, recoveryBasis } from './recovery';
 import { sleepDebt } from './sleep-debt';
@@ -7,11 +8,11 @@ import { recoveryZone } from './zones';
 import { weightScore } from './weight';
 import type { DailyScores, DailyScoresInput, DayRecord, RecoveryResult, Unavailable, UnavailableReason } from './types';
 
-export type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, UnavailableReason } from './types';
+export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, UnavailableReason } from './types';
 
 const everywhere = (reason: UnavailableReason): DailyScores => {
   const unavailable: Unavailable = { state: 'unavailable', reason };
-  return { recovery: unavailable, sleep_debt: unavailable, form: unavailable, weight: unavailable };
+  return { recovery: unavailable, drivers: [], sleep_debt: unavailable, form: unavailable, weight: unavailable };
 };
 
 // A day owns only the hourly readings inside its own local day, in the zone it was read in. That
@@ -35,7 +36,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     byDay.set(record.day, record);
   }
   const target: DayRecord = byDay.get(input.targetDay)
-    ?? { day: input.targetDay, timezone: input.days[0]?.timezone ?? 'UTC', sleep: null, overnightHrv: null, restingHeartRate: null, hourly: [], workouts: [], demand: null };
+    ?? { day: input.targetDay, timezone: input.days[0]?.timezone ?? 'UTC', sleep: null, overnightHrv: [], restingHeartRate: [], hourly: [], workouts: [], demand: null };
   const prior = [...byDay.values()].filter(record => {
     const age = daysBetween(record.day, input.targetDay);
     return age >= 1 && age <= BASELINE_WINDOW_DAYS;
@@ -50,6 +51,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   }
   return {
     recovery,
+    drivers: driversOf(target, prior),
     sleep_debt: sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes),
     form: formScore(target, prior, input.sleepNeedMinutes, input.asOf),
     weight: weightScore(target, prior),

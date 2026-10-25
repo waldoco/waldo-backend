@@ -86,8 +86,8 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
     rejected(params.get('state') ? 'bad_state' : 'missing_state');
     return consentPage(error ? { kind: 'denied' } : { kind: 'invalid' }, null);
   }
-  // Checked before the owner object wakes, so a forwarded sign-in or an injected code neither links nor settles the attempt.
-  const browser = await checkBrowser(request, 'google', state.nonce, Date.now());
+  // Checked before the owner object wakes, so a callback landing in a browser that did not start the attempt neither links nor settles it. A code injected into the starting browser is PKCE's to stop.
+  const browser = await checkBrowser(request, secret, 'google', state.nonce, Date.now());
   if (browser !== 'bound') {
     rejected(`browser_${browser}`);
     return callbackPage(false, UNBOUND, '', returnAction(state.surface, null));

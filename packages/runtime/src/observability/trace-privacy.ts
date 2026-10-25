@@ -4,6 +4,7 @@ import {
   turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
 } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
+import { scrubTraceHealth } from './trace-health-scrub';
 
 // The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
 // pair survives capture-off. A malformed caller cannot smuggle free-form provider text past
@@ -22,7 +23,7 @@ const validGuard = (guard: unknown): string | undefined =>
 const SAFE_DETAIL_HOPS = new Set([
   'stop', 'steer', 'connect_offer', 'google_token_migrated', 'memory_backup',
   'egress_scrub', 'egress_redacted', 'oauth_exchange', 'oauth_callback', 'google_linked',
-  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
+  'day_plan', 'nightly_memory', 'memory_flush', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
 ]);
 
 // These receipts are strictly enum/count-only, even if a caller supplies a free-form
@@ -41,8 +42,12 @@ const HEALTH_READ = /^(?:present|absent|read_failed)$/;
 const withholdEmail = (entry: TurnLogEntry): TurnLogEntry => entry.owner_email === undefined ? entry
   : { ...entry, owner_email: 'unknown', owner_identity: entry.owner_identity === 'verified' ? 'email_unavailable' : entry.owner_identity };
 
+// Capture on still keeps health values out: the scrub withholds them from text, detail, error and code. A scrub that
+// throws sends the entry through the capture-off gate with no text at all, since a capture-on sink would export it raw.
 export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
-  if (captureText) return entry;
+  if (captureText) {
+    try { return scrubTraceHealth(entry); } catch { return { ...gateWithoutCapture(withholdEmail(typedFieldsOnly(entry))), text: undefined }; }
+  }
   return gateWithoutCapture(withholdEmail(typedFieldsOnly(entry)));
 };
 
@@ -53,7 +58,7 @@ const TYPED_FIELDS = {
   error_code: turnErrorCodeSchema, job_id: turnIdentifierSchema, job_profile: turnIdentifierSchema,
   tools_called: z.number().int().min(0), parallel_batches: z.number().int().min(0),
   browser_ms: z.number().finite().min(0), sandbox_ms: z.number().finite().min(0), ttft_ms: z.number().finite().min(0),
-  fallback_fired: z.boolean(),
+  fallback_fired: z.boolean(), tool_search_degraded: z.boolean(),
 } as const;
 const typedFieldsOnly = (entry: TurnLogEntry): TurnLogEntry => {
   const copy: Record<string, unknown> = { ...entry };

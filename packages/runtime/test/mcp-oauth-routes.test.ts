@@ -8,6 +8,7 @@ import { MCP_ATTEMPT_TTL_MS, mcpState } from '../src/connectors/mcp-connections'
 import { MCP_CALLBACK_PATH } from '../src/connectors/mcp-oauth';
 import { bindBrowser } from '../src/connectors/oauth-browser-binding';
 import { cookieJar, setCookies } from './support/cookie-jar';
+import { forgedBinding } from './support/forged-binding';
 
 const SECRET = 'fixture-webhook-secret';
 const routeEnv = () => ({ WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: env.OWNER_DO }) as unknown as Parameters<typeof handleMcpCallback>[1];
@@ -21,9 +22,16 @@ describe('MCP OAuth routes', () => {
   it('verifies state only with its own key: the Telegram webhook secret alone signs nothing and the callback is absent', async () => {
     const owner = { idFromName: (name: string) => name, get: () => ({ fetch: async () => { throw new Error('must not wake'); } }) };
     const state = await mcpState(SECRET, 'mcp-route-owner', 'A'.repeat(43));
-    const cookie = (await bindBrowser('mcp', 'A'.repeat(43), MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now())).split(';')[0]!;
+    const cookie = (await bindBrowser(SECRET, 'mcp', 'A'.repeat(43), MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now())).split(';')[0]!;
     const response = await handleMcpCallback(new Request(`https://waldo.example/oauth/mcp/callback?code=c&state=${encodeURIComponent(state)}`, { headers: { cookie } }), { TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: owner } as unknown as Parameters<typeof handleMcpCallback>[1]);
     expect(response.status).toBe(404);
+  });
+
+  it('wakes no owner object for a binding built from the authorize address alone', async () => {
+    const owner = { idFromName: (name: string) => name, get: () => ({ fetch: async () => { throw new Error('must not wake'); } }) };
+    const state = await mcpState(SECRET, 'mcp-route-owner', 'A'.repeat(43));
+    const response = await handleMcpCallback(new Request(`https://waldo.example/oauth/mcp/callback?code=c&state=${encodeURIComponent(state)}`, { headers: { cookie: await forgedBinding('mcp', 'A'.repeat(43)) } }), { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: owner } as unknown as Parameters<typeof handleMcpCallback>[1]);
+    expect(response.status).toBe(403);
   });
 
   it('drops a forged state before any owner object wakes, and shows an unknown attempt as invalid', async () => {
@@ -31,7 +39,7 @@ describe('MCP OAuth routes', () => {
     expect(forged.status).toBe(400);
     expect(forged.headers.get('cache-control')).toBe('no-store');
     const state = await mcpState(SECRET, 'mcp-route-owner', 'A'.repeat(43));
-    const cookie = (await bindBrowser('mcp', 'A'.repeat(43), MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now())).split(';')[0]!;
+    const cookie = (await bindBrowser(SECRET, 'mcp', 'A'.repeat(43), MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, Date.now())).split(';')[0]!;
     const unknown = await handleMcpCallback(new Request(`https://waldo.example/oauth/mcp/callback?code=c&state=${encodeURIComponent(state)}`, { headers: { cookie } }), routeEnv());
     expect(unknown.status).toBe(400);
     expect(await unknown.text()).toContain('This link is not valid');
@@ -65,11 +73,11 @@ describe('MCP OAuth routes', () => {
 describe('the MCP callback is bound to the browser that started the connect', () => {
   const OWNER = 'mcp-bind-owner';
   const callbackFor = (query: string, cookie?: string) => new Request(`https://waldo.example${MCP_CALLBACK_PATH}?${query}`, cookie ? { headers: { cookie } } : {});
-  const fakeOwner = () => {
+  const fakeOwner = (outcome: Record<string, unknown> = { kind: 'linked', id: 'c1', name: 'notion' }) => {
     const calls: unknown[] = [];
-    return { calls, env: { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json({ kind: 'linked', id: 'c1', name: 'notion' }); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
+    return { calls, env: { WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async (_url: string, init: RequestInit) => { calls.push(JSON.parse(String(init.body))); return Response.json(outcome); } }) } } as unknown as Parameters<typeof handleMcpCallback>[1] };
   };
-  const bound = async (nonce: string, at = Date.now()) => (await bindBrowser('mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
+  const bound = async (nonce: string, at = Date.now()) => (await bindBrowser(SECRET, 'mcp', nonce, MCP_CALLBACK_PATH, MCP_ATTEMPT_TTL_MS, at)).split(';')[0]!;
 
   it('wakes no owner object for a browser with no binding, another attempt\'s, or one past the attempt lifetime', async () => {
     const nonce = 'C'.repeat(43), query = `code=attacker-code&state=${encodeURIComponent(await mcpState(SECRET, OWNER, nonce))}`;
@@ -85,6 +93,16 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     const linked = await handleMcpCallback(callbackFor(query.replace('attacker-code', 'c'), await bound(nonce)), owner.env);
     expect(linked.status).toBe(200);
     expect(owner.calls).toHaveLength(1);
+  });
+
+  it('tells a Granola owner what Waldo does with it, not that each tool asks first', async () => {
+    const nonce = 'E'.repeat(43), query = `code=c&state=${encodeURIComponent(await mcpState(SECRET, OWNER, nonce))}`;
+    const granola = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c2', name: 'granola', reviewed: true }).env)).text();
+    expect(granola).toContain('Granola connected');
+    expect(granola).toContain('never changes your notes');
+    expect(granola).not.toContain('asks you first');
+    const other = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner().env)).text();
+    expect(other).toContain('asks you first');
   });
 
   it('sets the binding on the console start link, leaves the attempt to that browser, and refuses a replay once it is spent', async () => {

@@ -18,6 +18,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   parts: turn.parts,
   ...(turn.runScope ? { runScope: turn.runScope } : {}),
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
+  ...(turn.replyStream ? { replyStream: turn.replyStream } : {}),
 });
 type CoreArgs = Parameters<typeof createOwnerResponder>;
 type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?, unknown?, unknown?] ? Public : never : never];
@@ -39,6 +40,6 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
     ...core, respond,
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
     remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface),
-    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9]) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint),
+    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9], ownerModel?: boolean) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel),
   };
 };

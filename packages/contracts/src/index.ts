@@ -40,6 +40,7 @@ export * from './tools/schemas/progress-note';
 export * from './tools/schemas/attach-file';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
+export * from './tools/schemas/tasks';
 export * from './tools/schemas/reminders';
 export * from './tools/schemas/health';
 export * from './tools/schemas/responsibilities';
@@ -90,5 +91,6 @@ export * from './channels/imessage-v1';
 export * from './tools/schemas/skills';
 
 export * from './tools/schemas/memory';
+export * from './tools/schemas/lookup';
 
 export * from './tools/use-mac';

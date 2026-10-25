@@ -1,11 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, applyPromotion, claimStore, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
+import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, HEALTH_NOTES_OFF, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
+import { HEALTH_MEMORY_RULES } from '../src/memory/health-rules';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
+import type { TurnLogEntry } from '../src/channels/owner-turn-types';
+import { gateTraceEntry } from '../src/observability/trace-privacy';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => T) =>
@@ -26,8 +29,8 @@ describe('claims', () => {
       applyClaimOps(store, ops({ seen: [gym!.id, 999], confirm: [lunch!.id, gym!.id] }), '2026-09-24T05:00:00Z', 'owner, tg-9');
       const after = new Map(store.claims().map((claim) => [claim.id, claim]));
       expect(after.get(gym!.id)).toMatchObject({ seen_count: 2, source: 'stated' });
-      expect(after.get(lunch!.id)).toMatchObject({ source: 'confirmed' });
-      expect(after.get(lunch!.id)!.evidence).toContain('confirmed: owner, tg-9');
+      expect(after.get(lunch!.id)).toMatchObject({ source: 'waldo_confirmed' });
+      expect(after.get(lunch!.id)!.evidence).toContain('Waldo confirmed: owner, tg-9');
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT, 'owner agreed', undefined, undefined, true);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
@@ -70,7 +73,7 @@ describe('claims', () => {
         store.add({ kind: 'fact', text, source: 'stated', evidence: text, origin: 'owner', source_ref: `owner, tg-${i}` }, AT, i + 1);
       }
       // Lines within the two budgets, plus the header, the tags and the omitted line.
-      expect(turnMemoryPrompt(store, 'unrelated question', 400_000).length).toBeLessThanOrEqual(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS + 300);
+      expect(turnMemoryPrompt(store, 'unrelated question', 400_000).length).toBeLessThanOrEqual(PROFILE_BLOCK_MAX_CHARS + FACTS_BLOCK_MAX_CHARS + 420);
     });
   });
 
@@ -791,7 +794,8 @@ describe('pinned blocks', () => {
       nightly(store, ops({ pin: [{ id: locker, block: 'profile', order: 1 }, { id: parks, block: 'profile', order: 2 }, { id: desk, block: 'profile', order: 3 }, { id: train, block: 'facts', order: 1 }] }));
       applyClaimOps(store, ops({ forget_claims: [locker] }), AT, 'owner agreed', undefined, undefined, true);
       applyClaimOps(store, ops({ dismiss: [parks] }), AT);
-      expect(store.allClaims().some((claim) => claim.id === locker)).toBe(false);
+      // The forgotten claim leaves the active set, and so its block, at once; the purge job deletes the row.
+      expect(store.claims().some((claim) => claim.id === locker)).toBe(false);
       expect(store.correct(desk, { kind: 'fact', text: 'Desk is by the door now', source: 'stated', evidence: '"desk moved to the door"', origin: 'owner', source_ref: 'owner, tg-77' }, AT)).toBe(true);
       expect(store.claims().find((claim) => claim.text === 'Desk is by the door now')).toMatchObject({ pinned: 'profile', pin_order: 3 });
       // A correction to an already-recorded owner fact retires the old row only; that twin takes the pin.
@@ -860,6 +864,207 @@ describe('pinned blocks', () => {
   });
 });
 
+// What the owner says about their own health is kept, numbers included; a reading whose evidence is not the owner's own
+// words (forwarded mail, Waldo's paraphrase) is held, by its source, never by its words. Synthetic values only.
+it('keeps a reading or goal the owner stated, and holds a reading from any other source', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'I aim for 7 hours of sleep now. My resting HR was 52 this morning.';
+    const shared = 'Lab report: resting HR 48 bpm, fasting glucose 92 mg/dL';
+    const detail = applyClaimOps(store, ops({
+      add: [
+        { kind: 'health', text: 'On 24 Sep said resting HR was 52', source: 'stated', evidence: 'My resting HR was 52 this morning', touches_forgotten: false },
+        { kind: 'health', text: 'Lab report on 24 Sep: resting HR 48 bpm', source: 'stated', evidence: 'Lab report: resting HR 48 bpm', touches_forgotten: false },
+        { kind: 'health', text: 'Resting HR is about 48', source: 'inferred', evidence: 'the lab numbers', touches_forgotten: false },
+        { kind: 'health', text: 'Checks heart rate in the mornings', source: 'stated', evidence: 'My resting HR was 52 this morning', aliases: ['fasting glucose 92 mg/dL'], touches_forgotten: false },
+      ],
+      corrections: [{ old_id: 1, kind: 'goal', text: 'Aims for 7 hours of sleep', evidence: 'I aim for 7 hours of sleep now' }],
+    }), AT, 'owner, tg-1', undefined, { owner, shared });
+    // The alias would carry the forwarded glucose reading into memory beside an owner-grounded claim, so that claim is held too.
+    expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([
+      ['Aims for 7 hours of sleep', 'owner', 'stated'], ['On 24 Sep said resting HR was 52', 'owner', 'stated'],
+    ]);
+    expect(store.claims().find((claim) => claim.text === 'Aims for 7 hours of sleep')?.supersedes_id).toBe(1);
+    // A held reading is counted once, as held, never also as downgraded.
+    expect(detail).toMatch(/held3\(numeric-health\)/);
+    expect(detail).not.toContain('downgraded');
+    const held = store.holds().filter((hold) => hold.reason === 'numeric-health');
+    expect(held).toHaveLength(3);
+    // A held reading leaves no trace of its words: every numeric-health hold carries the same fingerprint.
+    expect(new Set(held.map((hold) => hold.fingerprint)).size).toBe(1);
+    expect(held[0]!.fingerprint).not.toBe(textFingerprint('Lab report on 24 Sep: resting HR 48 bpm'));
+  });
+});
+
+// The hold keys on where each number of a reading came from: every number in a reading must be in the owner's words the
+// claim's evidence quotes, not merely somewhere the owner typed that day. Probes from the gate; synthetic values only.
+const reading = (text: string, evidence: string, aliases: string[] = []) => ({ kind: 'health', text, source: 'stated', evidence, aliases, touches_forgotten: false });
+it.each([
+  ['N1: the reading only in forwarded text, evidence the owner\'s request', { owner: 'Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],
+  ['N1b: the same, evidence one letter', { owner: 'Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'e')],
+  ['N2: a wearable reading Waldo relayed', { owner: 'How am I doing today', waldo: 'Your resting HR was 58 and you slept 6.5 hours.' }, reading('On 24 Sep resting HR was 58', 'How am I doing today')],
+  ['N4: one owner number beside one forwarded number', { owner: 'My resting HR was 52 this morning', shared: 'Fwd: A1c 6.1' }, reading('Resting HR 52, A1c 6.1', 'My resting HR was 52 this morning')],
+  ['N4b: a forwarded number in an alias', { owner: 'My resting HR was 52 this morning', shared: 'Fwd: A1c 6.1' }, reading('On 24 Sep said resting HR was 52', 'My resting HR was 52 this morning', ['A1c 6.1'])],
+  ['N6: mail Waldo relayed, then "note that"', { owner: 'note that', waldo: 'The clinic wrote that your blood pressure was 130/85.' }, reading('Blood pressure 130/85', 'note that')],
+  ['a reading found nowhere', { owner: 'Remember my heart rate' }, reading('Resting HR 61', 'Remember my heart rate')],
+  ['E2E-b: sleep and HRV Waldo relayed, against a 6 and a 16 the owner typed elsewhere that day', { owner: 'Laundry at 6, then the 16 bus home. How did I sleep?', waldo: 'You slept 6 hours and your HRV was 16.' }, reading('On 24 Sep slept 6 hours, HRV 16', 'How did I sleep?')],
+  ['N1c: a forwarded resting HR against "gate 58" the owner typed', { owner: 'Boarding at gate 58. Keep this for me please', shared: 'Fwd: Lab report. Resting HR 58 bpm' }, reading('Resting HR 58 bpm', 'Keep this for me please')],
+  ['N1d: a number only in the evidence\'s citation, outside its quote', { owner: 'How did I sleep?', waldo: 'Your HRV was 16.' }, reading('HRV 16', 'owner, tg-16: "How did I sleep?"')],
+  ['an HRV in milliseconds Waldo relayed', { owner: 'How did I sleep?', waldo: 'Your HRV was 48ms.' }, reading('On 24 Sep HRV was 48ms', 'How did I sleep?')],
+  ['a reading with one number the evidence quotes and one it does not', { owner: 'My blood pressure was 120/80 today', shared: 'Fwd: blood pressure 120/85' }, reading('Blood pressure 120/85', 'My blood pressure was 120/80 today')],
+] as const)('holds %s', async (_probe, sides, claim) => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    const detail = applyClaimOps(store, ops({ add: [claim] }), AT, 'owner, day of fixture', undefined, sides);
+    expect(store.claims()).toEqual([]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+it('N3: holds a correction that replaces the owner\'s goal with a forwarded lab value', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 92 mg/dL', evidence: 'Update my goal with the lab result' }] }), AT, 'owner, day of fixture', undefined,
+      { owner: 'Update my goal with the lab result', shared: 'Fwd: Lab report. Fasting glucose 92 mg/dL', ownerMessages: [{ ref: 'tg-1', text: 'Update my goal with the lab result' }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// N3c: the owner typed the lab value's number elsewhere that day ("Room 97"), but not in the words the correction quotes.
+it('N3c: holds a correction to a forwarded lab value whose number the owner typed only elsewhere', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'Room 97 is booked for Friday. Update my goal with the lab result';
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 97 mg/dL', evidence: 'Update my goal with the lab result' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: Lab report. Fasting glucose 97 mg/dL', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// A correction whose evidence is not the owner's words vouches for no number, even one its own quote carries: it is held as a
+// reading, so no fingerprint of the reading's words is kept, rather than as a correction that did not apply.
+it('holds a correction quoting shared content as a reading, keeping no fingerprint of it', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'Update my goal with the lab result';
+    const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 1, kind: 'goal', text: 'Keep fasting glucose under 97 mg/dL', evidence: 'Fasting glucose 97 mg/dL' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: Lab report. Fasting glucose 97 mg/dL', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.id, claim.text])).toEqual([[1, 'Aims for 8 hours of sleep']]);
+    expect(detail).toContain('held1(numeric-health)');
+    expect(store.holds().map((hold) => [hold.reason, hold.fingerprint])).toEqual([['numeric-health', 'withheld']]);
+  });
+});
+
+// A reading the owner wrote is kept when its evidence quotes it, citation and all.
+it('keeps a reading whose quoted evidence carries its numbers', async () => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    const owner = 'Room 7 is booked. My resting HR was 52 this morning.';
+    applyClaimOps(store, ops({ add: [reading('On 24 Sep said resting HR was 52', 'owner, tg-1: "My resting HR was 52 this morning"')] }), AT, 'owner, day of fixture', undefined,
+      { owner, ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source, claim.source_ref])).toEqual([['On 24 Sep said resting HR was 52', 'owner', 'stated', 'owner, tg-1']]);
+    expect(store.holds()).toEqual([]);
+  });
+});
+
+// The other side of the same rule: a reading the owner wrote is kept with the day the model dates it by, and a correction
+// to a goal in the owner's own numbers applies.
+it('keeps a reading and a goal correction in the owner\'s own numbers, dated', async () => {
+  await withSql((sql, transaction) => {
+    const store = claimStore(sql, transaction);
+    store.add({ kind: 'goal', text: 'Aims for 8 hours of sleep', source: 'stated', evidence: '"I aim for 8 hours of sleep"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'My blood pressure was 120/80 today. I aim for 7 hours of sleep now.';
+    applyClaimOps(store, ops({ add: [reading('On 24 Sep said blood pressure was 120/80', 'My blood pressure was 120/80 today')],
+      corrections: [{ old_id: 1, kind: 'goal', text: 'Aims for 7 hours of sleep', evidence: 'I aim for 7 hours of sleep now' }] }), AT, 'owner, day of fixture', undefined,
+      { owner, shared: 'Fwd: blood pressure 135/90', waldo: 'Your HRV was 120.', ownerMessages: [{ ref: 'tg-1', text: owner }] });
+    expect(store.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([
+      ['Aims for 7 hours of sleep', 'owner', 'stated'], ['On 24 Sep said blood pressure was 120/80', 'owner', 'stated'],
+    ]);
+    expect(store.holds()).toEqual([]);
+  });
+});
+
+it('drops health claims and corrections to health when the owner has health notes off, and keeps the rest', () => {
+  const raw = ops({
+    add: [
+      { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'late coffee', touches_forgotten: false },
+      { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'calm evenings', touches_forgotten: false },
+    ],
+    corrections: [{ old_id: 1, kind: 'health', text: 'Sleeps well now', evidence: 'sleep well' }, { old_id: 2, kind: 'routine', text: 'Runs at 7', evidence: 'run at 7' }],
+  });
+  const kept = JSON.parse(withoutHealthClaims(raw)) as { add: { kind: string }[]; corrections: { kind: string }[]; seen: unknown[] };
+  expect(kept.add.map((claim) => claim.kind)).toEqual(['preference']);
+  expect(kept.corrections.map((item) => item.kind)).toEqual(['routine']);
+  expect(kept.seen).toEqual([]);
+});
+
+// The nightly pass keeps health notes under the same owner setting as the flush.
+it('the nightly pass keeps no health note when the owner has health notes off, and keeps the rest', async () => {
+  await withSql(async (sql) => {
+    const store = claimStore(sql);
+    const day = 'owner: I sleep badly after late coffee. Please keep my evenings calm.';
+    const reply = ops({ add: [
+      { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'I sleep badly after late coffee', touches_forgotten: false },
+      { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'Please keep my evenings calm', touches_forgotten: false },
+    ] });
+    const asked: string[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (request) => { asked.push(JSON.stringify(request.request)); return { ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+    await responder.consolidate('night-off', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: false });
+    expect(store.claims().map((claim) => claim.kind)).toEqual(['preference']);
+    // The model is told, so a health note it would file under another kind is its call, not a kind filter's.
+    expect(asked.at(-1)).toContain(HEALTH_NOTES_OFF);
+    await responder.consolidate('night-on', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: true });
+    expect(store.claims().filter((claim) => claim.kind === 'health').map((claim) => claim.text)).toEqual(['Sleeps badly after late coffee']);
+    expect(asked.at(-1)).not.toContain(HEALTH_NOTES_OFF);
+  });
+});
+
+// The nightly pass, through its instruction and the admission gate: what the owner said saves, a reading dated by the
+// model and a goal as a standing claim; ordinary facts with numbers save; a reading from forwarded mail is held by kind
+// and reason alone. No log line the production sinks emit carries the value.
+it('the nightly pass keeps what the owner said, dated, and holds a reading from forwarded mail', async () => {
+  await withSql(async (sql) => {
+    const store = claimStore(sql);
+    const ordinary = ['Needs to file Form 16 by July', 'Laundry load at 6', 'Flight 6E 204 leaves at 06:40', 'Meeting with HR at 10:30', 'The laptop weighs 1.4 kg', 'Motion 2 passed at the board meeting'];
+    const owner = `${ordinary.join('. ')}. I aim for 7 hours of sleep. My resting HR was 52 this morning.`;
+    const shared = 'Fwd: Lab report. Resting HR 48 bpm, fasting glucose 92 mg/dL';
+    const day = `[2026-09-24T09:00:00+05:30] owner: ${owner}\n[2026-09-24T09:01:00+05:30] quoted: ${shared}`;
+    const reply = ops({ add: [
+      ...ordinary.map((text) => ({ kind: 'fact', text, source: 'stated', evidence: text, touches_forgotten: false })),
+      { kind: 'goal', text: 'Aims for 7 hours of sleep', source: 'stated', evidence: 'I aim for 7 hours of sleep', touches_forgotten: false },
+      { kind: 'health', text: 'On 24 Sep said resting HR was 52', source: 'stated', evidence: 'My resting HR was 52 this morning', touches_forgotten: false },
+      { kind: 'health', text: 'Lab report on 24 Sep: resting HR 48 bpm, fasting glucose 92 mg/dL', source: 'stated', evidence: 'Resting HR 48 bpm, fasting glucose 92 mg/dL', touches_forgotten: false },
+    ] });
+    const asked: string[] = [];
+    const logs: TurnLogEntry[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (request) => { asked.push(JSON.stringify(request.request)); return { ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
+    const responder = createOwnerResponder('fixture', undefined, store, (entry) => logs.push(entry), undefined, [], undefined, false, undefined, undefined, gateway);
+    await responder.consolidate('night-health', day, { owner, shared, waldo: '', ownerMessages: [{ ref: 'app-1', text: owner }] }, { health: true });
+    // The date is the model's to write, from its instruction.
+    expect(asked.at(-1)).toContain('write it with the day they said it');
+    expect(store.claims().map((claim) => claim.text).sort()).toEqual([...ordinary, 'Aims for 7 hours of sleep', 'On 24 Sep said resting HR was 52'].sort());
+    expect(store.claims().find((claim) => claim.kind === 'health')).toMatchObject({ origin: 'owner', source: 'stated', source_ref: 'owner, app-1' });
+    expect(store.holds().map((hold) => [hold.kind, hold.reason])).toEqual([['health', 'numeric-health']]);
+    expect(store.holds().map((hold) => Object.keys(hold).sort())).toEqual([['created_at', 'fingerprint', 'id', 'kind', 'reason']]);
+    expect(logs.length).toBeGreaterThan(0);
+    for (const entry of logs) {
+      const line = JSON.stringify({ ...gateTraceEntry(entry, false), text: undefined });
+      expect(line).not.toMatch(/resting HR/i);
+      expect(line).not.toMatch(/"[^"]*\b(?:52|48)\b[^"]*"/);
+    }
+  });
+});
+
 // Text built from memory earlier in a turn checks this count, not its own rendering, so every forget path must move it
 // and an ordinary write must not.
 it('every forget moves the forget generation; adding a claim or a node does not', async () => {
@@ -875,4 +1080,9 @@ it('every forget moves the forget generation; adding a claim or a node does not'
       expect(store.forgetGeneration()).toBe(index + 1);
     }
   });
+});
+
+// The notes-file migration is a background writer too: it gets the same health rules as the flush and the nightly pass.
+it('the notes-file migration carries the health memory rules', () => {
+  for (const rule of HEALTH_MEMORY_RULES) expect(MIGRATION_INSTRUCTION).toContain(rule);
 });

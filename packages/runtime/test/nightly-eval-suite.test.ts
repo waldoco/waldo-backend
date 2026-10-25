@@ -6,6 +6,8 @@ import type { Judge } from '../evals/nightly/judge';
 import { nightlyConfig } from '../evals/nightly/config';
 import { SCENARIOS, type NightlyScenario } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
+import { failedReceipts } from '../evals/nightly/receipts';
+import { runTrial } from '../evals/nightly/trial';
 import { evalWorld } from '../evals/nightly/world';
 
 const quick = (id: string, extra: Partial<NightlyScenario> = {}): NightlyScenario => ({
@@ -75,20 +77,110 @@ describe('nightly eval suite', () => {
   }, 60_000);
 });
 
+describe('nightly eval with the tool search menu', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('runs the whole catalogue on the flag-on menu and names that menu in the scorecard', async () => {
+    vi.stubGlobal('fetch', async () => { throw new Error('the dry run must not reach the network'); });
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', WALDO_EVAL_TOOL_SEARCH: 'on' });
+    const searched: boolean[] = [];
+    const inner = config.gateway;
+    const card = await runNightly(SCENARIOS, { ...config, gateway: () => {
+      const gateway = inner();
+      return { complete: async (request) => { if (request.request.tools?.length) searched.push(request.request.tool_search !== undefined); return gateway.complete(request); } };
+    } });
+    expect(card.candidate_model).toBe('recorded+tool_search');
+    expect(card.scenarios).toHaveLength(SCENARIOS.length);
+    expect(card.scenarios.flatMap((row) => row.harness_errors ?? [])).toEqual([]);
+    expect(card.scenarios.every((row) => row.status === 'blocked' || row.status === 'ungraded')).toBe(true);
+    // Every reply that offered tools offered them through tool search.
+    expect(searched.length).toBeGreaterThan(SCENARIOS.length);
+    expect(searched.every(Boolean)).toBe(true);
+    // A whole catalogue run, budgeted like the dry run above rather than as one unit test.
+  }, 60_000);
+
+  it('leaves the switch-off menu as it was', () => {
+    const config = nightlyConfig({ WALDO_EVAL_MODE: 'recorded' });
+    expect(config.candidate).toBe('recorded');
+    expect(config.toolSearch).toBeUndefined();
+  });
+});
+
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the health trigger case, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(27);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case, the two health cases, the look-up, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(31);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(31);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
-    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(2);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      // Something happens to the owner: they speak, or the health trigger runs on a change in their health.
-      expect(scenario.steps.some((step) => 'say' in step || 'health_change' in step)).toBe(true);
+      // Something happens to the owner: they speak, a late answer arrives, or the health trigger runs on a change in their health.
+      expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step || 'health_change' in step)).toBe(true);
     }
+  });
+
+  it('gives the background-task scenario the production start_task, which records the brief once per call', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const world = evalWorld(scenario.world, scenario.start);
+    const start = world.handlers.find((handler) => handler.name === 'start_task')!;
+    expect(start.description).toContain('never this conversation');
+    const args = { profile: 'reader', title: 'Promises', goal: 'List promises the owner made.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' };
+    const ctx = { turnId: 'turn-1', toolCallId: 'call-1' } as never;
+    const first = await start.handle(args as never, ctx);
+    expect(first).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    expect(await start.handle(args as never, ctx)).toEqual(first);
+    expect(world.effects()).toEqual([{ kind: 'task.start', payload: expect.objectContaining({ profile: 'reader', goal: args.goal, timezone: 'Asia/Kolkata' }) }]);
+  });
+
+  it('runs the late-answer scenario as R-4 does: the floor promise, then one retry turn on the owner model that quotes the message', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Sorry for the wait: linen shirts, one blazer, sunscreen.' }] }] });
+    const record = await runTrial(scenario, { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    expect(record.transcript.map((line) => line.role)).toEqual(['owner', 'waldo', 'world', 'waldo']);
+    expect(record.transcript[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+    expect(record.transcript[3]!.text).toBe('Sorry for the wait: linen shirts, one blazer, sunscreen.');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    expect(JSON.stringify(retry)).toContain('What should I pack?');
+    expect(retry.model).toBe(WALDO_CHAT_MODEL);
+    // The owner's turn wrote its message and the floor reply into the conversation, which the retry reads first.
+    const history = retry.messages.slice(0, -1).map((message) => `${message.role}:${JSON.stringify(message.content)}`).join('\n');
+    expect(history).toContain('What should I pack?');
+    expect(history).toMatch(/assistant:.*I can't answer properly right now/);
+  });
+
+  it('holds the background-task and late-answer scenarios to state asserted in code', async () => {
+    const w1 = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const w2 = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const brief = (title: string) => ({ name: 'start_task', arguments: { profile: 'reader', title, goal: 'Find every promise the owner made in mail from the last three months.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' } });
+    const w1Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w1, { gateway: scriptedGateway({ rules: [{ match: /every promise I made/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises')] }, { text: 'On it; I will tell you when it is done.' }]))).toEqual([]);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ text: 'Here are your promises.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), brief('Promises, again')] }, { text: 'Started twice.' }]))).toEqual(['exactly one background task, with a goal and what its result should look like']);
+    const reminder = { name: 'set_reminder', arguments: { note: 'check the promises list', at: '2026-09-24T18:00', repeat: 'none' } };
+    expect(failedReceipts(w1.receipts!, await w1Trial([{ toolCalls: [brief('Promises'), reminder] }, { text: 'On it.' }]))).toEqual(['nothing else was changed: no card, draft, reminder, standing order or open loop']);
+
+    const w2Trial = (rounds: Parameters<typeof scriptedGateway>[0]['rules'][number]['rounds']) =>
+      runTrial(w2, { gateway: scriptedGateway({ rules: [{ match: /this is the late answer/, rounds }], unmatchedText: 'ok' }), budget: callBudget(20) });
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ text: 'Late, sorry: linen shirts, one blazer, sunscreen.' }]))).toEqual([]);
+    expect(failedReceipts(w2.receipts!, await w2Trial([{ toolCalls: [reminder] }, { text: 'Late, sorry. I set a reminder.' }])).join()).toContain('nothing was changed');
+  });
+
+  it('a late answer to a message with health values reads it from the conversation, never from the retry brief', async () => {
+    const said = 'My resting heart rate was 72 bpm this morning, should I still run tonight?';
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Late, sorry: an easy run is fine.' }] }] });
+    const record = await runTrial(quick('health-late', { steps: [{ late_answer: said }] }), { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    const prompt = JSON.stringify(retry.messages.at(-1)!.content);
+    expect(prompt).toContain('Its text was not kept, because it held health details');
+    expect(prompt).not.toContain('72 bpm');
+    expect(JSON.stringify(retry.messages.slice(0, -1))).toContain('72 bpm');
   });
 
   it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {
@@ -102,6 +194,24 @@ describe('nightly eval catalogue', () => {
     const answer = await availability.handle({ date_range: { from: '2026-09-25T12:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary', 'family@group.calendar.example'], duration_minutes: 60, work_windows: [] } as never, undefined as never);
     expect(answer).toMatchObject({ ok: true, data: { free_windows: [], unavailable_calendar_ids: ['family@group.calendar.example'] } });
     expect(JSON.stringify(errand.steps)).toContain('family@group.calendar.example');
+  });
+
+  it('seeds the look-up with the owner\'s site, a namesake and a sensitive page, and shows the judge every finding recorded, none of them owner memory', async () => {
+    const lookup = SCENARIOS.find((scenario) => scenario.id === 'k1-owner-lookup')!;
+    const world = evalWorld(lookup.world, lookup.start);
+    const tool = (name: string) => world.handlers.find((handler) => handler.name === name)!;
+    const context = { turnId: 'k1-turn', authenticatedUserId: 'eval-owner', memoryTurn: { ownerId: 'eval-owner', conversationRef: 'app-1', current: { message_ref: 'm1', text: (lookup.steps[0] as { say: string }).say }, recent: [] } } as never;
+    expect(await tool('web_search').handle({ query: 'Asha Menon', limit: 5 } as never, context)).toMatchObject({ ok: true, source_taint: 'external' });
+    const record = (args: object) => tool('record_owner_finding').handle({ category: 'work', ...args } as never, context);
+    expect(await record({ text: 'Product manager at Northwind', source_url: 'https://ashamenon.example/about', evidence_quote: 'a product manager at Northwind' })).toMatchObject({ ok: true });
+    // Code does not decide whose page the dentist's is; a model that records it shows the judge that it did.
+    expect(await record({ text: 'Dentist in Kochi', source_url: 'https://smiles.example/dr-asha-menon', evidence_quote: 'a dentist in Kochi' })).toMatchObject({ ok: true });
+    expect(await record({ text: 'Lives at 12 Hill Road', category: 'based_in', source_url: 'https://ashamenon.example/about', evidence_quote: 'lives at 12 Hill Road' })).toMatchObject({ ok: false });
+    const state = world.finalState() as { findings: { text: string; source: string; state: string }[]; memory: unknown[] };
+    expect(state.findings.map(({ text, state: kept }) => [text, kept]).sort()).toEqual([['Dentist in Kochi', 'unconfirmed'], ['Product manager at Northwind', 'unconfirmed']]);
+    expect(state.memory).toEqual([]);
+    expect(lookup.rubric.must_not.join(' ')).toContain('record the dentist page as a finding');
+    expect(lookup.rubric.must_not.join(' ')).toContain('religion or politics');
   });
 
   it('fires the owner\'s check-back at its time and recalls across a day', () => {

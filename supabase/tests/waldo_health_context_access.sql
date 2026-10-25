@@ -9,8 +9,8 @@ select is(
     'form:jsonb:YES:<null>', 'recovery:jsonb:YES:<null>', 'weight:jsonb:YES:<null>',
     'tier2:jsonb:YES:<null>', 'drivers:jsonb:NO:''[]''::jsonb', 'confidence:numeric:YES:<null>',
     'freshness:text:YES:<null>', 'tags:_text:NO:''{}''::text[]', 'evidence:jsonb:NO:''[]''::jsonb',
-    'created_at:timestamptz:NO:now()', 'updated_at:timestamptz:NO:now()']::text[],
-  'all fourteen historical columns, types, nullability and defaults are exact');
+    'created_at:timestamptz:NO:now()', 'updated_at:timestamptz:NO:now()', 'sleep_debt:jsonb:YES:<null>']::text[],
+  'the fourteen historical columns and sleep_debt, with exact types, nullability and defaults');
 select is(
   (select array_agg(conname::text || ':' || pg_get_constraintdef(oid) order by conname)
    from pg_constraint where conrelid='public.health_context_daily'::regclass),

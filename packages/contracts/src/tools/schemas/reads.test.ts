@@ -8,10 +8,11 @@ import {
   connectServiceArgsSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema,
-  queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
+  queryAvailabilityArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
+  healthReadSignalSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
@@ -20,6 +21,7 @@ import {
   readDocumentArgsSchema,
   readDocumentResultSchema,
   readMemoryArgsSchema,
+  readMemoryResultSchema,
   searchEpisodesArgsSchema,
   taskStatusFilterSchema,
   browsePageArgsSchema,
@@ -76,12 +78,31 @@ describe('getHealthArgsSchema', () => {
   });
 
   it('rejects an unknown signal, an empty list, a reversed range, a range over 31 days and a smuggled argument', () => {
-    expect(getHealthArgsSchema.safeParse({ signals: ['spo2'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['blood_glucose'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: [], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-08', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-09-06', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01', to: '2026-10-07', metrics: ['hrv'] }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01T00:00:00Z', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('asks for the Watch signals, every signal in one call, and no more entries than there are signals', () => {
+    const watch = ['sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful'];
+    expect(getHealthArgsSchema.safeParse({ signals: watch, from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    const every = healthReadSignalSchema.options;
+    expect(every).toEqual(expect.arrayContaining([...watch, 'sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts']));
+    expect(getHealthArgsSchema.safeParse({ signals: every, from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: [...every, 'sleep'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('types the Watch signals\' units and temperature methods in the result', () => {
+    const base = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1 };
+    const one = (signal: string, unit: string, method: string | null = null) => ({ signal, unit, source: 'apple', method, days: [{ day: '2026-10-01', value: 1 }] });
+    const signals = [one('wrist_temperature', 'celsius', 'absolute'), one('wrist_temperature', 'celsius', 'baseline_delta'), one('spo2', 'percent'), one('respiratory_rate', 'breaths_per_minute'),
+      one('sleep_efficiency', 'ratio'), one('vo2_max', 'ml_per_kg_min'), one('steps', 'count'), one('active_energy', 'kcal'), one('sleep_rem', 'minutes')];
+    expect(getHealthResultSchema.safeParse({ ...base, signals }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...base, signals: [one('wrist_temperature', 'fahrenheit', 'absolute')] }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ ...base, signals: [one('wrist_temperature', 'celsius', 'skin')] }).success).toBe(false);
   });
 
   it('types the result: values by day or a summary, or a reason', () => {
@@ -185,6 +206,43 @@ describe('readMemoryArgs', () => {
   it('rejects a non-hall and a query over 500 chars', () => {
     expect(readMemoryArgsSchema.safeParse({ hall: 'goals' }).success).toBe(false);
     expect(readMemoryArgsSchema.safeParse({ query: 'x'.repeat(501) }).success).toBe(false);
+  });
+});
+
+describe('readMemoryResult', () => {
+  const claim = {
+    id: 1, kind: 'preference', text: 'Usually gym 11am', evidence: 'I go to the gym at 11', source: 'stated', origin: 'owner',
+    source_ref: 'owner, tg-1', verification_status: 'owner-grounded',
+    supersedes_id: null, last_seen_at: '2026-09-30T01:00:00Z',
+  };
+  const result = { claims: [claim], omitted_claim_ids: [], complete: true, authority: 'context_only_not_action_approval' };
+
+  it('accepts whole claims with provenance, and a read that names what it omitted', () => {
+    expect(readMemoryResultSchema.safeParse(result).success).toBe(true);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [], omitted_claim_ids: [2], complete: false }).success).toBe(true);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: null, source_ref: null, supersedes_id: 3 }] }).success).toBe(true);
+  });
+
+  it('rejects aliases or bookkeeping columns on a claim, a missing provenance field, and untrusted claims', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, aliases: 'workout' }] }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, status: 'active', seen_count: 2 }] }).success).toBe(false);
+    const { evidence: _evidence, ...unsourced } = claim;
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [unsourced] }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, origin: 'untrusted' }] }).success).toBe(false);
+  });
+
+  it('carries no validity start and no learned time: one is never written and the other repeats the row creation', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, verification_status: 'unverified' }] }).success).toBe(true);
+    for (const extra of [{ valid_from: null }, { valid_from: '2026-09-30T01:00:00Z' }, { learned_at: '2026-09-30T01:00:00Z' }])
+      expect([extra, readMemoryResultSchema.safeParse({ ...result, claims: [{ ...claim, ...extra }] }).success]).toEqual([extra, false]);
+  });
+
+  it('rejects a read that claims completeness while omitting a claim, or the reverse, or any action authority', () => {
+    expect(readMemoryResultSchema.safeParse({ ...result, omitted_claim_ids: [2], complete: true }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, complete: false }).success).toBe(false);
+    expect(readMemoryResultSchema.safeParse({ ...result, authority: 'approved' }).success).toBe(false);
+    const { omitted_claim_ids: _omitted, ...unbounded } = result;
+    expect(readMemoryResultSchema.safeParse(unbounded).success).toBe(false);
   });
 });
 
@@ -386,9 +444,12 @@ describe('date_range guidance and strictness', () => {
 
   it('tells the model the required format in the advertised JSON schema', () => {
     const json = z.toJSONSchema(queryCalendarArgsSchema, { io: 'input' }) as {
-      properties?: { date_range?: { properties?: { from?: { description?: string } } } };
+      properties?: { date_range?: { description?: string; properties?: { from?: { description?: string } } } };
     };
-    const description = json.properties?.date_range?.properties?.from?.description ?? '';
+    // Said once for the range: both bounds share the format, and every word is sent every round.
+    expect(json.properties?.date_range?.properties?.from?.description).toBeUndefined();
+    const description = json.properties?.date_range?.description ?? '';
+    expect(description).toContain('from and to');
     expect(description).toContain('seconds');
     expect(description).toContain('offset');
     expect(description).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
@@ -437,9 +498,9 @@ describe('dedicated source reads',()=>{
   expect(queryAvailabilityArgsSchema.parse(good).calendar_ids).toEqual(['primary']);
   for(const bad of [{...good,owner_id:'other'},{...good,calendar_ids:['primary','primary']},{...good,date_range:{from:'2026-10-05T09:00:00',to:good.date_range.to}},{...good,duration_minutes:0}])expect(queryAvailabilityArgsSchema.safeParse(bad).success).toBe(false);
  });
- it('owner context requires a bounded topic; no owner ID, approval or mutation argument',()=>{
-  expect(readOwnerContextArgsSchema.parse({topic:'gym'})).toEqual({topic:'gym',limit:8});
-  for(const bad of [{topic:'',limit:8},{topic:'gym',owner_id:'other'},{topic:'gym',approve:true},{topic:'gym',limit:13}])expect(readOwnerContextArgsSchema.safeParse(bad).success).toBe(false);
+ it('a topic read goes through read_memory query; no owner ID, approval or mutation argument',()=>{
+  expect(readMemoryArgsSchema.parse({query:'gym'})).toEqual({query:'gym',limit:10});
+  for(const bad of [{topic:'gym'},{query:''},{query:'gym',owner_id:'other'},{query:'gym',approve:true},{query:'gym',limit:51}])expect(readMemoryArgsSchema.safeParse(bad).success).toBe(false);
  });
 });
 

@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { ConversationTree, type ConversationEntry } from '@waldo/contracts';
+import { describe, expect, it } from 'vitest';
+import { ConversationTree, type ConversationCovers, type ConversationEntry, type ConversationModelMessage } from '@waldo/contracts';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
-import { COMPACTION, compactedHistory, compactionPlan, liveCompaction, ownerRowsSince, supersededCompaction } from '../src/conversation/compaction';
+import { COMPACTION, compactedHistory, compactionPlan, liveCompaction, ownerRowsSince, supersededCompaction, type CompactionSettings } from '../src/conversation/compaction';
 
 const PRINCIPAL = 'prn_10000000000000000000000000000001', TENANT = 'tnt_1', THREAD = 'thr_bounded';
 const MAIN = `owner:${PRINCIPAL}`, THREAD_CHAT = `owner:${PRINCIPAL}:${THREAD}`, IMESSAGE = 'imessage-1';
 const prefixOf = (thread?: string) => `canonical-owner-v1:${PRINCIPAL}:${TENANT}:${thread ? `thread:${thread}:` : ''}`;
+const ON: CompactionSettings = { ...COMPACTION, enabled: true };
 
 // A storage double with the Durable Object list/get semantics the store relies on (prefix, reverse, limit, exclusive end,
 // batched get), counting every read so a test can bound them.
@@ -53,13 +54,15 @@ const row = (id: string, parentId: string | null, role: 'user' | 'assistant', te
   modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), ...extra,
 });
 const witnessOf = (entry: unknown) => ({ lineage: 'canonical_v1', principal_ref: PRINCIPAL, tenant_ref: TENANT, entry });
-// Rows written in this order, each with its exact witness unless listed otherwise.
+// Rows written in this order, each with its exact witness unless listed otherwise. Each chat's live-summary key names the
+// last summary row written for it, as the store's append leaves it.
 const stored = (rows: readonly Row[], leaf: string | null, options: Readonly<{ thread?: string; unwitnessed?: readonly string[]; witness?: Readonly<Record<string, unknown>> }> = {}) => {
   const prefix = prefixOf(options.thread);
   const data = new Map<string, unknown>([[`${prefix}count`, rows.length], ...(leaf === null ? [] : [[`${prefix}leaf`, leaf] as [string, unknown]])]);
   rows.forEach((entry, index) => {
     data.set(`${prefix}conv:${String(index).padStart(10, '0')}`, entry);
     if (!options.unwitnessed?.includes(entry.id)) data.set(`${prefix}witness:${entry.id}`, witnessOf(options.witness?.[entry.id] ?? entry));
+    if (entry.role === 'compaction') data.set(`${prefix}compaction-live:${entry.chatId}`, entry.id);
   });
   return data;
 };
@@ -77,27 +80,36 @@ const chain = (rounds: number, chat = MAIN, start = 0, parent: string | null = n
 
 // What an owner turn builds from a load: the tree in load order, each chat's leaf, and the model's view of a next message
 // on the turn's chat (or of a retried message already stored).
-const turnView = async (storage: DurableObjectStorage, chat: string, options: Readonly<{ thread?: string; retry?: string }> = {}) => {
-  const store = canonicalOwnerConversationStore(storage, contextFor(chat), undefined, options.thread);
+type ViewOptions = Readonly<{ thread?: string; retry?: string; compaction?: CompactionSettings }>;
+type TurnView = Readonly<{
+  leafId: string | null; chatLeaf: string | null; messages: readonly ConversationModelMessage[];
+  live?: string | null; covers?: ConversationCovers | null; ownerRows?: number; plans?: boolean; ownerRowsDue?: boolean;
+}>;
+const turnView = async (storage: DurableObjectStorage, chat: string, options: ViewOptions = {}): Promise<TurnView> => {
+  const settings = options.compaction ?? COMPACTION;
+  const store = canonicalOwnerConversationStore(storage, contextFor(chat), undefined, options.thread, settings);
   const { entries, leafId } = await store.load();
   const tree = new ConversationTree(), leaves = new Map<string, string>();
   for (const entry of entries) { tree.append(entry); if (entry.role !== 'compaction') leaves.set(entry.chatId, entry.id); }
   const next = options.retry ?? 'next';
   if (!options.retry) tree.append(row('next', leaves.get(chat) ?? null, 'user', 'Next question.', { chatId: chat }));
-  const view = { leafId, chatLeaf: leaves.get(chat) ?? null, messages: compactedHistory(tree, next).messages };
+  const view = { leafId, chatLeaf: leaves.get(chat) ?? null, messages: compactedHistory(tree, next, undefined, settings).messages };
   // With compaction off a turn never plans one, so the plan's inputs are part of the turn's view only with it on.
-  if (!COMPACTION.enabled) return view;
+  if (!settings.enabled) return view;
   const live = liveCompaction(tree, next);
-  return { ...view, live: live?.id ?? null, covers: compactionPlan(tree, next, live)?.covers ?? null, ownerRows: ownerRowsSince(tree, next, live?.createdAt ?? null) };
+  const plan = compactionPlan(tree, next, live, settings), ownerRows = ownerRowsSince(tree, next, live?.createdAt ?? null);
+  if (live) return { ...view, live: live.id, covers: plan?.covers ?? null, ownerRows };
+  // With no summary yet the read stops at the window, so the first summary's span is what the window and the page past it
+  // hold; rows older than that stay dropped, as they are with compaction off. A whole-chain read would span further, so
+  // only whether a first compaction can be planned and is due on owner rows is the same either way.
+  return { ...view, live: null, plans: plan !== null, ownerRowsDue: ownerRows >= settings.minOwnerRows };
 };
-const equivalent = async (data: Map<string, unknown>, chat: string, options: Readonly<{ thread?: string; retry?: string }> = {}) => {
+const equivalent = async (data: Map<string, unknown>, chat: string, options: ViewOptions = {}) => {
   const bounded = countingStorage(new Map(data)), full = unboundedView(new Map(data));
   const view = await turnView(bounded, chat, options);
   expect(view).toEqual(await turnView(full, chat, options));
   return { view, reads: bounded.reads };
 };
-
-afterEach(() => { COMPACTION.enabled = false; });
 
 describe('an owner turn reads only the window of a long chat', () => {
   it('reads a bounded number of rows on a 5,000-row chain, and the same context as a whole-chain read', async () => {
@@ -112,6 +124,14 @@ describe('an owner turn reads only the window of a long chat', () => {
     expect(reads.lists).toBeLessThanOrEqual(Math.ceil((windowRows + 1) / 128) + 1);
     expect(reads.keys).toBeLessThanOrEqual(reads.rows + 1);
     expect(reads.gets).toBeLessThanOrEqual(reads.lists + 1);
+  });
+
+  it('with compaction on and no summary in the chain, still stops at the window budget', async () => {
+    const data = stored(chain(2_500), `${MAIN}-u2499-reply`);
+    const { view, reads } = await equivalent(data, MAIN, { compaction: ON });
+    const windowRows = view.messages.length - 1;
+    expect(view.live).toBeNull();
+    expect(reads.rows).toBeLessThanOrEqual(windowRows + 1 + 128);
   });
 
   it('keeps the same bound when the chain is twice as long', async () => {
@@ -145,15 +165,42 @@ describe('the window read gives a turn the same context and leaf as a whole-chai
     const base = chain(600);
     const near = after(after(base, `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202, MAIN, { modelPayload: '[superseded summary]', modelProjection: { mode: 'omit' } })),
       `${MAIN}-u580-reply`, summary(`${MAIN}-u580-reply`, `${MAIN}-u0`, 1_162));
-    const far = after(base, `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202));
+    const far = after(base, `${MAIN}-u300-reply`, summary(`${MAIN}-u300-reply`, `${MAIN}-u0`, 602));
     for (const enabled of [false, true]) {
-      COMPACTION.enabled = enabled;
-      const nearRead = await equivalent(stored(near, `${MAIN}-u599-reply`), MAIN);
+      const compaction = { ...COMPACTION, enabled };
+      const nearRead = await equivalent(stored(near, `${MAIN}-u599-reply`), MAIN, { compaction });
       expect(nearRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u580-reply.` : /^(question|answer) /);
       expect(nearRead.reads.rows).toBeLessThanOrEqual(enabled ? 128 : 256);
-      const farRead = await equivalent(stored(far, `${MAIN}-u599-reply`), MAIN);
-      expect(farRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u100-reply.` : /^(question|answer) /);
+      const farRead = await equivalent(stored(far, `${MAIN}-u599-reply`), MAIN, { compaction });
+      expect(farRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u300-reply.` : /^(question|answer) /);
     }
+  });
+
+  it('with compaction on, a live summary more than four window budgets back is not read to, and the turn reads the plain window', async () => {
+    const rows = after(chain(1_500), `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202));
+    const storage = countingStorage(stored(rows, `${MAIN}-u1499-reply`));
+    const view = await turnView(storage, MAIN, { compaction: ON });
+    expect(view.live).toBeNull();
+    expect(view.messages[0]!.content).toMatch(/^(question|answer) /);
+    // The plain window is one budget of rows; the read takes four, and the rest of the page it stopped in.
+    const windowRows = view.messages.length - 1;
+    expect(storage.reads.rows).toBeGreaterThan(3 * windowRows);
+    expect(storage.reads.rows).toBeLessThanOrEqual(4 * (windowRows + 1) + 128);
+  });
+
+  it('with compaction on, a summary forget omitted, or one on another chat, leaves the read at the window budget', async () => {
+    const forgotten = after(chain(2_500), `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202, MAIN, { modelPayload: '[superseded summary]', modelProjection: { mode: 'omit' } }));
+    const omitted = await equivalent(stored(forgotten, `${MAIN}-u2499-reply`), MAIN, { compaction: ON });
+    expect(omitted.view.live).toBeNull();
+    expect(omitted.reads.rows).toBeLessThanOrEqual(omitted.view.messages.length + 128);
+    const app = chain(600, MAIN), imessage = after(chain(600, IMESSAGE), `${IMESSAGE}-u300-reply`, summary(`${IMESSAGE}-u300-reply`, `${IMESSAGE}-u0`, 602, IMESSAGE));
+    const mixed = app.flatMap((entry, index) => [entry, imessage[index]!]).concat(imessage.slice(app.length));
+    const other = await equivalent(stored(mixed, `${MAIN}-u599-reply`), MAIN, { compaction: ON });
+    expect(other.view.live).toBeNull();
+    expect(other.reads.rows).toBeLessThanOrEqual(2 * other.view.messages.length + 128);
+    // The chat that has the summary still reads back to it.
+    const own = await equivalent(stored(mixed, `${IMESSAGE}-u599-reply`), IMESSAGE, { compaction: ON });
+    expect(own.view.live).toBe(`${IMESSAGE}-u300-reply-compaction`);
   });
 
   it('an app thread chain, and a main prefix that holds two chats with the stored leaf on the other one', async () => {
@@ -282,7 +329,21 @@ describe('writes after a window read', () => {
       expect(storage.data.get(`${prefixOf()}conv:${String(rows.findIndex((entry) => entry.role === 'compaction')).padStart(10, '0')}`))
         .toEqual(supersededCompaction(rows.find((entry) => entry.role === 'compaction')!));
       expect(storage.data.get(`${prefixOf()}leaf`)).toBe(`${MAIN}-u2499-reply`);
+      expect(storage.data.get(`${prefixOf()}compaction-live:${MAIN}`)).toBe(next.id);
     }
+  });
+
+  it('a summary appended to a chain read with compaction on is what the next turn reads back to, and no further', async () => {
+    const storage = countingStorage(stored(chain(2_500), `${MAIN}-u2499-reply`));
+    const store = canonicalOwnerConversationStore(storage, contextFor(MAIN), undefined, undefined, ON);
+    await store.load();
+    await store.appendCompaction!({ ...summary(`${MAIN}-u2300-reply`, `${MAIN}-u0`, 4_602), createdAt: 99_000 }, null);
+    const fresh = countingStorage(new Map(storage.data));
+    const view = await turnView(fresh, MAIN, { compaction: ON });
+    expect(view.live).toBe(`${MAIN}-u2300-reply-compaction`);
+    expect(view.messages[0]!.content).toContain(`Summary through ${MAIN}-u2300-reply.`);
+    // Back to the covered row, 199 rounds behind the head, and at most one page past it.
+    expect(fresh.reads.rows).toBeLessThanOrEqual(2 * 200 + 128);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { ApprovalReview } from './approvals';
-import { consoleMayApprove, type ConsoleView } from './console';
+import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
@@ -24,8 +24,9 @@ export function readControlsQuery(params: URLSearchParams): ControlsQuery | null
 
 const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
-  if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
+  if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? { account: review.account } : {}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body, ...(review.earlier_unknown_at ? { earlier_unknown_at: review.earlier_unknown_at } : {}) };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if ('text' in review) return { kind: review.kind, text: review.text };
   if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
 };
@@ -45,6 +46,7 @@ const projections = {
       connectAvailable: view.google.connectAvailable,
       accounts: view.google.accounts.map((account) => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.error ? 'needs_reconnect' as const : 'access_granted' as const })),
     },
+    ...(view.granola ? { granola: { connectAvailable: view.granola.connectAvailable, connection: view.granola.connection && { status: view.granola.connection.status, connected_at: view.granola.connection.connected_at } } } : {}),
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
     // Link state per channel, only when the directory answered. This view holds no part of the number, so a linked
@@ -59,9 +61,9 @@ const projections = {
     timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
-      const canApprove = consoleMayApprove(item) && review !== null;
+      const canApprove = consoleMayApprove(item) && review !== null, canSend = waitingMaySend(item) && review !== null;
       const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
-      const actions = canApprove ? ['approval.approve', 'approval.skip']
+      const actions = canApprove ? ['approval.approve', 'approval.skip'] : canSend ? ['approval.send', 'approval.edit', 'approval.skip']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions };
@@ -77,8 +79,8 @@ const projections = {
     ledger: view.ledger,
   }),
   profile: (view: ConsoleView) => ({
-    // Existing removal may leave derived text behind. Do not present that text as settled.
-    sections: view.forgettingSpots.length ? [] : view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
+    // The profile is built from memory as the model may see it, so what a forget is still clearing is already left out.
+    sections: view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
     barriers: view.barriers,
     removal: { state: view.forgettingSpots.length ? 'incomplete' as const : 'none_recorded' as const, pending_count: view.forgettingSpots.length },
     holds: view.holds.map((hold) => ({ kind: hold.kind, reason: hold.reason, created_at: hold.created_at })),
