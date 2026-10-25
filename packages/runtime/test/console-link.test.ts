@@ -109,13 +109,6 @@ describe('console link sender: one link per turn, minted only when it can be del
     expect(s.mint).not.toHaveBeenCalled();
   });
 
-  it('on a surface with no route mints nothing', async () => {
-    const reason = 'surface_unsupported';
-    const s = sender({ unsupported: reason });
-    expect(await s.send(turn)).toEqual({ sent: false, reason });
-    expect(s.mint).not.toHaveBeenCalled();
-  });
-
   it('mints nothing while the host cannot hand the link to the owner (a capture probe)', async () => {
     const s = sender(telegramRoute(), async () => LINK, () => false);
     expect(await s.send(turn)).toEqual({ sent: false, reason: 'unavailable' });
@@ -196,7 +189,6 @@ describe('iMessage console route: the link answers only the inbound message this
   const withRoute = (name: string, record: IMessageInboxRecord | null, run: (route: Extract<ConsoleLinkRoute, { surface: string }>, state: DurableObjectState) => Promise<void>) =>
     runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const route = iMessageConsoleRoute(state.storage, () => record);
-      if ('unsupported' in route) throw new Error('the iMessage route always delivers');
       await run(route, state);
     });
 
@@ -239,7 +231,6 @@ describe('WhatsApp console route: sent now or not at all', () => {
   const route = (answer: unknown) => {
     const bodies: object[] = [];
     const built = whatsappConsoleRoute(async (body) => { bodies.push(body); return answer; });
-    if ('unsupported' in built) throw new Error('the WhatsApp route always delivers');
     return { built, bodies };
   };
   it('asks for a send that is never held and never previewed, and counts only an accepted send', async () => {
@@ -267,7 +258,6 @@ describe('app console route: the link shows under the reply to the message that 
   it('records the link for the running message once, and reads it back as sent', async () => {
     await withKv('app-console-route-once', async state => {
       const route = appConsoleRoute(state.storage.kv);
-      if ('unsupported' in route) throw new Error('the app route always delivers');
       const turn = { turnId: 'msg-1', runScope: scope(state, 'msg-1') };
       expect(route.sent(turn)).toBe(false);
       expect(await route.deliver(consoleLinkText(LINK), turn)).toBe(true);
@@ -283,7 +273,6 @@ describe('app console route: the link shows under the reply to the message that 
     await withKv('app-console-route-expiry', async state => {
       let now = 1_000_000;
       const route = appConsoleRoute(state.storage.kv, () => now);
-      if ('unsupported' in route) throw new Error('the app route always delivers');
       await route.deliver(consoleLinkText(LINK), { turnId: 'msg-1', runScope: scope(state, 'msg-1') });
       await route.deliver(consoleLinkText(`${LINK}b`), { turnId: 'msg-2', runScope: scope(state, 'msg-2') });
       const links = () => appConsoleLinks(state.storage.kv, () => now);

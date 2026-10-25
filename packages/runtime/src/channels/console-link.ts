@@ -18,11 +18,9 @@ export const mintConsoleLink = async (storage: DurableObjectStorage, env: OwnerD
   return origin && (!configured || issuer && secret) ? consoleAccess(storage).mintLink(origin, configured ? { owner: issuer!, secret: secret! } : undefined) : null;
 };
 
-// How a turn's own surface carries the link, or why it cannot. `sent` reads an earlier send this turn already made
-// durable, so a retried turn never mints a second link.
-export type ConsoleLinkRoute =
-  | Readonly<{ surface: 'telegram' | 'imessage' | 'app' | 'whatsapp'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>
-  | Readonly<{ unsupported: 'app_unsupported' | 'surface_unsupported' }>;
+// How a turn's own surface carries the link. `sent` reads an earlier send this turn already made durable, so a retried turn
+// never mints a second link.
+export type ConsoleLinkRoute = Readonly<{ surface: 'telegram' | 'imessage' | 'app' | 'whatsapp'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>;
 
 export const consoleLinkSender = (deps: Readonly<{
   surface: string;
@@ -41,7 +39,6 @@ export const consoleLinkSender = (deps: Readonly<{
       return result;
     };
     const { route } = deps;
-    if ('unsupported' in route) return done({ sent: false, reason: route.unsupported });
     if (minted.has(turn.turnId) || route.sent(turn)) return done({ sent: false, reason: 'already_sent' });
     if (!deps.available()) return done({ sent: false, reason: 'unavailable' });
     const link = await deps.mint();
