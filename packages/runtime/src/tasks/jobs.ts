@@ -34,10 +34,12 @@ export type MachineBrief = Readonly<{
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
 // about dates without seeing the conversation. outside_text: the turn that wrote it had read someone else's words, so its
 // title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
+// conversation_ref: the app thread's chain the task was started in, so its report answers there; absent for main and every
+// other surface. The host's, never the worker's: the claim leaves it out.
 // A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true; machine?: MachineBrief;
+  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true; conversation_ref?: string; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.
@@ -481,9 +483,10 @@ export const jobsCarry = (sql: Sql, texts: readonly string[]): boolean => {
 // The forget purge job's store for task jobs (memory/forget-purge.ts). One transaction cancels the open jobs that carry a text,
 // fences their attempts and withdraws their errands' cards (cancelled), and redacts every row; a fence that throws rolls it
 // all back, so the job's retry cancels and fences again. Storage with no job book has nothing to clean and gets none made.
-export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(work: () => T) => T; book: () => JobBook; cancelled: (id: string) => void }>): ForgetStore => ({
+// storedOutputs empties the running attempts' stored large reads, which live in memory and are not searched for the texts.
+export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(work: () => T) => T; book: () => JobBook; cancelled: (id: string) => void; storedOutputs?: () => void }>): ForgetStore => ({
   name: 'task_jobs',
-  run: (texts) => (!jobsKept(deps.sql) ? 0 : deps.transaction(() => {
+  run: (texts) => (deps.storedOutputs?.(), !jobsKept(deps.sql) ? 0 : deps.transaction(() => {
     const { cancelled, remaining } = deps.book().forget(texts);
     for (const id of cancelled) deps.cancelled(id);
     return remaining;

@@ -70,11 +70,12 @@ const lane = (h: Harness, appliers: Partial<Record<'heartbeat' | 'update_sweep' 
 const hops = (log: readonly TurnLogEntry[], name: string) => log.filter(entry => entry.hop === name);
 
 describe('the machine reader allowlist', () => {
-  it('is the reader profile without the two tools whose arguments can carry private text out', () => {
+  it('is the reader profile without the tools whose arguments can carry private text out', () => {
     const reader = TASK_PROFILE_SPECS.reader.tools;
     expect(MACHINE_READER).not.toContain('web_search');
     expect(MACHINE_READER).not.toContain('read_mcp_tool');
-    expect([...MACHINE_READER].sort()).toEqual(reader.filter(name => name !== 'web_search' && name !== 'read_mcp_tool').sort());
+    expect(MACHINE_READER).not.toContain('browse_page');
+    expect([...MACHINE_READER].sort()).toEqual(reader.filter(name => name !== 'web_search' && name !== 'read_mcp_tool' && name !== 'browse_page').sort());
   });
 
   it('the brain offers a machine job only those tools, and refuses web_search from it without running it', async () => {
@@ -91,13 +92,13 @@ describe('the machine reader allowlist', () => {
       });
       const machine = book.startAttempt(enqueue(book, spec()).job.id)!;
       const claim = await host.claim(machine);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'read_tool_output']);
       expect(await host.tool(machine, { call_id: 'c1', name: 'web_search', arguments: '{"query":"asha"}' }, ['a1b2c3d4e5f60718'])).toMatchObject({ ok: false, error_code: 'acl_denied' });
       expect(ran).toEqual([]);
       // An owner's reader task keeps web_search.
       const owner = book.startAttempt(book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'owner-1', origin: 'tg-1', surface: 'app', brief: ownerBrief, dueAt: T0, deadlineAt: T0 + 3_600_000 }).job.id)!;
       const ownerClaim = await host.claim(owner);
-      expect(ownerClaim === 'fenced' ? [] : ownerClaim.tools.map(tool => tool.name)).toEqual(['search_communication', 'web_search']);
+      expect(ownerClaim === 'fenced' ? [] : ownerClaim.tools.map(tool => tool.name)).toEqual(['search_communication', 'web_search', 'read_tool_output']);
     });
   });
 });

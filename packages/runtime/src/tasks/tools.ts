@@ -24,6 +24,8 @@ export type TaskToolDeps = Readonly<{
   // The surface whose tools the worker borrows and whose chain the report goes to.
   surface: string;
   wake(due: number): Promise<void>;
+  // The app thread chain of the turn making this call, or null when it runs in main or on another surface.
+  conversationRef?(ctx: ToolDispatcherContext): string | null;
   // Stops a cancelled job's worker and drops its browser session.
   fence(jobId: string): void;
   log(entry: TurnLogEntry): void;
@@ -42,10 +44,11 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (unavailable) return refusal(unavailable, 'invalid_args');
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
+      const conversationRef = deps.conversationRef?.(ctx) ?? null;
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
-        ...(tainted ? { outside_text: true as const } : {}),
+        ...(tainted ? { outside_text: true as const } : {}), ...(conversationRef ? { conversation_ref: conversationRef } : {}),
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead.
       if (numericHealthIn(JSON.stringify(brief))) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.', 'invalid_args');

@@ -13,7 +13,9 @@ import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
-import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
+import { MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
+import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { TOOL_RECORDS } from '../src/tools/records';
 
 // The brain's side of the job protocol over the real job book: every worker call is checked against its ticket, the
@@ -22,7 +24,7 @@ const T0 = 1_800_000_000_000;
 const brief: TaskBrief = { title: 'Book a table', goal: 'Find a table for two tonight.', context: 'Near Bandra.', done_when: 'A shortlist.', effort: 'standard', timezone: 'UTC', started_at: T0 };
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
-const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
+const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_page: { url: 'https://example.com/menu', instruction: 'Read the menu.' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
 // An errand step that types nothing past Waldo's own page: the tainted-write law admits it from a worker. A step with no
 // typed command takes the legacy path and goes to the owner's card (below).
 const UNTYPED_BROWSE = { call_id: 'c-untyped', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/book', task: 'Book a table for two at 8pm.' }) };
@@ -62,6 +64,8 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
+      { name: 'browse_page', description: 'Read a page.', schema: z.object({ url: z.string(), instruction: z.string() }), trigger_allowlist: allowlist('browse_page'), autonomy_gated: false, mutates_state: false,
+        async handle() { ran.push('browse_page'); return { ok: true as const, data: { text: 'A menu.' }, source_taint: 'external' as const }; } },
       { name: 'browse_act', description: 'Act in the browser.', schema: z.object({ url: z.string(), task: z.string() }).loose(), trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
         async handle() { ran.push('browse_act'); if (browse.ms) await new Promise(resolve => setTimeout(resolve, browse.ms)); if (browse.throws) throw new Error('vendor dropped the session'); ran.push('browse_act:done'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
     ] as unknown as ReturnType<TaskHostDeps['handlers']>;
@@ -82,15 +86,28 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
   });
 
 describe('the task brain host', () => {
-  it('a reader job is offered only reader tools, and a call outside its profile is refused without running', async () => {
-    await withHost(async ({ host, ticket, ran }) => {
+  // A research worker reads pages, which a web_search snippet often cannot answer; acting on a page stays the errand's.
+  it('a reader job is offered only reader tools, page reads among them, and a call outside its profile is refused without running', async () => {
+    await withHost(async ({ host, ticket, ran, released }) => {
       const t = ticket('reader');
       const claim = await host.claim(t);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
-      const refused = await host.tool(t, call('browse_act'), CANARIES);
-      expect(refused).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page', 'read_tool_output']);
+      for (const name of ['browse_act', 'propose_action', 'send_message', 'send_email', 'start_task']) {
+        expect(await host.tool(t, call(name), CANARIES), name).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
+      }
       expect(ran).toEqual([]);
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+      expect(await host.tool(t, call('browse_page'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+      expect(ran).toEqual(['search_communication', 'browse_page']);
+      expect(released).toEqual([]);
+    });
+  });
+
+  it('the app thread a task reports to stays with the brain: the worker\'s claim carries the brief without it', async () => {
+    await withHost(async ({ host, book }) => {
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'k-thread', origin: 'app-1', surface: 'app', brief: { ...brief, conversation_ref: 'owner:prn_1:thr_1' }, dueAt: T0, deadlineAt: T0 + 3_600_000 });
+      const claim = await host.claim(book.startAttempt(job.id)!);
+      expect(claim === 'fenced' ? null : claim.brief).toEqual(brief);
     });
   });
 
@@ -849,7 +866,8 @@ describe('task profiles', () => {
   const forbidden: Readonly<Record<string, readonly ToolName[]>> = {
     send: names.filter(name => name.startsWith('send_') || name === 'attach_file'),
     approve: ['propose_action', 'raise_approval', 'execute_action', 'propose_calendar_change', 'propose_google_task_change', 'propose_schedule'],
-    memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory'), 'read_memory', 'remember'],
+    // read_tool_output is placed with memory, but a worker's handler reads only what its own attempt stored (tasks/brain.ts).
+    memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory' && name !== 'read_tool_output'), 'read_memory', 'remember'],
     delegation: ['delegate_task', 'use_mac'],
     tasks: ['start_task', 'cancel_task'],
     health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
@@ -867,5 +885,16 @@ describe('task profiles', () => {
       expect(tools.length, group).toBeGreaterThan(0);
       expect(TASK_PROFILE_SPECS[profile].tools.filter(tool => tools.includes(tool)), `${profile} ∩ ${group}`).toEqual([]);
     }
+  });
+
+  // A worker pages its stored large reads. A resumed attempt may call it again freely: it is a safe read, so a crash while
+  // it ran never parks the job. Child agents and outside-text turns still go without it.
+  it('every worker profile pages stored output with read_tool_output, a safe read that never parks a job', () => {
+    for (const profile of ['reader', 'errand'] as const) expect(TASK_PROFILE_SPECS[profile].tools).toContain('read_tool_output');
+    expect(MACHINE_READER).toContain('read_tool_output');
+    expect(TOOL_RECORDS.read_tool_output.replay.replay).toBe('safe_read');
+    expect(unreplayable('read_tool_output')).toBe(false);
+    expect(CHILD_READ_TOOLS).not.toContain('read_tool_output');
+    expect(OUTSIDE_TEXT_JOB_TOOLS).not.toContain('read_tool_output');
   });
 });

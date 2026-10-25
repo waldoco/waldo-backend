@@ -9,6 +9,8 @@ import type { InMemoryCircuitBreaker } from '../llm/provider';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
+import { inMemoryToolOutputStore, type ToolOutputStore } from '../conversation/tool-output-store';
+import { readToolOutputHandler } from '../tools/read-tool-output';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, retryBrief, taskBrief, type JobBook, type JobRow, type ReplayBrief, type ReplayOutcome, type TaskTicket } from './jobs';
 import { BROWSER_TOOLS, FINISH_TASK, jobTools, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
@@ -100,6 +102,14 @@ const OWNER_STEP = {
 // spend would have no bound at all.
 const UNREAD_SPEND = { spentUsd: 0, ceilingUsd: 0 } as const;
 
+// A worker's read too large for one result (a web page, a long thread) is stored for its attempt and paged back with
+// read_tool_output, as an owner turn's is. The store lives in this object's memory beside the attempt's run scope, never in
+// its storage: it is emptied when the attempt is fenced (cancel, report, park, a new attempt, the owner suspended) and on an
+// owner forget, and a lost store is a cache miss the worker answers by reading again. Its ids carry the job and attempt, so
+// a worker resolves only what its own attempt stored, never an owner turn's output or another attempt's. Workers hold no
+// health tool, so no health reading is stored here.
+export const TASK_STORED_OUTPUTS_MAX = 16;
+
 export const taskHost = (deps: TaskHostDeps) => {
   // Warned once per run of failed reads, so a lasting fault is visible without a line per worker call.
   let spendUnread = false;
@@ -115,24 +125,26 @@ export const taskHost = (deps: TaskHostDeps) => {
     }
   };
   // One run scope per live attempt, so a cancel aborts the attempt's in-flight I/O and every later admit fails.
-  const scopes = new Map<string, Readonly<{ attempt: number; scope: RunEffectScope; abort: AbortController }>>();
-  const scopeFor = (ticket: TaskTicket, row: JobRow): RunEffectScope => {
+  const scopes = new Map<string, Readonly<{ attempt: number; scope: RunEffectScope; abort: AbortController; outputs: ToolOutputStore }>>();
+  const attemptFor = (ticket: TaskTicket, row: JobRow) => {
     const held = scopes.get(ticket.jobId);
-    if (held && held.attempt === ticket.attempt) return held.scope;
+    if (held && held.attempt === ticket.attempt) return held;
     if (held) fence(ticket.jobId);
     const abort = new AbortController();
     const admit = () => {
       if (abort.signal.aborted || deps.book.get(ticket.jobId)?.lease_token !== ticket.token) { abort.abort(); throw new ClosedRunError(); }
     };
     const scope: RunEffectScope = { runId: `task:${ticket.jobId}`, attempt: String(ticket.attempt), deadline: row.deadline_at, signal: abort.signal, admit, commit: (work) => { admit(); return work(); } };
-    scopes.set(ticket.jobId, { attempt: ticket.attempt, scope, abort });
-    return scope;
+    const attempt = { attempt: ticket.attempt, scope, abort, outputs: inMemoryToolOutputStore({ idPrefix: `${ticket.jobId}.${ticket.attempt}.`, maxItems: TASK_STORED_OUTPUTS_MAX }) };
+    scopes.set(ticket.jobId, attempt);
+    return attempt;
   };
   // Aborts the attempt's I/O and lets the browser host drop the job's session.
   const fence = (jobId: string) => {
     const held = scopes.get(jobId);
     if (!held) return;
     scopes.delete(jobId);
+    held.outputs.clear();
     held.abort.abort();
     deps.releaseBrowser(held.scope);
   };
@@ -149,17 +161,19 @@ export const taskHost = (deps: TaskHostDeps) => {
   };
   const hop = (row: Pick<JobRow, 'id' | 'profile'>, hopName: string, fields: Partial<TurnLogEntry> = {}) =>
     deps.log({ trace: `task:${row.id}`, hop: hopName, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
-  const profileHandlers = async (row: JobRow) => {
+  // The owner's handlers, with read_tool_output bound to the attempt's own store in place of any the owner holds.
+  const profileHandlers = async (row: JobRow, outputs: ToolOutputStore) => {
     const tools = jobTools(row);
-    const allowed = deps.handlers(row.surface).filter((handler) => tools.includes(handler.name as never));
-    return (await eligibleHandlers(allowed)).handlers;
+    const allowed = deps.handlers(row.surface).filter((handler) => tools.includes(handler.name as never) && handler.name !== 'read_tool_output');
+    const own: Handlers = tools.includes('read_tool_output') ? [...allowed, readToolOutputHandler(outputs)] : allowed;
+    return (await eligibleHandlers(own)).handlers;
   };
 
   // One worker tool call's work, once the call holds its attempt busy.
   const serve = async (ticket: TaskTicket, row: JobRow, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> => {
     const started = deps.now();
     const allowed = jobTools(row).includes(call.name as never);
-    const scope = scopeFor(ticket, row);
+    const { scope, outputs } = attemptFor(ticket, row);
     // Asked fresh for every call: no worker acts for an owner the directory no longer admits.
     const admission = allowed && deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
     if (admission === 'dormant') {
@@ -176,7 +190,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const unchecked = toolError('transient', 'The owner\'s access could not be checked just now, so nothing ran.');
       result = { ok: false, error: unchecked.cause, error_code: unchecked.code, fix: unchecked.fix, retryable: true, code: 'transient' };
     } else {
-      const handlers = await profileHandlers(row);
+      const handlers = await profileHandlers(row, outputs);
       const spend = ownerSpend();
       const ctx: ToolDispatcherContext = {
         ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
@@ -199,7 +213,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const run = async () => {
         scope.admit();
         if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
-        return dispatchLoopTool(call, { handlers: reached, ctx });
+        return dispatchLoopTool(call, { handlers: reached, ctx, offload: outputs });
       };
       try {
         result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
@@ -235,6 +249,8 @@ export const taskHost = (deps: TaskHostDeps) => {
   return {
     fence,
     cancelled,
+    // An owner forget empties every attempt's stored outputs, as it empties an owner turn's: they are re-read if needed.
+    forgetOutputs: (): void => { for (const held of scopes.values()) held.outputs.clear(); },
     // Jobs whose live attempt has a call running here.
     busy: (): ReadonlySet<string> => new Set([...busy.keys()].flatMap((key) => {
       const split = key.lastIndexOf(':');
@@ -272,11 +288,11 @@ export const taskHost = (deps: TaskHostDeps) => {
         hop(row, 'task_parked', { ok: false, code: 'brief_changed' });
         return 'fenced';
       }
-      scopeFor(ticket, row);
-      const handlers = await profileHandlers(row);
+      const handlers = await profileHandlers(row, attemptFor(ticket, row).outputs);
       const spend = ownerSpend();
+      const { conversation_ref: _replyChain, ...brief } = taskBrief(row);
       return {
-        jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
+        jobId: row.id, profile: row.profile, brief, tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
         turns: jobCheckpoint(row).turns, seq: row.checkpoint_seq, deadlineAt: row.deadline_at, roundsUsed: row.rounds,
         ownerRef: deps.context(row.surface).authenticatedUserId,
@@ -309,7 +325,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       if (claimed === 'parked') { fence(ticket.jobId); await deps.wake(deps.now()); return; }
       if (claimed === 'fenced' || claimed.kind !== 'approval_replay') return;
       const row = claimed, brief = replayBrief(row), started = deps.now();
-      const scope = scopeFor(ticket, row);
+      const { scope } = attemptFor(ticket, row);
       let outcome: ReplayOutcome;
       if (md5Hex(row.brief_json) !== row.brief_digest) {
         outcome = { status: 'failed', message: 'The stored action changed after you approved it, so nothing ran.' };
