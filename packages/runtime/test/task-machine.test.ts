@@ -10,6 +10,7 @@ import { isMachine, jobBook, MACHINE_MAX_RUNNING, MACHINE_SETTLED_KEPT, MACHINE_
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineEnqueued, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
+import { taintedCallNeedsOwnerApproval } from '../src/hooks/registry';
 import { MACHINE_READER, TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import { taskBriefText } from '../src/tasks/worker-loop';
@@ -95,6 +96,14 @@ describe('the machine reader allowlist', () => {
       const ownerClaim = await host.claim(owner);
       expect(ownerClaim === 'fenced' ? [] : ownerClaim.tools.map(tool => tool.name)).toEqual(['search_communication', 'web_search']);
     });
+  });
+});
+
+// A machine job's worker holds no tool the tainted-write law cards, so the brain never hands one of its steps back as a
+// blocked proposal: every tool it holds runs or is refused for its own reasons.
+describe('the machine reader and the tainted-write law', () => {
+  it('holds no tool a turn over outside text must send to the owner\'s card', async () => {
+    for (const tool of MACHINE_READER) expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, {}), tool).toBe(false);
   });
 });
 
