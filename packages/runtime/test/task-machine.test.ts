@@ -10,6 +10,7 @@ import { isMachine, jobBook, MACHINE_MAX_RUNNING, MACHINE_SETTLED_KEPT, MACHINE_
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
 import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineEnqueued, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
+import { ClosedRunError } from '../src/channels/run-effect-scope';
 import { taintedCallNeedsOwnerApproval } from '../src/hooks/registry';
 import { MACHINE_READER, TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
@@ -324,6 +325,44 @@ describe('applying a machine job', () => {
         expect(l.turns).toEqual([]);
         expect(h.book.get(id)!.status).toBe('applied');
         expect(hops(l.log, 'machine_applied')).toHaveLength(1);
+      });
+    }
+  });
+
+  // HIGH-2 for machine jobs: an apply turn holds tools (a close card, a source loop) and delivers, so it writes its intent
+  // first. A pass lost inside it is not run again. The owner never asked for this work, so nothing tells them: the job settles
+  // silently, as a parked one does, and the trigger's next tick asks again.
+  it('the apply writes its intent before its turn; a pass lost inside it settles the job silently and is never applied again', async () => {
+    await withBook(async (h) => {
+      const id = reportMachine(h.book, found);
+      const during: (string | null)[] = [];
+      const l = lane(h, { heartbeat: async (row) => { during.push(h.book.get(row.id)!.inflight_json); throw new Error('the pass was lost here'); } });
+      await runJobsLane(l.deps());
+      expect(during.map(value => value && (JSON.parse(value) as { turn?: string }).turn)).toEqual(['task_report']);
+      // What a lost pass leaves: the row still reported, with the apply's intent on it.
+      h.sql.exec("UPDATE task_jobs SET inflight_json = ?, due_at = ? WHERE id = ?", JSON.stringify({ turn: 'task_report', at: T0 }), h.clock.at, id);
+      let again = 0;
+      const next = lane(h, { heartbeat: async () => { again += 1; return 'delivered'; } });
+      await runJobsLane(next.deps());
+      expect(again).toBe(0);
+      expect(next.turns).toEqual([]);
+      expect(next.sent.size).toBe(0);
+      expect(h.book.get(id)!.status).toBe('applied');
+      expect(hops(next.log, 'machine_apply_uncertain')).toHaveLength(1);
+    });
+  });
+
+  it('an apply closed partway, or that could not run, clears its intent, so the next pass applies it', async () => {
+    for (const thrown of [new ClosedRunError(), new Error('no model answered')]) {
+      await withBook(async (h) => {
+        const id = reportMachine(h.book, found);
+        await runJobsLane(lane(h, { heartbeat: async () => { throw thrown; } }).deps());
+        expect(h.book.get(id)).toMatchObject({ status: 'reported', inflight_json: null });
+        h.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', h.clock.at, id);
+        let applied = 0;
+        await runJobsLane(lane(h, { heartbeat: async (_row, _result, io) => { applied += 1; h.transaction(io.settle); return 'delivered'; } }).deps());
+        expect(applied).toBe(1);
+        expect(h.book.get(id)!.status).toBe('applied');
       });
     }
   });
