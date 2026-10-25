@@ -1,6 +1,7 @@
 import type { IMessageBinding } from '@waldo/contracts';
 import { armAlarm } from '../../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
+import type { IMessageMedia } from './photon-media';
 
 // Owner-DO side of iMessage ingress. One durable writer: payload, dedup identity, digest, sequence
 // and wake commit before the bridge's handoff is acknowledged. Cross-DO handoff is at-least-once;
@@ -21,6 +22,8 @@ export type IMessageInboxRecord = {
   id: string; updateId: number; dedupKey: string; digest: string; text: string; conversationRef: string;
   binding: IMessageBinding; bindingDigest: string; revision: string; environment: string; bridgeDoName: string; ownerDoName: string;
   commandId: string; occurredAt: number; admittedAt: number;
+  /** The message's files as references: the turn fetches the bytes, and they are never stored. */
+  media?: IMessageMedia;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
@@ -30,7 +33,7 @@ export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | '
 const finished = (r: IMessageInboxRecord) => r.state === 'completed' || r.state === 'interrupted' || r.state === 'revoked';
 const open = (r: IMessageInboxRecord) => r.state === 'admitted' || r.state === 'running';
 const due = (rows: readonly IMessageInboxRecord[], now: number) => (rows.some((r) => r.state === 'admitted') ? now + 250 : null);
-const clear = (r: IMessageInboxRecord) => { r.text = ''; };
+const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; };
 
 export class IMessageOwnerInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
@@ -116,12 +119,15 @@ export class IMessageOwnerInbox {
    * rows hold no text. Returns the rows rewritten and the not-running rows still holding a forgotten literal.
    */
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
+    const held = (r: IMessageInboxRecord) => (!!r.text && holds(r.text)) || !!r.media?.files.some((file) => holds(file.name));
     let rewritten = 0;
     for (const r of this.records()) {
-      if (r.state !== 'admitted' || !r.text || !holds(r.text)) continue;
-      r.text = redact(r.text); this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
+      if (r.state !== 'admitted' || !held(r)) continue;
+      r.text = redact(r.text);
+      if (r.media) r.media = { ...r.media, files: r.media.files.map((file) => ({ ...file, name: redact(file.name) })) };
+      this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }
-    return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && r.text && holds(r.text)).length };
+    return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && held(r)).length };
   }
   /** Called inside the scope's commit transaction together with the frozen reply. */
   closeFinal(record: IMessageInboxRecord): void {

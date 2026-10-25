@@ -25,15 +25,15 @@ export const admitIMessageOwnerTurn = async <T>(input: unknown, deps: IMessageAd
     revision: opaqueIMessageIdSchema.parse(resolved.revision), doName: opaqueIMessageIdSchema.parse(resolved.doName) });
   const check = () => { if (deps.authority?.current(grant) !== true) throw new Error('iMessage turn not admitted'); };
   const turn = admittedIMessageTurn(event, grant.binding);
-  if (event.attachments.length > LLM_ATTACHMENTS_MAX) throw new Error('iMessage excess media');
-  if (new Set(event.attachments.map(file => file.reference)).size !== event.attachments.length) throw new Error('iMessage ambiguous media');
+  // With no media store the files are not loaded here: they go on as references, and the owner answers for them.
+  if (deps.media && event.attachments.length > LLM_ATTACHMENTS_MAX) throw new Error('iMessage excess media');
+  if (deps.media && new Set(event.attachments.map(file => file.reference)).size !== event.attachments.length) throw new Error('iMessage ambiguous media');
   check();
   const lookedUp = await deps.directory.byPresence('imessage', grant.binding.subject);
   check();
   if (!lookedUp || lookedUp.doName !== grant.doName || lookedUp.subject !== grant.binding.subject) throw new Error('iMessage turn not admitted');
   const route = Object.freeze({ doName: lookedUp.doName, subject: lookedUp.subject, timezone: lookedUp.timezone });
-  if (event.attachments.length && !deps.media) throw new Error('iMessage media unavailable');
-  const media = event.attachments.length ? await loadIMessageMedia(event, grant, deps.media!, check) : { attachments: [], statuses: [] };
+  const media = event.attachments.length && deps.media ? await loadIMessageMedia(event, grant, deps.media, check) : { attachments: [], statuses: [] };
   check();
   return admitted(route, { ...turn, ...(media.attachments.length ? { attachments: media.attachments } : {}) }, media.statuses);
 };

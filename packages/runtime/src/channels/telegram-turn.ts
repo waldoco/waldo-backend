@@ -34,7 +34,8 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
     turn.runScope?.admit();
     const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
     turn.runScope?.admit();
-    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
+    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}),
+      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }, time);
   };
   return {
     ...core, respond,

@@ -7,6 +7,7 @@ import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
+import { iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -33,9 +34,11 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const known = host.storage.kv.get<string>('do_name');
   if (known !== undefined && known !== input.ownerDoName) return 'refused';
   const binding = iMessageBindingSchema.safeParse(input.binding);
-  if (!binding.success || binding.data.conversationKind !== 'direct' || input.envelope.surface !== 'imessage'
+  const media = iMessageMediaSchema.optional().safeParse(input.media);
+  // Bytes never cross from the bridge; files arrive as media references, and a message may be files alone.
+  if (!binding.success || !media.success || binding.data.conversationKind !== 'direct' || input.envelope.surface !== 'imessage'
     || input.envelope.conversationRef !== JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid])
-    || typeof input.envelope.text !== 'string' || !input.envelope.text.trim() || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length) return 'refused';
+    || typeof input.envelope.text !== 'string' || (!input.envelope.text.trim() && !media.data) || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length) return 'refused';
   const digestOfBinding = await bindingDigest(binding.data);
   const record = { environment: input.environment, binding: binding.data, revision: input.revision, ownerDoName: input.ownerDoName, bindingDigest: digestOfBinding };
   try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
@@ -43,7 +46,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const commandId = `wrc_${(await sha256Hex(input.dedupKey)).slice(0, 40)}`;
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
-    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()),
+    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}),
   });
   return result.kind;
 };
@@ -60,6 +63,21 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
     subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef, ...sources });
   if (context.conversationRef !== record.conversationRef) throw new ClosedRunError();
   return context;
+};
+
+/**
+ * A running record's files, opened through Photon for its turn. When they cannot all be opened the owner gets one fixed
+ * reply instead, frozen as the turn's reply in the transaction that closes it, so the event is answered once and settled.
+ */
+export type OpenedIMessageTurnMedia = Extract<OpenedIMessageMedia, { kind: 'opened' }>;
+export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope)
+  : Promise<Readonly<{ kind: 'text' | 'answered' }> | OpenedIMessageTurnMedia> => {
+  if (!record.media) return { kind: 'text' };
+  const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit });
+  if (opened.kind === 'opened') return opened;
+  scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
+  return { kind: 'answered' };
 };
 
 const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
