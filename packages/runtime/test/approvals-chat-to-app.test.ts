@@ -19,18 +19,18 @@ const OWNER = 447700900123;
 const iso = (s: string) => s as never;
 type Surface = 'whatsapp' | 'imessage' | 'telegram';
 
-const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ appLink?: boolean }> = {}) => {
+const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ appLink?: boolean; app?: boolean; event?: Record<string, unknown> }> = {}) => {
   const { sql } = state.storage;
   const cards: { text: string; buttons: string[] }[] = [], sent: string[] = [], created: unknown[] = [];
   let n = 0, ref = 0;
   const client = {
     account: { connection_id: 'local:owner@example.test', email: 'owner@example.test' },
-    event: async (id: string) => ({ id, title: 'Standup', start: '2026-10-26T10:00:00Z', end: '2026-10-26T10:15:00Z', all_day: false, etag: 'v1' }),
+    event: async (id: string) => ({ id, title: 'Standup', start: '2026-10-26T10:00:00Z', end: '2026-10-26T10:15:00Z', all_day: false, etag: 'v1', ...options.event }),
     createEvent: async (input: unknown) => { created.push(input); return { id: 'ev1', title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
   } as unknown as GoogleClient;
   const before = { id: 't1', task_list_id: 'l1', title: 'Buy milk', status: 'todo' as const, notes: null, due_date: null, etag: '"e1"', parent: null, deleted: false, assigned: false };
   const desk = approvalDesk(sql, {
-    owner: OWNER, surface, appIdentity: () => true, ...(options.appLink === false ? {} : { appLink: appApprovalLink }),
+    owner: OWNER, surface, appIdentity: () => options.app !== false,...(options.appLink === false ? {} : { appLink: appApprovalLink }),
     call: async (method: string, body: object) => {
       if (method !== 'sendMessage') return true;
       const message = body as { text: string; reply_markup?: { inline_keyboard: { text: string }[][] } };
@@ -114,6 +114,19 @@ describe('a send proposed in a chat surface is handed to the app', () => {
       });
     });
   }
+});
+
+describe('an owner who has not set up the app yet', () => {
+  it('still gets the send put in the app, so the link on the card has an approval to open; a hold stays chat only', async () => {
+    await owner('chat-to-app-no-app-yet', async state => {
+      const f = harness(state, 'whatsapp', { app: false });
+      const send = await f.desk.proposeSendMessage(message());
+      expect(f.presented(send)).toEqual([{ surface: 'app', approvable: 1 }, { surface: 'whatsapp', approvable: 0 }]);
+      expect(f.cards.at(-1)!.text).toContain(`Review and approve it there: waldo://approvals/${send}`);
+      const hold = await f.desk.propose(HOLD);
+      expect(f.presented(hold)).toEqual([{ surface: 'whatsapp', approvable: 1 }]);
+    });
+  });
 });
 
 describe('a low-risk change to the owner\'s own things stays one tap in chat', () => {
@@ -201,6 +214,17 @@ describe('Telegram, internal only, is unchanged', () => {
       await f.reply(`a:${id}`);
       expect(f.sent).toEqual(['On my way']);
       expect(HANDED_TO_APP).not.toMatch(/telegram/i);
+    });
+  });
+});
+
+describe('a calendar change with guests is handed to the app even when a detail does not fit the app\'s schema', () => {
+  it('a move of a guest event whose provider time has no offset still counts its guests', async () => {
+    await owner('chat-to-app-offsetless-guests', async state => {
+      const f = harness(state, 'whatsapp', { event: { start: '2026-10-26T10:00:00', end: '2026-10-26T10:15:00', attendees: 3 } });
+      const id = await f.desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: iso('2026-10-27T10:00:00Z'), end: iso('2026-10-27T10:15:00Z'), reason: 'clash' });
+      expect(f.cards.at(-1)!.buttons).toEqual(['Not now', "Don't do this"]);
+      expect((await f.desk.decide(id, 'a', 'trace', { surface: 'whatsapp' })).toast).toBe('Review it in the app');
     });
   });
 });
