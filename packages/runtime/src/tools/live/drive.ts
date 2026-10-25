@@ -84,7 +84,7 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
     requires_connector: true,
     eligible: () => enabled ? { ok: true } : { ok: false, reason: 'not_configured' },
     handle: async (args: ReadDriveArgs, ctx): Promise<ToolResult<unknown>> => {
-      const accounts = enabled ? await accountsToRead(google, args.account) : [];
+      const accounts = enabled ? await accountsToRead(google, 'drive', args.account) : [];
       if (accounts.length < 2) return read(args, ctx);
       // A content read names its connection, which names its account.
       if (args.action === 'content') return read({ ...args, account: accounts.find((known) => known.id === args.connection_id)?.email }, ctx);

@@ -88,8 +88,10 @@ export const missingClientReason = async (google: GoogleAccess, feature: GoogleF
   return 'not_connected';
 };
 
-// The accounts a read covers when none is named: every connected one.
-export const accountsToRead = async (google: GoogleAccess, named?: string): Promise<readonly KnownAccount[]> => !named && google.state ? google.state() : [];
+// The accounts a read covers when none is named: every connected one whose grant holds the feature. state() reports only
+// calendar, mail and tasks, so for the other features every account counts and a missing grant is named by its read.
+export const accountsToRead = async (google: GoogleAccess, feature: GoogleFeature, named?: string): Promise<readonly KnownAccount[]> =>
+  !named && google.state ? (await google.state()).filter((known) => !flagged(feature) || known[feature]) : [];
 
 // An id from one account's result (a continuation, a list, a thread, a calendar) means nothing in another account.
 export const nameTheAccount = (accounts: readonly KnownAccount[], what: string): ToolResult<never> => ({
@@ -145,7 +147,7 @@ export const readEveryAccount = async <T>(tool: ToolName, feature: GoogleFeature
 // A read without a named account covers every connected account. bound names an id in the call that belongs to one account;
 // with more than one account connected, that id must come with its account.
 const readAccounts = async <T extends object>(google: GoogleAccess, tool: ToolName, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, args: Readonly<{ account?: string | undefined; limit: number }>, max: number, bound: string | null, work: (client: GoogleClient, limit: number) => Promise<T>): Promise<ToolResult<unknown>> => {
-  const accounts = await accountsToRead(google, args.account);
+  const accounts = await accountsToRead(google, feature, args.account);
   if (accounts.length < 2) return withGoogle(google, feature, ctx, (client) => work(client, args.limit), args.account);
   if (bound) return nameTheAccount(accounts, bound);
   const limit = accountShare(args.limit, max, accounts.length);
@@ -643,7 +645,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           qualification:`Free only on the calendars that answered. ${unavailable.join(', ')} could not be read and may be busy; offer these as tentative and say which calendar was not checked.`};
         return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
       };
-      const accounts=await accountsToRead(google,args.account);
+      const accounts=await accountsToRead(google,'availability',args.account);
       if(accounts.length<2)return withGoogle(google,'availability',ctx,async client=>freeTime(ids,await observe(client)),args.account);
       const read=await readEveryAccount('query_availability','availability',accounts,email=>withGoogle(google,'availability',ctx,async client=>({email,calendars:await observe(client)}),email));
       if(!read.ok)return read;
