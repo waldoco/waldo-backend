@@ -533,7 +533,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const id = entry.id;
     const shownInApp = appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
     const handed = HANDS_TO_APP.has(via.surface) && approvedInApp(entry);
-    const change = action === 'e';
+    // A kind with no Modify is only approved or declined, in the app as here.
+    const change = action === 'e' && CARDS[entry.kind]?.modify === true;
     if (!handed) return shownInApp && deps.appLink
       ? { toast: 'Review it in the app', message: `That approval wasn't shown in full here, so it can't be ${change ? 'changed' : 'approved'} here. Nothing was done. Review and ${change ? 'change' : 'approve'} it in the Waldo app: ${deps.appLink(id)}` }
       : { toast: 'Not available here', message: `That approval wasn't shown in full here, so it can't be ${change ? 'changed' : 'approved'} here. Nothing was done.` };

@@ -179,6 +179,17 @@ describe('no chat reply approves a gated kind', () => {
     });
   });
 
+  it('a typed Modify for a kind the app cannot change keeps the approve wording', async () => {
+    await owner('chat-to-app-modify-unchangeable', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await PROPOSE.mcp_call(f.desk);
+      expect((await f.desk.approvals(NOW, { id }))[0]!.actions).not.toContain('edit');
+      await f.reply(`e:${id}`);
+      expect(f.cards.at(-1)!.text).toBe(`${HANDED_TO_APP} Nothing was done. Review and approve it in the Waldo app: waldo://approvals/${id}`);
+      expect(f.status(id)).toBe('open');
+    });
+  });
+
   it('"yes", "send" and a reaction on WhatsApp are never a decision; only the typed approval form is, and the desk refuses it', () => {
     const subject = String(OWNER);
     const { updates } = whatsappIngressUpdates([
