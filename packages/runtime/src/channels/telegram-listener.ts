@@ -5,6 +5,7 @@ import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 import type { RunEffectScope } from './run-effect-scope';
+import { createReplyStream, type ReplyDraftSurface, type ReplyStream, type StreamOutcome } from '../conversation/reply-stream';
 
 
 export const TURN_TIMEOUT_MS = 150_000;
@@ -35,6 +36,8 @@ export type TelegramOwnerListenerOptions = Readonly<{
   clearTurnReceipts?(trace: string): void;
   // Sends the files the turn queued, after its reply is out. Only for surfaces whose reply is a direct send.
   deliverAttachments?(trace: string, runScope?: RunEffectScope): Promise<void>;
+  // Where this turn's reply is shown while it is written. Absent (the default), the reply arrives whole.
+  streamReply?(turn: TelegramInboundTurn): ReplyDraftSurface | undefined;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
@@ -141,15 +144,27 @@ export class TelegramOwnerListener {
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
     const clearRunTimers = () => { clearInterval(typingTimer); };
     turn.runScope?.signal.addEventListener('abort', clearRunTimers, { once: true });
+    const draft = this.options.streamReply?.(turn);
+    const stream: ReplyStream | undefined = draft ? createReplyStream(draft) : undefined;
+    // Drafts stop before the reply goes, so none can show after it; the outcome is content-free.
+    let settled = false;
+    const settle = async (delivered: string | null) => {
+      if (!stream || settled) return;
+      settled = true;
+      const outcome: StreamOutcome = await stream.settle(delivered);
+      this.options.log?.({ trace, hop: 'reply_stream', ms: outcome.firstShownMs ?? 0, ok: outcome.outcome !== 'diverged', code: outcome.outcome,
+        detail: `released=${outcome.released} updates=${outcome.updates} withdrawals=${outcome.withdrawals}${outcome.stopped ? ` stopped=${outcome.stopped}` : ''}` });
+    };
     try {
       const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
-      const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
+      const text = (await time('respond', () => Promise.race([this.options.respond(stream ? { ...turn, replyStream: stream } : turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const guardedText = redactSecretUrls(text).text;
+      await settle(guardedText);
       // WhatsApp and iMessage render plain text; Telegram HTML would arrive escaped.
       const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: guardedText} : telegramRichReply(guardedText);
       if (this.options.queueFinal) {
@@ -168,6 +183,7 @@ export class TelegramOwnerListener {
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
       return 'answered';
     } catch (error) {
+      await settle(null);
       const failure = error instanceof TurnTimeout
         ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
