@@ -336,4 +336,25 @@ describe('an approved browser card runs as a replay job', () => {
     });
   });
 
+  it('a settled replay keeps which card and tool it ran, never the frozen arguments; cancel_task still names it', async () => {
+    await withReplay(async ({ desk, book, clock, card, pass, settle }) => {
+      const tools = taskToolHandlers({ book, now: () => clock.at, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
+      const cancel = tools.find(tool => tool.name === 'cancel_task')!;
+      const ran = await card();
+      await desk.decide(ran, 'a', 'tap');
+      await pass();
+      await settle();
+      await pass();
+      const applied = book.byKey(replayKey(ran))!;
+      expect(applied.status).toBe('applied');
+      expect(JSON.parse(applied.brief_json)).toEqual({ approval_id: ran, tool: 'browse_act', approved_at: T0 });
+      expect(await cancel.handle({ job_id: applied.id })).toMatchObject({ ok: false, error: '"the approved browse_act action" already finished.' });
+
+      const forgotten = await card({ ...ARGS, task: 'Book the 9pm table for two at Juniper.' });
+      await desk.decide(forgotten, 'a', 'tap');
+      expect(book.forget(['Juniper']).cancelled).toHaveLength(1);
+      await pass();
+      expect(JSON.parse(book.byKey(replayKey(forgotten))!.brief_json)).toEqual({ approval_id: forgotten, tool: 'browse_act', approved_at: T0 });
+    });
+  });
 });
