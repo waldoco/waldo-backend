@@ -70,6 +70,19 @@ describe('live owner memory', () => {
     const byTopic = await s2.call('forget_memory', { topic: 'copper-lantern', scope_note: 'codename' }, s2.ctx('forget copper-lantern'));
     expect(byTopic).toMatchObject({ ok: true, data: { history_swept: 'topic_literal' } });
   });
+  it('tells the model what a forget removed and what it left, and to confirm without the forgotten words', async () => {
+    for (const args of [{ topic: 'copper-lantern', scope_note: 'the codename' }, { claim_ids: [1], scope_note: 'the codename' }]) {
+      const s = setup();
+      await s.call('remember', { kind: 'fact', text: 'Project codename is copper-lantern', evidence_quote: 'copper-lantern' }, s.ctx('project codename is copper-lantern'));
+      const result = await s.call('forget_memory', args, s.ctx('forget copper-lantern')) as { ok: true; data: { scope: string; reply: string } };
+      // A topic forget reaches every copy carrying its words, never one that put the fact in other words.
+      expect(result.data.scope).toMatch(/other words/);
+      expect(result.data.scope).toMatch(/already delivered/);
+      expect(result.data.scope).not.toMatch(/telegram/i);
+      expect(result.data.reply).toContain('without repeating the forgotten words');
+      expect(result.data.reply).not.toContain('copper');
+    }
+  });
   it('an owner-approved forget by ids runs from its card, with no conversation turn; nothing else does', async () => {
     const s = setup();
     await s.call('remember', { kind: 'fact', text: 'Project codename is copper-lantern', evidence_quote: 'copper-lantern' }, s.ctx('project codename is copper-lantern'));

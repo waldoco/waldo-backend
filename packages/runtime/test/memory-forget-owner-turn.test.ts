@@ -62,6 +62,8 @@ it('forget my favourite coffee returns a tool receipt and removes history recall
     seen.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'coffee', scope_note: 'favourite coffee' }) }], []);
     const reply = await responder.respond(ownerTyped({ traceId: 'tg-forget', conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }), timer);
     expect(reply).toContain('memory forgotten');
+    // The model reads how to confirm before it writes the reply, which the forget barrier would otherwise mask.
+    expect(seen.inputs.find(input => input.includes('removed_ids'))).toContain('without repeating the forgotten words');
     expect(historyCleaned).toBe(true);
     expect(store.claims()).toEqual([]);
     await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'What is my favourite coffee?' }), timer);
