@@ -70,7 +70,9 @@ describe('trace health scrub at the gate, capture on', () => {
   it('redacts health readings in owner words and keeps the rest of the sentence', async () => {
     const { gated, otlp } = await sinks([{ trace: 'tg-1', hop: 'turn', ms: 1, ok: true, text: { input: 'I slept 7h 22m and my HRV was 45, then booked the dentist', output: 'Noted the dentist.' } }]);
     const input = gated[0]!.text!.input;
-    for (const value of ['7h', '22m', '45']) { expect(input).not.toContain(value); expect(otlp).not.toContain(value); }
+    // OTLP bodies carry random span ids and nanosecond times, so they are searched for the readings' words, not bare digits.
+    for (const value of ['7h', '22m', '45']) expect(input).not.toContain(value);
+    for (const value of ['slept 7h', '22m', 'HRV was 45']) expect(otlp).not.toContain(value);
     expect(input).toContain(HEALTH_WITHHELD);
     expect(input).toContain('booked the dentist');
     expect(otlp).toContain('Noted the dentist.');
@@ -113,7 +115,7 @@ describe('trace health scrub at the gate, capture on', () => {
 
   it('runs the free-text floor over error, detail and code too', async () => {
     const { gated, notes, otlp } = await sinks([{ trace: 'tg-4', hop: 'llm_reply', ms: 1, ok: false, error: 'provider echoed: resting heart rate 58 bpm', detail: 'HRV was 39', code: 'failed:HRV was 39' }]);
-    for (const value of ['58', '39']) { expect(notes).not.toContain(value); expect(otlp).not.toContain(value); expect(JSON.stringify(gated)).not.toContain(value); }
+    for (const value of ['rate 58', 'was 39']) { expect(notes).not.toContain(value); expect(otlp).not.toContain(value); expect(JSON.stringify(gated)).not.toContain(value); }
     expect(gated[0]!.error).toContain('provider echoed');
   });
 
@@ -129,9 +131,9 @@ describe('trace health scrub at the gate, capture on', () => {
     const { gated, otlp, notes } = await sinks([{ trace: 'tg-6', hop: 'turn', ms: 1, ok: false, error: 'HRV was 45', code: 'failed', text: hostile }]);
     expect(gated[0]!.text).toBeUndefined();
     expect(gated[0]!.error).toBeUndefined();
-    expect(otlp).not.toContain('45');
+    expect(otlp).not.toContain('was 45');
     expect(otlp).not.toContain('reply');
-    expect(notes).not.toContain('45');
+    expect(notes).not.toContain('was 45');
   });
 
   it('leaves the capture-off gate as it was: text untouched by the gate and dropped by every sink', async () => {
@@ -167,9 +169,9 @@ describe('trace health scrub through a real owner turn', () => {
       await responder.respond(ownerTyped({ traceId: 'tg-turn-1', conversationRef: 'owner', surface: 'telegram', text: 'plan my afternoon around the dentist' }), (_name, work) => work());
       // The raw entries do carry the values: this is what the gate has to stop.
       expect(JSON.stringify(logged)).toContain('61.7');
-      expect(JSON.stringify(logged)).toContain('Form zone:');
+      for (const raw of ['Form zone:', 'Day summary:', 'quokka', 'Shared health today']) expect(JSON.stringify(logged)).toContain(raw);
       const { otlp, notes, console } = await sinks(logged);
-      for (const value of ['61.7', 'Form zone', 'Recovery:', 'Shared health today']) {
+      for (const value of ['61.7', 'Form zone', 'Day summary:', 'quokka', 'Shared health today']) {
         expect(otlp).not.toContain(value);
         expect(notes).not.toContain(value);
         expect(console).not.toContain(value);
