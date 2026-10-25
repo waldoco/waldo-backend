@@ -328,4 +328,12 @@ describe('a Granola ticket', () => {
     expect((await open(env)).status).toBe(400);
     expect(doCalls).toHaveLength(0);
   });
+
+  it('says Granola is already connected, with no redirect, when Continue finds a live connection', async () => {
+    const { env } = owner({ url: null, already: true } as never);
+    answers.connect_session_resolve = GRANOLA;
+    const response = await proceed(env);
+    expect([response.status, response.headers.get('location')]).toEqual([200, null]);
+    expect(await response.text()).toContain('Granola is already connected');
+  });
 });

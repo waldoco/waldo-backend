@@ -159,7 +159,7 @@ import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
 import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
-import { GRANOLA_MCP_URL, isGranolaHost } from '../connectors/granola-mcp';
+import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
@@ -379,9 +379,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log: (entry) => console.log(JSON.stringify({ trace: 'mcp', ...entry })),
     });
   }
+  // The owner's Granola connection: the reviewed one when there is one, else any on a Granola host.
+  private granolaConnection() {
+    const servers = this.mcp().list();
+    return servers.find((server) => isReviewedGranola(server.server_url, server.issuer)) ?? servers.find((server) => isGranolaHost(server.server_url));
+  }
   // Granola as the app shows it. Connecting needs the OAuth edge, the state secret and this deployment's origin.
   private granolaState(): NonNullable<ConsoleView['granola']> {
-    const connection = this.mcp().list().find((server) => isGranolaHost(server.server_url));
+    const connection = this.granolaConnection();
     const configured = !!oauthProxy(this.env) && !!oauthStateSecret(this.env) && !!signedRpc(this.env) && !!this.ctx.storage.kv.get<string>('origin');
     return { connectAvailable: configured, connection: connection ? { status: connection.status, connected_at: connection.connected_at } : null };
   }
@@ -390,17 +395,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async granolaConnect(runtime: OwnerRuntime): Promise<ControlReceipt> {
     return granolaConnectReceipt(await runtime.connectLink('granola', 'app', { handoff: true }), this.ctx.storage.kv.get<string>('origin'));
   }
-  // Continue on a Granola ticket: discover Granola, record the attempt, and hand back its authorize address. The ticket is
-  // remembered under the attempt so a linked sign-in can close it; entries left by abandoned sign-ins are swept here.
-  private async beginGranola(ticketHash: string): Promise<Readonly<{ url: string | null; nonce: string | null }>> {
+  // Continue on a Granola ticket: discover Granola, record the attempt, and hand back its authorize address. Discovery is
+  // network only, so it runs off the owner's turn queue; the attempt is started on it. The ticket is remembered under the
+  // attempt so a linked sign-in can close it; entries left by abandoned sign-ins are swept here.
+  private async beginGranola(ticketHash: string): Promise<Readonly<{ url: string | null; nonce: string | null; already?: true }>> {
     const origin = this.ctx.storage.kv.get<string>('origin');
     if (!origin) return { url: null, nonce: null };
     const begun = await this.mcp().begin(GRANOLA_MCP_URL, origin);
     if (begun.kind !== 'redirect') {
-      console.log(JSON.stringify({ trace: `connect:${ticketHash.slice(0, 8)}`, hop: 'connect_begin', ok: false, detail: `granola ${begun.kind === 'failed' ? begun.reason : begun.kind}` }));
-      return { url: null, nonce: null };
+      console.log(JSON.stringify({ trace: `connect:${ticketHash.slice(0, 8)}`, hop: 'connect_begin', ok: begun.kind === 'already', detail: `granola ${begun.kind === 'failed' ? begun.reason : begun.kind}` }));
+      return begun.kind === 'already' ? { url: null, nonce: null, already: true } : { url: null, nonce: null };
     }
-    const nonce = begun.path.slice(MCP_START_PATH.length), now = Date.now();
+    return this.serial(() => this.startGranola(ticketHash, begun.path.slice(MCP_START_PATH.length)));
+  }
+  private async startGranola(ticketHash: string, nonce: string): Promise<Readonly<{ url: string | null; nonce: string | null }>> {
+    const now = Date.now();
     const kept = await this.ctx.storage.list<Readonly<{ ticket: string; at: number }>>({ prefix: 'connect_mcp_ticket:' });
     const stale = [...kept].filter(([, entry]) => now - entry.at > 24 * 60 * 60_000).map(([key]) => key);
     if (stale.length) await this.ctx.storage.delete(stale);
@@ -410,7 +419,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return { url, nonce: url ? nonce : null };
   }
   private async granolaDisconnect(): Promise<ControlReceipt> {
-    const connection = this.mcp().list().find((server) => isGranolaHost(server.server_url));
+    const connection = this.granolaConnection();
     return mcpDisconnectReceipt(connection ? await this.mcp().disconnect(connection.id) : { ok: false, provider: 'not_needed' });
   }
   // A sign-in that began on a connect ticket closes that ticket once it links. Bookkeeping only: the ticket was spent at
@@ -1490,7 +1499,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const { ticket_hash, provider } = JSON.parse(body) as { ticket_hash: string; provider?: string };
       // The ticket names its provider; Continue on a Granola ticket starts Granola's sign-in once (the ticket is already spent).
       if (provider === 'granola') {
-        const begun = await this.serial(() => this.beginGranola(ticket_hash));
+        const begun = await this.beginGranola(ticket_hash);
         console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begun.url !== null, detail: 'granola' }));
         return Response.json(begun);
       }

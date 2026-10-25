@@ -37,6 +37,7 @@ const used = (provider: string) => ({ status: 410, title: 'This link was already
   ? 'Each connect link starts one sign-in. Ask Waldo to connect Google for a fresh one.'
   : `Each connect link starts one sign-in. Connect ${provider} again from Connections in the Waldo app for a fresh one.` });
 const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Nothing was connected. You can close this tab.' };
+const ALREADY = (provider: string) => ({ status: 200, title: `${provider} is already connected`, body: 'Nothing else is needed. You can close this tab.' });
 
 const hop = (status: string, hashPrefix: string) =>
   console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: status === 'ok', detail: status }));
@@ -114,7 +115,13 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     const reply = await owners.get(owners.idFromName(begun.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {
       method: 'POST', body: JSON.stringify({ ticket_hash: hash, provider: session.provider }),
     });
-    const { url: consent, nonce } = await reply.json() as { url?: string; nonce?: string };
+    const { url: consent, nonce, already } = await reply.json() as { url?: string; nonce?: string; already?: boolean };
+    if (already === true) {
+      hop('already', hashPrefix);
+      const page = callbackPage(true, ALREADY(provider.name), '', '');
+      if (session.handoff) page.headers.append('set-cookie', await releaseHandOff(request, hash));
+      return page;
+    }
     // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.
     if (!consent || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error('no consent url minted');
     // The confirm page told the owner where Continue goes; a consent address anywhere else is refused, not followed.
