@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -201,8 +201,41 @@ describe('constellation view', () => {
     ]) expect(appControlQueryV1Schema.safeParse(query).success).toBe(false);
   });
 
-  it('takes no actions', () => {
+  it('takes the node actions, and they only it', () => {
     expect(appControlActionV1Schema.safeParse({ view: 'constellation', action: 'timezone.set', value: 'UTC', revision, request_id: 'request-0009' }).success).toBe(false);
+    const act = (extra: object) => ({ view: 'constellation', revision, request_id: 'request-0010', ...extra });
+    for (const valid of [
+      act({ action: 'node.confirm', id: 'memory:node:7' }), act({ action: 'node.forget', id: 'memory:node:7' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'Walks before lunch, not after' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'x'.repeat(APP_NODE_CORRECTION_MAX_V1) }),
+    ]) expect(appControlActionV1Schema.safeParse(valid).success).toBe(true);
+    for (const invalid of [
+      act({ action: 'node.confirm' }), act({ action: 'node.confirm', id: 'memory:claim:7' }), act({ action: 'node.forget', id: 'memory:node:0' }),
+      act({ action: 'node.forget', id: 'memory:node:7', value: 'extra' }), act({ action: 'node.confirm', id: 'memory:node:7', volume: 'low' }),
+      act({ action: 'node.correct', id: 'memory:node:7' }), act({ action: 'node.correct', id: 'memory:node:7', value: '   ' }),
+      act({ action: 'node.correct', id: 'memory:node:7', value: 'x'.repeat(APP_NODE_CORRECTION_MAX_V1 + 1) }),
+      { ...act({ action: 'node.forget', id: 'memory:node:7' }), view: 'day' },
+    ]) expect(appControlActionV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  const stages = { health: 'done', calendar: 'reading', mail: 'pending', web: 'skipped' };
+  const welcome = { state: 'building', started_at: 1_761_400_000_000, finished_at: null, stages, nodes: 4 };
+  it('carries the welcome build on the summary, and node sources and confirmation, all optional', () => {
+    for (const data of [
+      { ...valid[0], welcome }, { ...valid[0], welcome: { ...welcome, state: 'not_started', started_at: null, nodes: 0, stages: { health: 'pending', calendar: 'pending', mail: 'pending', web: 'pending' } } },
+      { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: 1_761_400_090_000, stages: { health: 'empty', calendar: 'revoked', mail: 'unavailable', web: 'skipped' } } },
+      { ...valid[2], items: [{ ...node, sources: ['apple_health', 'calendar'], confirmation: 'waldos_read' }] },
+      { ...valid[2], items: [{ ...node, sources: [], confirmation: 'confirmed' }] },
+      { ...valid[4], item: { ...node, sources: ['gmail'], confirmation: 'waldos_read' } },
+    ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(true);
+    for (const data of [
+      { ...valid[0], welcome: { ...welcome, state: 'failed' } }, { ...valid[0], welcome: { ...welcome, stages: { ...stages, web: 'failed' } } },
+      { ...valid[0], welcome: { ...welcome, stages: { health: 'done', calendar: 'done', mail: 'done' } } }, { ...valid[0], welcome: { ...welcome, nodes: -1 } },
+      { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: null } }, { ...valid[0], welcome: { ...welcome, finished_at: 1 } },
+      { ...valid[0], welcome: { ...welcome, state: 'not_started' } },
+      { ...valid[2], items: [{ ...node, sources: ['web'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
+      { ...valid[1], welcome },
+    ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(false);
   });
   it('takes no actions but the claim actions of controls revision 2', () => {
     expect(APP_CONTROLS_MEMORY_REVISION).toBe(2);
@@ -244,6 +277,25 @@ describe('confirmed time zone', () => {
   it('says whether the owner set the zone, and stays optional for a Worker that does not say', () => {
     for (const valid of [{}, { timezone_confirmed: true }, { timezone_confirmed: false }]) expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
     for (const invalid of [{ timezone_confirmed: 'yes' }, { timezone_confirmed: null }, { timezone_confirmed: 1 }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
+  });
+});
+
+describe('signing out another device from the app', () => {
+  const ref = `sess_${'c'.repeat(64)}`;
+  const revoke = { view: 'connections', action: 'session.revoke', value: ref, revision, request_id: 'revoke-0001' };
+  it('names the device by the session_ref its connections row carries', () => {
+    expect(appControlActionV1Schema.safeParse(revoke).success).toBe(true);
+    const item = { signed_in: '2026-10-12T20:00:00Z', until: '2026-11-11T20:00:00Z', current: false, session_ref: ref };
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [item] } })).success).toBe(true);
+    const { session_ref: _ref, ...older } = item;
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [older] } })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [{ ...item, session_ref: 'sess_short' }] } })).success).toBe(false);
+  });
+  it('refuses a revoke without a session_ref, from another view, or carrying other fields', () => {
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: undefined }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: 'c'.repeat(64) }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, view: 'day' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, id: 'telegram' }).success).toBe(false);
   });
 });
 
@@ -311,5 +363,43 @@ describe("today's update cards", () => {
       updates([{ ...update, source: 'gmail' }]), updates([{ ...update, message_id: '' }]), updates([{ ...update, delivered_at: 0 }]),
       updates([], 0, 0), updates([], 0, 1.5), updates([], 0, '2026-10-13T10:40:00Z' as unknown as number), { updates: { ...updates([]).updates, held: 2 } },
     ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+});
+
+describe('welcome constellation fixture', () => {
+  it('parses every example the app builds against', async () => {
+    const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;
+    for (const projection of [fixture.summary_building, fixture.summary_done, fixture.interpretations_after_welcome, fixture.detail_node]) expect(appControlProjectionV1Schema.safeParse(projection).success).toBe(true);
+    for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
+    expect(appControlResultV1Schema.safeParse(fixture.action_result).success).toBe(true);
+  });
+});
+
+describe('the phone view', () => {
+  const send = { view: 'phone', action: 'phone.sms_send', revision, request_id: 'phone-0001' };
+  const check = { view: 'phone', action: 'phone.sms_check', code: '424242', revision, request_id: 'phone-0002' };
+  const data = { phone: '+919800000001', verified: false, sms: true, challenge: { state: 'pending', expires_at: 1_800_000_600, retry_at: null, checks_left: 5 }, actions: ['phone.sms_send', 'phone.sms_check'] };
+
+  it('reads the number on file and acts on it with nothing but the code', () => {
+    expect(appControlQueryV1Schema.safeParse({ view: 'phone' }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: [] } }).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(send).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(check).success).toBe(true);
+  });
+
+  it('refuses a number, a malformed code, a code on a send, a check without one, or a phone action elsewhere', () => {
+    for (const bad of [
+      { ...send, value: '+14155550100' }, { ...send, id: '+14155550100' }, { ...send, phone: '+14155550100' }, { ...send, code: '424242' },
+      { ...check, code: undefined }, { ...check, code: '4242' }, { ...check, code: '42424a' }, { ...check, code: ' 424242' },
+      { ...send, view: 'connections' }, { ...check, view: 'account' }, { view: 'phone', action: 'timezone.set', value: 'UTC', revision, request_id: 'phone-0003' },
+      { view: 'day', action: 'timezone.set', value: 'UTC', code: '424242', revision, request_id: 'phone-0004' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('refuses a malformed phone projection', () => {
+    for (const bad of [{ ...data, phone: '98000 00001' }, { ...data, extra: true }, { ...data, actions: ['phone.sms_resend'] },
+      { ...data, challenge: { ...data.challenge, state: 'sent' } }, { ...data, challenge: { ...data.challenge, checks_left: 6 } }, { ...data, challenge: { ...data.challenge, retry_at: undefined } }])
+      expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: bad }).success, JSON.stringify(bad)).toBe(false);
   });
 });

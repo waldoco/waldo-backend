@@ -109,6 +109,8 @@ Known gap: the ledger undercounts billed tokens, so treat the baseline as a floo
 
 No test yet pins that a failed attempt's `spent` is added exactly once. Follow-up: make every billed attempt reach the turn log and add that test.
 
+An active admin sees the same window per owner, with a deployment total, under "Spend (last 30 days)" on the console admin page. It is read through `waldo.admin_cost_summary` (migration `20261024010000`), a signed call that answers only an admin's DO and returns owner, day, USD, calls, input and cached tokens. On a deployment with the ledger off the table says nothing was recorded.
+
 Spend per owner per day for the last 30 days (service role):
 
 ```sql

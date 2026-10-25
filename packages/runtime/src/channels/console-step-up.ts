@@ -32,6 +32,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
   'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
+  'node.confirm': { gated: false, why: 'Confirms one remembered pattern as the owner\'s own; grants no access.' },
+  'node.correct': { gated: true, why: 'Replaces a remembered pattern with words stored as the owner\'s own, which every later turn reads.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
@@ -51,6 +53,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
+  'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
   'google.connect': { gated: true, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
   'mcp.connect': { gated: true, why: 'Connects a tool server Waldo keeps calling after this session.' },
@@ -78,6 +81,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
+  'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
+  'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.

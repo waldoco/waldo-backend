@@ -15,7 +15,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
     verifyOrJoin: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerAppCredential: async () => CREDENTIAL,
     readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null),
-    listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()}],
+    listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString(),expires_at:new Date(Date.now()+12*60*60_000).toISOString(),rotated_to:null,signed_in_at:new Date().toISOString()}],
     revokeSession: async () => { calls.push('revoke'); revoked=true; return true; },
     ...over,
   } as unknown as ConsoleAuth;
@@ -255,7 +255,7 @@ describe('Connect iMessage from the app', () => {
   it('issues no code to a session signed in over two hours ago, or whose sign-in time cannot be read', async () => {
     const issued: string[] = [];
     const issueProviderLinkCode = async (doName: string, provider: string) => { issued.push(`${doName}:${provider}`); return 'ABCDEFGHJK'; };
-    const signedIn = (created_at: string) => fakeAuth({ issueProviderLinkCode, listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at, last_seen_at: created_at }] } as never).auth;
+    const signedIn = (created_at: string) => fakeAuth({ issueProviderLinkCode, listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at, last_seen_at: created_at, signed_in_at: created_at }] } as never).auth;
     const old = await handleApp(authed(), withAddress(), signedIn(new Date(Date.now() - 3 * 60 * 60_000).toISOString()));
     expect([old!.status, await old!.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
     expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode, listSessions: async () => [] } as never).auth))!.status).toBe(403);

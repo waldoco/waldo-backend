@@ -38,6 +38,8 @@ export type AppOnboardingHost = Readonly<{
   diagnostics: AppDiagnosticRecording | null;
   // Whether this app session signed in within the last two hours, as a link code needs.
   signedInRecently(): Promise<boolean>;
+  // Setup is done: the first-run complete action or the setup answers landed. Starts the owner's one welcome build; a repeat starts nothing.
+  setupDone?(): void;
   // The owner's proactive-surface setting (the console's own).
   proactiveSurface(): AppProactiveSurfaceV1;
   now(): number;
@@ -136,6 +138,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const action = appOnboardingActionV1Schema.parse(body);
     const error = await host.firstRun.act(action);
     if (error) return problem(error);
+    if (action.action === 'complete') host.setupDone?.();
     return record(appOnboardingResultV1Schema.parse({ request_id: action.request_id, onboarding: await host.firstRun.view(), replayed: false }));
   }
   if (path === ANSWERS_PATH) {
@@ -143,6 +146,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     if (!host.consent.stepsOpen()) return problem('agreements_required');
     const answers = appSetupAnswersRequestV1Schema.parse(body);
     const held = host.transaction(() => host.firstRun.saveAnswers(answers));
+    host.setupDone?.();
     return record(appSetupAnswersResultV1Schema.parse({ request_id: answers.request_id, held, replayed: false }));
   }
   if ((path === '/app/v1/consents' || path === '/app/v1/consents/withdraw') && 'purpose' in body && body.purpose === 'diagnostic_recording') {
@@ -193,6 +197,7 @@ export type OwnerOnboardingDeps = Readonly<{
   chat: ChatChannels;
   diagnostics: AppDiagnosticRecording | null;
   signedInRecently(): Promise<boolean>;
+  setupDone?(): void;
   // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
   // discloses it is published.
   agreementsOffered: boolean;
@@ -264,7 +269,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     withdrawLookup,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, diagnostics: deps.diagnostics, signedInRecently: deps.signedInRecently, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
+    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, diagnostics: deps.diagnostics, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
   };
 };
