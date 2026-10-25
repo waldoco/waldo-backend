@@ -746,7 +746,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const composition = iMessageComposition(this.imessageHost.env);
     if (!composition) return;
     const inbox = new IMessageOwnerInbox(this.ctx.storage);
-    inbox.recover(this.imessageAttempts);
+    inbox.recover(this.imessageAttempts, this.iMessageFailureNotice);
     for (const pending of inbox.records().filter(row => row.state === 'admitted')) {
       let current = false;
       try { await currentIMessageAuthority(this.imessageHost.env, pending); current = true; }
@@ -763,13 +763,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: record.text } }, 'imessage', true, scope);
         completed = true;
       } catch { console.error('imessage execution outcome unconfirmed'); }
-      finally { await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
+      finally { await this.iMessageProgress?.close(); this.iMessageProgress = null; clearTimeout(timeout); inbox.settle(record, completed, this.iMessageFailureNotice); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
       // Each reply goes to the bridge before the next turn starts, not after every turn this drain found.
       await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     }
     await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
     await this.rearmEveryWake();
   }
+  // A turn that closes without its reply (a model or tool error, its deadline, an empty reply, an eviction) gets the app's
+  // fixed notice, frozen in the transaction that closes it: never the error, never the owner's words. A notice that cannot
+  // freeze leaves the turn closed and unannounced rather than holding the queue.
+  private readonly iMessageFailureNotice = (record: IMessageInboxRecord): void => {
+    try { new IMessageFinalOutbox(this.ctx.storage).freezeFailure(record, `${RUN_DID_NOT_FINISH}\n\n${this.requestReceived(record.admittedAt)}`); }
+    catch { console.error('imessage failure notice unavailable'); }
+  };
   // Short notes while a long iMessage turn runs (see progress-pacer). The model writes each one; it freezes under the turn's
   // own scope and goes to the bridge from inside the turn, which already holds the serial queue, so nothing is queued
   // behind the turn and nothing re-arms: a note that cannot go at once is settled unsent. WALDO_IMESSAGE_PROGRESS=0 is off.
