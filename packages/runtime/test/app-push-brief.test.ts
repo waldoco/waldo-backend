@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
-    const text = String(content).includes('[Scheduled card') ? CARD_TEXT : 'SKIP';
+    const text = String(content).includes('[Scheduled card') && !(globalThis as { skipBrief?: boolean }).skipBrief ? CARD_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -59,7 +59,7 @@ beforeEach(() => {
     return Response.json(true);
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); delete (globalThis as { skipBrief?: boolean }).skipBrief; });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 
@@ -138,5 +138,14 @@ it('a device Expo no longer reaches is retired in the directory, signed for this
     const { p_at: at, p_sig: signature } = wire.retired[0] as { p_at: number; p_sig: string };
     expect(signature).toBe(await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, at, `app.push.retire.push-brief-retire.${INSTALLATION}.4`));
     expect(pushLog(state).map(row => row.note?.split(':')[0])).toEqual(['partial', 'retired']);
+  });
+});
+
+it('a Brief the model skips puts nothing in the app chat and pushes nothing, so no push says a Brief is ready that is not there', async () => {
+  (globalThis as { skipBrief?: boolean }).skipBrief = true;
+  await briefFires('push-brief-skipped', 'app', async (owner, state) => {
+    expect(await appChat(owner, 'push-brief-skipped')).toEqual([]);
+    expect([wire.targetsAsked, wire.pushes.length]).toEqual([0, 0]);
+    expect(pushLog(state)).toEqual([]);
   });
 });
