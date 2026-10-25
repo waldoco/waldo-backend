@@ -41,7 +41,7 @@ function world() {
 }
 const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-phone-${crypto.randomUUID()}`)), async (_i, state) => {
-    const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, storage: state.storage, assertCurrent: async () => {},
+    const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {},
       sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 60_000 }], view: unused, act: unused,
       account: { owner: 'owner-app-phone', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
       phone: phoneEnv(on) };
@@ -70,7 +70,7 @@ it('reads the number on file, texts a code to it and proves it, with receipts th
     const checked = await act({ view: 'phone', action: 'phone.sms_check', code: CODE, revision: waiting.revision, request_id: 'phone-request-2' });
     expect(appControlResultV1Schema.parse(checked.body).receipt).toEqual({ state: 'recorded', message: 'Your number is verified.' });
     const back = await appControlsRequest(new Request('https://app.fixture.invalid/app/v1/actions/phone-request-2'), {
-      csrf: 'c'.repeat(64), expires: Date.now() + 60_000, storage, assertCurrent: async () => {}, sessions: unused, view: unused, act: unused,
+      csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt: new Date().toISOString(), storage, assertCurrent: async () => {}, sessions: unused, view: unused, act: unused,
       account: { owner: 'owner-app-phone', auth: null, requestUrl: '', purgeOwnerFiles: unused, eraseOwnerStorage: unused }, phone: phoneEnv('1') });
     expect(await back.json()).toMatchObject({ request_id: 'phone-request-2', duplicate: true, receipt: { state: 'recorded' } });
     expect(JSON.stringify([...(await storage.list()).entries()])).not.toMatch(new RegExp(`${CODE}|${TOKEN}`));
