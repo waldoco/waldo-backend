@@ -2768,6 +2768,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       scope.admit();
       await currentIMessageAuthority(this.imessageHost.env, record);
       scope.admit();
+      if (await this.iMessageNumberedReply(desk, scope, log)) return;
     }
     if (channel === 'app') {
       const record = this.activeApp;
@@ -2780,7 +2781,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `${channel}-unlinked`, hop: 'turn', ms: 0, ok: false, detail: `dropped: ${channel} not linked for this owner` });
       return;
     }
-    if (channel === 'imessage' && await this.iMessageNumberedReply(desk, scope!, log)) return;
     try {
     const offsetKey = offsetKeyOf(channel);
     const offset = durable ? 0 : (await this.ctx.storage.get<number>(offsetKey)) ?? 0;
@@ -3387,6 +3387,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     // The owner-turn tool set, captured where the responder is built: an approved tainted action replays through it.
     let replayHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [];
+    // iMessage shows no buttons: a card goes out as its own message ahead of the turn's reply, and is answered by number.
+    const approvalCallers: Partial<Record<ChannelKind, typeof routedCall>> = {
+      imessage: iMessageApprovalCaller(storage, () => this.activeIMessage && this.activeScope ? { record: this.activeIMessage, scope: this.activeScope } : null),
+    };
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow,
@@ -3396,8 +3400,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await destination('telegram')!.call('editMessageReplyMarkup', { chat_id: Number(chat), message_id: Number(message), reply_markup: { inline_keyboard: [] } });
       },
       appIdentity: () => !!identity.get<string>('app_subject') || !!identity.get<string>('owner_principal_ref'),
-      // iMessage shows no buttons: a card goes out as its own message ahead of the turn's reply, and is answered by number.
-      call: channel === 'imessage' ? iMessageApprovalCaller(storage, () => this.activeIMessage && this.activeScope ? { record: this.activeIMessage, scope: this.activeScope } : null) : routedCall,
+      call: approvalCallers[channel] ?? routedCall,
       owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
