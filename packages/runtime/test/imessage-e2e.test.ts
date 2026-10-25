@@ -35,7 +35,7 @@ import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][],
-  notes: [] as (string | null)[], progressInputs: [] as string[], progressHold: null as null | (() => Promise<void>), googleDead: false }));
+  notes: [] as (string | null)[], progressInputs: [] as string[], progressHold: null as null | (() => Promise<void>), googleDead: false, moved: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
   if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); proof.systems.push(String(input.instructions ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
@@ -49,6 +49,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
 // A dead grant, when a test asks for one: the calendar read reports invalid_grant to the host and fails 401.
 vi.mock('../src/connectors/google', async load => { const original = await load<typeof import('../src/connectors/google')>(); return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health?: (error: string) => void) => ({
   event: async (id: string) => ({ id, etag: 'etag-3pm', title: 'Design review', status: 'confirmed', start: '2030-01-02T15:00:00Z', end: '2030-01-02T16:00:00Z' }),
+  moveEvent: async (id: string, start: string, end: string) => { proof.moved.push(id); return { id, etag: 'etag-4pm', title: 'Design review', status: 'confirmed', start, end }; },
   ...(proof.googleDead ? { calendarPage: async () => { health?.('google token failed: invalid_grant'); throw new original.GoogleError(401, 'google token failed: invalid_grant'); } } : {}),
 }) }; });
 
@@ -58,7 +59,7 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; proof.notes = []; proof.progressInputs = []; proof.progressHold = null; proof.googleDead = false; proof.moved = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   // Each world counts only its own test's egress.
@@ -195,25 +196,57 @@ it('a signed direct message runs one genuine owner turn and its frozen reply rea
   expect(forbiddenEgress).toEqual([]);
 });
 
-it('an approval proposed on an iMessage turn is shown only in the app; the iMessage reply stays plain text', async () => {
+it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead of the reply, numbered; a tapback leaves it, and "1" moves the event once', async () => {
   const w = await world();
   await w.pairAndActivate();
   await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', 'https://imessage.fixture.invalid'); await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]); });
   proof.outputs.push([{ type: 'function_call', call_id: 'move-3pm', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z', end: '2030-01-02T17:00:00Z', reason: 'Owner asked to move it to 4' }) }], []);
-  expect((await w.host.send(w.host.message('Move my 3pm to 4'))).status).toBe(200);
-  await w.pump();
-  await runInDurableObject(w.ownerStub, async (_i, state) => {
-    const shown = state.storage.sql.exec<{ surface: string }>('SELECT surface FROM approval_presentations').toArray();
-    expect(shown.length).toBeGreaterThan(0);
-    expect(shown.map(row => row.surface)).toEqual(shown.map(() => 'app'));
-  });
-  const { delivery } = await w.host.pull();
-  const command = JSON.parse(delivery!.body);
-  expect(command).toMatchObject({ operation: 'send', attachments: [] });
-  expect(command.text.startsWith(proof.reply)).toBe(true);
-  expect(command.text).not.toMatch(/approve|Design review|waldo:\/\//i); // no card text, buttons or app link went to iMessage
-  expect(forbiddenEgress).toEqual([]);
-});
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    await replyFor(w, 'Move my 3pm to 4');
+    // The card is its own message, ahead of the reply on the bridge's one slot.
+    const first = (await w.host.pull()).delivery!;
+    const card = JSON.parse(first.body);
+    expect(card.text).toContain('Move "Design review"');
+    expect(card.text).toMatch(/\n\nReply 1 to move it, or 2 to skip\.$/);
+    expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
+    await moveClock(w, t0 + 6_000);
+    await w.pump(3);
+    const second = (await w.host.pull()).delivery!;
+    expect(JSON.parse(second.body).text.startsWith(proof.reply)).toBe(true);
+    expect((await w.host.postResult(second, await w.host.execute(second))).status).toBe(200);
+    await w.pump(2);
+    await runInDurableObject(w.ownerStub, async (_i, state) => {
+      expect(state.storage.sql.exec<{ surface: string; approvable: number }>("SELECT surface, approvable FROM approval_presentations WHERE surface = 'imessage'").toArray()).toEqual([{ surface: 'imessage', approvable: 1 }]);
+    });
+
+    // A tapback on the card is evidence, never a turn or a decision.
+    const base = w.host.message('x');
+    const tapback: any = { ...base, eventId: 'sim-card-tapback', kind: 'reaction', action: 'add', actorHandle: SUBJECT, reaction: { kind: 'standard', type: 'like' },
+      target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT, messageGuid: 'sim-card-guid', partIndex: 0 } };
+    delete tapback.text; delete tapback.attachments;
+    expect((await w.host.send(tapback)).status).toBe(200);
+    await w.pump(2);
+    expect(proof.moved).toEqual([]);
+    expect(proof.turns).toHaveLength(1);
+
+    // "1" decides the card without a model turn, and the decision is the reply.
+    await replyFor(w, '1');
+    expect(proof.turns).toHaveLength(1);
+    expect(proof.moved).toEqual(['ev-3pm']);
+    const decided = (await w.host.pull()).delivery!;
+    expect(JSON.parse(decided.body).text).toMatch(/^Done: Move "Design review"/);
+    expect((await w.host.postResult(decided, await w.host.execute(decided))).status).toBe(200);
+    await w.pump(2);
+
+    // Another "1" has no waiting card: it is an ordinary turn, and the event is not moved again.
+    await replyFor(w, '1');
+    expect(proof.turns).toHaveLength(2);
+    expect(proof.moved).toEqual(['ev-3pm']);
+    expect(forbiddenEgress).toEqual([]);
+  } finally { vi.useRealTimers(); }
+}, 20_000);
 
 const outbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 const inbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
