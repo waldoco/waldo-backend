@@ -52,6 +52,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
+  'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
   'google.connect': { gated: true, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
   'mcp.connect': { gated: true, why: 'Connects a tool server Waldo keeps calling after this session.' },
@@ -79,6 +80,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
+  'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
+  'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.

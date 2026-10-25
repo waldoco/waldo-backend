@@ -43,7 +43,8 @@ export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: nu
 
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
 // name is recorded. Tokens never leave this function.
-export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+// ref names a directory-held session, so the app can sign that device out; browser rows from this store have none.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string }>;
 const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
   [...sessions].sort((a, b) => signedInAt(b) - signedInAt(a)).map((session) => ({
@@ -143,7 +144,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 

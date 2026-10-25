@@ -25,17 +25,19 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
- imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+ imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
+// One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
+const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
-// targets. The fresh read's list is the eligibility check, so the console view is never built.
-const listedRows:Readonly<Record<string,string>>={imessage:'bridges',devices:'devices'};
-const listedAction=(action:ConsoleAction,data:unknown,rows:string):boolean=>{
+// targets (null: top level only). The fresh read's list is the eligibility check, so the console view is never built.
+const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null};
+const listedAction=(action:ConsoleAction,data:unknown,rows:string|null):boolean=>{
  const listing=data as Readonly<Record<string,unknown>>|null,has=(actions:unknown)=>Array.isArray(actions)&&actions.includes(action.action);
  if(action.id==='')return has(listing?.actions);
- const items=listing?.[rows];
+ const items=rows===null?undefined:listing?.[rows];
  return Array.isArray(items)&&items.some((item:Readonly<{id?:unknown;actions?:unknown}>)=>item?.id===action.id&&has(item.actions));
 };
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
@@ -91,6 +93,7 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
  if(action.action==='whatsapp.unlink')return view.whatsapp?.linked===true;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);
+ if(action.action==='session.revoke')return view.sessions.some(row=>row.ref!==undefined&&row.ref===action.value&&!row.current);
  if(action.action.startsWith('approval.')) {
   const p=view.approvals.find(p=>p.id===action.id);if(!p)return false;
   if(action.action==='approval.approve')return consoleMayApprove(p);
@@ -111,7 +114,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!action||!Object.hasOwn(CONTROL_VIEW_ACTIONS,view)||!CONTROL_VIEW_ACTIONS[view]!.includes(action.action))return reply({error:'invalid_action'},403);
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
- const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:values}:{view,action,revision:form.get('revision')});
+ const kept=Object.fromEntries(Object.entries(values).filter(([key])=>!unfingerprinted[view]?.includes(key)));
+ const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:kept}:{view,action,revision:form.get('revision')});
  const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`,bookKey=deps.book??RECEIPT_BOOK_KEY;
  const book=await loadReceiptBook(deps.store,deps.sessions,bookKey);
  const prior=book[key];
@@ -120,8 +124,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  const projection=await deps.projection(view,action.id);
  if(!projection)return reply({error:'unavailable'},503);
  if(await controlRevision(projection)!==form.get('revision'))return reply({error:'stale_read',message:'These records changed. Refresh and review again before applying a change.'},409);
- const rows=Object.hasOwn(listedRows,view)?listedRows[view]:undefined;
- if(rows?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
+ const rows=Object.hasOwn(listedRows,view)?listedRows[view]!:undefined;
+ if(rows!==undefined?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
  const kept_until=Date.now()+RECEIPT_RETENTION_MS,expires=Math.min(deps.expires,kept_until);
  const pending:StoredReceipt={fingerprint,expires,kept_until,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
  book[key]=pending;await deps.store.put(bookKey,book);

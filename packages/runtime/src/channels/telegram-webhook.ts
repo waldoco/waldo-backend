@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
@@ -74,7 +75,7 @@ export type TelegramWebhookEnv = Readonly<{
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
-}> & OwnerDirectoryEnv;
+}> & PhoneSmsEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 

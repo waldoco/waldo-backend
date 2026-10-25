@@ -381,7 +381,7 @@ describe('a request another site started renews no session', () => {
       const name = url.split('/rpc/')[1]!;
       names.push(name);
       if (name === 'console_session_open_for') listed.push(String((JSON.parse(String(init.body)) as { p_session_hash: string }).p_session_hash));
-      if (name === 'console_session_list') return new Response(JSON.stringify(listed.map(session => ({ session, created_at: '2026-10-23T00:00:00Z', last_seen_at: '2026-10-23T00:00:00Z' }))));
+      if (name === 'console_session_inventory') return new Response(JSON.stringify(listed.map(session => ({ session, created_at: '2026-10-23T00:00:00Z', last_seen_at: '2026-10-23T00:00:00Z', expires_at: '2026-10-23T12:00:00Z', rotated_to: null, signed_in_at: '2026-10-23T00:00:00Z' }))));
       return new Response('true');
     });
     const auth = consoleAuth(env, fetcher as unknown as typeof fetch, () => at)!;
@@ -389,7 +389,7 @@ describe('a request another site started renews no session', () => {
     for (const site of ['cross-site', 'same-site']) {
       names.length = 0;
       expect(await auth.readOwnerCookie(new Request('https://w.test/console', { headers: { cookie, 'sec-fetch-site': site } })), site).toBe('do-a');
-      expect(names, site).toEqual(['console_session_list']);
+      expect(names, site).toEqual(['console_session_inventory']);
     }
     listed = [];
     expect(await auth.readOwnerCookie(new Request('https://w.test/console', { headers: { cookie, 'sec-fetch-site': 'cross-site' } }))).toBeNull();
