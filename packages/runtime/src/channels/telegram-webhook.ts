@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
@@ -44,6 +45,8 @@ export type TelegramWebhookEnv = Readonly<{
   BROWSER?: import('@cloudflare/playwright').BrowserWorker;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
+  // Expo's access token for app push. Missing means push is not configured.
+  EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
   // '0' turns off progress notes on long iMessage turns.
@@ -74,7 +77,7 @@ export type TelegramWebhookEnv = Readonly<{
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
-}> & OwnerDirectoryEnv;
+}> & PhoneSmsEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 

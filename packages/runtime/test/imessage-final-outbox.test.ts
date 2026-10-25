@@ -29,6 +29,33 @@ it('settling prunes the reply text; the settled identity still dedups and still 
   });
 });
 
+it('a failed turn\'s notice has one identity per turn, apart from its reply: closing the turn again freezes the same record', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage);
+    const frozen = outbox.freezeFailure(turn('a'), 'This run did not finish.');
+    expect(frozen).toMatchObject({ replyRef: 'failure:a', commandId: 'wfn_cmd-a', bridgeDoName: 'bridge', ownerDoName: 'owner', state: 'frozen' });
+    expect(outbox.freezeFailure(turn('a'), 'This run did not finish.')).toEqual(frozen);
+    expect(outbox.records()).toHaveLength(1);
+    expect(outbox.freeze(turn('a'), 'the reply').commandId).not.toBe(frozen.commandId);
+  });
+});
+
+it('only a turn that closes as interrupted, and only the call that closes it, hears about it', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage), heard: string[] = [];
+    const admit = async (key: string) => (await inbox.admit({ dedupKey: key, digest: '0'.repeat(64), text: 'hi', conversationRef: 'c', binding: {} as never,
+      bindingDigest: 'b', revision: '1', environment: 'test', bridgeDoName: 'bridge', ownerDoName: 'owner', commandId: `cmd-${key}`, occurredAt: 1 }) as { record: IMessageInboxRecord }).record;
+    const done = inbox.claim((await admit('done')).id, true)!, failed = inbox.claim((await admit('failed')).id, true)!, lost = inbox.claim((await admit('lost')).id, true)!;
+    inbox.settle(done, true, r => heard.push(r.commandId));
+    inbox.settle(failed, false, r => heard.push(r.commandId));
+    inbox.settle(failed, false, r => heard.push(r.commandId));
+    inbox.recover(new Set(), r => heard.push(r.commandId));
+    inbox.recover(new Set(), r => heard.push(r.commandId));
+    expect(heard).toEqual(['cmd-failed', 'cmd-lost']);
+    expect(inbox.get(lost.id)).toMatchObject({ state: 'interrupted', effectsUnconfirmed: true });
+  });
+});
+
 it('a message Waldo starts is frozen to the sender of the latest turn, under its own id and command, and a retry refreezes it', async () => {
   await runInDurableObject(stub(), async (_i, state) => {
     const outbox = new IMessageFinalOutbox(state.storage);

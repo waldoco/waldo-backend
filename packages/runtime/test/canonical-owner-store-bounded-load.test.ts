@@ -165,15 +165,27 @@ describe('the window read gives a turn the same context and leaf as a whole-chai
     const base = chain(600);
     const near = after(after(base, `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202, MAIN, { modelPayload: '[superseded summary]', modelProjection: { mode: 'omit' } })),
       `${MAIN}-u580-reply`, summary(`${MAIN}-u580-reply`, `${MAIN}-u0`, 1_162));
-    const far = after(base, `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202));
+    const far = after(base, `${MAIN}-u300-reply`, summary(`${MAIN}-u300-reply`, `${MAIN}-u0`, 602));
     for (const enabled of [false, true]) {
       const compaction = { ...COMPACTION, enabled };
       const nearRead = await equivalent(stored(near, `${MAIN}-u599-reply`), MAIN, { compaction });
       expect(nearRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u580-reply.` : /^(question|answer) /);
       expect(nearRead.reads.rows).toBeLessThanOrEqual(enabled ? 128 : 256);
       const farRead = await equivalent(stored(far, `${MAIN}-u599-reply`), MAIN, { compaction });
-      expect(farRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u100-reply.` : /^(question|answer) /);
+      expect(farRead.view.messages[0]!.content).toMatch(enabled ? `Summary through ${MAIN}-u300-reply.` : /^(question|answer) /);
     }
+  });
+
+  it('with compaction on, a live summary more than four window budgets back is not read to, and the turn reads the plain window', async () => {
+    const rows = after(chain(1_500), `${MAIN}-u100-reply`, summary(`${MAIN}-u100-reply`, `${MAIN}-u0`, 202));
+    const storage = countingStorage(stored(rows, `${MAIN}-u1499-reply`));
+    const view = await turnView(storage, MAIN, { compaction: ON });
+    expect(view.live).toBeNull();
+    expect(view.messages[0]!.content).toMatch(/^(question|answer) /);
+    // The plain window is one budget of rows; the read takes four, and the rest of the page it stopped in.
+    const windowRows = view.messages.length - 1;
+    expect(storage.reads.rows).toBeGreaterThan(3 * windowRows);
+    expect(storage.reads.rows).toBeLessThanOrEqual(4 * (windowRows + 1) + 128);
   });
 
   it('with compaction on, a summary forget omitted, or one on another chat, leaves the read at the window budget', async () => {
@@ -181,14 +193,14 @@ describe('the window read gives a turn the same context and leaf as a whole-chai
     const omitted = await equivalent(stored(forgotten, `${MAIN}-u2499-reply`), MAIN, { compaction: ON });
     expect(omitted.view.live).toBeNull();
     expect(omitted.reads.rows).toBeLessThanOrEqual(omitted.view.messages.length + 128);
-    const app = chain(600, MAIN), imessage = after(chain(600, IMESSAGE), `${IMESSAGE}-u10-reply`, summary(`${IMESSAGE}-u10-reply`, `${IMESSAGE}-u0`, 22, IMESSAGE));
+    const app = chain(600, MAIN), imessage = after(chain(600, IMESSAGE), `${IMESSAGE}-u300-reply`, summary(`${IMESSAGE}-u300-reply`, `${IMESSAGE}-u0`, 602, IMESSAGE));
     const mixed = app.flatMap((entry, index) => [entry, imessage[index]!]).concat(imessage.slice(app.length));
     const other = await equivalent(stored(mixed, `${MAIN}-u599-reply`), MAIN, { compaction: ON });
     expect(other.view.live).toBeNull();
     expect(other.reads.rows).toBeLessThanOrEqual(2 * other.view.messages.length + 128);
     // The chat that has the summary still reads back to it.
     const own = await equivalent(stored(mixed, `${IMESSAGE}-u599-reply`), IMESSAGE, { compaction: ON });
-    expect(own.view.live).toBe(`${IMESSAGE}-u10-reply-compaction`);
+    expect(own.view.live).toBe(`${IMESSAGE}-u300-reply-compaction`);
   });
 
   it('an app thread chain, and a main prefix that holds two chats with the stored leaf on the other one', async () => {

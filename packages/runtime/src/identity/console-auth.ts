@@ -1,4 +1,5 @@
 import { withRequestTimeout } from './request-timeout';
+import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
@@ -35,7 +36,22 @@ export type AdminOverview = Readonly<{
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
-export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string }>;
+// rotated_to: the session a renewal issued in this one's place for the same device; this one still works until it expires.
+// signed_in_at: when the sign-in this session renews from happened. created_at is when this row opened, which a renewal
+// resets, so the step-up reads signed_in_at.
+export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; rotated_to: string | null; signed_in_at: string }>;
+// A session and every listed session a renewal links to it, either way. They are one device: signing one out signs out all.
+export const sessionFamily = (rows: readonly ConsoleSession[], session: string): readonly string[] => {
+  const family = new Set([session]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const row of rows) {
+      const linked = family.has(row.session) ? row.rotated_to : row.rotated_to !== null && family.has(row.rotated_to) ? row.session : null;
+      if (linked !== null && !family.has(linked)) { family.add(linked); grew = true; }
+    }
+  }
+  return [...family];
+};
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string, code?: string): Promise<boolean>;
@@ -52,6 +68,8 @@ export type ConsoleAuth = Readonly<{
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
+  /** Spend across every owner for the last 30 days; null unless the database admits the caller as an admin. */
+  adminCostSummary(doName: string): Promise<AdminCostSummary | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
@@ -77,6 +95,8 @@ export type ConsoleAuth = Readonly<{
   // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
   ownerAppCredential(doName: string): Promise<string | null>;
   readAppCredential(credential: string): Promise<string | null>;
+  // A credential for a fresh 30-day app session; the presented session keeps 5 more minutes. null when it is no longer live.
+  renewAppCredential(doName: string, sessionId: string): Promise<string | null>;
   listSessions(doName: string): Promise<readonly ConsoleSession[]>;
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
@@ -151,20 +171,25 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   };
   const presentedOwnerCookie = (request: Request) =>
     (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
+  // console_session_inventory, not console_session_list: the list keeps its three keys for a Worker deployed before the
+  // 30-day app session, and the inventory adds each row's end, its renewal successor and its sign-in time.
   const listSessions = async (doName: string): Promise<readonly ConsoleSession[]> => {
-    const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
+    const rows = await rpc('console_session_inventory', `consolesess.inventory.${doName}`, { p_do_name: doName });
     // An invalid authority response cannot prove that a session is absent.
     if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
     const seen = new Set<string>();
     return rows.map((raw: unknown) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
       const row = raw as Record<string, unknown>;
-      if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+      if (Object.keys(row).sort().join(',') !== 'created_at,expires_at,last_seen_at,rotated_to,session,signed_in_at'
         || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
         || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
-        || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+        || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))
+        || typeof row.expires_at !== 'string' || !Number.isFinite(Date.parse(row.expires_at))
+        || typeof row.signed_in_at !== 'string' || !Number.isFinite(Date.parse(row.signed_in_at))
+        || (row.rotated_to !== null && (typeof row.rotated_to !== 'string' || !/^[a-f0-9]{64}$/.test(row.rotated_to)))) throw new Error('session inventory unavailable');
       seen.add(row.session);
-      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: row.expires_at, rotated_to: row.rotated_to, signed_in_at: row.signed_in_at };
     });
   };
   // The list holds only live rows, so membership answers liveness without moving last_seen_at.
@@ -233,6 +258,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
+    adminCostSummary: async (doName) => {
+      const summary = await rpc('admin_cost_summary', `admincost.${doName}`, { p_do_name: doName });
+      return summary === null ? null : adminCostSummarySchema.parse(summary);
+    },
     invite: async (doName, email, code) => {
       const address = email.trim().toLowerCase();
       const hash = await linkCodeHash(code);
@@ -260,6 +289,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     readOwnerCookie: (request) => fromAnotherSite(request) ? readListed(presentedOwnerCookie(request)) : readSigned(presentedOwnerCookie(request), cookieSig),
     ownerAppCredential: (doName) => mint(doName, appSig, openTwelveHours),
     readAppCredential: (credential) => readSigned(credential, appSig),
+    async renewAppCredential(doName, sessionId) {
+      const fresh = newSessionId();
+      const [presented, renewed] = await Promise.all([linkCodeHash(sessionId), linkCodeHash(fresh)]);
+      const rotated = await rpc('app_session_rotate', `appsess.rotate.${doName}.${presented}.${renewed}`, { p_do_name: doName, p_session_hash: presented, p_new_session_hash: renewed });
+      if (typeof rotated !== 'boolean') throw new Error('session renewal unavailable');
+      return rotated ? `${encodeURIComponent(doName)}.${fresh}.${await appSig(doName, fresh)}` : null;
+    },
     listSessions,
     revokeSession,
     async signOutAll(doName) {

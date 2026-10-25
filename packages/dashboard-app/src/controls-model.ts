@@ -1,6 +1,6 @@
 import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
-export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices';
+export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
 export type DayRecord = Base<'day', {
   timezone: string;
@@ -52,11 +52,17 @@ export type IMessageRecord = Base<'imessage', {
 export type DevicesRecord = Base<'devices', {
   actions: 'device.pair'[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: (typeof DEVICE_ROW)[number][] }[]; query_kinds: string[]; notification_bodies: string[];
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
-type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
+const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
+/** The number on file and how to prove it. Times are epoch seconds; retry_at null means a code may be asked for now. */
+export type PhoneRecord = Base<'phone', {
+  phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
+  challenge: { state: (typeof PHONE_STATES)[number]; expires_at: number; retry_at: number | null; checks_left: number } | null;
+}>;
+type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
-  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string };
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
 /** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
@@ -187,6 +193,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       actions: [...data.actions] as DevicesRecord['data']['actions'], query_kinds: [...data.query_kinds], notification_bodies: [...data.notification_bodies],
       devices: (data.devices as Device[]).map(row => ({ id: row.id, label: row.label, capabilities: [...row.capabilities], created_at: row.created_at, actions: [...row.actions] })),
     }, status: { devices: (status.devices as DevicesRecord['status']['devices']).map(row => ({ id: row.id, online: row.online, last_seen_at: row.last_seen_at, commands: row.commands.map(command => ({ class: command.class, state: command.state, result_state: command.result_state })) })) } } as Records[V];
+  }
+  if (expected === 'phone') {
+    const challenge = data.challenge;
+    if (!(data.phone === null || (string(data.phone) && /^\+[1-9]\d{6,14}$/.test(data.phone))) || typeof data.verified !== 'boolean' || typeof data.sms !== 'boolean' || !listed(data.actions, PHONE_ACTIONS)
+      || !(challenge === null || (obj(challenge) && (PHONE_STATES as readonly string[]).includes(String(challenge.state)) && count(challenge.expires_at)
+        && (challenge.retry_at === null || count(challenge.retry_at)) && count(challenge.checks_left) && challenge.checks_left <= 5))) throw shapeError();
+    type Challenge = NonNullable<PhoneRecord['data']['challenge']>;
+    return { ...base, view: 'phone', data: { phone: data.phone, verified: data.verified, sms: data.sms, actions: [...data.actions] as PhoneRecord['data']['actions'],
+      challenge: obj(challenge) ? { state: challenge.state as Challenge['state'], expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } : null } } as Records[V];
   }
   if (expected === 'files') {
     if (data.storage !== 'telegram_reference' || !Array.isArray(data.items) || !data.items.every(item => obj(item) && count(item.id) && item.id > 0 && string(item.kind) && string(item.name) && optionalString(item.mime) && (item.size === null || count(item.size)) && string(item.caption) && typeof item.at === 'number' && Number.isFinite(item.at))) throw shapeError();
