@@ -3,13 +3,15 @@ import { signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 // The words an owner agrees to. Signup and the console both show this text, and an agreement counts only for the version
 // it was given to: new wording means a new version, and every earlier agreement stops counting until the owner agrees again.
 export const DIAGNOSTIC_RECORDING_WORDING = Object.freeze({
-  version: 'beta-2026-10-22',
+  version: 'beta-2026-10-25',
   label: 'During the beta, let the Waldo team read my chats with Waldo to find and fix problems (optional)',
   detail: 'If you agree, Waldo records the full text of your conversations with it: your messages, Waldo’s replies, what its '
     + 'tools returned and any health information in them, with your email address. The records go to Langfuse, the diagnostic '
     + 'service we use; error details and your email address also go to our service logs. The Ecofresh team members who work on '
-    + 'Waldo can read them. You can turn this off at any time in the console, under Settings, Your day; recording stops from your '
-    + 'next message. To have earlier records deleted, write to woof@heywaldo.in. Waldo works the same whether or not you agree.',
+    + 'Waldo can read them. Diagnostic records are kept for 30 days, and service logs for up to 7 days. You can turn this off at '
+    + 'any time in the app, or in the console under Settings, Your day; recording stops from your next message, and your earlier '
+    + 'diagnostic records are deleted within 7 days. To ask about your records, write to woof@heywaldo.in. Waldo works the same '
+    + 'whether or not you agree.',
 });
 
 export type DiagnosticAgreement = Readonly<{ agreed: boolean; version: string | null }>;
