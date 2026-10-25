@@ -67,7 +67,7 @@ What is exported then:
 
 The same decision gates free-form `error` and `detail` text and the owner's email in the DO trace table, Worker logs and OTLP (`gateTraceEntry`).
 
-The agreement lives in Supabase (`waldo.diagnostic_recording_agreements`, migration `20261022120000`). Each row holds the owner, the wording version, where they agreed (`signup` or `console`), when, and when they withdrew. The two signed functions `set_diagnostic_recording` and `diagnostic_recording_state` are its only writer and reader.
+The agreement lives in Supabase (`waldo.diagnostic_recording_agreements`, migration `20261025150000`). Each row holds the owner, the wording version, where they agreed (`signup` or `console`), when, and when they withdrew. The two signed functions `set_diagnostic_recording` and `diagnostic_recording_state` are its only writer and reader.
 
 Owners choose at Finish signup (optional, unticked, shown only where the environment records text) or later in the console under Settings, Your day. Existing owners start as not agreed.
 
