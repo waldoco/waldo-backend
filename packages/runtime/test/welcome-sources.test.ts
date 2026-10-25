@@ -15,6 +15,23 @@ const granted = (...sources: string[]) => ({ kind: 'granted' as const, sources: 
 const health = (b: HealthReadBook) => healthStage(b, () => 'Europe/London', () => NOW)();
 
 describe('welcome health stage', () => {
+  // The welcome read is get_health's read: time asleep only, a stage from its own share of the night, one method per signal.
+  it('reads a sleep stage from its share of the night and never time in bed or blended methods', async () => {
+    const night = { start_at: '2026-10-23T22:00:00.000Z', end_at: '2026-10-24T06:00:00.000Z' };
+    const result = await health(book(granted('apple'), series([{ source: 'apple', readings: [
+      { ...reading('sleep_duration', '2026-10-24', 420, 'asleep_duration'), ...night, stages: { light: 200, deep: 70, rem: 90, unspecified: 60, awake: 22 } },
+      { ...reading('sleep_duration', '2026-10-24', 480, 'time_in_bed'), ...night },
+      reading('overnight_hrv', '2026-10-24', 40, 'rmssd'), reading('overnight_hrv', '2026-10-24', 90, 'sdnn'), reading('overnight_hrv', '2026-10-23', 42, 'rmssd'),
+    ] }])));
+    expect(result.kind).toBe('input');
+    if (result.kind !== 'input') return;
+    const line = (signal: string) => result.text.split('\n').find((row) => row.startsWith(`${signal} (`));
+    expect(line('sleep')).toBe('sleep (apple_health, minutes): 2026-10-24 420');
+    expect(line('sleep_light')).toBe('sleep_light (apple_health, minutes): 2026-10-24 200');
+    expect(line('sleep_awake')).toBe('sleep_awake (apple_health, minutes): 2026-10-24 22');
+    expect(line('hrv')).toBe('hrv (apple_health, ms, rmssd): 2026-10-23 42; 2026-10-24 40');
+  });
+
   it('skips without consent, says revoked after a withdrawal, unavailable on a failed read, and asks the plane nothing then', async () => {
     for (const [consent, state] of [[{ kind: 'consent_required' }, 'skipped'], [{ kind: 'not_linked' }, 'skipped'], [{ kind: 'consent_withdrawn' }, 'revoked'], [{ kind: 'read_failed' }, 'unavailable']] as const) {
       const b = book(consent);

@@ -100,7 +100,7 @@ select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-worker-0001','
   'invalid_request','a Worker rejection with an unknown reason is a fault: the whole batch is refused');
 select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-worker-0002','x',jsonb_build_array(pg_temp.steps('half',7,10),'{"rejected":"invalid_sample","signal":"steps_window","value":5}'::jsonb)))->>'error',
   'invalid_request','a Worker rejection that carries anything but its reason and kind is refused');
-select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-worker-0003','x',jsonb_build_array(pg_temp.steps('half',7,10),'{"rejected":"invalid_sample","signal":"vo2_max"}'::jsonb)))->>'error',
+select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-worker-0003','x',jsonb_build_array(pg_temp.steps('half',7,10),'{"rejected":"invalid_sample","signal":"blood_glucose"}'::jsonb)))->>'error',
   'invalid_request','a Worker rejection naming a signal this backend does not know is refused');
 select is(pg_temp.h('ingest','per-sample-owner',pg_temp.batch('ps-worker-0004','x',jsonb_build_array(pg_temp.steps('half',7,10),'{"rejected":null,"signal":null}'::jsonb)))->>'error',
   'invalid_request','a Worker rejection without a reason is refused');

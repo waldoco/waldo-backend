@@ -9,6 +9,10 @@ export type UnavailableReason =
 
 export type HealthAccess = 'granted' | 'not_linked' | 'consent_required' | 'consent_withdrawn';
 export type HrvMethod = 'rmssd' | 'sdnn';
+export type RestingMethod = 'overnight_resting' | 'provider_resting_daily' | 'resting_measurement' | 'unknown';
+export type TemperatureMethod = 'absolute' | 'baseline_delta';
+// A reading is compared only with earlier readings of its own method: two methods measure two quantities.
+export interface MethodReading<Method extends string> { readonly value: number; readonly method: Method }
 
 export interface HourlyBucket {
   readonly startAt: string;
@@ -17,6 +21,7 @@ export interface HourlyBucket {
   readonly hrvMethod: HrvMethod | null;
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
+  readonly activeEnergyKcal: number | null;
 }
 export interface Span { readonly startAt: string; readonly endAt: string }
 export interface SleepRecord extends Span {
@@ -34,11 +39,23 @@ export interface DayRecord {
   readonly day: string;
   readonly timezone: string;
   readonly sleep: SleepRecord | null;
-  readonly overnightHrv: Readonly<{ value: number; method: HrvMethod }> | null;
-  readonly restingHeartRate: number | null;
+  // At most one reading per method: the night's newest of each.
+  readonly overnightHrv: readonly MethodReading<HrvMethod>[];
+  readonly restingHeartRate: readonly MethodReading<RestingMethod>[];
   readonly hourly: readonly HourlyBucket[];
   readonly workouts: readonly Span[];
   readonly demand: DemandInputs | null;
+  // Signals that feed no score, only the drivers. Absent when the day was read without them.
+  readonly vitals?: DayVitals;
+}
+// The night's readings belong to the day it ended on: breathing rate and blood oxygen are the mean of the readings inside
+// that night's asleep span, wrist temperature the night's reading of each method, awake minutes the night's waking time.
+export interface DayVitals {
+  readonly breathingRate: number | null;
+  readonly bloodOxygen: number | null;
+  readonly wristTemperature: readonly MethodReading<TemperatureMethod>[];
+  readonly awakeMinutes: number | null;
+  readonly walkingHeartRate: number | null;
 }
 export interface DailyScoresInput {
   readonly access: HealthAccess;
@@ -85,6 +102,8 @@ export interface SleepDebtResult {
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
+  // Closed phrases naming signals outside the owner's usual range today, strongest first. Never a score weight.
+  readonly drivers: readonly string[];
   readonly sleep_debt: SleepDebtResult | Unavailable;
   readonly form: FormResult;
   readonly weight: WeightResult;
