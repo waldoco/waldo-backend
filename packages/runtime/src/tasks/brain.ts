@@ -84,8 +84,9 @@ const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
   };
 };
 
-// A step the taint gate sends to the owner's card. A worker cannot raise a card (no profile holds propose_action) and never
-// approves, so the task stops at the step and hands it back: the report's apply turn puts the proposal to the owner.
+// A step the taint gate holds for the owner's approval. A worker cannot raise a card (no profile holds propose_action) and
+// never approves, so the task stops at the step and hands it back as a proposal: the report's apply turn asks the owner. A
+// browser step cannot be replayed from an approval, so Waldo asks in words; a final form submit keeps the browser card.
 const OWNER_STEP = {
   error: 'This step needs the owner\'s approval, which a task cannot ask for, so it did not run.',
   fix: `Do not try it again. Call ${FINISH_TASK} now with status blocked, this exact step (the tool and its arguments) in proposals, and what you found so far: Waldo asks the owner.`,
