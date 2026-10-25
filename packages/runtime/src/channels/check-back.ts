@@ -24,7 +24,7 @@ export const reminderCheckBackText = (note: string): string => [
   // A due reminder is the nudge itself. Reporting state first ("your reminder is set for 4:13 and doesn't repeat") turns
   // it into a confirmation of something already done.
   'This message is the reminder itself: remind them in your own words, usually in one short line. It is not a confirmation, so leave out when it was set, its time and whether it repeats, and do not add a sentence explaining that they asked for it. Do not repeat the note word for word.',
-  'Read current state with your read tools only when something current would change or add to the reminder (the meeting it is about moved, the email it names already went out), and then say what changed.',
+  'When the reminder is about something you can check (a meeting, an email, a task), check it first with your read tools; if it moved or is already done, say that instead. A plain nudge needs no reads.',
   SILENT,
 ].join('\n\n');
 
