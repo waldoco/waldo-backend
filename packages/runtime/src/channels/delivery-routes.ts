@@ -42,6 +42,8 @@ export const SEND_NOW_ONLY: unique symbol = Symbol('send.now_only');
 // 24-hour window) keeps nothing itself for such a send: it answers that it refused, and the outbox sends the record again
 // when the surface allows it. A symbol key, like SEND_NOW_ONLY.
 export const OUTBOX_CUSTODY: unique symbol = Symbol('send.outbox_custody');
+// Names the app thread a send belongs in, from its record's appThread. Only the app reads it; a symbol key, like SEND_NOW_ONLY.
+export const APP_THREAD: unique symbol = Symbol('send.app_thread');
 
 export type Admission = 'admitted' | 'dormant' | 'retry';
 
@@ -58,9 +60,9 @@ export const admittedRoute = (route: OutboxRoute, admission: () => Promise<Admis
 
 // Delivers a message, then sends a plain copy of its text. The copy goes once, only after the delivery succeeded, and a
 // refused copy (the send returns nothing) or a failed one is only reported by its code: it never fails or repeats the delivery.
-export const withPlainCopy = <T>(deliver: (text: string) => Promise<T>, copy: (text: string) => Promise<unknown>, report: (code: 'copy_blocked' | 'copy_failed') => void) =>
-  async (text: string): Promise<T> => {
-    const delivered = await deliver(text);
+export const withPlainCopy = <T, A extends unknown[]>(deliver: (text: string, ...rest: A) => Promise<T>, copy: (text: string) => Promise<unknown>, report: (code: 'copy_blocked' | 'copy_failed') => void) =>
+  async (text: string, ...rest: A): Promise<T> => {
+    const delivered = await deliver(text, ...rest);
     let code: 'copy_blocked' | 'copy_failed' | null = null;
     try { if ((await copy(text)) === undefined) code = 'copy_blocked'; } catch { code = 'copy_failed'; }
     if (code) report(code);

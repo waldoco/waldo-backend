@@ -25,6 +25,36 @@ describe('receiptLine', () => {
     expect(receiptLine([ev(1, 'set_reminder', false, { code: 'rejected' }), ev(2, 'workspace_write', true, {}, { path: 'a.md' })]))
       .toBe('Receipts: reminder set (failed); workspace file written a.md (accepted)');
   });
+  // A refused attempt the turn then made good (the same tool, the same target, accepted later) is not a failure of the turn:
+  // it is superseded. Anything less than that keeps the failure on the line.
+  describe('a failed attempt the same turn later made good', () => {
+    const forget = (topic: string, scope_note = 'the owner asked') => ({ topic, scope_note });
+    it('is left off when the same tool later accepts the same target, even with a reworded scope note', () => {
+      const events = [ev(1, 'forget_memory', false, { code: 'invalid_args' }, forget('Asha')), ev(2, 'forget_memory', true, {}, forget('Asha', 'forget Asha'))];
+      expect(receiptLine(events)).toBe('Done: memory forgotten');
+    });
+    it('still shows when the later success was for a different target', () => {
+      const events = [ev(1, 'forget_memory', false, { code: 'invalid_args' }, forget('Asha')), ev(2, 'forget_memory', true, {}, forget('Ravi'))];
+      expect(receiptLine(events)).toBe('Receipts: memory forgotten (failed); memory forgotten (accepted)');
+    });
+    it('still shows when it came after the success', () => {
+      const events = [ev(1, 'forget_memory', true, {}, forget('Asha')), ev(2, 'forget_memory', false, { code: 'invalid_args' }, forget('Asha'))];
+      expect(receiptLine(events)).toBe('Receipts: memory forgotten (accepted); memory forgotten (failed)');
+    });
+    // A handler that threw may have crossed its effect, and an unconfirmed receipt may have landed: a retry can be a second
+    // copy, so neither is hidden behind the retry.
+    it('still shows when it may have done something: a transient failure or an unconfirmed receipt', () => {
+      const write = { path: 'a.md' };
+      expect(receiptLine([ev(1, 'workspace_write', false, { code: 'transient' }, write), ev(2, 'workspace_write', true, {}, write)]))
+        .toBe('Receipts: workspace file written a.md (failed); workspace file written a.md (accepted)');
+      expect(receiptLine([ev(1, 'workspace_write', false, { receiptStatus: 'unavailable' }, write), ev(2, 'workspace_write', true, {}, write)]))
+        .toBe('Receipts: workspace file written a.md (unconfirmed); workspace file written a.md (accepted)');
+    });
+    it('is left off the typed items too, which the line names', async () => {
+      const receipt = await turnReceipt([ev(1, 'forget_memory', false, { code: 'invalid_args' }, forget('Asha')), ev(2, 'forget_memory', true, {}, forget('Asha'))]);
+      expect(receipt?.items.map(item => item.outcome)).toEqual(['accepted']);
+    });
+  });
   // A proposal changes nothing until the owner says yes, so it never reads as done.
   it('says a proposal waits on the owner, never that it is done', () => {
     expect(receiptLine([ev(1, 'send_email', true)])).toBe('Needs your yes: email send');

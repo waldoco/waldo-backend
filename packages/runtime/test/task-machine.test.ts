@@ -69,11 +69,12 @@ const lane = (h: Harness, appliers: Partial<Record<'heartbeat' | 'update_sweep' 
 const hops = (log: readonly TurnLogEntry[], name: string) => log.filter(entry => entry.hop === name);
 
 describe('the machine reader allowlist', () => {
-  it('is the reader profile without the two tools whose arguments can carry private text out', () => {
+  it('is the reader profile without the tools whose arguments can carry private text out', () => {
     const reader = TASK_PROFILE_SPECS.reader.tools;
     expect(MACHINE_READER).not.toContain('web_search');
     expect(MACHINE_READER).not.toContain('read_mcp_tool');
-    expect([...MACHINE_READER].sort()).toEqual(reader.filter(name => name !== 'web_search' && name !== 'read_mcp_tool').sort());
+    expect(MACHINE_READER).not.toContain('browse_page');
+    expect([...MACHINE_READER].sort()).toEqual(reader.filter(name => name !== 'web_search' && name !== 'read_mcp_tool' && name !== 'browse_page').sort());
   });
 
   it('the brain offers a machine job only those tools, and refuses web_search from it without running it', async () => {

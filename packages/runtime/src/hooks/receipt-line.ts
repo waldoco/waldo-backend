@@ -1,4 +1,4 @@
-import { RECEIPT_MAX_ITEMS, type ConversationReceipt } from '@waldo/contracts';
+import { RECEIPT_MAX_ITEMS, type ConversationReceipt, type ToolName } from '@waldo/contracts';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { receiptsFromLoopEvents, type LoopEventLike } from './claim-hook';
 
@@ -11,7 +11,28 @@ const MAX_NAMED = 5;
 const NOT_SHOWN = new Set(['skill_selected', 'browser_acted']);
 const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconfirmed' } as const;
 
-const shownReceipts = (events: readonly LoopEventLike[]) => receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+// The arguments that pick an effect's target, so a retry that only rewords its note names the same target. A tool not listed
+// is named by all of its arguments.
+const TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source'] };
+const targetOf = (tool: string, args: unknown): string => {
+  const keys = TARGET_ARGS[tool as ToolName];
+  if (!keys || !args || typeof args !== 'object') return stableJson(args ?? null);
+  return stableJson(Object.fromEntries(keys.flatMap(key => (args as Record<string, unknown>)[key] === undefined ? [] : [[key, (args as Record<string, unknown>)[key]]])));
+};
+// A refused attempt that a later call in the same turn made good (the same tool, the same target, accepted) is superseded,
+// not a failure of the turn. A transient failure (a handler that threw, a timeout) may have crossed its effect, and an
+// unconfirmed receipt may have landed, so a retry can be a second copy: those stay shown, as does any failure never made good.
+const shownReceipts = (events: readonly LoopEventLike[]) => {
+  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+  const eventOf = new Map(events.map(event => [event.seq, event]));
+  const target = (r: (typeof receipts)[number]) => targetOf(r.tool, eventOf.get(r.seq)?.call.args);
+  const superseded = (r: (typeof receipts)[number]) => {
+    const code = eventOf.get(r.seq)?.code;
+    return r.state === 'failed' && code !== undefined && code !== 'transient'
+      && receipts.some(later => later.seq > r.seq && later.tool === r.tool && later.state === 'accepted' && target(later) === target(r));
+  };
+  return receipts.filter(r => !superseded(r));
+};
 const TARGET_MAX = 200;
 
 // A proposal's effect only asks the owner for an approval: accepted, it is waiting on their yes, never done.

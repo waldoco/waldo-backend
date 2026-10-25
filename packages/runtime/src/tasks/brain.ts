@@ -271,8 +271,9 @@ export const taskHost = (deps: TaskHostDeps) => {
       scopeFor(ticket, row);
       const handlers = await profileHandlers(row);
       const spend = ownerSpend();
+      const { conversation_ref: _replyChain, ...brief } = taskBrief(row);
       return {
-        jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
+        jobId: row.id, profile: row.profile, brief, tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
         turns: jobCheckpoint(row).turns, seq: row.checkpoint_seq, deadlineAt: row.deadline_at, roundsUsed: row.rounds,
         ownerRef: deps.context(row.surface).authenticatedUserId,

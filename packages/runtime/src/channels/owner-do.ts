@@ -61,7 +61,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
-import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -1136,12 +1136,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // Writes a scheduled message as an assistant row at the end of the owner's app transcript, and answers with the row's id.
-  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<string> {
-    return text => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ entries }, ownerRef) => {
-      const id = `scheduled-${crypto.randomUUID()}`, chatId = ownerChainRef('app', ownerRef);
+  // A send naming a thread goes into that thread while it is open; one archived or deleted since, even during the write,
+  // gets the message in main.
+  private appDeliveryFor(authority: OwnerRuntimeAuthority): ScheduledAppDelivery {
+    const kv = this.ctx.storage.kv, closed = new Error('thread_closed');
+    const open = (thread: string) => threadRecord(kv, thread)?.state === 'active';
+    const write = (text: string, thread?: string) => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ entries }, ownerRef) => {
+      const id = `scheduled-${crypto.randomUUID()}`, chatId = thread ? threadChainRef(ownerRef, thread) : ownerChainRef('app', ownerRef);
       return { entry: { id, ownerId: ownerRef, chatId, parentId: chainLeaf(entries, chatId), threadAnchorId: null, surface: 'app',
         modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() }, leafId: id };
-    });
+    }, work => this.ctx.storage.transactionSync(() => {
+      if (thread && !open(thread)) throw closed;
+      const written = work();
+      if (thread) touchThread(kv, thread, Date.now());
+      return written;
+    }), thread);
+    return async (text, send) => {
+      const thread = send?.thread !== undefined && open(send.thread) ? send.thread : undefined;
+      try { return await write(text, thread); } catch (error) { if (error === closed) return write(text); throw error; }
+    };
   }
 
   // Each interrupted app turn leaves one "did not finish" reply in the owner's transcript. It hangs under the owner's
@@ -1241,7 +1254,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return withCopy(copy.prefix, deliver, (id, text) => copy.queue(id, text, Date.now()),
       code => log({ trace: `copy:${Date.now()}`, hop: `${target}_copy`, ms: 0, ok: false, code, detail: code }));
   }
-  private copiedToTelegram(deliver: (text: string) => Promise<string>): (text: string) => Promise<string> {
+  private copiedToTelegram(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
     const telegram = this.setup('telegram');
     return withPlainCopy(deliver, text => telegram.call('sendMessage', { chat_id: telegram.owner, text }),
       code => telegram.log({ trace: `copy:${Date.now()}`, hop: 'telegram_copy', ms: 0, ok: false, code, detail: code }));
@@ -2656,7 +2669,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (r.scheduleNotice && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) return Date.now() + 10 * 60_000;
         return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
       },
-      send: payload => runtime.call('sendMessage', payload),
+      send: (payload, record) => runtime.call('sendMessage', record.appThread ? { ...payload, [APP_THREAD]: record.appThread } : payload),
     };
     // Surfaces whose platform limits when a business may write first wrap their route in that rule.
     const windowed: Partial<Record<ChannelKind, (inner: OutboxRoute) => OutboxRoute>> = {
@@ -2775,10 +2788,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         turn: (job, trace, text, current, sourceTaint, toolNames) => this.asOwnerJob(job, trace, () =>
           runtime.macFollowup(trace, runtime.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined, job === 'retry_turn')),
         applyTools: () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task'),
-        deliver: async (id, trace, text, commit) => {
+        deliver: async (id, trace, text, commit, conversationRef) => {
           if (runtime.finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+          // Only the app route reads it; any other surface's send ignores it.
+          const appThread = conversationRef ? threadOfChain(conversationRef) : null;
           await runtime.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text }, ownerSubject: String(runtime.owner),
-            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
+            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], ...(appThread ? { appThread } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
         },
         room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
         heldTopics: () => heldTopicsOf(claimStore(storage.sql)),
@@ -3887,7 +3902,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable, cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, closableIn), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable, cancelMachine })), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
+        // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
+        conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs())].filter(Boolean).join('\n\n') : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),

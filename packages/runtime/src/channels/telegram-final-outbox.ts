@@ -29,6 +29,8 @@ export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary';
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
+  // The app thread this message belongs in (a task started there); the app route writes it there while the thread is open.
+  appThread?: string;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
