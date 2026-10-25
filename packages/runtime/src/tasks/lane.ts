@@ -32,7 +32,8 @@ export type JobsLaneDeps = Readonly<{
   applyTools(): readonly ToolName[];
   // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
   // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
-  deliver(id: string, trace: string, text: string, commit: () => void): Promise<void>;
+  // conversationRef: the app thread a task was started in, where its messages go while that thread is open.
+  deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string): Promise<void>;
   // Whether this alarm still has time for a model turn; work left over waits for the next pass.
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
@@ -127,7 +128,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       }
     }
     try {
-      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row));
+      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref);
       else settle(row);
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;
@@ -222,7 +223,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (due > deps.now()) { nextNote = Math.min(nextNote ?? due, due); continue; }
     if (deps.quiet()) { nextNote = Math.min(nextNote ?? Infinity, deps.now() + QUIET_RECHECK_MS); continue; }
     try {
-      await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row, deps.timezone), () => book.noteSent(row.id));
+      await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row, deps.timezone), () => book.noteSent(row.id), taskBrief(row).conversation_ref);
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;
       continue;

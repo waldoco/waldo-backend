@@ -19,9 +19,11 @@ export type CancelReason = 'owner' | 'forgotten';
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
 // about dates without seeing the conversation. outside_text: the turn that wrote it had read someone else's words, so its
 // title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
+// conversation_ref: the app thread's chain the task was started in, so its report answers there; absent for main and every
+// other surface. The host's, never the worker's: the claim leaves it out.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true;
+  effort: 'standard' | 'deep'; timezone: string; started_at: number; outside_text?: true; conversation_ref?: string;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.

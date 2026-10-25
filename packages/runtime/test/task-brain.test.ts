@@ -93,6 +93,14 @@ describe('the task brain host', () => {
     });
   });
 
+  it('the app thread a task reports to stays with the brain: the worker\'s claim carries the brief without it', async () => {
+    await withHost(async ({ host, book }) => {
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'k-thread', origin: 'app-1', surface: 'app', brief: { ...brief, conversation_ref: 'owner:prn_1:thr_1' }, dueAt: T0, deadlineAt: T0 + 3_600_000 });
+      const claim = await host.claim(book.startAttempt(job.id)!);
+      expect(claim === 'fenced' ? null : claim.brief).toEqual(brief);
+    });
+  });
+
   // A worker has always read outside content, and it cannot raise a card or approve: a step the taint gate sends to the
   // owner (a free-form browser step, a download) does not run, and the worker is told to stop there and hand the step back
   // in its result's proposals, which the report's apply turn puts to the owner. It is never pointed at propose_action, which
