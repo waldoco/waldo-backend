@@ -297,8 +297,10 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   /** Whether this bridge's host sends standard tapbacks now: online, ready, and the flag sent, verified and exact. */
   async tapbacksReady(): Promise<boolean> {
     const c = this.composition();
-    if (!c) return false;
-    const store = this.store(c.policy), caps = store.capabilities(store.meta('bridge_id') ?? '', store.meta('account_id') ?? '');
+    return !!c && this.tapbacks(this.store(c.policy));
+  }
+  private tapbacks(store: BridgeStore): boolean {
+    const caps = store.capabilities(store.meta('bridge_id') ?? '', store.meta('account_id') ?? '');
     return store.online() && !!caps && caps.readiness === 'ready' && sends(caps, 'standard_reactions');
   }
 
@@ -352,12 +354,12 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
   async photonStatus(): Promise<PhotonStatus | null> { return this.photonTokens()?.status() ?? null; }
 
-  async status(): Promise<{ online: boolean; textReady: boolean; quarantine: string | null; events: Record<string, number>; outstanding: number; revoked: boolean }> {
+  async status(): Promise<{ online: boolean; textReady: boolean; tapbacksReady: boolean; quarantine: string | null; events: Record<string, number>; outstanding: number; revoked: boolean }> {
     const c = this.composition();
-    if (!c) return { online: false, textReady: false, quarantine: null, events: {}, outstanding: 0, revoked: false };
+    if (!c) return { online: false, textReady: false, tapbacksReady: false, quarantine: null, events: {}, outstanding: 0, revoked: false };
     const store = this.store(c.policy), bridgeId = store.meta('bridge_id') ?? '', accountId = store.meta('account_id') ?? '';
     const caps = store.capabilities(bridgeId, accountId);
-    return { online: store.online(), textReady: !!caps && caps.readiness === 'ready' && caps.features.text.send && caps.features.text.verified,
+    return { online: store.online(), textReady: !!caps && caps.readiness === 'ready' && caps.features.text.send && caps.features.text.verified, tapbacksReady: this.tapbacks(store),
       quarantine: store.quarantineReason(), events: store.eventCounts(), outstanding: store.deliveries().filter(d => d.state === 'queued' || d.state === 'delivered').length,
       revoked: store.revokedRevision() !== null };
   }

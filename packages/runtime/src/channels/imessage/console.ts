@@ -21,7 +21,7 @@ const field = (v: unknown, max = 512): string | null =>
   typeof v === 'string' && v.length > 0 && v.length <= max && v.trim() === v && !/[\u0000-\u001f\u007f]/.test(v) ? v : null;
 
 export type IMessagePageOptions = { admin?: boolean; address?: string; linkedHint?: string | null; enrollable?: boolean; phone?: string | null; photon?: 'connected' | 'disconnected' | null; media?: boolean };
-export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; quarantine?: string | null })[], csrf: string, o: IMessagePageOptions = {}): string {
+export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; tapbacksReady?: boolean; quarantine?: string | null })[], csrf: string, o: IMessagePageOptions = {}): string {
   const hidden = `<input type="hidden" name="csrf" value="${escape(csrf)}">`;
   const form = (action: string, body: string, label: string) => `<form method="post" action="/console/action">${hidden}<input type="hidden" name="action" value="${action}">${body}<button>${label}</button></form>`;
   const row = (r: (typeof rows)[number]) => {
@@ -32,7 +32,7 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
       ? form('imessage.verify', id + scope, shared ? 'Set your challenge sender and get a challenge' : 'Set exact sender and get a challenge') + (r.observed ? form(shared ? 'imessage.activate_shared' : 'imessage.activate', id + `<input type="hidden" name="subject" value="${escape(r.subject ?? '')}"><input type="hidden" name="chat" value="${escape(r.chat_guid ?? '')}">`, shared ? 'Activate the shared Waldo number' : `Confirm ${escape(r.subject ?? '')} in ${escape(r.chat_guid ?? '')}`) : '')
       : '';
     const revoke = r.state === 'revoked' ? '' : form('imessage.revoke', id, 'Revoke');
-    const health = r.state === 'active' ? ` · ${r.online ? 'online' : 'offline'} · ${r.textReady ? 'text verified' : 'text not verified'}${r.quarantine ? ' · sending paused (uncertain send)' : ''}` : '';
+    const health = r.state === 'active' ? ` · ${r.online ? 'online' : 'offline'} · ${r.textReady ? 'text verified' : 'text not verified'} · ${r.tapbacksReady ? 'tapbacks verified' : 'tapbacks not verified'}${r.quarantine ? ' · sending paused (uncertain send)' : ''}` : '';
     return `<tr><td>${shared ? 'shared Waldo number · ' : ''}${escape(r.state)}${health}</td><td>${shared ? '' : escape(r.subject ?? '')}</td><td>${escape(r.host_version)}</td><td>${actions}${revoke}</td></tr>`;
   };
   const address = o.address ? escape(o.address) : 'the Waldo iMessage number';
@@ -47,7 +47,7 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
   const number = o.enrollable && o.address ? `<p>Your Waldo number: <b>${escape(o.address)}</b></p>` : '';
   const photon = o.admin && o.photon ? `<h2>Photon (operator)</h2><p>${o.photon === 'connected' ? 'Connected. New owners get their Waldo number automatically.' : 'Not connected. Owners cannot get a Waldo number until an operator connects Photon.'}</p><p><a href="${CONSOLE_PHOTON_START_PATH}">${o.photon === 'connected' ? 'Reconnect Photon' : 'Connect Photon'}</a></p>` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo on iMessage</title></head><body><a href="/console">Back to console</a><h1>iMessage</h1>`
-    + `<p>${o.media ? 'Direct iMessages: text, and photos and documents sent to your Waldo number.' : 'Direct iMessage text only. Photos and files get a reply asking you to send them in the app.'} Groups, SMS, voice notes and reactions are not supported.</p>`
+    + `<p>${o.media ? 'Direct iMessages: text, and photos and documents sent to your Waldo number.' : 'Direct iMessage text only. Photos and files get a reply asking you to send them in the app.'} Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.</p>`
     + `<h2>Text your Waldo from your iPhone</h2>${number}${enroll}${photon}`
     + `<h2>Your own Mac host</h2>${form('imessage.pair', '', 'Pair a Mac host')}`
     + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the host that runs the shared Waldo number for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
@@ -82,7 +82,7 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
     const withStatus = await Promise.all(rows.map(async (r) => {
       if (r.state !== 'active') return r;
       const s = await ns.get(ns.idFromName(iMessageBridgeName(environment, r.bridge_id, r.account_id))).status();
-      return { ...r, online: s.online, textReady: s.textReady, quarantine: s.quarantine };
+      return { ...r, online: s.online, textReady: s.textReady, tapbacksReady: s.tapbacksReady, quarantine: s.quarantine };
     }));
     const auth = consoleAuth(env);
     const admin = await auth?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
