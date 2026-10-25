@@ -90,7 +90,7 @@ describe('the task brain host', () => {
     await withHost(async ({ host, ticket, ran, released }) => {
       const t = ticket('reader');
       const claim = await host.claim(t);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page']);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page', 'read_tool_output']);
       for (const name of ['browse_act', 'propose_action', 'send_message', 'send_email', 'start_task']) {
         expect(await host.tool(t, call(name), CANARIES), name).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
       }

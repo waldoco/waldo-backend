@@ -38,7 +38,8 @@ const withOwner=async(surface:'telegram'|'app',work:(host:Host,state:DurableObje
    return book.startAttempt(row.id)!;
   };
   await work(host,state,job);
-  expect(network).not.toHaveBeenCalled();await state.storage.deleteAlarm();
+  // The owner object may plan its day cards with the model in the background (refused here); no read reaches the network.
+  expect(network.mock.calls.map(([url])=>String(url)).filter(url=>!url.startsWith('https://api.openai.com/'))).toEqual([]);await state.storage.deleteAlarm();
  });}finally{network.mockRestore();}
 };
 const call=(name:string,args:unknown,id=`call-${name}`)=>({call_id:id,name,arguments:JSON.stringify(args)});

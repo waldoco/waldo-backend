@@ -6,10 +6,12 @@ import { isMachine, type JobRow } from './jobs';
 // handler or a credential. No profile carries memory, send, approve, delegation or start_task (a worker cannot act for
 // the owner or spawn more work), and none carries a turn-only health tool: a worker's checkpoints persist, and the owner's
 // health values must never be stored. A reader reads public pages (browse_page) as well as searching for them: research needs
-// the page, not the snippet. Acting on a page (browse_act) is the errand's.
+// the page, not the snippet. Acting on a page (browse_act) is the errand's. A read too large for one result is stored for the
+// attempt and paged with read_tool_output, which reads that attempt's store and nothing else (brain.ts).
 const READER: readonly ToolName[] = [
   'get_context', 'query_calendar', 'query_availability', 'get_communication', 'search_communication', 'read_thread', 'search_contacts', 'get_tasks',
   'read_drive', 'read_mcp_tool', 'web_search', 'browse_page', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
+  'read_tool_output',
 ];
 // The reads whose arguments leave the account: a search query, a page URL, an MCP call. Nothing cards a read, so a turn that
 // starts on text nobody asked Waldo to read, with no owner in the loop, could be steered into carrying private data out in
