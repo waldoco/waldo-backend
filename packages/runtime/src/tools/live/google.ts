@@ -99,8 +99,13 @@ export const nameTheAccount = (accounts: readonly KnownAccount[], what: string):
   error: `${what} belongs to one Google account, and ${accounts.length} are connected: ${accounts.map((known) => known.email).join(', ')}. Pass account with the one it came from.`,
 });
 
+// One call reads at most this many accounts, all at once; the rest are named as not read. Each account's read costs
+// several provider requests (token, list, per-item reads) against the turn's request budget, and five still leaves every
+// account at least two items of the smallest page (search_contacts, 10).
+export const MAX_ACCOUNTS_PER_READ = 5;
+
 // Each account reads its share of the tool's page bound, so the combined result stays inside what one page may hold.
-export const accountShare = (limit: number, max: number, accounts: number): number => Math.min(limit, Math.max(1, Math.floor(max / accounts)));
+export const accountShare = (limit: number, max: number, accounts: number): number => Math.min(limit, Math.max(1, Math.floor(max / Math.min(accounts, MAX_ACCOUNTS_PER_READ))));
 
 const FEATURE_NAMES: Readonly<Record<GoogleFeature, string>> = {
   calendar: 'Google Calendar', availability: 'Google Calendar', calendar_list: 'Google Calendar', mail: 'Gmail', tasks: 'Google Tasks',
@@ -115,20 +120,22 @@ const accountFix = (email: string, feature: GoogleFeature, failed: Failed): stri
 const NOT_READ = 'An account that was not read is unknown, not empty.';
 const ACCOUNT_ERROR_CHARS = 300;
 
-// Every account is read at once. Each result keeps its own account receipt, and an account that fails is named with its
-// reason and fix while the others still come back. The per-account summary comes first, so it stays in view when a long
-// result is shown only in part.
+// The first MAX_ACCOUNTS_PER_READ accounts are read at once. Each result keeps its own account receipt, and an account that
+// fails is named with its reason and fix while the others still come back; an account past the cap is named as not read.
+// The per-account summary comes first, so it stays in view when a long result is shown only in part.
 export const readEveryAccount = async <T>(tool: ToolName, feature: GoogleFeature, accounts: readonly KnownAccount[], read: (email: string) => Promise<ToolResult<T>>): Promise<ToolResult<Readonly<{ accounts: readonly unknown[]; note: string; by_account: readonly T[] }>>> => {
-  const results = await Promise.all(accounts.map((known) => read(known.email)));
-  const summary = accounts.map((known, index) => {
+  const reading = accounts.slice(0, MAX_ACCOUNTS_PER_READ);
+  const leftOut = accounts.slice(MAX_ACCOUNTS_PER_READ);
+  const results = await Promise.all(reading.map((known) => read(known.email)));
+  const summary = [...reading.map((known, index) => {
     const result = results[index]!;
     if (result.ok) return { email: known.email, read: 'ok' as const };
     const fix = accountFix(known.email, feature, result);
     return { email: known.email, read: 'failed' as const, code: result.code, ...(result.connect ? { reason: result.connect.reason } : {}), error: result.error.slice(0, ACCOUNT_ERROR_CHARS), ...(fix ? { fix } : {}) };
-  });
+  }), ...leftOut.map((known) => ({ email: known.email, read: 'not_read' as const, fix: `One call reads at most ${MAX_ACCOUNTS_PER_READ} accounts. Pass account ${known.email} to read this one.` }))];
   const failed = results.filter((result): result is Failed => !result.ok);
   // Content-free: how many accounts were read and how each failure failed, never an address.
-  console.log(JSON.stringify({ hop: 'google_read_accounts', ok: failed.length === 0, code: `${tool}:read_${results.length - failed.length}_of_${results.length}${failed.map((result) => `:${result.code}${result.connect ? `_${result.connect.reason}` : ''}`).join('')}`.slice(0, 64) }));
+  console.log(JSON.stringify({ hop: 'google_read_accounts', ok: failed.length === 0 && leftOut.length === 0, code: `${tool}:read_${results.length - failed.length}_of_${accounts.length}${failed.map((result) => `:${result.code}${result.connect ? `_${result.connect.reason}` : ''}`).join('')}`.slice(0, 64) }));
   if (failed.length === results.length) {
     const auth = failed.every((result) => result.connect);
     return {
@@ -139,7 +146,7 @@ export const readEveryAccount = async <T>(tool: ToolName, feature: GoogleFeature
   }
   return { ok: true, source_taint: 'external', data: {
     accounts: summary,
-    note: `Every connected Google account was read at once: accounts says how each went, by_account holds each account's result under its account.${failed.length ? ` ${NOT_READ}` : ''} To continue one account, pass that account with its own page token and page_limit.`,
+    note: `${leftOut.length ? `The first ${MAX_ACCOUNTS_PER_READ} of ${accounts.length} connected Google accounts were` : 'Every connected Google account was'} read at once: accounts says how each went, by_account holds each account's result under its account.${failed.length || leftOut.length ? ` ${NOT_READ}` : ''} To continue one account, pass that account with its own page token and page_limit.`,
     by_account: results.flatMap((result) => result.ok ? [result.data] : []),
   } };
 };
