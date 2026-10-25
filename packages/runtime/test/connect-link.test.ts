@@ -102,7 +102,7 @@ describe('handleConnectTicket', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(rpcCalls.map(r => r.fn)).toEqual(['connect_session_resolve', 'connect_session_begin']);
     expect(rpcCalls[1]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
-    expect(doCalls).toEqual([{ path: BEGIN_SESSION_PATH, body: JSON.stringify({ ticket_hash: await ticketHash(TICKET) }) }]);
+    expect(doCalls).toEqual([{ path: BEGIN_SESSION_PATH, body: JSON.stringify({ ticket_hash: await ticketHash(TICKET), provider: 'google' }) }]);
     const [set] = setCookies(response);
     expect(set).toContain(`Path=${GOOGLE_CALLBACK_PATH}`);
     expect(set).toContain('Max-Age=43200');

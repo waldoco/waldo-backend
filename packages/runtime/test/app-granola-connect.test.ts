@@ -7,17 +7,17 @@ import { BEGIN_SESSION_PATH, ticketHash } from '../src/channels/connect-link';
 import { routerSignature } from '../src/identity/owner-directory';
 import { granolaConnectReceipt } from '../src/channels/dashboard-control-actions';
 import { handoffHash } from '../src/channels/connect-confirm';
-import { GRANOLA_MCP_URL } from '../src/connectors/granola-mcp';
+import { GRANOLA_AUTH_ORIGIN, GRANOLA_MCP_URL } from '../src/connectors/granola-mcp';
 import { readMcpState } from '../src/connectors/mcp-connections';
 import { MCP_CALLBACK_PATH } from '../src/connectors/mcp-oauth';
-import { fakeMcpWorld, ISSUER, type FakeMcpWorld } from './support/fake-mcp-world';
+import { fakeMcpWorld, type FakeMcpWorld } from './support/fake-mcp-world';
 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
 const SECRET = 'fictional-granola-app-router-secret-0000000000', STATE_SECRET = 'fictional-granola-state-secret', DIRECTORY = 'https://granola-app.fixture.invalid', ORIGIN = 'https://app.fixture.invalid';
 const OWNER = '10000000-0000-0000-0000-000000000003', AUTH = '20000000-0000-0000-0000-000000000003', EMAIL = 'granola-owner@example.test';
 const GRANOLA_ORIGIN = new URL(GRANOLA_MCP_URL).origin;
-const granolaWorld = () => fakeMcpWorld({ origin: GRANOLA_ORIGIN });
+const granolaWorld = () => fakeMcpWorld({ origin: GRANOLA_ORIGIN, issuer: GRANOLA_AUTH_ORIGIN });
 type Connections = { revision: string; data: { granola?: { connectAvailable: boolean; connection: unknown } } };
 
 const fixture = async (world: FakeMcpWorld | null, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: OwnerDO) => Promise<void>) => {
@@ -27,7 +27,7 @@ const fixture = async (world: FakeMcpWorld | null, run: (app: (path: string, bod
     const created = new Date().toISOString(), expires = Date.now() + 3_600_000, issued: Record<string, string>[] = [];
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input));
-      if (world && [GRANOLA_ORIGIN, ISSUER].includes(url.origin)) return world.fetcher(input, init);
+      if (world && [GRANOLA_ORIGIN, GRANOLA_AUTH_ORIGIN].includes(url.origin)) return world.fetcher(input, init);
       expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body));
       if (url.pathname === '/auth/v1/otp') return Response.json({});
       if (url.pathname === '/auth/v1/verify') return Response.json({ user: { id: AUTH, email: EMAIL } });
@@ -82,17 +82,17 @@ it('an app owner starts Granola from Connections: a first-party ticket for Grano
     const link = new URL(receipt.navigation!, ORIGIN);
     expect(issued).toHaveLength(1);
     expect(issued[0]).toMatchObject({ p_provider: 'granola', p_channel: 'app', p_ticket_hash: await ticketHash(link.pathname.slice(3)), p_handoff_hash: await handoffHash(link.searchParams.get('handoff')!) });
-    // Discovery ran against Granola's server and its sign-in; nothing has been granted or called.
-    expect(world.calls.filter((call) => call.method === 'tools/call')).toEqual([]);
+    // Nothing reaches Granola until the owner presses Continue, so the sign-in attempt's 15 minutes start there.
+    expect(world.hits).toEqual([]);
 
-    const begin = () => instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
-    const { url, nonce } = await (await begin()).json() as { url: string; nonce: string };
+    const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash, provider: 'granola' }) }));
+    const { url, nonce } = await begun.json() as { url: string; nonce: string };
     const authorize = new URL(url);
-    expect(`${authorize.origin}${authorize.pathname}`).toBe(`${ISSUER}/authorize`);
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(`${GRANOLA_AUTH_ORIGIN}/authorize`);
     expect(Object.fromEntries(authorize.searchParams)).toMatchObject({ resource: GRANOLA_MCP_URL, redirect_uri: `${ORIGIN}${MCP_CALLBACK_PATH}`, code_challenge_method: 'S256' });
     expect((await readMcpState(STATE_SECRET, authorize.searchParams.get('state')!))?.nonce).toBe(nonce);
-    // Continue starts the attempt once: a second press finds nothing to start.
-    expect(await (await begin()).json()).toMatchObject({ url: null, nonce: null });
+    // The attempt remembers its ticket, so a linked sign-in can close it.
+    expect(await (instance as unknown as { ctx: DurableObjectState }).ctx.storage.get(`connect_mcp_ticket:${nonce}`)).toMatchObject({ ticket: issued[0]!.p_ticket_hash });
   });
 });
 
@@ -117,12 +117,10 @@ it('the app cannot start Granola from another view, with a server address, or wh
 });
 
 it('a Granola receipt carries only this deployment\'s /c/<ticket> link with its handoff code, and says why a connect failed', () => {
-  const handed = `${ORIGIN}/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB`, redirect = { kind: 'redirect' };
-  expect(granolaConnectReceipt(redirect, handed, ORIGIN)).toEqual({ state: 'recorded', message: 'Granola connect is ready to begin. Access has not been granted or tested.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' });
-  expect(granolaConnectReceipt({ kind: 'already' }, null, ORIGIN)).toEqual({ state: 'recorded', message: 'Granola is already connected.' });
-  expect(granolaConnectReceipt({ kind: 'failed', reason: 'oauth_unavailable' }, null, ORIGIN)).toEqual({ state: 'rejected', message: 'Signing in to servers is not set up on this Waldo yet.' });
-  expect(granolaConnectReceipt({ kind: 'failed', reason: 'probe_failed' }, null, ORIGIN).state).toBe('rejected');
+  const handed = `${ORIGIN}/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB`;
+  expect(granolaConnectReceipt(handed, ORIGIN)).toEqual({ state: 'recorded', message: 'Granola connect is ready to begin. Access has not been granted or tested.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' });
+  expect(granolaConnectReceipt(null, ORIGIN)).toEqual({ state: 'rejected', message: 'Granola could not be connected right now. Try again later.' });
   for (const [link, origin] of [[null, ORIGIN], [handed, undefined], [handed, 'https://other.example'], [`${ORIGIN}/c/AAAAAAAAAAAAAAAAAAAAAA`, ORIGIN], [`${handed}#x`, ORIGIN],
     [`${ORIGIN}/console/mcp/start/${'C'.repeat(43)}`, ORIGIN], [`https://mcp-auth.granola.ai/oauth2/authorize`, ORIGIN]] as const)
-    expect([link, granolaConnectReceipt(redirect, link, origin).state]).toEqual([link, 'rejected']);
+    expect([link, granolaConnectReceipt(link, origin).state]).toEqual([link, 'rejected']);
 });

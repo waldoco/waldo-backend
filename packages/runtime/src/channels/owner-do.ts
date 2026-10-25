@@ -158,7 +158,7 @@ import { HANDOFF_PARAM, newHandoff } from './connect-confirm';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
 import { oauthStateSecret } from '../connectors/oauth-state-secret';
-import { BEGIN_SESSION_PATH, CONNECT_LINK_PREFIX, newTicket, ticketHash } from './connect-link';
+import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { GRANOLA_MCP_URL, isGranolaHost } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
@@ -385,16 +385,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const configured = !!oauthProxy(this.env) && !!oauthStateSecret(this.env) && !!signedRpc(this.env) && !!this.ctx.storage.kv.get<string>('origin');
     return { connectAvailable: configured, connection: connection ? { status: connection.status, connected_at: connection.connected_at } : null };
   }
-  // Granola from the app: discovery and the sign-in attempt are made here, and the owner continues on the first-party
-  // /c/<ticket> page, which hands the browser to Granola. The attempt waits under the ticket until Continue.
+  // Granola from the app: a first-party /c/<ticket> link. Granola's discovery and the sign-in attempt start when the owner
+  // presses Continue there (beginGranola), so the attempt's 15 minutes run from that press.
   private async granolaConnect(runtime: OwnerRuntime): Promise<ControlReceipt> {
+    return granolaConnectReceipt(await runtime.connectLink('granola', 'app', { handoff: true }), this.ctx.storage.kv.get<string>('origin'));
+  }
+  // Continue on a Granola ticket: discover Granola, record the attempt, and hand back its authorize address. The ticket is
+  // remembered under the attempt so a linked sign-in can close it; entries left by abandoned sign-ins are swept here.
+  private async beginGranola(ticketHash: string): Promise<Readonly<{ url: string | null; nonce: string | null }>> {
     const origin = this.ctx.storage.kv.get<string>('origin');
-    if (!origin) return granolaConnectReceipt({ kind: 'failed', reason: 'oauth_unavailable' }, null, origin);
+    if (!origin) return { url: null, nonce: null };
     const begun = await this.mcp().begin(GRANOLA_MCP_URL, origin);
-    if (begun.kind !== 'redirect') return granolaConnectReceipt(begun, null, origin);
-    const link = await runtime.connectLink('granola', 'app', { handoff: true });
-    if (link) await this.ctx.storage.put(`connect_mcp:${await ticketHash(new URL(link).pathname.slice(CONNECT_LINK_PREFIX.length))}`, begun.path.slice(MCP_START_PATH.length));
-    return granolaConnectReceipt(begun, link, origin);
+    if (begun.kind !== 'redirect') {
+      console.log(JSON.stringify({ trace: `connect:${ticketHash.slice(0, 8)}`, hop: 'connect_begin', ok: false, detail: `granola ${begun.kind === 'failed' ? begun.reason : begun.kind}` }));
+      return { url: null, nonce: null };
+    }
+    const nonce = begun.path.slice(MCP_START_PATH.length), now = Date.now();
+    const kept = await this.ctx.storage.list<Readonly<{ ticket: string; at: number }>>({ prefix: 'connect_mcp_ticket:' });
+    const stale = [...kept].filter(([, entry]) => now - entry.at > 24 * 60 * 60_000).map(([key]) => key);
+    if (stale.length) await this.ctx.storage.delete(stale);
+    await this.ctx.storage.put(`connect_mcp_ticket:${nonce}`, { ticket: ticketHash, at: now });
+    const url = await this.mcp().start(nonce);
+    if (url === null) await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
+    return { url, nonce: url ? nonce : null };
   }
   private async granolaDisconnect(): Promise<ControlReceipt> {
     const connection = this.mcp().list().find((server) => isGranolaHost(server.server_url));
@@ -403,7 +416,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // A sign-in that began on a connect ticket closes that ticket once it links. Bookkeeping only: the ticket was spent at
   // Continue, so a failed close changes nothing the owner can reach.
   private async completeConnectTicket(nonce: string, linked: boolean): Promise<void> {
-    const ticket = await this.ctx.storage.get<string>(`connect_mcp_ticket:${nonce}`);
+    const ticket = (await this.ctx.storage.get<Readonly<{ ticket: string; at: number }>>(`connect_mcp_ticket:${nonce}`))?.ticket;
     if (ticket === undefined) return;
     await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
     const call = signedRpc(this.env);
@@ -1474,17 +1487,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return Response.json(outcome);
     }
     if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
-      const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
-      // A Granola ticket carries the MCP sign-in attempt it was issued for; Continue starts that attempt once.
-      const attempt = await this.ctx.storage.get<string>(`connect_mcp:${ticket_hash}`);
-      if (attempt !== undefined) {
-        const url = await this.serial(async () => {
-          await this.ctx.storage.delete(`connect_mcp:${ticket_hash}`);
-          await this.ctx.storage.put(`connect_mcp_ticket:${attempt}`, ticket_hash);
-          return this.mcp().start(attempt);
-        });
-        console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: url !== null, detail: 'granola' }));
-        return Response.json({ url, nonce: url ? attempt : null });
+      const { ticket_hash, provider } = JSON.parse(body) as { ticket_hash: string; provider?: string };
+      // The ticket names its provider; Continue on a Granola ticket starts Granola's sign-in once (the ticket is already spent).
+      if (provider === 'granola') {
+        const begun = await this.serial(() => this.beginGranola(ticket_hash));
+        console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begun.url !== null, detail: 'granola' }));
+        return Response.json(begun);
       }
       // A ticket the app issued is begun on the app runtime, so an owner without Telegram can connect.
       const issuer = await this.ctx.storage.get<string>(`connect_channel:${ticket_hash}`);

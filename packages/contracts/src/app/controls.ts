@@ -36,7 +36,7 @@ export const appControlActionV1Schema = z.strictObject({
   // Granola is one fixed, reviewed server, so its actions name nothing. A connect receipt's navigation is the first-party
   // /c/<ticket>?handoff=<code> path; disconnect revokes at Granola where it can and says when it could not.
   const granola = action.action === 'granola.connect' || action.action === 'granola.disconnect';
-  if (granola && (action.view !== 'connections' || (action.id ?? action.value) !== undefined)) ctx.addIssue({ code: 'custom', path: ['view'], message: 'granola actions start from the connections view and carry no id or value' });
+  if (granola && (action.view !== 'connections' || (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['view'], message: 'granola actions start from the connections view and carry nothing else' });
   // Deletion signs out every session, so its recorded receipt cannot be read back: a replay is refused
   // as signed out. An unconfirmed receipt can be read back, and resending the same request_id never
   // runs a second deletion.

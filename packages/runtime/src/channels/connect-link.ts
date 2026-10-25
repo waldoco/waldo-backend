@@ -33,7 +33,9 @@ const PROVIDERS = {
 const providerOf = (value: string | undefined) => (value === 'granola' ? PROVIDERS.granola : value === 'google' ? PROVIDERS.google : null);
 
 type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown }>;
-const used = (provider: string) => ({ status: 410, title: 'This link was already used', body: `Each connect link starts one sign-in. Ask Waldo to connect ${provider} for a fresh one.` });
+const used = (provider: string) => ({ status: 410, title: 'This link was already used', body: provider === 'Google'
+  ? 'Each connect link starts one sign-in. Ask Waldo to connect Google for a fresh one.'
+  : `Each connect link starts one sign-in. Connect ${provider} again from Connections in the Waldo app for a fresh one.` });
 const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Nothing was connected. You can close this tab.' };
 
 const hop = (status: string, hashPrefix: string) =>
@@ -110,7 +112,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   try {
     const reply = await owners.get(owners.idFromName(begun.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {
-      method: 'POST', body: JSON.stringify({ ticket_hash: hash }),
+      method: 'POST', body: JSON.stringify({ ticket_hash: hash, provider: session.provider }),
     });
     const { url: consent, nonce } = await reply.json() as { url?: string; nonce?: string };
     // The browser that follows this link is the only one the callback accepts, so a redirect without a binding would only dead-end.

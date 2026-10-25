@@ -20,6 +20,8 @@ export type FakeOptions = {
   results: (name: string, args: Record<string, unknown>) => unknown;
   // Where the MCP server answers; the server path stays /mcp.
   origin: string;
+  // The authorization server's issuer and origin.
+  issuer: string;
 };
 
 export const defaultTools: FakeTool[] = [
@@ -34,6 +36,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     era: 'modern', auth: true, registration: 'cimd', issParameter: true, pkce: true, tools: defaultTools, accessTtlSeconds: 3600, revocation: true,
     results: (name, args) => ({ content: [{ type: 'text', text: `${name} ran with ${JSON.stringify(args)}` }] }),
     origin: new URL(MCP_URL).origin,
+    issuer: ISSUER,
     ...overrides,
   };
   const mcpUrl = `${options.origin}/mcp`, metadata = `${options.origin}/.well-known/oauth-protected-resource/mcp`;
@@ -105,16 +108,16 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const url = new URL(request.url);
     hits.push(`${request.method} ${url.origin}${url.pathname}`);
     if (url.origin === options.origin) {
-      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [ISSUER], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
+      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
       if (url.pathname === '/mcp') return mcp(request);
       return new Response('not found', { status: 404 });
     }
-    if (url.origin === ISSUER) {
+    if (url.origin === options.issuer) {
       if (url.pathname === '/.well-known/oauth-authorization-server') {
         return json({
-          issuer: ISSUER, authorization_endpoint: `${ISSUER}/authorize`, token_endpoint: `${ISSUER}/token`,
-          ...(options.registration === 'dcr' ? { registration_endpoint: `${ISSUER}/register` } : {}),
-          ...(options.revocation ? { revocation_endpoint: `${ISSUER}/revoke` } : {}),
+          issuer: options.issuer, authorization_endpoint: `${options.issuer}/authorize`, token_endpoint: `${options.issuer}/token`,
+          ...(options.registration === 'dcr' ? { registration_endpoint: `${options.issuer}/register` } : {}),
+          ...(options.revocation ? { revocation_endpoint: `${options.issuer}/revoke` } : {}),
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,
@@ -174,7 +177,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
       const url = new URL(authorizeUrl);
       const back = new URL(url.searchParams.get('redirect_uri')!);
       back.searchParams.set('state', url.searchParams.get('state')!);
-      const iss = issOverride === undefined ? (options.issParameter ? ISSUER : null) : issOverride;
+      const iss = issOverride === undefined ? (options.issParameter ? options.issuer : null) : issOverride;
       if (iss !== null) back.searchParams.set('iss', iss);
       if (decision === 'deny') { back.searchParams.set('error', 'access_denied'); return back; }
       counter += 1;

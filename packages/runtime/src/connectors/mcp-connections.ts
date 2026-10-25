@@ -8,7 +8,7 @@ import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorization
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
 import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
-import { isGranolaHost, isGranolaRead } from './granola-mcp';
+import { isGranolaHost, isGranolaRead, isReviewedGranola } from './granola-mcp';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
@@ -225,9 +225,9 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const byName = (name: string) => sql.exec<Row>('SELECT * FROM mcp_connections WHERE name = ?', name).toArray()[0];
   const toolRows = (connection: string) => sql.exec<{ name: string; digest: string; def: string }>('SELECT name, digest, def FROM mcp_tools WHERE connection = ? ORDER BY position', connection).toArray();
   const reads = (connection: string) => new Map(sql.exec<{ name: string; digest: string }>('SELECT name, digest FROM mcp_tool_reads WHERE connection = ?', connection).toArray().map((r) => [r.name, r.digest]));
-  // A reviewed server's reads run without a card; on any other server only the owner's grant for this exact definition does.
+  // The reviewed server's reads run without a card; on any other server only the owner's grant for this exact definition does.
   const runsWithoutAsking = (r: Row, name: string, digest: string, granted: ReadonlyMap<string, string>) =>
-    (isGranolaHost(r.server_url) && isGranolaRead(name)) || granted.get(name) === digest;
+    (isReviewedGranola(r.server_url, r.issuer) && isGranolaRead(name)) || granted.get(name) === digest;
   const update = (id: string, fields: Partial<Row>) => {
     const keys = Object.keys(fields);
     if (keys.length) sql.exec(`UPDATE mcp_connections SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields as Record<string, unknown>)[k] as string | number | null), id);
@@ -238,7 +238,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const defs = tools.map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
     return {
       id: r.id, name: r.name, host: new URL(r.server_url).hostname, server_url: r.server_url, auth: r.auth as 'oauth' | 'none', registration: r.registration as RegistrationMode | 'none',
-      risk: isGranolaHost(r.server_url) ? 'reviewed' : 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
+      risk: isReviewedGranola(r.server_url, r.issuer) ? 'reviewed' : 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
       tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.name, t.digest, granted)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
       tools_changed: [...granted].some(([name, digest]) => !tools.some((t) => t.name === name && t.digest === digest)), connected_at: r.connected_at,
     };
@@ -531,7 +531,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
         if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
         await refreshTools(r).catch(() => undefined);
-        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isGranolaHost(r.server_url) ? { reviewed: true as const } : {}) };
+        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}) };
         settle(nonce, outcome);
         log('mcp_consent', started);
         return outcome;
@@ -565,8 +565,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // 'changed' means they moved since the owner looked, and nothing was granted.
     async setRuns(id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> {
       const r = row(id);
-      // A reviewed server's permissions are Waldo's review, not a per-tool choice.
-      if (!r || isGranolaHost(r.server_url)) return false;
+      // The reviewed server's permissions are Waldo's review, not a per-tool choice.
+      if (!r || isReviewedGranola(r.server_url, r.issuer)) return false;
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
       if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;

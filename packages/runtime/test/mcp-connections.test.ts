@@ -5,7 +5,7 @@ import { EVERY_READ_ONLY_HINT, mcpConnections, McpRefusal, McpToolFailed, mcpSta
 import { oauthProxy } from '../src/connectors/oauth-proxy-client';
 import { callMcpToolHandler } from '../src/tools/live/mcp';
 import type { McpCallProposal } from '../src/channels/approvals';
-import { GRANOLA_MCP_URL, GRANOLA_READ_TOOLS } from '../src/connectors/granola-mcp';
+import { GRANOLA_AUTH_ORIGIN, GRANOLA_MCP_URL, GRANOLA_READ_TOOLS, isGranolaHost } from '../src/connectors/granola-mcp';
 import { fakeMcpWorld, ISSUER, MCP_URL, WALDO_ORIGIN, type FakeMcpWorld, type FakeOptions } from './support/fake-mcp-world';
 import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/oauth-edge-harness';
 
@@ -456,7 +456,7 @@ describe('Granola, a reviewed read-only server', () => {
     { name: 'sign_out', description: 'Sign out.', inputSchema: query },
     { name: 'add_meeting_to_folder', description: 'Move a meeting.', inputSchema: query },
   ];
-  const granola = { origin: new URL(GRANOLA_MCP_URL).origin, tools: granolaTools };
+  const granola = { origin: new URL(GRANOLA_MCP_URL).origin, issuer: GRANOLA_AUTH_ORIGIN, tools: granolaTools };
   const toolCalls = (world: FakeMcpWorld) => world.calls.filter((call) => call.method === 'tools/call').map((call) => call.name);
 
   it('keeps only its reviewed reads, and those run without a card', withRig('granola-reads', granola, async (rig) => {
@@ -488,4 +488,19 @@ describe('Granola, a reviewed read-only server', () => {
     expect(await mcp.setRuns(id, EVERY_READ_ONLY_HINT, true)).toBe(false);
     expect(mcp.list()[0]!.runs_without_asking).toBe(3);
   }));
+
+  it('runs reads without a card only on Granola\'s own server and sign-in; another Granola host still keeps only reads, and they ask first', withRig('granola-elsewhere', { ...granola, origin: 'https://notes.granola.ai' }, async (rig) => {
+    const { mcp } = rig;
+    await connect(rig, 'https://notes.granola.ai/mcp');
+    expect(mcp.list()[0]).toMatchObject({ host: 'notes.granola.ai', risk: 'unreviewed', tools: 3, runs_without_asking: 0 });
+    expect((await refusal(mcp.invoke({ mode: 'read', server: mcp.list()[0]!.name, tool: 'list_meetings', args: {} }))).code).toBe('forbidden');
+    expect((await refusal(mcp.describe(mcp.list()[0]!.name, 'switch_workspace'))).code).toBe('forbidden');
+  }));
+
+  it('treats a trailing-dot Granola host as Granola', () => {
+    expect(isGranolaHost('https://mcp.granola.ai./mcp')).toBe(true);
+    expect(isGranolaHost('https://MCP.GRANOLA.AI/mcp')).toBe(true);
+    expect(isGranolaHost('https://granola.ai.example.com/mcp')).toBe(false);
+    expect(isGranolaHost('http://mcp.granola.ai/mcp')).toBe(false);
+  });
 });

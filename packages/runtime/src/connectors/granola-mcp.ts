@@ -1,8 +1,11 @@
 // Granola's hosted MCP server, reviewed for Waldo. Waldo reads the owner's meeting notes through it and
 // never changes anything there: switch_workspace moves the owner's own Granola app to another workspace,
 // sign_out ends Waldo's access, and folder edits change their notes. Any MCP server on a Granola host is
-// governed by this list, whichever way it was connected: other tools are never offered, and a call to one
-// is refused before the network.
+// governed by this list, whichever way it was connected (the owner's connections or deploy config): other
+// tools are never offered, and a call to one is refused before the network. Only the reviewed server itself,
+// signed in through Granola's own sign-in service, runs those reads without a card.
+import { normaliseHost } from '../security/public-host';
+
 export const GRANOLA_MCP_URL = 'https://mcp.granola.ai/mcp';
 // Where Granola's sign-in happens; the connect page names it before the owner continues.
 export const GRANOLA_AUTH_ORIGIN = 'https://mcp-auth.granola.ai';
@@ -13,10 +16,20 @@ export const GRANOLA_READ_TOOLS: readonly string[] = ['get_account_info', 'list_
 export const isGranolaHost = (url: string): boolean => {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && (parsed.hostname === 'granola.ai' || parsed.hostname.endsWith('.granola.ai'));
+    const host = normaliseHost(parsed.hostname) ?? '';
+    return parsed.protocol === 'https:' && (host === 'granola.ai' || host.endsWith('.granola.ai'));
   } catch {
     return false;
   }
 };
 
 export const isGranolaRead = (tool: string): boolean => GRANOLA_READ_TOOLS.includes(tool);
+
+// The server Waldo reviewed: Granola's own address, with a grant from Granola's own sign-in service.
+export const isReviewedGranola = (serverUrl: string, issuer: string | null): boolean => {
+  try {
+    return new URL(serverUrl).origin === new URL(GRANOLA_MCP_URL).origin && issuer === GRANOLA_AUTH_ORIGIN;
+  } catch {
+    return false;
+  }
+};

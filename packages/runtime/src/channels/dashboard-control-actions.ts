@@ -60,9 +60,8 @@ const MCP_CONNECT_FAILURES:Readonly<Record<string,string>>={
 // Granola from the app: the receipt carries only this deployment's /c/<ticket> link with its handoff code, which binds the
 // browser the app opens it in. Nothing has been granted until the owner finishes Granola's own sign-in.
 const GRANOLA_START=new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`);
-export const granolaConnectReceipt=(begun:Readonly<{kind:string;reason?:string}>,link:string|null,origin:string|undefined):ControlReceipt=>{
- if(begun.kind==='already'||begun.kind==='connected')return {state:'recorded',message:'Granola is already connected.'};
- if(begun.kind!=='redirect')return {state:'rejected',message:MCP_CONNECT_FAILURES[begun.reason??'']??'Granola could not be connected right now. Try again later.'};
+export const granolaConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
+ if(!link)return {state:'rejected',message:'Granola could not be connected right now. Try again later.'};
  const destination=link&&origin?new URL(link,origin):null;
  if(!destination||destination.origin!==origin||destination.hash||!GRANOLA_START.test(destination.pathname+destination.search))return {state:'rejected',message:'Granola connect returned an unavailable destination. Try again later.'};
  return {state:'recorded',message:'Granola connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname+destination.search};

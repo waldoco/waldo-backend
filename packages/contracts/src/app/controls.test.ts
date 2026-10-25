@@ -296,6 +296,8 @@ describe('Granola from the app', () => {
     expect(appControlActionV1Schema.safeParse({ ...connect, view: 'day' }).success).toBe(false);
     expect(appControlActionV1Schema.safeParse({ ...connect, value: 'https://mcp.granola.ai/mcp' }).success).toBe(false);
     expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', id: 'connection-1' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, volume: 'low' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', confirmation: 'DELETE' }).success).toBe(false);
   });
 
   it('reads connections with or without Granola, so older Workers still parse', () => {
