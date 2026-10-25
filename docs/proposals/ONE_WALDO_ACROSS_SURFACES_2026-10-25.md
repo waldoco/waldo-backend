@@ -211,7 +211,8 @@ On the team's cross-surface tracker these items are row 1 (timeline), row 3 (app
 type Audience = 'owner_only' | 'others';
 export const audienceOf = (kind: string, payload: unknown): Audience => /* table below; an unknown kind is 'others' */;
 export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: string; proofAt?: number }>;
-// In decide, before any effect, for action 'a' (and 'e', which can lead to a send):
+// In decide, before any effect, for action 'a' only. An edit sends nothing; the draft it produces is a new card whose
+// approve is gated in turn, which keeps the console's ungated approval.edit (channels/console-step-up.ts:37).
 // audienceOf(...) === 'others' && !(via.proofAt !== undefined && now - via.proofAt < CONSOLE_STEP_UP_MS) → refuse
 ```
 
@@ -230,7 +231,7 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 | `email_send` | others | recipients by construction [verified `channels/approvals.ts:119`] |
 | `calendar_change` | others when `calendarInviteDetails(payload)` holds (guests, `send_updates`, another calendar, location, description, Meet; `channels/approvals.ts:128-129`); otherwise owner_only | the holds on the owner's own calendar the ruling names |
 | `google_task_change` | owner_only | the owner's own task lists |
-| `message_send` | owner_only **as built** (`channels/owner-do.ts:3281`) | **owner question Q1** |
+| `message_send` | others **until Q1 is answered**, matching the console gate today (`channels/console-step-up.ts:36`) | as built it reaches only the owner's own chat (`channels/owner-do.ts:3281`), which is why **Q1** asks |
 | `browser_submit` | others | a form sent to a third-party site; **Q2** |
 | `mcp_call` | others | a third-party tool server's effect is unknown to Waldo; **Q2** |
 | `tainted_action` | others unless the replayed tool is in an owner-only list (`remember`, `forget_memory`, `close_loop`, `set_reminder`); unknown tools are others | **Q2** |
@@ -270,12 +271,14 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 6. **Adversarial:**
    - a proof from another owner's session can't satisfy the check, because the proof is read inside the owner object from the admitted session;
    - a skip and a defer never need a proof;
-   - an `edit` on an `others` card from a chat surface is refused, because it would yield a sendable draft there.
+   - an `edit` on an `others` card needs no proof on any surface, and the new draft's card is review-only on chat surfaces;
+   - a console `approval.edit` with a session older than two hours still works.
 
 ### 2.6 Owner questions
 
 - **Q1.** `message_send` reaches only the owner today, so the literal rule makes it one tap. The console gates it now. Ungating it relaxes a security setting, so it needs the owner's yes. The default keeps it gated (treated as `others`).
 - **Q2.** `browser_submit`, `mcp_call` and `tainted_action` aren't named by the ruling. The default is `others` (fail closed). The alternative is a per-tool owner-only list that the owner approves once.
+- **Q3.** Telegram is internal, but the owner uses it personally. Under this design every chat surface fails closed for sends, so Telegram's Send buttons stop sending and hand over the app link instead, like iMessage and WhatsApp. The alternative is an exemption for internal accounts, which would be a Telegram-only branch (`CLAUDE.md:16`). The default is no exemption.
 
 ## 3. iMessage approves by numbered reply
 
@@ -295,8 +298,13 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 - **Card for others:** a summary, `It's waiting in your Waldo app: <link>`, and `Reply 2 to skip.`
 - **A review that doesn't fit** the iMessage text cap (§4) shows the summary and the app link only, as `REVIEW_BUDGET` does today.
 
+**Which message carries the card.** The turn's final reply goes out after anything proposed mid-turn, and it closes progress notes first (`channels/owner-do.ts:3632-3635`). A card sent as its own message mid-turn would therefore be followed by the reply, which disarms it (see the binding rule below). So:
+- **Inside an iMessage turn,** `present()` sends nothing. It records the card as pending on the turn. `queueFinal` then appends the card block (the review and the `Reply 1 …` line) to the reply text, so the message that carries the numbers is the last one the turn sends. This is the iMessage analogue of `on_this_reply` (`tools/live/raise-approval.ts:15`).
+  - When reply plus card exceeds the text cap, the card is frozen as a second record in the same commit, after the reply. The drain hands records to the bridge in freeze order. PR C pins that ordering with a test.
+- **Outside a turn** (a job or proactive card), the card is its own outbox message.
+
 **Presentation is asynchronous.**
-- `present()` freezes the card into the iMessage final outbox as a new record kind, `card:<approval_id>`. It records a presentation with `surface: 'imessage'`, `message_ref: cmd:<commandId>`, `approvable: 0`, and the payload digest.
+- The frozen record that carries the card records a presentation with `surface: 'imessage'`, `message_ref: cmd:<commandId>`, `approvable: 0`, and the payload digest.
 - On a `delivered` or `local_recorded` result with a `messageGuid`, `recordIMessageResult` sets `message_ref` to that guid, sets `approvable = 1` for an owner-only card, and **arms** it.
 - A `rejected` or `unknown` result arms nothing, and the row follows the existing `card_unconfirmed` path.
 
@@ -305,7 +313,9 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 - **What the number binds to:** `(approval_id, payload_digest, messageGuid, expires_at)`, where `expires_at` is the approval's expiry (`PROPOSAL_TTL_MS`, `channels/approvals.ts:39,206-207`).
 - **A second card while one is armed** waits in the outbox and is presented after the first resolves. The tool result tells the model it is queued.
 
-**The intercept.** In `drainIMessage`, before `this.turn` (`channels/owner-do.ts:759`), the host checks whether the record is an exact decision. Matching an authorization input deterministically is allowed (`CLAUDE.md:11`); the model never decides approvals.
+**The intercept.** In `drainIMessage`, before `this.turn` (`channels/owner-do.ts:759`), the host checks whether the record is an exact decision.
+- **This is iMessage's button protocol, not a reading of meaning.** The numbered reply plays the role Telegram's `callback_data` plays (`channels/approvals.ts:1306-1312`): a surface-level control the host decodes exactly.
+- The model never decides authorization. The security checklist forbids LLM output in authz decisions, and the model's only approval tool lists and re-raises (`tools/live/raise-approval.ts:19-33`). So the decision can't be handed to the model's reading of free text. Anything that isn't the exact control goes to the model as conversation.
 - **It is an exact decision when all of these hold:**
   - the text, with only ASCII whitespace trimmed, is exactly `1` or `2`;
   - the event had no attachments;
@@ -313,7 +323,9 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
   - the card hasn't expired.
 - **On a match**, the host calls `decide(approval_id, '1' → 'a' | '2' → 's', …, { surface: 'imessage', messageRef: guid })`. `shownAsStored` checks the digest, and the audience predicate (§2) applies, so `1` on an others card is refused with the app link.
 - **The outcome text is fixed:** the desk's own `message`, as the Telegram callback replies today (`channels/approvals.ts:1306-1329`). It goes out through the iMessage outbox.
-- **Both rows join the main timeline** under the record's own admission: the owner's `1` (surface `imessage`) and the outcome, with its receipt. No model turn runs.
+- **Both rows are written** under the record's own admission: the owner's `1` (surface `imessage`) and the outcome, with its receipt. No model turn runs.
+  - They go to the iMessage turn's **current history chain**: the iMessage chain until PR D's iMessage switch is on, main after.
+  - The app shows them either way (§1.1).
 - **Anything else is an ordinary model turn**, for example `yes`, `1 please`, `send it`, `11`, `1.`, a full-width `１`, or a `1` sent with a photo.
   - The armed card stays live. The host appends one fixed line to that turn's reply: `Still waiting: reply 1 to add it, 2 to skip.`
   - That message re-arms the same `(approval_id, digest)` when it is delivered, so the "latest outbound" rule holds.
@@ -339,7 +351,8 @@ export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: stri
 
 ### 3.5 Tests (red first, then adversarial)
 
-1. **Falsifier.** A primary-calendar hold proposed in an iMessage turn: the card reaches the iMessage outbox, a delivered result arms it, a later `1` creates exactly one event, and the timeline shows `1` and the outcome. Today no card is frozen.
+1. **Falsifier.** A primary-calendar hold proposed mid-turn in an iMessage turn: the card rides on the turn's final reply, that reply's delivered result arms it, a later `1` creates exactly one event, and the timeline shows `1` and the outcome. Today no card is frozen.
+   - Variant: reply plus card exceeds the cap. The card is frozen after the reply, reaches the bridge after it, and `1` still decides.
 2. **Tapback.** A `like` reaction on the card is never admitted (bridge and ingress). The card is still open.
 3. **Edit.** An edit event turning `2` into `1` is never admitted.
 4. **Ambiguous replies** (`yes`, `1 please`, `11`, `1.`, `１`, `1` with an attachment, `1` from another handle, `1` in a group): each one either goes to the model or is refused at ingress, and none decides.
