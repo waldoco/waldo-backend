@@ -89,19 +89,40 @@ describe('the task brain host', () => {
     });
   });
 
-  // A worker has always read outside content, and it cannot raise a card: a free-form browser step, which may commit, is
-  // refused toward the owner's card before it runs, with no effect intent written.
-  it('an errand worker\'s untyped browser step is refused toward the owner\'s card: nothing runs and no effect intent is written', async () => {
-    await withHost(async ({ host, ticket, ran, book }) => {
+  // A worker has always read outside content, and it cannot raise a card or approve: a step the taint gate sends to the
+  // owner (a free-form browser step, a download) does not run, and the worker is told to stop there and hand the step back
+  // in its result's proposals, which the report's apply turn puts to the owner. It is never pointed at propose_action, which
+  // no worker profile holds.
+  for (const [label, step] of [
+    ['untyped browser step', UNTYPED_BROWSE],
+    ['download', { call_id: 'c-download', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/book', task: 'Save the menu.', command: { operation: 'download', element_ref: 'e2' } }) }],
+  ] as const) {
+    it(`an errand worker's ${label} stops for the owner: nothing runs, no intent is written, and the worker is told to finish with it as a proposal`, async () => {
+      await withHost(async ({ host, ticket, ran, book }) => {
+        const t = ticket('errand');
+        await host.claim(t);
+        const refused = await host.tool(t, step, CANARIES);
+        expect(refused).toMatchObject({ ok: false, error_code: 'taint_needs_approval', retryable: false });
+        const told = JSON.stringify(refused);
+        expect(told).not.toContain('propose_action');
+        expect(told).toContain(FINISH_TASK);
+        expect(told).toContain('proposals');
+        expect(ran).toEqual([]);
+        expect(book.get(t.jobId)!).toMatchObject({ status: 'running', inflight_json: null });
+        expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
+        expect(ran).toEqual(['browse_act', 'browse_act:done']);
+      });
+    });
+  }
+
+  it('a worker that stops at a step needing the owner reports it as a proposal, and the stored result keeps the exact step', async () => {
+    await withHost(async ({ host, ticket, book }) => {
       const t = ticket('errand');
       await host.claim(t);
-      const refused = await host.tool(t, UNTYPED_BROWSE, CANARIES);
-      expect(refused).toMatchObject({ ok: false });
-      expect(JSON.stringify(refused)).toContain('propose_action');
-      expect(ran).toEqual([]);
-      expect(book.get(t.jobId)!.inflight_json).toBeNull();
-      expect(await host.tool(t, call('browse_act'), CANARIES)).toMatchObject({ ok: true });
-      expect(ran).toEqual(['browse_act', 'browse_act:done']);
+      await host.tool(t, UNTYPED_BROWSE, CANARIES);
+      const proposal = { tool: 'browse_act', why: 'Booking needs the owner\'s approval.', args: JSON.parse(UNTYPED_BROWSE.arguments) as Record<string, unknown> };
+      expect(await host.report(t, { kind: 'result', result: { status: 'blocked', summary: 'Found a table; booking it needs you.', findings: [], proposals: [proposal], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(t.jobId)!.result_json!)).toMatchObject({ status: 'blocked', proposals: [proposal] });
     });
   });
 
