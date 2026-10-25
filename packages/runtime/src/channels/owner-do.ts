@@ -3980,7 +3980,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           transaction: work => storage.transactionSync(work),
           providerDown: () => workerRouteDown(modelAccess), outbox: () => finalOutbox.records(),
           enqueue: (due, tick) => {
-            const made = enqueueMachine(this.jobs(), heartbeatJobSpec(due, { ...tick, surface: channel, timezone: clock.timezone }));
+            const made = enqueueMachine(this.jobs(), heartbeatJobSpec(due, { ...tick, surface: channel, timezone: clock.timezone }), heldTopicsOf(claimStore(storage.sql)));
             if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, tick.now); queued = made.job.id; }
             return made.code;
           },
@@ -4297,7 +4297,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             gate: (prep, start) => prepGate(connectionId, prep.occurrence, start, timezone),
             machine: prep => storage.transactionSync(() => {
               if (workerRouteDown(modelAccess)) return 'held_breaker';
-              const made = enqueueMachine(this.jobs(), meetingPrepSpec({ ...prep, surface: channel }));
+              const made = enqueueMachine(this.jobs(), meetingPrepSpec({ ...prep, surface: channel }), heldTopicsOf(claimStore(storage.sql)));
               if (made.code === 'enqueued') { holdTaskJobsDue(storage.kv, Date.now()); jobs += 1; }
               return made.code;
             }),
@@ -4357,7 +4357,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups,
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
-          enqueued: () => holdTaskJobsDue(storage.kv, now),
+          enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => recompute.calendarChanged().then(
             code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
             () => log({ trace, hop: 'health_calendar_change', ms: 0, ok: false, code: 'failed' })) });

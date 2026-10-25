@@ -45,7 +45,7 @@ const withPrep = <T,>(shape: (event: CalendarItem) => CalendarItem, work: (h: Ha
     const sweep = (over: Partial<Parameters<ReturnType<typeof eventBriefs>['groundedSweep']>[0]> = {}) => briefs.groundedSweep({
       client, now, timezone: 'UTC', current: async () => undefined, known: () => false,
       gate: async () => gate.code,
-      machine: prep => state.storage.transactionSync(() => enqueueMachine(book, meetingPrepSpec({ ...prep, surface: 'app' })).code),
+      machine: prep => state.storage.transactionSync(() => enqueueMachine(book, meetingPrepSpec({ ...prep, surface: 'app' }), []).code),
       decide: async (_id, prompt) => { decisions.push(prompt); return JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }); },
       enqueue: async (id, _text, _receipt, commit) => { state.storage.transactionSync(commit); enqueued.push(id); return true; },
       ...over,

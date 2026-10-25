@@ -33,6 +33,8 @@ export type SweepCheckDeps = Readonly<{
   transaction<T>(work: () => T): T;
   // Runs inside that transaction for a job it wrote (the jobs lane's wake).
   enqueued(job: JobRow): void;
+  // The topics the owner is forgetting whose purge has not settled.
+  held(): readonly string[];
   // A change it read lands on the owner's today: asks for a health recompute, after the transaction.
   dayChanged(): Promise<void>;
 }>;
@@ -47,7 +49,11 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   if (gate === null && deps.providerDown()) return { code: 'held_breaker', changes: 0, analysis: 0 };
   const key = `machine:update_sweep:${updates.since('mail_since')}:${updates.since('calendar_since')}`;
   const read = await readChanges(updates, deps.google, deps.now, deps.sourceFollowups);
-  const checked = deps.transaction((): SweepChecked => {
+  // A job held for a topic the owner is forgetting rolls the whole write back: the record, the observed mail and the
+  // watermarks stay as they were, so the tick after the forget settles reads the same window.
+  const heldTopic = new Error('held_topic');
+  let checked: SweepChecked;
+  try { checked = deps.transaction((): SweepChecked => {
     writeChanges(updates, read);
     let recordId = read.changes.length ? updates.record(deps.day, deps.now, read.changes, null) : null;
     updates.pruneMail(deps.now);
@@ -57,10 +63,14 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     if (gate !== null) return { code: gate, ...counts };
     if (!analysis.length) return { code: 'unchanged', ...counts };
     recordId ??= updates.record(deps.day, deps.now, [], null);
-    const made = enqueueMachine(deps.jobs, updateSweepSpec(analysis, { key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now }));
+    const made = enqueueMachine(deps.jobs, updateSweepSpec(analysis, { key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now }), deps.held());
+    if (made.code === 'held_topic') throw heldTopic;
     if (made.code === 'enqueued') deps.enqueued(made.job);
     return { code: made.code, ...counts, job: made.job };
-  });
+  }); } catch (error) {
+    if (error !== heldTopic) throw error;
+    checked = { code: 'held_topic', changes: read.changes.length, analysis: 0 };
+  }
   // Weight follows the day, whatever the card does: a change on the owner's today asks for a recompute once the changes are
   // recorded. A failed ask never costs the update.
   if (read.changes.some(change => touchesDay(change, deps.day, deps.timezone))) await deps.dayChanged().catch(() => undefined);

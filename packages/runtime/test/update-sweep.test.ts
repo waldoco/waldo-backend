@@ -50,7 +50,7 @@ const withSweep = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const check = (over: Partial<Parameters<typeof updateSweepCheck>[0]> = {}) => updateSweepCheck({
       updates, jobs: book, google, now: clock.at, day: DAY, timezone: 'UTC', surface: 'app', sourceFollowups: true,
       gate: () => gate.code, providerDown: () => down.breaker, transaction: work => state.storage.transactionSync(work),
-      enqueued: job => { held.push(job.created_at); }, dayChanged: async () => undefined, ...over,
+      enqueued: job => { held.push(job.created_at); }, held: () => [], dayChanged: async () => undefined, ...over,
     });
     return work({
       sql, storage: state.storage, clock, updates, book, mail, events, reads, gate, down, held, check,

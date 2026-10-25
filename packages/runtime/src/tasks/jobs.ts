@@ -414,6 +414,13 @@ export type JobBook = ReturnType<typeof jobBook>;
 // Whether this storage has a job book, asked without opening one (which creates the table).
 export const jobsKept = (sql: Sql): boolean =>
   sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray().length > 0;
+// Whether any of these values carries one of the texts, by the forget store's own predicate: what a job is written from is
+// held to the same reading the purge cleans by.
+export const carriesForgotten = (texts: readonly string[], values: readonly (string | null)[]): boolean => {
+  const topics = forgetTopics(texts);
+  return topics.length > 0 && values.some(carriesAny(topics));
+};
+
 // Whether a forget of these texts would change the job book, asked without opening one: the forget tool counts a task that
 // carries the text as memory it touched.
 export const jobsCarry = (sql: Sql, texts: readonly string[]): boolean => {

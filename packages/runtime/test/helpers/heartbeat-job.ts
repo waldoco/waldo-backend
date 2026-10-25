@@ -24,7 +24,7 @@ export const heartbeatJobs = (storage: DurableObjectStorage, options: Readonly<{
   const tickDeps: Pick<HeartbeatDeps, 'transaction' | 'providerDown' | 'outbox' | 'enqueue' | 'checked'> = {
     transaction: work => storage.transactionSync(work), providerDown: () => false, checked: () => undefined,
     outbox: () => storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [],
-    enqueue: (due, tick) => enqueueMachine(book, heartbeatJobSpec(due, { ...tick, surface: 'app', timezone: options.timezone })).code,
+    enqueue: (due, tick) => enqueueMachine(book, heartbeatJobSpec(due, { ...tick, surface: 'app', timezone: options.timezone }), []).code,
   };
   const applier = heartbeatApplier({
     sql: storage.sql, loops: options.loops, timezone: options.timezone, now: options.now, enabled: () => true,

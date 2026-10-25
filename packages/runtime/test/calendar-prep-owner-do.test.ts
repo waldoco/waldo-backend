@@ -9,7 +9,10 @@ import { loopBook } from '../src/channels/loops';
 import { updateBook } from '../src/channels/update-cards';
 import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, textFingerprint } from '../src/memory/claims';
+import { FORGET_PURGE_ID } from '../src/memory/forget-purge';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
 import { reportMachineJobs } from './helpers/heartbeat-job';
 
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', changes: [] as CalendarChange[], mutate: null as (() => void) | null, ack: true }));
@@ -333,8 +336,8 @@ it.each(['accepted', 'quiet'] as const)('an accepted meeting\'s prep runs throug
 });
 
 // The owner is forgetting a topic: a meeting whose event carries it gets no reader job, so nothing the worker would read is
-// written while the forget runs; the sweep after the forget settles writes it. The topic stays held here because one copy of
-// it, spelled by an escape, is one the purge cannot clean yet.
+// written while the forget runs; the sweep after the forget settles writes it. The topic is in custody with the purge job
+// armed for its next try, as a forget whose first pass left a copy behind is.
 describe('meeting prep while the owner is forgetting a topic', () => {
   const TOPIC = 'onboarding mocks';
   const withHeld = (name: string, work: (o: Readonly<{ state: DurableObjectState; fire(): Promise<void>; jobs(): unknown[]; settle(): Promise<void> }>) => Promise<void>) =>
@@ -350,9 +353,9 @@ describe('meeting prep while the owner is forgetting a topic', () => {
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
       claimStore(state.storage.sql);
-      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES ('fp-onboarding', ?, ?, 'everywhere')", TOPIC, new Date(now).toISOString());
-      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
-      state.storage.sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'stuck', String.raw`bring the onboarding mocks`, now);
+      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(TOPIC), TOPIC, new Date(now).toISOString());
+      ensureSchema(state.storage);
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: FORGET_PURGE_ID, kind: 'forget_purge', payloadRefs: { id: FORGET_PURGE_ID }, occurrenceAt: now + 3_600_000, dueAt: now + 3_600_000 });
       let update = 100;
       try {
         await work({
@@ -363,7 +366,6 @@ describe('meeting prep while the owner is forgetting a topic', () => {
           },
           jobs: () => state.storage.sql.exec('SELECT origin, status FROM task_jobs').toArray(),
           settle: async () => {
-            state.storage.sql.exec("DELETE FROM reminder_notes WHERE id = 'stuck'");
             await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
             expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM topic_purge_pending').one()).toEqual({ n: 0 });
           },
@@ -374,7 +376,7 @@ describe('meeting prep while the owner is forgetting a topic', () => {
   it('a meeting whose event carries the topic writes no reader job, and logs only a code', () => withHeld('calendar-prep-held', async ({ state, fire, jobs }) => {
     await fire();
     expect(jobs()).toEqual([]);
-    expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check'").toArray()).toEqual([{ note: 'held_topic' }]);
+    expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check' AND trace LIKE 'briefs:%'").toArray()).toEqual([{ note: 'held_topic' }]);
     expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM trace_log').toArray())).not.toContain(TOPIC);
   }));
 

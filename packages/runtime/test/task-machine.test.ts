@@ -8,7 +8,7 @@ import { numericHealthIn, sanitise } from '../src/scribe/sanitiser';
 import { noteDue, taskHost, type TaskHost, type TaskHostDeps } from '../src/tasks/brain';
 import { isMachine, jobBook, MACHINE_MAX_RUNNING, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_OPEN, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
-import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineSpec } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineEnqueued, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { MACHINE_READER, TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
@@ -28,6 +28,8 @@ const spec = (over: Partial<MachineSpec> = {}): MachineSpec => ({
   items: [{ ref: 'l1', detail: 'Chase the quote from Asha (due 2027-01-15 09:00)' }], timezone: 'UTC', now: T0, deadlineAt: T0 + 30 * 60_000, ...over,
 });
 
+// Nothing held: the job is written, or another stands in its place.
+const enqueue = (book: JobBook, machine: MachineSpec) => enqueueMachine(book, machine, []) as Exclude<MachineEnqueued, { code: 'held_topic' }>;
 type Harness = Readonly<{ book: JobBook; clock: { at: number }; sql: SqlStorage; transaction<T>(work: () => T): T }>;
 let seq = 0;
 const withBook = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
@@ -39,7 +41,7 @@ const withBook = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
   });
 
 const reportMachine = (book: JobBook, result: TaskResult, over: Partial<MachineSpec> = {}) => {
-  const made = enqueueMachine(book, spec(over));
+  const made = enqueue(book, spec(over));
   const ticket = book.startAttempt(made.job.id)!;
   expect(book.report(ticket, result, { rounds: 1, costUsd: 0.001 })).toBe('accepted');
   return made.job.id;
@@ -83,7 +85,7 @@ describe('the machine reader allowlist', () => {
         context: () => ({ authenticatedUserId: 'owner-1', sanitise }), serialBrowser: (_scope, run) => run(), releaseBrowser: () => undefined,
         log: () => undefined, wake: async () => undefined,
       });
-      const machine = book.startAttempt(enqueueMachine(book, spec()).job.id)!;
+      const machine = book.startAttempt(enqueue(book, spec()).job.id)!;
       const claim = await host.claim(machine);
       expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
       expect(await host.tool(machine, { call_id: 'c1', name: 'web_search', arguments: '{"query":"asha"}' }, ['a1b2c3d4e5f60718'])).toMatchObject({ ok: false, error_code: 'acl_denied' });
@@ -99,7 +101,7 @@ describe('the machine reader allowlist', () => {
 describe('a machine job is written', () => {
   it('as a reader task the brain started: origin machine:<job>, tainted, on the auxiliary model, with its data fenced', async () => {
     await withBook(async ({ book }) => {
-      const made = enqueueMachine(book, spec());
+      const made = enqueue(book, spec());
       expect(made.code).toBe('enqueued');
       expect(made.job).toMatchObject({ kind: 'task', profile: 'reader', origin: 'machine:heartbeat', taint: 'external', status: 'queued', surface: 'app', deadline_at: T0 + 30 * 60_000 });
       expect(isMachine(made.job)).toBe(true);
@@ -117,31 +119,31 @@ describe('a machine job is written', () => {
 
   it('once per key: the same key returns the job it made, even after it settled', async () => {
     await withBook(async ({ book }) => {
-      const first = enqueueMachine(book, spec());
-      const again = enqueueMachine(book, spec());
+      const first = enqueue(book, spec());
+      const again = enqueue(book, spec());
       expect(again).toMatchObject({ code: 'existing', job: { id: first.job.id } });
       book.cancel(first.job.id, 'owner');
-      expect(enqueueMachine(book, spec())).toMatchObject({ code: 'existing', job: { id: first.job.id, status: 'cancelled' } });
+      expect(enqueue(book, spec())).toMatchObject({ code: 'existing', job: { id: first.job.id, status: 'cancelled' } });
       expect(book.open()).toHaveLength(0);
     });
   });
 
   it('at most one open job per kind and scope: a second key waits until the first settles', async () => {
     await withBook(async ({ book }) => {
-      const first = enqueueMachine(book, spec());
-      expect(enqueueMachine(book, spec({ key: 'machine:heartbeat:heartbeat-tick:2' }))).toMatchObject({ code: 'held_open_job', job: { id: first.job.id } });
+      const first = enqueue(book, spec());
+      expect(enqueue(book, spec({ key: 'machine:heartbeat:heartbeat-tick:2' }))).toMatchObject({ code: 'held_open_job', job: { id: first.job.id } });
       // Meeting prep keeps one per event occurrence: another scope is its own job.
-      const prepA = enqueueMachine(book, spec({ job: 'meeting_prep', scope: 'evt-1:100', key: 'machine:meeting_prep:evt-1:100:d1' }));
-      const prepB = enqueueMachine(book, spec({ job: 'meeting_prep', scope: 'evt-2:200', key: 'machine:meeting_prep:evt-2:200:d1' }));
+      const prepA = enqueue(book, spec({ job: 'meeting_prep', scope: 'evt-1:100', key: 'machine:meeting_prep:evt-1:100:d1' }));
+      const prepB = enqueue(book, spec({ job: 'meeting_prep', scope: 'evt-2:200', key: 'machine:meeting_prep:evt-2:200:d1' }));
       expect([prepA.code, prepB.code]).toEqual(['enqueued', 'enqueued']);
       book.cancel(first.job.id, 'owner');
-      expect(enqueueMachine(book, spec({ key: 'machine:heartbeat:heartbeat-tick:2' })).code).toBe('enqueued');
+      expect(enqueue(book, spec({ key: 'machine:heartbeat:heartbeat-tick:2' })).code).toBe('enqueued');
     });
   });
 
   it('an item carrying a health value keeps its ref and drops its detail; nothing stored carries a reading', async () => {
     await withBook(async ({ book }) => {
-      const made = enqueueMachine(book, spec({ items: [
+      const made = enqueue(book, spec({ items: [
         { ref: 'l1', detail: 'Ask the coach about my HRV 38 ms this week' },
         { ref: 'l2', detail: 'Send Asha the signed quote' },
       ] }));
@@ -190,14 +192,14 @@ describe('a machine job never takes the owner\'s place', () => {
         book.startAttempt(book.create({ kind: 'task', profile: 'reader', idempotencyKey: `own-${i}`, origin: 'tg-1', surface: 'app', brief: ownerBrief, dueAt: T0, deadlineAt: T0 + 3_600_000 }).job.id);
       }
       const queuedOwner = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'own-waiting', origin: 'tg-1', surface: 'app', brief: ownerBrief, dueAt: T0, deadlineAt: T0 + 3_600_000 }).job;
-      const machine = enqueueMachine(book, spec()).job;
+      const machine = enqueue(book, spec()).job;
       const l = lane(h);
       await runJobsLane(l.deps());
       expect(l.started).toEqual([machine.id]);
       expect(book.get(queuedOwner.id)!.status).toBe('queued');
       expect(book.runningTasks()).toBe(TASK_MAX_RUNNING);
       // While the owner's slots stay full, a queued machine job is still due at its time.
-      const next = enqueueMachine(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a', now: T0 + 5_000 })).job;
+      const next = enqueue(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a', now: T0 + 5_000 })).job;
       expect(book.nextDue(true)).toBe(book.get(next.id)!.due_at);
     });
   });
@@ -206,9 +208,9 @@ describe('a machine job never takes the owner\'s place', () => {
     await withBook(async (h) => {
       const { book, clock } = h;
       // A dense day: twelve meetings, each its own prep job, plus a check-back and a sweep.
-      for (let i = 0; i < 12; i += 1) enqueueMachine(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
-      enqueueMachine(book, spec());
-      enqueueMachine(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a' }));
+      for (let i = 0; i < 12; i += 1) enqueue(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
+      enqueue(book, spec());
+      enqueue(book, spec({ job: 'update_sweep', key: 'machine:update_sweep:a' }));
       const l = lane(h);
       const next = await runJobsLane(l.deps());
       expect(l.started).toHaveLength(MACHINE_MAX_RUNNING);
@@ -229,7 +231,7 @@ describe('a machine job never takes the owner\'s place', () => {
   it('sends no progress note however long it runs', async () => {
     await withBook(async (h) => {
       const { book, clock } = h;
-      const machine = enqueueMachine(book, spec()).job;
+      const machine = enqueue(book, spec()).job;
       book.startAttempt(machine.id);
       expect(noteDue(book.get(machine.id)!)).toBeNull();
       clock.at = T0 + 25 * 60_000;
@@ -241,7 +243,7 @@ describe('a machine job never takes the owner\'s place', () => {
 
   it('is hidden from the owner\'s running-task line and from cancel_task', async () => {
     await withBook(async ({ book }) => {
-      const machine = enqueueMachine(book, spec()).job;
+      const machine = enqueue(book, spec()).job;
       expect(runningTasksLine(book)).toBe('');
       const [, cancel] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
       const refused = await (cancel as { handle(args: CancelTaskArgs, ctx: ToolDispatcherContext): Promise<unknown> }).handle({ job_id: machine.id }, {} as ToolDispatcherContext);
@@ -252,7 +254,7 @@ describe('a machine job never takes the owner\'s place', () => {
 
   it('do not count toward the owner\'s open-task cap: the owner can still start a task', async () => {
     await withBook(async ({ book }) => {
-      for (let i = 0; i < TASK_MAX_OPEN; i += 1) enqueueMachine(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
+      for (let i = 0; i < TASK_MAX_OPEN; i += 1) enqueue(book, spec({ job: 'meeting_prep', scope: `evt-${i}`, key: `machine:meeting_prep:evt-${i}` }));
       expect(book.taskCounts('turn-1')).toEqual({ open: 0, fromTurn: 0 });
       const [start] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
       const started = await (start as { handle(args: unknown, ctx: ToolDispatcherContext): Promise<unknown> }).handle(
@@ -272,10 +274,10 @@ describe('a machine job never takes the owner\'s place', () => {
       // Old machine rows, settled long ago, then a burst of recent ones.
       for (let i = 0; i < MACHINE_SETTLED_KEPT + 20; i += 1) {
         clock.at = T0 + i;
-        book.cancel(enqueueMachine(book, spec({ key: `old-${i}` })).job.id, 'owner');
+        book.cancel(enqueue(book, spec({ key: `old-${i}` })).job.id, 'owner');
       }
       clock.at = T0 + MACHINE_SETTLED_KEPT_MS + 60_000;
-      for (let i = 0; i < 70; i += 1) book.cancel(enqueueMachine(book, spec({ key: `new-${i}` })).job.id, 'owner');
+      for (let i = 0; i < 70; i += 1) book.cancel(enqueue(book, spec({ key: `new-${i}` })).job.id, 'owner');
       book.trim();
       const count = (machine: boolean) => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM task_jobs WHERE origin ${machine ? '' : 'NOT '}LIKE 'machine:%'`).toArray()[0]!.n;
       expect(count(false)).toBe(TASK_SETTLED_KEPT);
@@ -319,7 +321,7 @@ describe('applying a machine job', () => {
 
   it('a parked machine job settles silently: no notice, no turn, no delivery', async () => {
     await withBook(async (h) => {
-      const made = enqueueMachine(h.book, spec());
+      const made = enqueue(h.book, spec());
       expect(h.book.park(made.job.id, 'provider_unavailable')).toBe(true);
       const l = lane(h, { heartbeat: async () => { throw new Error('a parked machine job reached its applier'); } });
       await runJobsLane(l.deps());

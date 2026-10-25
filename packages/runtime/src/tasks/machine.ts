@@ -6,7 +6,7 @@ import { ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
-import { jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
+import { carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
 
 // Machine jobs: reader tasks the brain starts on its own schedule, so the reading runs on a worker and not in the owner's
 // alarm pass. The brain decides deterministically that the data changed before it writes one; the worker judges whether
@@ -28,12 +28,14 @@ export type MachineSpec = Readonly<{
   // The job's own digest of its inputs, where it already has one its apply compares against (meeting prep's event digest).
   inputDigest?: string;
 }>;
-export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }>;
+export type MachineEnqueued = Readonly<{ code: 'enqueued' | 'existing' | 'held_open_job'; job: JobRow }> | Readonly<{ code: 'held_topic' }>;
 
 // Writes the job, or names the one that stands in its place: the same key returns the job it made, settled or not, and
 // a job and scope with a job still open waits for it, so a burst of ticks coalesces into the open job. Synchronous, so the
-// caller writes it in the same transaction as the check that read its data.
-export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueued => {
+// caller writes it in the same transaction as the check that read its data. held: the topics the owner is forgetting whose
+// purge has not settled (heldTopicsOf). A job whose inputs carry one (its brief, machine block included, or the source text
+// it was given, a detail the brief drops too) is not written, so the forget wins; the next tick asks again.
+export const enqueueMachine = (book: JobBook, spec: MachineSpec, held: readonly string[]): MachineEnqueued => {
   const open = book.openMachine(spec.job, spec.scope);
   if (open) return { code: open.idempotency_key === spec.key ? 'existing' : 'held_open_job', job: open };
   const items = spec.items.map(keptItem);
@@ -49,6 +51,7 @@ export const enqueueMachine = (book: JobBook, spec: MachineSpec): MachineEnqueue
       ...(withheld.length ? { withheld } : {}),
     },
   };
+  if (carriesForgotten(held, [JSON.stringify(brief), ...spec.items.flatMap(({ ref, detail }) => [ref, detail])])) return { code: 'held_topic' };
   const { job, created } = book.create({
     kind: 'task', profile: 'reader', idempotencyKey: spec.key, origin: `${MACHINE_ORIGIN}${spec.job}`, surface: spec.surface,
     brief, dueAt: spec.now, deadlineAt: spec.deadlineAt, taint: 'external',

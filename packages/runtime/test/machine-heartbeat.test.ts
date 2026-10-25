@@ -52,7 +52,7 @@ const withHeartbeat = <T,>(now: number, work: (h: Harness) => Promise<T>): Promi
           transaction: work => state.storage.transactionSync(work),
           providerDown: () => down.breaker, outbox: () => new TelegramFinalOutbox(state.storage.kv, () => clock.at).records(),
           enqueue: (due, ctx) => {
-            const made = enqueueMachine(book, heartbeatJobSpec(due, { ...ctx, surface: 'app', timezone: TZ }));
+            const made = enqueueMachine(book, heartbeatJobSpec(due, { ...ctx, surface: 'app', timezone: TZ }), []);
             if (down.crash) { down.crash = false; throw new Error('crash-injection: after the job write, inside its transaction'); }
             return made.code;
           },
@@ -126,7 +126,7 @@ describe('the heartbeat tick writes a machine job', () => {
       await tick(NOW);
       // The same occurrence again, as a re-fired alarm delivers it.
       const [job] = jobs();
-      expect(enqueueMachine(book, heartbeatJobSpec(loops.list(), { entryId: HEARTBEAT_ID, occurrence: NOW, runId: 'run-x', now: NOW, surface: 'app', timezone: TZ }))).toMatchObject({ code: 'existing', job: { id: job!.id } });
+      expect(enqueueMachine(book, heartbeatJobSpec(loops.list(), { entryId: HEARTBEAT_ID, occurrence: NOW, runId: 'run-x', now: NOW, surface: 'app', timezone: TZ }), [])).toMatchObject({ code: 'existing', job: { id: job!.id } });
       await tick(NOW + 30 * 60_000);
       expect(jobs()).toHaveLength(1);
       expect(checks).toEqual(['enqueued', 'held_open_job']);
