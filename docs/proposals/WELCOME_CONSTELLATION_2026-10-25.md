@@ -1,6 +1,9 @@
 # Welcome constellation: design note (25 October 2026)
 
 Status: **proposed, for gate review before any code.** The ADR draft is [`ADR_DRAFT_WELCOME_CONSTELLATION_2026-10-25.md`](ADR_DRAFT_WELCOME_CONSTELLATION_2026-10-25.md).
+It is the first producer of [Memory v2](MEMORY_V2_2026-10-25.md), and it ships on its own. When v2's *About you* page lands, the
+`<owner_constellation>` block in section 3 retires into the page's *Waldo's read* section.
+
 Base: `beta-mvp` `2c4672c9`. Owner rulings of 25 Oct: it ships in the first cohort's deploy (#1530), workstream 1 builds it, the
 constellation stays with its nightly growth (M-7 retirement PRs #1491, #1500 and #1502 are closed), the look-up is on once the
 notice is published, and the owner-profile ADR (#1534) is a yes.
