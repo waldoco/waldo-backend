@@ -25,7 +25,7 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','diagnostic_recording.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','diagnostic_recording.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
@@ -58,6 +58,15 @@ const MCP_CONNECT_FAILURES:Readonly<Record<string,string>>={
  egress_credentials:'Remove the user name or password from the address.',egress_malformed:'That is not a web address.',query_string:'Remove the part after "?" from the address.',
  pkce_unsupported:'That server\'s sign-in does not support the secure flow (PKCE with S256) Waldo requires.',registration_unsupported:'That server does not let Waldo register as an app, so it cannot be connected yet.',
  oauth_unavailable:'Signing in to servers is not set up on this Waldo yet.',
+};
+// Granola from the app: the receipt carries only this deployment's /c/<ticket> link with its handoff code, which binds the
+// browser the app opens it in. Nothing has been granted until the owner finishes Granola's own sign-in.
+const GRANOLA_START=new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`);
+export const granolaConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
+ if(!link)return {state:'rejected',message:'Granola could not be connected right now. Try again later.'};
+ const destination=link&&origin?new URL(link,origin):null;
+ if(!destination||destination.origin!==origin||destination.hash||!GRANOLA_START.test(destination.pathname+destination.search))return {state:'rejected',message:'Granola connect returned an unavailable destination. Try again later.'};
+ return {state:'recorded',message:'Granola connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname+destination.search};
 };
 export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:string;reason?:string}>):ControlReceipt=>{
  if(result.kind==='connected')return {state:'recorded',message:`Connected ${result.name}. It needed no sign-in. Its tools ask you first until you choose otherwise.`};
@@ -98,6 +107,8 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:!card.sent);}
  if(action.action==='google.connect')return view.google.connectAvailable;
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
+ if(action.action==='granola.connect')return view.granola?.connectAvailable===true&&view.granola.connection?.status!=='active';
+ if(action.action==='granola.disconnect')return !!view.granola?.connection;
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
  if(action.action==='whatsapp.unlink')return view.whatsapp?.linked===true;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);

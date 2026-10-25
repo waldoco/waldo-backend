@@ -1,4 +1,4 @@
-import { HEALTH_PROVIDER_REVISION_V1, healthApiErrorV1Schema, healthChangeRejectionReasonV1Schema, healthPurposeV1Schema, healthSourceV1Schema } from '../../../contracts/src/app/health-ingest';
+import { HEALTH_PROVIDER_REVISION_V1, HEALTH_SLEEP_DEBT_REVISION_V1, healthApiErrorV1Schema, healthChangeRejectionReasonV1Schema, healthPurposeV1Schema, healthSourceV1Schema } from '../../../contracts/src/app/health-ingest';
 import { healthConsentView, healthScoresView, invokeHealth } from './app-health';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 
@@ -66,7 +66,8 @@ const admitted = (kv: Kv, key: string, limit: number, now: number): boolean => {
 const ownerRead = async ({ rpc, doName, now }: ConsoleHealthInput): Promise<Response> => {
   const read = (operation: string) => (rpc && doName ? invokeHealth(rpc, doName, operation, '{}') : Promise.resolve(null));
   const [scored, listed, fresh] = await Promise.all([read('scores_read'), read('consent_list'), read('freshness_read')]);
-  const scores = healthScoresView(scored, null, now), consents = healthConsentView(listed, HEALTH_PROVIDER_REVISION_V1);
+  // The console page ships with this Worker, so it reads every field of the latest revision.
+  const scores = healthScoresView(scored, null, now, HEALTH_SLEEP_DEBT_REVISION_V1), consents = healthConsentView(listed, HEALTH_PROVIDER_REVISION_V1);
   // An error answer (not linked, unavailable) is no freshness to show; a freshness out of shape is a fault on our side.
   const freshness = obj(fresh) && 'freshness' in fresh ? freshnessView(fresh.freshness) : null;
   if (obj(fresh) && 'freshness' in fresh && !freshness) console.error('console health freshness shape');

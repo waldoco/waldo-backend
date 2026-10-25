@@ -366,6 +366,35 @@ describe("today's update cards", () => {
   });
 });
 
+describe('Granola from the app', () => {
+  const connect = { view: 'connections', action: 'granola.connect', revision, request_id: 'granola-0001' };
+
+  it('connects and disconnects from the connections view, naming nothing', () => {
+    expect(appControlActionV1Schema.safeParse(connect).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect' }).success).toBe(true);
+  });
+
+  it('refuses another view, a server address or an id', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, view: 'day' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, value: 'https://mcp.granola.ai/mcp' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', id: 'connection-1' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, volume: 'low' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'granola.disconnect', confirmation: 'DELETE' }).success).toBe(false);
+  });
+
+  it('reads connections with or without Granola, so older Workers still parse', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: null } })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: { status: 'reauth_needed', connected_at: 1_761_400_000_000 } } })).success).toBe(true);
+  });
+
+  it('refuses a Granola state the app could misread', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: { status: 'connected', connected_at: 1 } } })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true, connection: null, email: 'owner@example.test' } })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, granola: { connectAvailable: true } })).success).toBe(false);
+  });
+});
+
 describe('welcome constellation fixture', () => {
   it('parses every example the app builds against', async () => {
     const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;

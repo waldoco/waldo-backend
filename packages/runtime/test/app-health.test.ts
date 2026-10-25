@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
@@ -31,7 +32,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const headers = (extra: Record<string, string> = {}) => ({ authorization: `Bearer ${CREDENTIAL}`, ...extra });
-const get = (path: string) => handleApp(new Request(`https://w.test${path}`, { headers: headers() }), env(), auth) as Promise<Response>;
+const get = (path: string, extra: Record<string, string> = {}) => handleApp(new Request(`https://w.test${path}`, { headers: headers(extra) }), env(), auth) as Promise<Response>;
 const post = (path: string, body: unknown, extra: Record<string, string> = {}) => handleApp(new Request(`https://w.test${path}`, {
   method: 'POST', headers: headers({ 'content-type': 'application/json', ...extra }), body: typeof body === 'string' ? body : JSON.stringify(body),
 }), env(), auth) as Promise<Response>;
@@ -181,7 +182,7 @@ describe('app health ingest: per-sample rejection at health revision 3', () => {
   const v3 = { 'x-waldo-app-contract': 'approvals=2,health=3' };
   // Synthetic marker values: a bad reading's value must never leave the Worker.
   const tooMany = { ...sample, sample_id: 'steps-bad-1', value: 777_777 };
-  const unknownKind = { ...sample, sample_id: 'temp-1', signal: 'wrist_temperature', unit: 'celsius', value: 36.6123 };
+  const unknownKind = { ...sample, sample_id: 'glucose-1', signal: 'blood_glucose', unit: 'mmol_per_l', value: 6.6123 };
   const goodDeletion = { sample_id: 'spo2-gone-1', signal: 'spo2', revision: 3 };
   const mixed = { ...batch, request_id: 'health-upload-v3-1', samples: [sample, tooMany, unknownKind, 'hostile', { ...sample, sample_id: 'steps-2026-10-10T09', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z' }], deletions: [goodDeletion, { ...goodDeletion, revision: -5 }] };
   const rejections = [
@@ -199,8 +200,26 @@ describe('app health ingest: per-sample rejection at health revision 3', () => {
       samples: [sample, { rejected: 'invalid_sample', signal: 'steps_window' }, { rejected: 'unsupported_signal', signal: null }, { rejected: 'invalid_sample', signal: null }, mixed.samples[4]],
       deletions: [goodDeletion, { rejected: 'invalid_sample', signal: 'spo2' }],
     });
-    for (const leaked of ['777777', '36.6123', 'hostile', 'wrist_temperature', '-5']) expect(payload).not.toContain(leaked);
+    for (const leaked of ['777777', '6.6123', 'hostile', 'blood_glucose', '-5']) expect(payload).not.toContain(leaked);
     expect(rpcs[0]!.body.p_sig).toBe(await routerSignature(SECRET, rpcs[0]!.body.p_at as number, `health.ingest.owner-1.${md5Hex(payload)}`));
+  });
+  it('takes the Watch wellness signals in both modes, and at revision 3 names a bad one by its signal and nothing else', async () => {
+    const point = { ...sample, start_at: '2026-10-10T02:00:00Z', end_at: '2026-10-10T02:00:00Z' };
+    const temperature = { ...point, sample_id: 'temp-1', signal: 'wrist_temperature', unit: 'celsius', method: 'absolute', value: 34.2 };
+    const fitness = { ...point, sample_id: 'vo2-1', signal: 'vo2_max', unit: 'ml_per_kg_min', value: 41.5 };
+    const wellness = { ...batch, request_id: 'health-upload-watch-1', samples: [temperature, fitness], deletions: [{ sample_id: 'mind-1', signal: 'mindful_duration', revision: 2 }] };
+    rpcResult = { ...receipt, request_id: wellness.request_id, accepted: 2, deleted: 1 };
+    expect((await post('/app/v1/health/ingest', wellness)).status).toBe(200);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(wellness);
+    const fahrenheit = { ...wellness, request_id: 'health-upload-watch-2', samples: [{ ...temperature, value: 93.9871 }, fitness] };
+    rpcResult = { ...receipt, request_id: fahrenheit.request_id, accepted: 1, deleted: 1, rejected: [{ change: 'sample', index: 0, signal: 'wrist_temperature', reason: 'invalid_sample' }] };
+    expect((await post('/app/v1/health/ingest', fahrenheit, v3)).status).toBe(200);
+    const payload = rpcs[1]!.body.p_payload as string;
+    expect(JSON.parse(payload).samples).toEqual([{ rejected: 'invalid_sample', signal: 'wrist_temperature' }, fitness]);
+    expect(payload).not.toContain('93.9871');
+    // The same batch from an older build is refused whole, as every bad batch always was.
+    expect((await post('/app/v1/health/ingest', { ...fahrenheit, request_id: 'health-upload-watch-3' })).status).toBe(400);
+    expect(rpcs).toHaveLength(2);
   });
   it('keeps an older build all-or-nothing, exactly as before: the same mixed batch is refused and nothing is called', async () => {
     for (const header of [{}, { 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=1' }, { 'x-waldo-app-contract': 'health=3,health=3' }, { 'x-waldo-app-contract': 'approvals=3' }] as Record<string, string>[]) {
@@ -306,7 +325,54 @@ describe('app health routes: error mapping', () => {
   });
 });
 
+// The scores schema an installed build parses with, copied from the app's own pin of this contract: strict objects, with
+// sleep_debt optional. A body this rejects would break that build.
+const pinnedUnavailable = z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings', 'baseline_immature', 'missing_sleep', 'missing_resting_signal', 'stale_inputs', 'conflicting_inputs', 'intraday_inputs_unavailable', 'calendar_demand_unavailable']) });
+const pinnedVersion = { algorithm_version: z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64), activation: z.enum(['candidate_unaccepted', 'accepted']) };
+const pinnedPillar = (zone: readonly [string, ...string[]]) => z.union([pinnedUnavailable, z.strictObject({ state: z.literal('available'), score: z.number().finite().min(0).max(100), zone: z.enum(zone).nullable(), ...pinnedVersion, confidence: z.number().finite().min(0).max(1).nullable(), hrv_method: z.enum(['rmssd', 'sdnn']).nullable() })]);
+const pinnedScores = z.strictObject({
+  day: z.iso.date(), timezone: z.string(), compiled_at: z.iso.datetime({ offset: true }), freshness: z.enum(['fresh', 'stale', 'expired']),
+  recovery: pinnedPillar(['excellent', 'solid', 'mixed', 'compromised']), form: pinnedPillar(['energized', 'steady', 'flagging', 'depleted']), weight: pinnedPillar(['light', 'moderate', 'heavy', 'peak']),
+  sleep_debt: z.union([pinnedUnavailable, z.strictObject({ state: z.literal('partial'), confidence: z.number().finite().min(0).max(1), ...pinnedVersion }),
+    z.strictObject({ state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average']), ...pinnedVersion })]).optional(),
+});
+
+// Builds pinned before the app took sleep_debt parse the scores with no such key, strictly.
+const pinnedBeforeSleepDebt = pinnedScores.omit({ sleep_debt: true });
+
 describe('app health scores', () => {
+  const version = { algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
+  const debts = [{ state: 'unavailable', reason: 'missing_sleep' }, { state: 'partial', confidence: 0.6, ...version }, { state: 'available', debt_minutes: 315.5, need_basis: 'own_average', ...version }];
+  it('serves stored sleep debt from health revision 2, in a shape an installed build parses with its own pin', async () => {
+    for (const sleep_debt of debts) {
+      rpcResult = { scores: { ...row, sleep_debt } };
+      for (const contract of [{ 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=3' }, { 'x-waldo-app-contract': 'approvals=3,health=3' }] as Record<string, string>[]) {
+        const body = await (await get('/app/v1/health/scores', contract)).json() as Record<string, unknown>;
+        expect(pinnedScores.safeParse(body).success, `${sleep_debt.state} ${JSON.stringify(contract)}`).toBe(true);
+        expect(body.sleep_debt).toEqual(sleep_debt);
+      }
+    }
+  });
+  it('never shows sleep debt to a build below health revision 2, which keeps all three scores', async () => {
+    for (const sleep_debt of debts) {
+      rpcResult = { scores: { ...row, sleep_debt } };
+      for (const contract of [{}, { 'x-waldo-app-contract': 'health=1' }, { 'x-waldo-app-contract': 'approvals=3' }, { 'x-waldo-app-contract': 'health=two' }] as Record<string, string>[]) {
+        const response = await get('/app/v1/health/scores', contract);
+        const body = await response.json() as Record<string, unknown>;
+        const label = `${sleep_debt.state} ${JSON.stringify(contract)}`;
+        expect([response.status, 'sleep_debt' in body], label).toEqual([200, false]);
+        expect(pinnedBeforeSleepDebt.safeParse(body).success, label).toBe(true);
+      }
+    }
+  });
+  it('answers without sleep debt when the row has none, or holds one it cannot read, and still serves the scores', async () => {
+    for (const stored of [row, { ...row, sleep_debt: { state: 'available', debt_minutes: -1 } }, { ...row, sleep_debt: 'lots' }]) {
+      rpcResult = { scores: stored };
+      const response = await get('/app/v1/health/scores', { 'x-waldo-app-contract': 'health=2' });
+      const body = await response.json() as Record<string, unknown>;
+      expect([response.status, 'sleep_debt' in body, pinnedScores.safeParse(body).success]).toEqual([200, false, true]);
+    }
+  });
   it('translates the stored read model into the contract: zone words by meaning, unavailable pillars with their reason', async () => {
     rpcResult = { scores: row };
     const response = await get('/app/v1/health/scores');
