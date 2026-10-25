@@ -6,7 +6,7 @@ import { claimStore } from '../src/memory/claims';
 
 const unused = () => { throw Error('The constellation view reads only owner storage'); };
 const host = (storage: DurableObjectStorage): AppControlsHost => ({
-  csrf: 'csrf-constellation', expires: Date.now() + 60_000, storage, assertCurrent: async () => {}, sessions: unused, view: unused, act: unused,
+  csrf: 'csrf-constellation', expires: Date.now() + 60_000, signedInAt: new Date().toISOString(), storage, assertCurrent: async () => {}, sessions: unused, view: unused, act: unused,
   account: { owner: 'owner-constellation', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
 });
 const get = async (storage: DurableObjectStorage, query: string) => {
@@ -41,19 +41,19 @@ it('serves every sub-view of the console memory graph under the app contract, wi
 
     const first = data((await get(storage, 'view=constellation&memory_view=claims&limit=1')).body);
     if (first.memory_view !== 'claims') throw Error('expected claims');
-    expect(first.items.map(item => item.text)).toEqual(['Walks after lunch']);
+    expect(first.items.map(item => item.text)).toEqual(['Sleeps better after a walk']);
     expect(first.page).toMatchObject({ returned: 1, total: 2 });
     const second = data((await get(storage, `view=constellation&memory_view=claims&limit=1&cursor=${first.page.next_cursor}`)).body);
     if (second.memory_view !== 'claims') throw Error('expected claims');
-    expect(second.items.map(item => item.text)).toEqual(['Sleeps better after a walk']);
+    expect(second.items.map(item => item.text)).toEqual(['Walks after lunch']);
     expect(second.page.next_cursor).toBeNull();
 
     const nodes = data((await get(storage, 'view=constellation&memory_view=interpretations&limit=50')).body);
     if (nodes.memory_view !== 'interpretations') throw Error('expected interpretations');
     const [center] = nodes.items;
-    expect(center!.support.claim_ids).toEqual(first.items.map(item => item.id).concat(second.items.map(item => item.id)));
+    expect(center!.support.claim_ids).toEqual(second.items.map(item => item.id).concat(first.items.map(item => item.id)));
     const claimDetail = data((await get(storage, `view=constellation&memory_view=detail&id=${first.items[0]!.id}`)).body);
-    expect(claimDetail).toMatchObject({ kind: 'claim', linked_interpretation_ids: nodes.items.map(item => item.id) });
+    expect(claimDetail).toMatchObject({ kind: 'claim', linked_interpretation_ids: nodes.items.map(item => item.id).reverse() });
     expect(data((await get(storage, `view=constellation&memory_view=detail&id=${center!.id}`)).body)).toMatchObject({ kind: 'interpretation', support_unavailable_count: 0 });
     const pattern = data((await get(storage, `view=constellation&memory_view=pattern&id=${center!.id}&max_nodes=5&max_links=5`)).body);
     expect(pattern).toMatchObject({ memory_view: 'pattern', showing: { nodes: 1, of_nodes: 1, links: 1, of_links: 1 }, truncated: false });

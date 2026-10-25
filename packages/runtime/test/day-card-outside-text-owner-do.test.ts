@@ -88,7 +88,9 @@ const morningCard = async (changes: readonly Change[], script: (seeded: Seeded) 
   });
 };
 const cardRequests = () => proof.requests.filter(request => JSON.stringify(request.input).includes('Scheduled card'));
-const cardTools = () => ((cardRequests()[0]?.tools ?? []) as { name?: string }[]).map(tool => tool.name);
+type WireTool = { type?: string; name?: string; tools?: WireTool[] };
+// With tool search on, OpenAI nests a deferred tool inside its namespace, so a write tool is looked for there too.
+const cardTools = () => ((cardRequests()[0]?.tools ?? []) as WireTool[]).flatMap(tool => tool.type === 'namespace' ? tool.tools ?? [] : [tool]).map(tool => tool.name);
 const delivered = () => proof.telegram.filter(entry => entry.method === 'sendMessage' && String(entry.body.text).startsWith('The Brief'));
 
 it('a mail title asking to cancel the 9am reminder leaves the reminder in place and raises no card by itself', async () => {

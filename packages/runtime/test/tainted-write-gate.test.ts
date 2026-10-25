@@ -122,7 +122,7 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   it('a new write tool is carded by default: a record with a claim and no exemption needs the owner', async () => {
-    const write: ToolRecord = { brain: 'actions', scope: 'allow', claim: 'thing_booked', replay: { replay: 'non_replayable_uncertain', basis: 'hypothetical' } };
+    const write: ToolRecord = { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'thing_booked', replay: { replay: 'non_replayable_uncertain', basis: 'hypothetical' } };
     expect(await recordNeedsOwnerCard('execute_action', write, {}, {})).toBe(true);
     expect(await recordNeedsOwnerCard('execute_action', { ...write, claim: null }, {}, {})).toBe(false);
     expect(await recordNeedsOwnerCard('execute_action', { ...write, tainted: { exempt: 'draft', reason: 'hypothetical' } }, {}, {})).toBe(false);
