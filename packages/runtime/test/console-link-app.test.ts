@@ -70,16 +70,26 @@ it('an app turn that asks for the console link shows it under the reply, and kee
       expect(reply.text).toMatch(/^Your console link is just below\.\n\nConsole \(link works once, for 10 minutes\): https:\/\/waldo\.fixture\.invalid\/console\?t=\S+$/);
 
       await ask('console-client-02', 'Thanks, got it');
-      expect(model.all.length).toBeGreaterThan(2);
+      const REPLY = 'Your console link is just below.';
+      // Each scan must see where the reply itself landed, so a location it cannot read fails here rather than passing as clean.
+      const second = model.requests.at(-1)!;
+      expect(second).toContain(REPLY);
       expect(model.all.join('\n')).not.toContain('console?t=');
-      const holding = [...state.storage.kv.list()].filter(([, value]) => JSON.stringify(value).includes('console?t=')).map(([key]) => key);
-      expect(holding).toEqual(['app_console_links_v1']);
-      const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map(row => row.name);
+      const kvRows = [...state.storage.kv.list()];
+      expect(kvRows.some(([, value]) => JSON.stringify(value).includes(REPLY))).toBe(true);
+      expect(kvRows.filter(([, value]) => JSON.stringify(value).includes('console?t=')).map(([key]) => key)).toEqual(['app_console_links_v1']);
+      expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM episodes').toArray())).toContain(REPLY);
+      const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'").toArray().map(row => row.name);
+      const unread: string[] = [];
+      let holding: string[] = [];
       for (const table of tables) {
-        let rows: unknown[] = [];
-        try { rows = state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray(); } catch { continue; }
-        expect(JSON.stringify(rows), table).not.toContain('console?t=');
+        let rows: unknown[];
+        try { rows = state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray(); } catch { unread.push(table); continue; }
+        if (JSON.stringify(rows).includes('console?t=')) holding = [...holding, table];
       }
+      expect(tables).toContain('episodes');
+      expect(unread).not.toContain('episodes');
+      expect(holding.filter(table => table !== '_cf_KV')).toEqual([]);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
