@@ -130,6 +130,36 @@ describe('the task brain host', () => {
     });
   });
 
+  // A worker has always read outside content, so every call it makes runs with outside-sourced arguments: this value is
+  // the whole taint gate for a worker's browse_act, and the worker never grants itself approval.
+  it('every worker call reaches its handler with outside-sourced arguments and no approval', async () => {
+    await withHost(async ({ host, ticket, handler }) => {
+      const seen: Pick<ToolDispatcherContext, 'toolArgSourceTaint' | 'sourceTaint'>[] = [];
+      let approved: boolean | undefined;
+      handler.search = async (ctx) => { seen.push({ toolArgSourceTaint: ctx.toolArgSourceTaint, sourceTaint: ctx.sourceTaint }); approved = await ctx.hasApproval?.({ tool: 'search_communication', args: {}, session: null }); return { hits: 1 }; };
+      const t = ticket();
+      await host.claim(t);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+      expect(seen).toEqual([{ toolArgSourceTaint: 'external', sourceTaint: null }]);
+      expect(approved).toBe(false);
+    });
+  });
+
+  // The lease renews only for the attempt's own token: a forged token neither keeps the job alive nor reaches its calls.
+  it('a heartbeat with a forged token is refused and leaves the lease where it was', async () => {
+    await withHost(async ({ host, ticket, book, clock }) => {
+      const t = ticket();
+      await host.claim(t);
+      const lease = book.get(t.jobId)!.lease_until;
+      clock.at += 60_000;
+      expect(await host.heartbeat({ ...t, token: 'forged' })).toBe(false);
+      expect(book.get(t.jobId)!.lease_until).toBe(lease);
+      expect(await host.tool({ ...t, token: 'forged' }, call('search_communication'), CANARIES)).toBe('fenced');
+      expect(await host.heartbeat(t)).toBe(true);
+      expect(book.get(t.jobId)!.lease_until).toBeGreaterThan(lease!);
+    });
+  });
+
   it('records external taint on the job when a tool returns outside content', async () => {
     await withHost(async ({ host, ticket, book }) => {
       const t = ticket();
