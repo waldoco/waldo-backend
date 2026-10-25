@@ -15,12 +15,19 @@ export WALDO_PROBE_URL='https://waldo-runtime-staging.piyushfulper3210.workers.d
 The token lives ONLY in the vault and in the worker's secret store. Never commit it,
 echo it, or paste it into the repo.
 
+Probes run as a designated synthetic owner, never as a real one. The worker needs
+`WALDO_PROBE_TELEGRAM_ID` (the synthetic owner's Telegram subject, which must differ from
+`WALDO_OWNER_TELEGRAM_ID`) and `WALDO_PROBE_SYNTHETIC_DO_NAMES` (comma-separated DO names that
+may receive probes). Without both, or when the subject resolves to a DO outside that list,
+`/probe/turn` refuses (503 or 403) and nothing reaches any owner. A probe turn writes what any
+turn writes (open loops, reminders, the transcript), so it must never target a real account.
+
 ## Run
 
 ```bash
 node scripts/probe-staging.mjs            # core suite: auth + payload + capture checks
 node scripts/probe-staging.mjs --burst    # adds 22 rapid probes to verify the 20/min rate limiter returns 429
-node scripts/probe-staging.mjs --live     # adds ONE real Telegram send to the owner chat (requires --burst too if you want both)
+node scripts/probe-staging.mjs --live     # adds ONE real Telegram send to the synthetic probe owner's chat (requires --burst too if you want both)
 ```
 
 ## Cases and expected receipts

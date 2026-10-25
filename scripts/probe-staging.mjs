@@ -8,7 +8,9 @@
 // Optional: --url <origin> (default https://waldo-runtime-staging.piyushfulper3210.workers.dev)
 //           --burst   include the 22-probe rate-limit burst (spends ~22 cheap model calls)
 //           --live    include the live-send receipt probe (sends ONE real Telegram message to
-//                     the owner; capture mode never sends). Off by default.
+//                     the designated synthetic probe owner; capture mode never sends). Off by default.
+// The worker only accepts probes for its designated synthetic owner (WALDO_PROBE_TELEGRAM_ID, whose DO is
+// listed in WALDO_PROBE_SYNTHETIC_DO_NAMES); it refuses rather than write into a real owner's account.
 //
 // Endpoint contract (packages/runtime/src/channels/probe-turn.ts + owner-do.ts):
 //   404 non-staging/unconfigured/wrong method; 403 missing or wrong token;

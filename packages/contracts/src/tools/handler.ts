@@ -179,13 +179,15 @@ export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTain
 // can ask for any of them, and one write would make the injection persist, so a tainted turn sends them to the owner's
 // card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
 // their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
-// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good. A background
-// task is a schedule too: it runs paid workers on its brief and reports to the owner later, without being asked again, and
-// cancelling one stops work the owner asked for, as cancelling a reminder does.
+// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good, and so is
+// closing a loop: a mail that says "paid" would end what the owner asked Waldo to stay on. A background task is a schedule
+// too: it runs paid workers on its brief and reports to the owner later, without being asked again, and cancelling one stops
+// work the owner asked for, as cancelling a reminder does.
 export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
   'set_reminder',
   'cancel_reminder',
   'open_loop',
+  'close_loop',
   'set_standing_order',
   'cancel_standing_order',
   'set_proactivity',
@@ -199,6 +201,8 @@ export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
 // from the frozen arguments: a loop bound to an observed mail source records that source, its title never enters a
 // prompt as the owner's (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back;
 // it is the owner-enabled mail follow-through, so it needs no card. Arguments that are not a plain record are no loop.
+// close_loop names only an id, which cannot say whose loop it is, so this law cards every tainted close; the runtime
+// admits closing a mail-bound loop by reading the owner's loop store (hooks/registry.ts taintedCallNeedsOwnerApproval).
 export function taintGateNeedsOwnerApproval(tool: ToolName, taint: SourceTaint, args?: unknown): boolean {
   if (taintGateBlocksDirectExecution(tool, taint)) return true;
   if (!isExternalSourceTaint(taint) || !STANDING_CHANGE_TOOLS.includes(tool)) return false;

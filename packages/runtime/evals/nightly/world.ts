@@ -60,6 +60,8 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Loops the owner already gave Waldo to stay on, as the loop store holds them.
+  loops?: readonly Readonly<{ title: string; due: string | null }>[];
   // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
   // consent granted or not.
   lookup?: Readonly<{ consent: boolean }>;
@@ -266,6 +268,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   }
   const memory = memoryMode === 'claims' ? claims : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
+  for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
   const conversation = indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, now);
   const web = {

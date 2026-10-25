@@ -10,4 +10,9 @@ if (!template.includes('{{ .Token }}')) {
   process.stderr.write(`${NAME}: the magic_link email template must include {{ .Token }} so console sign-in has a code\n`);
   process.exit(1);
 }
+const length = /\[auth\.email\][^[]*otp_length = (\d+)/.exec(config)?.[1];
+if (length !== '6') {
+  process.stderr.write(`${NAME}: [auth.email] otp_length must be 6, the sign-in code length the app shows (found ${length ?? 'none'})\n`);
+  process.exit(1);
+}
 process.stdout.write(`${NAME}: ok\n`);
