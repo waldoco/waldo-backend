@@ -1,19 +1,27 @@
-import { appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_MEMORY_REVISION, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
+import { signedInRecently } from '../identity/console-auth';
 import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
 import type { ConsoleAction, ConsoleView } from './console';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
+import { phoneControlAct, phoneControls } from './dashboard-phone';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
+  // The session row's created_at: the proof of a recent email code that a gated action needs.
+  signedInAt:string;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
   cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
+  phone:PhoneSmsEnv;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -21,12 +29,25 @@ const MEMORY_SCOPE='memory';
 type Item=Record<string,unknown>&{local_id?:number};
 const withoutLocalId=({local_id:_local,...item}:Item)=>item;
 // The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
-const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>)=>({
+// A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
+// revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
+const pinOf=(pins:ReadonlyMap<number,string>|undefined)=>(item:Item):Item=>item.type==='interpretation'?item
+  :pins?{...item,pinned:pins.get(item.local_id!)??null}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins?:ReadonlyMap<number,string>)=>({
   ...rest,memory_view:view,
-  ...(Array.isArray(items)?{items:items.map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(item as Item)}:{}),
+  ...(Array.isArray(items)?{items:items.map(pinOf(pins)).map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(pinOf(pins)(item as Item))}:{}),
   ...(center?{center:withoutLocalId(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(withoutLocalId)}:{}),
 });
 type Book=Record<string,{receipt:unknown;expires:number}>;
+const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
+const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
+// The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
+const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit'};
+// One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean)=>{
+  const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined)}:{status:paged.status,error:paged.body.error};
+};
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
   if(path.startsWith('/app/v1/actions/')){
@@ -53,10 +74,16 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     if(query.data.view==='constellation'){
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
-      let paged:ReturnType<typeof pageMemoryGraph>;
-      try{paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams(paging));}catch{return reply({error:'projection_unavailable'},503);}
-      if(paged.status!==200)return reply({error:paged.body.error},paged.status);
-      const data=appMemoryGraph(paged.body),parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      let graph:ReturnType<typeof constellationData>;
+      try{graph=constellationData(host.storage,paging,showsPins(request));}catch{return reply({error:'projection_unavailable'},503);}
+      if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
+      const data=graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='phone'){
+      let controls:Awaited<ReturnType<typeof phoneControls>>;
+      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf);}catch{return reply({error:'projection_unavailable'},503);}
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='account'){
@@ -76,6 +103,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(request.method!=='POST')return reply({error:'method_not_allowed'},405);
   let raw:unknown;try{raw=await request.json();}catch{return reply({error:'invalid_action'},400);}
   const action=appControlActionV1Schema.safeParse(raw);
+  if(action.success&&stepUpGated(appControlStepUpAction(action.data))&&!signedInRecently(host.signedInAt,Date.now()))return appStepUpRefusal();
   // A recorded deletion erases this storage and revokes the session: nothing may write or check currency after it.
   if(action.success&&action.data.action==='account.delete'){
     const form=new FormData();for(const key of ['action','view','revision','request_id','confirmation'] as const)form.set(key,action.data[key]!);form.set('csrf',host.csrf);
@@ -84,10 +112,29 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
     return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
-  if(!action.success||!(action.data.view==='day'||(action.data.view==='connections'&&action.data.action==='google.connect')))return reply({error:'invalid_action'},400);
+  // A claim action runs as the console's memory action on the claim it names. It carries the revision of that claim's
+  // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
+  if(action.success&&action.data.view==='constellation'){
+    if(!showsPins(request))return reply({error:'invalid_action'},400);
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true);return detail.status===200?detail.data as never:null;},
+      act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&(action.data.action==='google.connect'||action.data.action==='session.revoke'))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
-  const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
-    act:async action=>{await host.assertCurrent();return host.act(action);}});
+  // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
+  const phone=action.data.view==='phone';
+  const response=await controlAction(form,phone
+    ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf):null,
+      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields);}}
+    :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
+      act:async action=>{await host.assertCurrent();return host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
   const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
   // Signout is a separate push-first endpoint. No control can invalidate its own receipt.

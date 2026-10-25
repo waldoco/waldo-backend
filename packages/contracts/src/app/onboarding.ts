@@ -180,20 +180,50 @@ export const appFindingResultV1Schema = z.strictObject({
   request_id: requestId, finding_id: appFindingIdV1Schema, outcome: z.enum(['kept', 'corrected', 'forgotten']), replayed: z.boolean(),
 });
 
+// Setup answers: what the app's setup conversation asks besides the steps above, kept as owner facts Waldo reads on every
+// turn, on every surface. Each answer a request names is set, null clears it, and one left out stays as it is. day and slips
+// pair a choice with the owner's own words; an empty choice with no words clears it too. wearable is the watch the owner
+// says they wear, never a paired device or its data. Not part of the run: these can be sent before it starts and after it
+// finishes, as often as setup is run again. Refused agreements_required while the agreements are offered and not accepted.
+export const APP_SETUP_OWN_WORDS_MAX_V1 = 280;
+export const appSetupDayShapeV1Schema = z.enum(['meetings', 'focus', 'fixed', 'varies']);
+export const appSetupSlipV1Schema = z.enum(['replies', 'overlaps', 'promises', 'breaks', 'evenings']);
+export const appSetupWearableV1Schema = z.enum(['samsung', 'apple', 'oura', 'whoop', 'garmin']);
+const ownWords = z.string().trim().max(APP_SETUP_OWN_WORDS_MAX_V1);
+const SETUP_ANSWERS = ['name', 'day', 'slips', 'wearable'] as const;
+export const appSetupAnswersRequestV1Schema = z.strictObject({
+  request_id: requestId,
+  name: z.string().trim().min(1).max(80).nullable().optional(),
+  day: z.strictObject({ shape: appSetupDayShapeV1Schema.nullable(), own_words: ownWords }).nullable().optional(),
+  slips: z.strictObject({
+    picked: z.array(appSetupSlipV1Schema).max(appSetupSlipV1Schema.options.length).refine(picked => new Set(picked).size === picked.length, 'a slip is picked once'),
+    own_words: ownWords,
+  }).nullable().optional(),
+  wearable: appSetupWearableV1Schema.nullable().optional(),
+}).refine(request => SETUP_ANSWERS.some(answer => request[answer] !== undefined), 'name at least one answer');
+// held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write.
+export const appSetupAnswersResultV1Schema = z.strictObject({
+  request_id: requestId,
+  held: z.strictObject({ name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean() }),
+  replayed: z.boolean(),
+});
+
 // channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
 // channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
-// request_id came back with a different body. not_found: no such finding.
+// request_id came back with a different body. not_found: no such finding. step_up_required (403): a link code needs a sign-in
+// from the last two hours.
 export const appOnboardingErrorV1Schema = z.strictObject({
-  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable']),
+  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable', 'step_up_required']),
   message: z.string().max(1000).optional(),
 });
 
 export const appOnboardingRoutesV1 = [
   { method: 'GET', path: '/app/v1/onboarding', response: appOnboardingV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/actions', request: appOnboardingActionV1Schema, response: appOnboardingResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/onboarding/answers', request: appSetupAnswersRequestV1Schema, response: appSetupAnswersResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/onboarding/channels', response: appOnboardingChannelsV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/channel-link', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema, authenticated: true, success_status: 200, max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/consents', response: appConsentListV1Schema, authenticated: true, success_status: 200 },
@@ -216,3 +246,5 @@ export type AppChannelLinkCodeV1 = z.infer<typeof appChannelLinkCodeV1Schema>;
 export type AppFindingV1 = z.infer<typeof appFindingV1Schema>;
 export type AppFindingCategoryV1 = z.infer<typeof appFindingCategoryV1Schema>;
 export type AppFindingActionV1 = z.infer<typeof appFindingActionV1Schema>;
+export type AppSetupAnswersRequestV1 = z.infer<typeof appSetupAnswersRequestV1Schema>;
+export type AppSetupAnswersResultV1 = z.infer<typeof appSetupAnswersResultV1Schema>;

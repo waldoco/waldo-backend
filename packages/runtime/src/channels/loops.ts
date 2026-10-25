@@ -46,6 +46,9 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       if (closed) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', id);
       return closed;
     },
+    get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
+    // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
+    sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
     reviewDue(localNow: string, timezone = 'UTC', now = deps.now()): readonly Loop[] {
       return sql.exec<Loop>(`SELECT l.*, s.source_ref, json_extract(j.value, '$.detail') AS source_detail, m.thread_id, m.message_id AS source_message_id
@@ -157,9 +160,13 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
     mutates_state: true,
     async handle({ id, outcome }, ctx) {
       if (closable(ctx?.turnId)?.has(id) === false) return { ok: false, code: 'rejected', error: 'This check-back can close only the loops it was given.' };
-      return { ok: true, data: { id, closed: book.close(id, outcome) }, source_taint: null };
+      if (book.close(id, outcome)) return { ok: true, data: { id, closed: true }, source_taint: null };
+      // An approved card replays this call and shows the owner its error, so a close that changed nothing fails in words
+      // they can read. The title stays out: a mail-bound loop's title is someone else's text.
+      const loop = book.get(id);
+      return { ok: false, code: 'rejected', error: loop ? `This loop was already closed as ${loop.status}, so nothing changed.` : 'There is no loop with this id, so nothing was closed.' };
     },
-  } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: boolean }, ToolDispatcherContext>,
+  } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: true }, ToolDispatcherContext>,
   {
     name: 'set_proactivity',
     description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups false or true only when the owner asks to turn mail and calendar follow-ups off or back on; they are on by default.",

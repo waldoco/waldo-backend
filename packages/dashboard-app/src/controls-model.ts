@@ -1,6 +1,6 @@
 import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
-export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices';
+export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
 export type DayRecord = Base<'day', {
   timezone: string;
@@ -9,6 +9,8 @@ export type DayRecord = Base<'day', {
   proactivity: { quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' };
   // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
   proactive_surface?: ProactiveSurface;
+  // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
+  health_memory?: boolean;
 }>;
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
@@ -22,6 +24,7 @@ export type ConnectionsRecord = Base<'connections', {
 export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
+  | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
 export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
 export type ActivityCursors = { trace_before?: number | null; runs_before?: number | null };
@@ -49,11 +52,17 @@ export type IMessageRecord = Base<'imessage', {
 export type DevicesRecord = Base<'devices', {
   actions: 'device.pair'[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: (typeof DEVICE_ROW)[number][] }[]; query_kinds: string[]; notification_bodies: string[];
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
-type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
+const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
+/** The number on file and how to prove it. Times are epoch seconds; retry_at null means a code may be asked for now. */
+export type PhoneRecord = Base<'phone', {
+  phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
+  challenge: { state: (typeof PHONE_STATES)[number]; expires_at: number; retry_at: number | null; checks_left: number } | null;
+}>;
+type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
-  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string };
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
 /** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
@@ -80,6 +89,7 @@ function readProposalReview(value: unknown): ProposalReview | null {
   if (value.kind === 'email_send' && (value.account === undefined || string(value.account)) && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body) && (value.earlier_unknown_at === undefined || string(value.earlier_unknown_at)))
     return { kind: value.kind, ...(value.account === undefined ? {} : { account: value.account }), to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body, ...(value.earlier_unknown_at === undefined ? {} : { earlier_unknown_at: value.earlier_unknown_at }) };
   if (value.kind === 'message_send' && string(value.channel) && string(value.content)) return { kind: value.kind, channel: value.channel, content: value.content };
+  if ((value.kind === 'mcp_call' || value.kind === 'tainted_action' || value.kind === 'browser_submit') && string(value.text)) return { kind: value.kind, text: value.text };
   if (value.kind === 'calendar_change' && ['create', 'move', 'cancel'].includes(String(value.action)) && [value.title, value.event_id, value.start, value.end].every(optionalString) && string(value.reason)) return { kind: value.kind, action: value.action as 'create' | 'move' | 'cancel', title: value.title as string | null, event_id: value.event_id as string | null, start: value.start as string | null, end: value.end as string | null, reason: value.reason };
   throw shapeError();
 }
@@ -93,12 +103,14 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
+    if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
+      ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
@@ -181,6 +193,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       actions: [...data.actions] as DevicesRecord['data']['actions'], query_kinds: [...data.query_kinds], notification_bodies: [...data.notification_bodies],
       devices: (data.devices as Device[]).map(row => ({ id: row.id, label: row.label, capabilities: [...row.capabilities], created_at: row.created_at, actions: [...row.actions] })),
     }, status: { devices: (status.devices as DevicesRecord['status']['devices']).map(row => ({ id: row.id, online: row.online, last_seen_at: row.last_seen_at, commands: row.commands.map(command => ({ class: command.class, state: command.state, result_state: command.result_state })) })) } } as Records[V];
+  }
+  if (expected === 'phone') {
+    const challenge = data.challenge;
+    if (!(data.phone === null || (string(data.phone) && /^\+[1-9]\d{6,14}$/.test(data.phone))) || typeof data.verified !== 'boolean' || typeof data.sms !== 'boolean' || !listed(data.actions, PHONE_ACTIONS)
+      || !(challenge === null || (obj(challenge) && (PHONE_STATES as readonly string[]).includes(String(challenge.state)) && count(challenge.expires_at)
+        && (challenge.retry_at === null || count(challenge.retry_at)) && count(challenge.checks_left) && challenge.checks_left <= 5))) throw shapeError();
+    type Challenge = NonNullable<PhoneRecord['data']['challenge']>;
+    return { ...base, view: 'phone', data: { phone: data.phone, verified: data.verified, sms: data.sms, actions: [...data.actions] as PhoneRecord['data']['actions'],
+      challenge: obj(challenge) ? { state: challenge.state as Challenge['state'], expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } : null } } as Records[V];
   }
   if (expected === 'files') {
     if (data.storage !== 'telegram_reference' || !Array.isArray(data.items) || !data.items.every(item => obj(item) && count(item.id) && item.id > 0 && string(item.kind) && string(item.name) && optionalString(item.mime) && (item.size === null || count(item.size)) && string(item.caption) && typeof item.at === 'number' && Number.isFinite(item.at))) throw shapeError();

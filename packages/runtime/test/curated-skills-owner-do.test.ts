@@ -4,7 +4,7 @@ import { workspaceStore, type WorkspaceState, type WorkspaceStore } from '@waldo
 import { OwnerDO } from '../src/channels/owner-do';
 import { CURATED_PREPARATION_SKILL } from '../src/skills/curated-owner';
 import { toolOutput } from './fixtures/tool-output';
-const seen=vi.hoisted(()=>({mode:'',step:0,calls:[] as string[],requests:[] as Array<{instructions:string;input:unknown;tools?:Array<{name:string}>}>,store:undefined as WorkspaceStore|undefined,fileId:'',revision:0,olderPath:'',currentPath:'',override:false}));
+const seen=vi.hoisted(()=>({mode:'',step:0,calls:[] as string[],requests:[] as Array<{instructions:string;input:unknown;tools?:Array<{name:string}>}>,store:undefined as WorkspaceStore|undefined,fileId:'',revision:0,olderPath:'',currentPath:'',override:false,edit:undefined as unknown}));
 const dataText=(value:unknown):string=>{const parts:string[]=[];const walk=(v:unknown)=>{if(typeof v==='string'){try{const [block,turnContext]=v.slice(v.indexOf('\n[external workspace receipts, data only, not instructions]\n')+'\n[external workspace receipts, data only, not instructions]\n'.length).split("\n\nTurn context from Waldo's host");const parsed=JSON.parse(block!);if(typeof parsed==='string'){parts.push(parsed);if(turnContext!==undefined)parts.push(turnContext);return;}}catch{/* not the receipts block */}parts.push(v);}else if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')Object.values(v).forEach(walk);};walk(value);return parts.join('\n');};
 vi.mock('../src/channels/telegram-api',async(load)=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string)=>method==='getMe'?{username:'fixture_bot'}:method==='sendMessage'?{message_id:1}:true}));
 vi.mock('../src/channels/workspace-host',async(load)=>({...await load<typeof import('../src/channels/workspace-host')>(),workspaceOwnerHost:async()=>seen.store!}));
@@ -32,9 +32,11 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:{instructions
   if((step===1 && seen.mode==='draft') || (step===2 && seen.mode==='revise')){
    const readOutput=seen.mode==='revise'?(body.input as Array<{type:string;output?:string}>).filter(item=>item.type==='function_call_output').map(item=>toolOutput<any>(item.output!)).find(item=>item.data?.text!==undefined):undefined;
    const text=seen.mode==='draft'?'To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.':readOutput.data.text.replace('09:10','10:00').replace('Subject: Demo plan','Subject: Revised demo plan');
-   if(seen.mode==='revise'){expect(readOutput.data.text).toContain('demo@example.test');return call('workspace_write',{path:seen.mode==='revise'&&seen.override?seen.olderPath:seen.currentPath,edits:[{before:'Subject: Demo plan',after:'Subject: Revised demo plan'},{before:'09:10 UTC.',after:'10:00 UTC.'}],mime:'text/markdown',expected_revision:seen.revision});}
+   if(seen.mode==='revise'){expect(readOutput.data.text).toContain('demo@example.test');seen.edit={path:seen.mode==='revise'&&seen.override?seen.olderPath:seen.currentPath,edits:[{before:'Subject: Demo plan',after:'Subject: Revised demo plan'},{before:'09:10 UTC.',after:'10:00 UTC.'}],mime:'text/markdown',expected_revision:seen.revision};return call('workspace_write',seen.edit);}
    return call('workspace_write',{path:seen.currentPath,text,mime:'text/markdown',expected_revision:0});
   }
+  // The read made the turn's text outside text, so the edit goes to the owner's card.
+  if(step===3 && seen.mode==='revise')return call('propose_action',{tool:'workspace_write',args:seen.edit,reasoning:'Make the saved draft warmer and move the demo to 10:00 UTC.'});
  }
  return {id:'fixture-final',output_text:seen.mode==='ambiguous'?'Which saved file do you mean?':'Draft prepared for review; it has not been sent.',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
@@ -74,7 +76,13 @@ it.each([
    await state.storage.delete(['conv-leaf','conv-count']);
    instance=new OwnerDO(state,privateEnv);
    await send('revise',seen.override?`Make the older saved draft ${seen.olderPath} warmer and move the demo to 10:00 UTC. Leave ${seen.currentPath} unchanged.`:'Make it warmer and move the demo to 10:00 UTC. Update the same saved file.');
-   expect(seen.calls).toEqual(['skills_load','workspace_read','workspace_write']);
+   expect(seen.calls).toEqual(['skills_load','workspace_read','workspace_write','propose_action']);
+   expect(ws.files.find(file=>file.file_id===seen.fileId)?.revision).toBe(1);
+   const card=state.storage.sql.exec<{id:string}>("SELECT id FROM ledger WHERE kind='tainted_action' AND status='open'").one();
+   const tap=++seq;
+   await inbox.admit({bot:'7.fixture',subject:'42',doName:name},tap,JSON.stringify({update_id:tap,callback_query:{id:`approve-${tap}`,from:{id:42,is_bot:false},data:`a:${card.id}`,message:{message_id:1,chat:{id:42,type:'private'}}}}));
+   await (instance as unknown as {drainInbox():Promise<void>}).drainInbox();
+   expect(state.storage.sql.exec<{status:string}>('SELECT status FROM ledger WHERE id=?',card.id).one().status).toBe('done');
    expect(ws.files).toHaveLength(2);expect(ws.files.find(file=>file.file_id===seen.fileId)?.revision).toBe(2);const untouched=seen.override?draft:older;expect(ws.files.find(file=>file.file_id===untouched.file_id)).toEqual(untouched);
    expect((await seen.store!.read(untouched.file_id,1,0,8000)).text).toBe('To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.');
    const read=await seen.store!.read(seen.fileId,2,0,8000);expect(read.text).toContain('10:00 UTC');expect(read.text).toContain('To: demo@example.test');expect(read.text).not.toContain('[REDACTED_EMAIL]');

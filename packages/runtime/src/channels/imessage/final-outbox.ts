@@ -64,6 +64,13 @@ export class IMessageFinalOutbox {
   freezeProgress(record: IMessageInboxRecord, index: 1 | 2, text: string): IMessageOutboxRecord {
     return this.put(`${PROGRESS}${record.id}:${index}`, { ...targetOf(record), commandId: `wpn${index}_${record.commandId}` }, text);
   }
+  /**
+   * The one fixed notice for a turn that closed without its reply. Its id and commandId are fixed by the turn, so closing the
+   * same turn again freezes the same record. Synchronous: it runs inside the transaction that closes the turn.
+   */
+  freezeFailure(record: IMessageInboxRecord, text: string): IMessageOutboxRecord {
+    return this.put(`failure:${record.id}`, { ...targetOf(record), commandId: `wfn_${record.commandId}` }, text);
+  }
   /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. */
   messageWaiting(bridgeDoName: string): boolean {
     return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.bridgeDoName === bridgeDoName);

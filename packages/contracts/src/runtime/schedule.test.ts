@@ -38,6 +38,7 @@ describe('scheduleKind', () => {
       'standing_order',
       'watch_upkeep',
       'provider_sync',
+      'forget_purge',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -52,6 +53,7 @@ describe('scheduleKind', () => {
       standing_order: 9,
       watch_upkeep: 10,
       provider_sync: 11,
+      forget_purge: 12,
     });
   });
 
@@ -69,6 +71,7 @@ describe('scheduleKind', () => {
       standing_order: null,
       watch_upkeep: null,
       provider_sync: null,
+      forget_purge: null,
     });
   });
 

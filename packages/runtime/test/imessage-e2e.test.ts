@@ -317,6 +317,131 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
+const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+// Every model call fails, so a retry inside the responder cannot rescue the turn.
+const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
+const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));
+const expectNotice = (delivery: Delivery) => {
+  const text = JSON.parse(delivery.body).text as string;
+  expect(text.startsWith(`${DID_NOT_FINISH}\n\nRequest received: `)).toBe(true);
+  expect(text).not.toContain('upstream-detail-9f2');
+  expect(text).not.toContain('Plan my afternoon');
+};
+
+it('an iMessage turn the model fails tells the owner once, with a fixed notice and no error text; a replay sends nothing more', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  modelDown();
+  const event = w.host.message('Plan my afternoon');
+  expect((await w.host.send(event)).status).toBe(200);
+  await w.pump();
+  expectNotice(await sendNext(w));
+  await w.pump(2);
+  expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed, r.text])).toEqual([['interrupted', true, '']]);
+  expect((await failureRows(w)).map(r => [r.state, r.result?.state])).toEqual([['settled', 'local_recorded']]);
+  // The bridge hands the same event again and the owner drains again: no second turn, no second notice.
+  expect((await w.host.send(event)).status).toBe(200);
+  await w.pump(3);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends).toHaveLength(1);
+  // The next turn that succeeds gets its reply and no notice.
+  proof.hold = null;
+  await replyFor(w, 'What time is it?');
+  await sendNext(w);
+  expect(sentTexts(w).slice(1)).toEqual(['Scripted owner reply.']);
+  expect(await failureRows(w)).toHaveLength(1);
+  expect(forbiddenEgress).toEqual([]);
+}, 30_000);
+
+it('an iMessage turn whose model writes nothing tells the owner once', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const reply = proof.reply;
+  proof.reply = '   ';
+  try {
+    await replyFor(w, 'Plan my afternoon');
+    expectNotice(await sendNext(w));
+  } finally { proof.reply = reply; }
+  await w.pump(2);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['failure']);
+  expect(w.host.nativeSends).toHaveLength(1);
+}, 30_000);
+
+// The claimed turn's deadline is `offsetMs` from its claim instead of the full window.
+const shortDeadline = (offsetMs: number) => {
+  const claim = IMessageOwnerInbox.prototype.claim;
+  vi.spyOn(IMessageOwnerInbox.prototype, 'claim').mockImplementation(function (this: IMessageOwnerInbox, id: string, current: boolean) {
+    return claim.call(this, id, current, Date.now() + offsetMs);
+  });
+};
+
+it('an iMessage turn that runs out of time while the model works answers with its own reply and no notice on top', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  shortDeadline(300);
+  proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
+  await replyFor(w, 'Plan my afternoon');
+  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  await w.pump(2);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
+  expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
+  expect(w.host.nativeSends).toHaveLength(1);
+}, 30_000);
+
+it('an iMessage turn whose deadline passes before it can run tells the owner once', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  shortDeadline(-1);
+  await replyFor(w, 'Plan my afternoon');
+  expectNotice(await sendNext(w));
+  await w.pump(2);
+  expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed])).toEqual([['interrupted', true]]);
+  expect((await outbox(w.ownerStub)).map(r => [r.replyRef.split(':')[0], r.state])).toEqual([['failure', 'settled']]);
+  expect(w.host.nativeSends).toHaveLength(1);
+  expect(proof.turns).toEqual([]);
+}, 30_000);
+
+it('an iMessage turn whose owner object was evicted mid-turn tells the owner once, when the next drain recovers it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  modelDown();
+  // The instance dies before it can close the row: the row stays running under an attempt nobody holds any more.
+  const settle = vi.spyOn(IMessageOwnerInbox.prototype, 'settle').mockImplementation(() => { throw new Error('instance gone'); });
+  expect((await w.host.send(w.host.message('Plan my afternoon'))).status).toBe(200);
+  await runDurableObjectAlarm(w.bridgeStub()); await w.settle();
+  await vi.waitFor(() => expect(settle).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 50 });
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['running']);
+  expect(await failureRows(w)).toEqual([]);
+  settle.mockRestore();
+  const calls = proof.turns.length;
+  await evictDurableObject(w.ownerStub);
+  await w.pump(2);
+  expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed])).toEqual([['interrupted', true]]);
+  expectNotice(await sendNext(w));
+  await w.pump(3);
+  expect(w.host.nativeSends).toHaveLength(1);
+  expect(proof.turns).toHaveLength(calls); // recovery never reruns the turn
+}, 30_000);
+
+it('a failure notice that cannot be queued still settles the turn, loops nowhere, and the next message runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  modelDown();
+  const freeze = vi.spyOn(IMessageFinalOutbox.prototype, 'freezeFailure').mockImplementation(() => { throw new Error('imessage_outbox_capacity'); });
+  await replyFor(w, 'Plan my afternoon');
+  const calls = proof.turns.length;
+  await w.pump(3);
+  expect(freeze).toHaveBeenCalledTimes(1);
+  expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
+  expect(await outbox(w.ownerStub)).toEqual([]);
+  expect(proof.turns).toHaveLength(calls);
+  proof.hold = null; freeze.mockRestore();
+  await replyFor(w, 'What time is it?');
+  await sendNext(w);
+  expect(sentTexts(w)).toEqual(['Scripted owner reply.']);
+}, 30_000);
+
 it('revocation during the model await blocks publication and pull; revoked hosts are rejected; evidence is retained', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -1634,4 +1759,74 @@ it('a note whose handoff threw is settled as possibly sent, never retried, and t
   const [note, reply] = await outbox(w.ownerStub);
   expect(note).toMatchObject({ state: 'settled', result: { state: 'unknown', disposition: 'may_have_completed', reason: 'progress_handoff_uncertain' } });
   expect(reply).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
+}, 20_000);
+
+// A Mac result reaches the owner where their proactive work goes: on iMessage for an owner whose only surface it is, and in
+// the app with one iMessage copy for an owner who chose both. The device directory answers for the owner's paired Mac.
+const MAC_OWNER = '10000000-0000-4000-8000-000000000001';
+const MAC_REPORT = 'Mac request request_imsg: completed (exit code 0).\nFixture result summary.';
+const macResultFor = async (w: Awaited<ReturnType<typeof world>>) => {
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith('/rpc/device_for_auth_v030')) return Response.json([{ owner_id: MAC_OWNER, do_name: w.ownerName, contract_version: '0.3.0', pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'shell_exec' }]);
+    return directory(input, init);
+  });
+  return runInDurableObject(w.ownerStub, async (instance) => (instance as unknown as { admitMacDelivery(value: unknown): Promise<boolean> }).admitMacDelivery({
+    kind: 'result', request_id: 'request_imsg', device_id: 'device_imsg', owner_id: MAC_OWNER, payload: { status: 'completed', exit_code: 0, output_tail: 'fixture output', truncated: false } }));
+};
+const macRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
+  state.storage.sql.exec<{ state: string }>('SELECT state FROM mac_result_inbox').toArray().map(row => row.state));
+const macPasses = async (w: Awaited<ReturnType<typeof world>>) => {
+  proof.reply = 'Fixture result summary.';
+  try {
+    for (let i = 0; i < 3; i++) {
+      await runInDurableObject(w.ownerStub, async (_i, state) => { state.storage.kv.put('owner_alarm_last_v1', 0); });
+      await runDurableObjectAlarm(w.ownerStub); await w.settle();
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  } finally { proof.reply = 'Scripted owner reply.'; }
+  await w.pump();
+};
+
+it('an iMessage-only owner gets a Mac result on iMessage', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  expect(await macResultFor(w)).toBe(true);
+  await macPasses(w);
+  expect(await macRows(w)).toEqual(['finished']);
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the report reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: MAC_REPORT, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(forbiddenEgress).toEqual([]);
+}, 20_000);
+
+it('an owner who chose the app and iMessage gets a Mac result in the app and one iMessage copy of it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await answered(w, 'Morning');
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith('/rpc/owner_runtime_authority')) return Response.json({ owner_id: MAC_OWNER, auth_user_id: MAC_OWNER, do_name: w.ownerName, state_version: 1, admission_revision: '5' });
+    if (url.endsWith('/rpc/health_log_recent')) return Response.json([]);
+    return directory(input, init);
+  });
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.kv.put('app_subject', String(appSubjectFor(w.ownerName)));
+    state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
+    state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'app_imessage');
+    state.storage.sql.exec('DELETE FROM schedule');
+  });
+  expect(await macResultFor(w)).toBe(true);
+  await macPasses(w);
+  expect(await macRows(w)).toEqual(['finished']);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(deliveryRecords(state).filter(row => row.id.startsWith('device-')).map(row => [row.status, row.payload.text])).toEqual([['delivered', MAC_REPORT]]);
+    expect(copies(state).map(row => row.replyRef)).toEqual([expect.stringMatching(/^proactive:imessage-copy:device-/)]);
+  });
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the copy reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: MAC_REPORT, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(forbiddenEgress).toEqual([]);
 }, 20_000);

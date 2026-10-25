@@ -2,6 +2,7 @@ import type { ConsoleAuth } from '../identity/console-auth';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { parseConsoleAction } from './console';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
+import { adminSpendFor } from './admin-spend';
 
 const reply = (value: object, status = 200) => Response.json(value, { status, headers: DASHBOARD_OVERVIEW_HEADERS });
 export const INVITE_HONESTY = 'Copy it now and send it yourself. Waldo did not email anyone.';
@@ -10,7 +11,8 @@ export const INVITE_HONESTY = 'Copy it now and send it yourself. Waldo did not e
 export async function adminRead(auth: ConsoleAuth | null, doName: string | undefined, csrf: string): Promise<Response> {
   try {
     const overview = auth && doName ? await auth.adminOverview(doName) : null;
-    return overview ? reply({ ...overview, csrf, as_of: new Date().toISOString() }) : reply({ error: 'not_found' }, 404);
+    if (!auth || !doName || !overview) return reply({ error: 'not_found' }, 404);
+    return reply({ ...overview, spend: await adminSpendFor(auth, doName, overview), csrf, as_of: new Date().toISOString() });
   } catch { return reply({ error: 'unavailable' }, 503); }
 }
 
