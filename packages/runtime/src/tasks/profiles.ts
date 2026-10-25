@@ -4,10 +4,11 @@ import { TOOL_REPLAY_CLASS } from '../hooks/tool-replay-class';
 // What each worker profile may call. The brain enforces this on every call a worker sends; the worker never holds a
 // handler or a credential. No profile carries memory, send, approve, delegation or start_task (a worker cannot act for
 // the owner or spawn more work), and none carries a turn-only health tool: a worker's checkpoints persist, and the owner's
-// health values must never be stored.
+// health values must never be stored. A reader reads public pages (browse_page) as well as searching for them: research needs
+// the page, not the snippet. Acting on a page (browse_act) is the errand's.
 const READER: readonly ToolName[] = [
   'get_context', 'query_calendar', 'query_availability', 'get_communication', 'search_communication', 'read_thread', 'search_contacts', 'get_tasks',
-  'read_drive', 'read_mcp_tool', 'web_search', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
+  'read_drive', 'read_mcp_tool', 'web_search', 'browse_page', 'workspace_list', 'workspace_read', 'workspace_search', 'list_artifacts', 'read_artifact',
 ];
 // The browser host serves one active run scope per owner, so these run in the brain's serial lane under the job's scope.
 export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'browse_act']);
@@ -16,7 +17,7 @@ export const BROWSER_TOOLS: ReadonlySet<ToolName> = new Set(['browse_page', 'bro
 export type ProfileSpec = Readonly<{ tools: readonly ToolName[]; unavailable?: string }>;
 export const TASK_PROFILE_SPECS: Readonly<Record<TaskProfile, ProfileSpec>> = {
   reader: { tools: READER },
-  errand: { tools: [...READER, 'browse_page', 'browse_act'] },
+  errand: { tools: [...READER, 'browse_act'] },
   // A code worker owns a sandbox container. execute_code has no handler on any deploy yet, so the profile is refused at
   // start with a reason the model can act on.
   code: {

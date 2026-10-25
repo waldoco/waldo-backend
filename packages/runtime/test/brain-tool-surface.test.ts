@@ -212,7 +212,7 @@ describe('the brain tool surface', () => {
     const mcp = JSON.stringify([{ name: 'gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }]);
     const request = await ownerReply('tool-surface-worker', 'off', { DRIVE_READS: '1', MCP_READ_INTENTS: '1', WALDO_MCP_SERVERS: mcp });
     const owned = [...request.tools!, ...toolDefinitions([browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)])];
-    const PINNED = { reader: { openai: 5_100, anthropic: 4_950 }, errand: { openai: 6_700, anthropic: 6_550 } } as const;
+    const PINNED = { reader: { openai: 5_440, anthropic: 5_280 }, errand: { openai: 6_700, anthropic: 6_550 } } as const;
     const measured: Record<string, { openai: number; anthropic: number }> = {};
     for (const profile of ['reader', 'errand'] as const) {
       const tools = owned.filter((tool) => TASK_PROFILE_SPECS[profile].tools.includes(tool.name as never));

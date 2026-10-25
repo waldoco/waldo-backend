@@ -22,7 +22,7 @@ const T0 = 1_800_000_000_000;
 const brief: TaskBrief = { title: 'Book a table', goal: 'Find a table for two tonight.', context: 'Near Bandra.', done_when: 'A shortlist.', effort: 'standard', timezone: 'UTC', started_at: T0 };
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
-const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
+const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_page: { url: 'https://example.com/menu', instruction: 'Read the menu.' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.', command: { operation: 'click', element_ref: 'e1', intent: 'read' } } };
 // An errand step that types nothing past Waldo's own page: the tainted-write law admits it from a worker. A step with no
 // typed command takes the legacy path and goes to the owner's card (below).
 const UNTYPED_BROWSE = { call_id: 'c-untyped', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/book', task: 'Book a table for two at 8pm.' }) };
@@ -62,6 +62,8 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
+      { name: 'browse_page', description: 'Read a page.', schema: z.object({ url: z.string(), instruction: z.string() }), trigger_allowlist: allowlist('browse_page'), autonomy_gated: false, mutates_state: false,
+        async handle() { ran.push('browse_page'); return { ok: true as const, data: { text: 'A menu.' }, source_taint: 'external' as const }; } },
       { name: 'browse_act', description: 'Act in the browser.', schema: z.object({ url: z.string(), task: z.string() }).loose(), trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
         async handle() { ran.push('browse_act'); if (browse.ms) await new Promise(resolve => setTimeout(resolve, browse.ms)); if (browse.throws) throw new Error('vendor dropped the session'); ran.push('browse_act:done'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
     ] as unknown as ReturnType<TaskHostDeps['handlers']>;
@@ -81,15 +83,20 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
   });
 
 describe('the task brain host', () => {
-  it('a reader job is offered only reader tools, and a call outside its profile is refused without running', async () => {
-    await withHost(async ({ host, ticket, ran }) => {
+  // A research worker reads pages, which a web_search snippet often cannot answer; acting on a page stays the errand's.
+  it('a reader job is offered only reader tools, page reads among them, and a call outside its profile is refused without running', async () => {
+    await withHost(async ({ host, ticket, ran, released }) => {
       const t = ticket('reader');
       const claim = await host.claim(t);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
-      const refused = await host.tool(t, call('browse_act'), CANARIES);
-      expect(refused).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page']);
+      for (const name of ['browse_act', 'propose_action', 'send_message', 'send_email', 'start_task']) {
+        expect(await host.tool(t, call(name), CANARIES), name).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
+      }
       expect(ran).toEqual([]);
       expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+      expect(await host.tool(t, call('browse_page'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+      expect(ran).toEqual(['search_communication', 'browse_page']);
+      expect(released).toEqual([]);
     });
   });
 
