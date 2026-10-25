@@ -1,9 +1,12 @@
 -- The app session lasts 30 days and renews, on the per-row lifetime of 20261023090000.
 -- - waldo.console_sessions.rotated_to names the session a renewal issued in a row's place.
+-- - waldo.console_sessions.signed_in_at is when the session's sign-in happened. A renewal carries it over unchanged, so
+--   the two-hour step-up, which needs a recent email code, never counts a renewal as a sign-in. Rows from before this
+--   migration take their created_at.
 -- - app_session_rotate opens a fresh row with a 30-day lifetime and no idle limit. It caps the presented row the way
 --   console_session_cap does, so it runs out 5 minutes later and the requests and a running turn that hold it can
 --   finish. It moves the row's push devices to the new one. A row that was renewed cannot renew again.
--- - console_session_inventory lists each live row with its end and its successor. console_session_list keeps its three
+-- - console_session_inventory lists each live row with its end, its successor and its sign-in time. console_session_list keeps its three
 --   keys, so the Worker deployed before this migration still reads it.
 -- - console_session_revoke also ends every row a renewal replaced with the one named.
 -- - app_push_list, app_push_register and app_push_revoke follow the row's own lifetime instead of 12 hours from
@@ -13,6 +16,9 @@
 -- the Worker that calls app_session_rotate and console_session_inventory.
 -- Forward-only, like every migration here: undoing it is a later migration, never an edit of this one.
 alter table waldo.console_sessions add column rotated_to text check (rotated_to ~ '^[a-f0-9]{64}$');
+alter table waldo.console_sessions add column signed_in_at timestamptz;
+update waldo.console_sessions set signed_in_at = created_at;
+alter table waldo.console_sessions alter column signed_in_at set default now(), alter column signed_in_at set not null;
 
 create function waldo.console_session_inventory(p_do_name text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -29,7 +35,8 @@ begin
       'created_at', s.created_at,
       'last_seen_at', s.last_seen_at,
       'expires_at', least(s.created_at + s.lifetime, coalesce(s.last_seen_at + s.idle_timeout, s.created_at + s.lifetime)),
-      'rotated_to', s.rotated_to) order by s.last_seen_at desc)
+      'rotated_to', s.rotated_to,
+      'signed_in_at', s.signed_in_at) order by s.last_seen_at desc)
     from waldo.console_sessions s where s.owner_id = v_owner
       and s.created_at > now() - s.lifetime
       and (s.idle_timeout is null or s.last_seen_at > now() - s.idle_timeout)
@@ -52,19 +59,19 @@ end $$;
 -- The caller names no duration: 30 days and the 5-minute cap live here.
 create function waldo.app_session_rotate(p_do_name text, p_session_hash text, p_new_session_hash text, p_at bigint, p_sig text) returns boolean
 language plpgsql security definer set search_path = '' as $$
-declare v_owner uuid;
+declare v_owner uuid; v_signed_in timestamptz;
 begin
   if p_session_hash !~ '^[a-f0-9]{64}$' or p_new_session_hash !~ '^[a-f0-9]{64}$' or p_new_session_hash = p_session_hash
     or waldo.router_signed('appsess.rotate.' || p_do_name || '.' || p_session_hash || '.' || p_new_session_hash, p_at, p_sig) is distinct from true then
     raise exception 'unsigned or invalid session call' using errcode = '42501';
   end if;
-  select o.id into v_owner from waldo.owners o join waldo.console_sessions s on s.owner_id = o.id join auth.users u on u.id = o.auth_user_id
+  select o.id, s.signed_in_at into v_owner, v_signed_in from waldo.owners o join waldo.console_sessions s on s.owner_id = o.id join auth.users u on u.id = o.auth_user_id
     where o.do_name = p_do_name and o.state = 'active' and s.session_hash = p_session_hash and s.rotated_to is null
       and s.created_at > now() - s.lifetime
       and (s.idle_timeout is null or s.last_seen_at > now() - s.idle_timeout)
     for update of o, s;
   if v_owner is null then return false; end if;
-  insert into waldo.console_sessions (owner_id, session_hash, lifetime) values (v_owner, p_new_session_hash, interval '30 days');
+  insert into waldo.console_sessions (owner_id, session_hash, lifetime, signed_in_at) values (v_owner, p_new_session_hash, interval '30 days', v_signed_in);
   update waldo.console_sessions s
     set lifetime = least(s.lifetime, now() - s.created_at + interval '5 minutes'),
         idle_timeout = case when s.idle_timeout is null then null else least(s.idle_timeout, s.lifetime, now() - s.created_at + interval '5 minutes') end,

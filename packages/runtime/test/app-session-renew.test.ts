@@ -10,7 +10,7 @@ import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 const SECRET = 'fictional-renew-router-secret-0000000000000', DIRECTORY = 'https://renew.fixture.invalid', EMAIL = 'owner@example.test';
 const OWNER = '10000000-0000-0000-0000-0000000000a1', AUTH = '20000000-0000-0000-0000-0000000000a1';
 const HOUR = 3_600_000, DAY = 24 * HOUR;
-type Row = { created: number; expires: number; seen: number; rotatedTo?: string };
+type Row = { created: number; expires: number; seen: number; signedIn: number; rotatedTo?: string };
 // The directory's session table as the 30-day migration defines it: each row keeps its own end.
 const directory = vi.hoisted(() => ({ rows: new Map<string, Row>(), migrated: true, calls: [] as string[], pushRevoked: [] as string[] }));
 const live = (hash: string) => { const row = directory.rows.get(hash); return row && row.expires > Date.now() ? row : undefined; };
@@ -36,18 +36,18 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
       switch (fn) {
         case 'console_auth_throttle': case 'signin_allowed': return Response.json(true);
         case 'owner_for_auth': return Response.json(a.p_do_name ?? name);
-        case 'console_session_open': directory.rows.set(a.p_session_hash, { created: now, expires: now + 12 * HOUR, seen: now }); return Response.json(true);
+        case 'console_session_open': directory.rows.set(a.p_session_hash, { created: now, expires: now + 12 * HOUR, seen: now, signedIn: now }); return Response.json(true);
         case 'app_session_rotate': {
           if (!directory.migrated) return new Response('{"code":"PGRST202"}', { status: 404 });
           const old = live(a.p_session_hash); if (!old || old.rotatedTo) return Response.json(false);
-          directory.rows.set(a.p_new_session_hash, { created: now, expires: now + 30 * DAY, seen: now }); old.expires = Math.min(old.expires, now + 5 * 60_000); old.rotatedTo = a.p_new_session_hash;
+          directory.rows.set(a.p_new_session_hash, { created: now, expires: now + 30 * DAY, seen: now, signedIn: old.signedIn }); old.expires = Math.min(old.expires, now + 5 * 60_000); old.rotatedTo = a.p_new_session_hash;
           return Response.json(true);
         }
         case 'console_session_touch': { const row = live(a.p_session_hash); if (row) row.seen = now; return Response.json(row !== undefined); }
         case 'console_session_inventory': {
           if (!directory.migrated) return new Response('{"code":"PGRST202"}', { status: 404 });
           return Response.json([...directory.rows].filter(([hash]) => live(hash)).map(([session, row]) =>
-            ({ session, created_at: iso(row.created), last_seen_at: iso(row.seen), expires_at: iso(row.expires), rotated_to: row.rotatedTo ?? null })));
+            ({ session, created_at: iso(row.created), last_seen_at: iso(row.seen), expires_at: iso(row.expires), rotated_to: row.rotatedTo ?? null, signed_in_at: iso(row.signedIn) })));
         }
         case 'console_session_revoke': { let dropped = false; for (const [hash, row] of directory.rows) if (hash === a.p_session_hash || row.rotatedTo === a.p_session_hash) dropped = directory.rows.delete(hash) || dropped; return Response.json(dropped); }
         case 'app_session_authority': { const row = live(a.p_session_hash);
@@ -202,7 +202,7 @@ it('a session renewed three hours after its sign-in still needs a new code to de
   await withOwner('renew-step-up', async (app, _state, owner) => {
     const first = await signIn(app);
     const signedIn = directory.rows.get(await hashOf(first.credential))!;
-    signedIn.created = signedIn.seen = Date.now() - 3 * HOUR;
+    signedIn.created = signedIn.seen = signedIn.signedIn = Date.now() - 3 * HOUR;
     const next = await renew(app, first.credential);
     expect(directory.rows.get(await hashOf(next.credential))!.created).toBeGreaterThan(Date.now() - 60_000);
     const account = appControlProjectionV1Schema.parse(await (await app('/controls?view=account', undefined, next.credential)).json());

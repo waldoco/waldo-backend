@@ -45,7 +45,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     if (url.pathname.endsWith('/console_session_cap')) return Response.json(rpcState.cap);
     if (url.pathname.endsWith('/console_session_inventory')) {
       const at = new Date().toISOString();
-      return Response.json(rpcState.live ? opened.filter(session => !ended.has(session)).map(session => ({ session, created_at: at, last_seen_at: at, expires_at: new Date(Date.parse(at) + 12 * 60 * 60_000).toISOString(), rotated_to: null })) : []);
+      return Response.json(rpcState.live ? opened.filter(session => !ended.has(session)).map(session => ({ session, created_at: at, last_seen_at: at, expires_at: new Date(Date.parse(at) + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: at })) : []);
     }
     if (url.pathname.endsWith('/route_presence')) {
       expect(args.p_subject).toBe(SUBJECT);

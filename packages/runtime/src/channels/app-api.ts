@@ -142,7 +142,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
   // A link code or a provider connection outlives this session, so it needs a sign-in from the last two hours. Throws when
   // the directory cannot list the sessions.
-  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.created_at, Date.now()); };
+  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.signed_in_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }

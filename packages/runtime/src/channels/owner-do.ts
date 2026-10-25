@@ -1310,7 +1310,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
-            signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.created_at,Date.now()),
+            signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{
               this.bindAppSubject(name);
@@ -1332,10 +1332,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
-          const host={...session,signedInAt:row.created_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
+          const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true}):null,this.ctx.storage.kv.get<string>('origin'))

@@ -40,7 +40,7 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
-    if (fn === 'console_session_inventory') return Response.json([{ session: HASH, created_at: new Date(AT - 60_000).toISOString(), last_seen_at: new Date(AT).toISOString(), expires_at: new Date(AT - 60_000 + 12 * 60 * 60_000).toISOString(), rotated_to: null }]);
+    if (fn === 'console_session_inventory') return Response.json([{ session: HASH, created_at: new Date(AT - 60_000).toISOString(), last_seen_at: new Date(AT).toISOString(), expires_at: new Date(AT - 60_000 + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: new Date(AT - 60_000).toISOString() }]);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(false);

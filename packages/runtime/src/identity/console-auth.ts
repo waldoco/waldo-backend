@@ -36,7 +36,9 @@ export type AdminOverview = Readonly<{
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
 // rotated_to: the session a renewal issued in this one's place for the same device; this one still works until it expires.
-export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; rotated_to: string | null }>;
+// signed_in_at: when the sign-in this session renews from happened. created_at is when this row opened, which a renewal
+// resets, so the step-up reads signed_in_at.
+export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; rotated_to: string | null; signed_in_at: string }>;
 // A session and every listed session a renewal links to it, either way. They are one device: signing one out signs out all.
 export const sessionFamily = (rows: readonly ConsoleSession[], session: string): readonly string[] => {
   const family = new Set([session]);
@@ -167,7 +169,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const presentedOwnerCookie = (request: Request) =>
     (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
   // console_session_inventory, not console_session_list: the list keeps its three keys for a Worker deployed before the
-  // 30-day app session, and the inventory adds each row's end and its renewal successor.
+  // 30-day app session, and the inventory adds each row's end, its renewal successor and its sign-in time.
   const listSessions = async (doName: string): Promise<readonly ConsoleSession[]> => {
     const rows = await rpc('console_session_inventory', `consolesess.inventory.${doName}`, { p_do_name: doName });
     // An invalid authority response cannot prove that a session is absent.
@@ -176,14 +178,15 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     return rows.map((raw: unknown) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
       const row = raw as Record<string, unknown>;
-      if (Object.keys(row).sort().join(',') !== 'created_at,expires_at,last_seen_at,rotated_to,session'
+      if (Object.keys(row).sort().join(',') !== 'created_at,expires_at,last_seen_at,rotated_to,session,signed_in_at'
         || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
         || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
         || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))
         || typeof row.expires_at !== 'string' || !Number.isFinite(Date.parse(row.expires_at))
+        || typeof row.signed_in_at !== 'string' || !Number.isFinite(Date.parse(row.signed_in_at))
         || (row.rotated_to !== null && (typeof row.rotated_to !== 'string' || !/^[a-f0-9]{64}$/.test(row.rotated_to)))) throw new Error('session inventory unavailable');
       seen.add(row.session);
-      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: row.expires_at, rotated_to: row.rotated_to };
+      return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: row.expires_at, rotated_to: row.rotated_to, signed_in_at: row.signed_in_at };
     });
   };
   // The list holds only live rows, so membership answers liveness without moving last_seen_at.
