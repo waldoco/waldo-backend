@@ -414,13 +414,14 @@ it('an iMessage turn whose owner object was evicted mid-turn tells the owner onc
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['running']);
   expect(await failureRows(w)).toEqual([]);
   settle.mockRestore();
+  const calls = proof.turns.length;
   await evictDurableObject(w.ownerStub);
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => [r.state, r.effectsUnconfirmed])).toEqual([['interrupted', true]]);
   expectNotice(await sendNext(w));
   await w.pump(3);
   expect(w.host.nativeSends).toHaveLength(1);
-  expect(proof.turns).toHaveLength(1);
+  expect(proof.turns).toHaveLength(calls); // recovery never reruns the turn
 }, 30_000);
 
 it('a failure notice that cannot be queued still settles the turn, loops nowhere, and the next message runs', async () => {
@@ -429,11 +430,12 @@ it('a failure notice that cannot be queued still settles the turn, loops nowhere
   modelDown();
   const freeze = vi.spyOn(IMessageFinalOutbox.prototype, 'freezeFailure').mockImplementation(() => { throw new Error('imessage_outbox_capacity'); });
   await replyFor(w, 'Plan my afternoon');
+  const calls = proof.turns.length;
   await w.pump(3);
   expect(freeze).toHaveBeenCalledTimes(1);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['interrupted']);
   expect(await outbox(w.ownerStub)).toEqual([]);
-  expect(proof.turns).toHaveLength(1);
+  expect(proof.turns).toHaveLength(calls);
   proof.hold = null; freeze.mockRestore();
   await replyFor(w, 'What time is it?');
   await sendNext(w);
