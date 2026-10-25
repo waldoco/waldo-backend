@@ -180,3 +180,16 @@ it('duplicate remember is not receipted as a new save', async () => {
     expect(seen.inputs.at(-1)).toContain('duplicate');
   });
 });
+// The app and the console hide the receipt line only where it ends the reply's text, so a memory notice goes above it.
+it('a reply carrying a memory notice keeps its receipt line last', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-notice-order')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, store, undefined, undefined, tools];
+    const notice = 'Saved to memory from our earlier chat: "Prefers window seats" (c9).';
+    args[21] = { memoryNotice: () => ({ line: notice, taken: () => undefined }) };
+    seen.outputs.push([{ type: 'function_call', call_id: 'tea', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }) }], []);
+    const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'tg-notice', conversationRef: 'owner', surface: 'app', text: 'I prefer tea' }), timer);
+    expect(reply).toBe(`Done\n\n${notice}\n\nDone: memory stored`);
+  });
+});
