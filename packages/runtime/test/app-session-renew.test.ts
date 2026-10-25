@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appRenewResultV1Schema, appSessionV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
@@ -18,7 +19,7 @@ const iso = (ms: number) => new Date(ms).toISOString();
 beforeEach(() => { directory.rows.clear(); directory.migrated = true; directory.calls = []; directory.pushRevoked = []; });
 afterEach(() => { vi.restoreAllMocks(); });
 
-const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, state: DurableObjectState) => Promise<void>) =>
+const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, state: DurableObjectState, owner: OwnerDO) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_unused, state) => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY);
@@ -64,7 +65,7 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
     const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => owner.fetch(r) }) } } as never;
     const app = async (path: string, body?: unknown, credential?: string) => (await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST',
       headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed))!;
-    try { await work(app, state); } finally { (owner as any).ownerBrowser.stop(); await (owner as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); }
+    try { await work(app, state, owner); } finally { (owner as any).ownerBrowser.stop(); await (owner as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); }
   });
 const signIn = async (app: (path: string, body?: unknown) => Promise<Response>) => {
   const verified = await app('/auth/verify', { email: EMAIL, code: '123456' }); expect(verified.status).toBe(200);
@@ -194,5 +195,23 @@ it('signing another device out after it renewed closes the work admitted under i
     expect(stateOf(state, 'app-tablet-before-renewal')).toBe('revoked');
     for (const credential of [tablet.credential, renewed.credential]) expect((await app('/session', undefined, credential)).status).toBe(401);
     expect((await app('/session', undefined, phone.credential)).status).toBe(200);
+  });
+});
+
+it('a session renewed three hours after its sign-in still needs a new code to delete the account or approve a send', async () => {
+  await withOwner('renew-step-up', async (app, _state, owner) => {
+    const first = await signIn(app);
+    const signedIn = directory.rows.get(await hashOf(first.credential))!;
+    signedIn.created = signedIn.seen = Date.now() - 3 * HOUR;
+    const next = await renew(app, first.credential);
+    expect(directory.rows.get(await hashOf(next.credential))!.created).toBeGreaterThan(Date.now() - 60_000);
+    const account = appControlProjectionV1Schema.parse(await (await app('/controls?view=account', undefined, next.credential)).json());
+    const deleted = await app('/actions', { view: 'account', action: 'account.delete', confirmation: 'DELETE', revision: account.revision, request_id: 'renew-delete-0001' }, next.credential);
+    expect([deleted.status, await deleted.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    const message = await (owner as any).setup('app').desk.proposeSendMessage({ channel: 'telegram', content: 'Running ten minutes late.', idempotency_key: 'renew-late-0001' });
+    const [card] = appApprovalListV1Schema.parse(await (await app('/approvals?state=open', undefined, next.credential)).json()).approvals.filter(item => item.approval_id === message);
+    const approved = await app('/approvals/decisions', { approval_id: message, action: 'approve', expected_digest: card!.payload_digest, request_id: 'renew-approve-0001' }, next.credential);
+    expect([approved.status, await approved.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect((await app('/controls?view=day', undefined, next.credential)).status).toBe(200);
   });
 });
