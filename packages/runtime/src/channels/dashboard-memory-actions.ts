@@ -1,10 +1,10 @@
 import type {ConsoleView,ConsoleAction} from './console';
-import {awaitsOwnerConfirm} from '../memory/claims';
+import {PROFILE_KINDS,awaitsOwnerConfirm} from '../memory/claims';
 // A separate owner-session control read. The Memory graph remains read-only and
 // local IDs alone do not authorize a change; every target is resolved in this DO.
 export function memoryControl(view:ConsoleView,scope:string,id:string){
  const claim=view.spots.find(c=>`${scope}:claim:${c.id}`===id),pending=view.forgettingSpots.find(c=>`${scope}:claim:${c.id}`===id),node=view.nodes.find(n=>`${scope}:node:${n.id}`===id);
- if(claim)return {id,kind:'claim' as const,source:claim.source,origin:claim.origin??'legacy',status:claim.status,review:{label:claim.text,note:claim.evidence,kind:claim.kind,seen:claim.seen_count,last_seen:claim.last_seen_at},actions:[...(awaitsOwnerConfirm(claim)?['spot.confirm']:[]),'spot.dismiss','spot.forget']};
+ if(claim)return {id,kind:'claim' as const,source:claim.source,origin:claim.origin??'legacy',status:claim.status,review:{label:claim.text,note:claim.evidence,kind:claim.kind,seen:claim.seen_count,last_seen:claim.last_seen_at},actions:[...(awaitsOwnerConfirm(claim)?['spot.confirm']:[]),...(claim.pinned?['spot.unpin']:PROFILE_KINDS.includes(claim.kind)?['spot.pin']:[]),...(claim.status==='active'?['spot.edit']:[]),'spot.dismiss','spot.forget']};
  if(pending)return {id,kind:'claim' as const,source:pending.source,origin:pending.origin??'legacy',status:'purging',actions:['spot.forget']};
  if(node)return {id,kind:'interpretation' as const,status:node.status,review:{label:node.label,note:node.summary,domain:node.domain,support:node.supporting_spots,strength:node.strength},actions:['node.forget']};
  return null;

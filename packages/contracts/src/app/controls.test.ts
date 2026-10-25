@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_MEMORY_PAGE_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -204,6 +204,36 @@ describe('constellation view', () => {
   it('takes no actions', () => {
     expect(appControlActionV1Schema.safeParse({ view: 'constellation', action: 'timezone.set', value: 'UTC', revision, request_id: 'request-0009' }).success).toBe(false);
   });
+  it('takes no actions but the claim actions of controls revision 2', () => {
+    expect(APP_CONTROLS_MEMORY_REVISION).toBe(2);
+    for (const action of ['proactivity.set', 'channel.unlink', 'google.connect']) expect(appControlActionV1Schema.safeParse({ view: 'constellation', action, value: 'x', revision, request_id: 'request-0010' }).success).toBe(false);
+  });
+
+  it('shows a claim pinned to a block, unpinned, or without the field for revision 1', () => {
+    for (const pinned of ['profile', 'facts', null, undefined]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...claim, ...(pinned === undefined ? {} : { pinned }) } })).success).toBe(true);
+    for (const pinned of ['', 'top', 1, true]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[1], items: [{ ...claim, pinned }] })).success, String(pinned)).toBe(false);
+  });
+
+  const act = (fields: object) => appControlActionV1Schema.safeParse({ view: 'constellation', revision, request_id: 'claim-0001', ...fields }).success;
+  it('pins a claim to profile or facts, unpins it, and edits its text', () => {
+    for (const valid of [
+      { action: 'claim.pin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.pin', id: 'memory:claim:1', value: 'facts' },
+      { action: 'claim.unpin', id: 'memory:claim:12' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs on Tuesdays' }, { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1) },
+    ]) expect(act(valid), JSON.stringify(valid)).toBe(true);
+  });
+
+  it('refuses a claim action on another view, on an interpretation or a bad id, or with a bad value or extra fields', () => {
+    for (const invalid of [
+      { action: 'claim.pin', id: 'memory:claim:12', value: 'profile', view: 'day' }, { action: 'claim.pin', id: 'memory:node:12', value: 'profile' },
+      { action: 'claim.pin', id: 'memory:claim:0', value: 'profile' }, { action: 'claim.pin', id: 'claim:12', value: 'profile' }, { action: 'claim.pin', value: 'profile' },
+      { action: 'claim.pin', id: 'memory:claim:12' }, { action: 'claim.pin', id: 'memory:claim:12', value: 'top' },
+      { action: 'claim.unpin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.unpin', id: 'memory:claim:12', volume: 'low' },
+      { action: 'claim.edit', id: 'memory:claim:12' }, { action: 'claim.edit', id: 'memory:claim:12', value: '   ' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1 + 1) },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' }, { action: 'claim.forget', id: 'memory:claim:12' },
+    ]) expect(act(invalid), JSON.stringify(invalid)).toBe(false);
+  });
 });
 
 describe('confirmed time zone', () => {
@@ -281,5 +311,34 @@ describe("today's update cards", () => {
       updates([{ ...update, source: 'gmail' }]), updates([{ ...update, message_id: '' }]), updates([{ ...update, delivered_at: 0 }]),
       updates([], 0, 0), updates([], 0, 1.5), updates([], 0, '2026-10-13T10:40:00Z' as unknown as number), { updates: { ...updates([]).updates, held: 2 } },
     ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+});
+
+describe('the phone view', () => {
+  const send = { view: 'phone', action: 'phone.sms_send', revision, request_id: 'phone-0001' };
+  const check = { view: 'phone', action: 'phone.sms_check', code: '424242', revision, request_id: 'phone-0002' };
+  const data = { phone: '+919800000001', verified: false, sms: true, challenge: { state: 'pending', expires_at: 1_800_000_600, retry_at: null, checks_left: 5 }, actions: ['phone.sms_send', 'phone.sms_check'] };
+
+  it('reads the number on file and acts on it with nothing but the code', () => {
+    expect(appControlQueryV1Schema.safeParse({ view: 'phone' }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: [] } }).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(send).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(check).success).toBe(true);
+  });
+
+  it('refuses a number, a malformed code, a code on a send, a check without one, or a phone action elsewhere', () => {
+    for (const bad of [
+      { ...send, value: '+14155550100' }, { ...send, id: '+14155550100' }, { ...send, phone: '+14155550100' }, { ...send, code: '424242' },
+      { ...check, code: undefined }, { ...check, code: '4242' }, { ...check, code: '42424a' }, { ...check, code: ' 424242' },
+      { ...send, view: 'connections' }, { ...check, view: 'account' }, { view: 'phone', action: 'timezone.set', value: 'UTC', revision, request_id: 'phone-0003' },
+      { view: 'day', action: 'timezone.set', value: 'UTC', code: '424242', revision, request_id: 'phone-0004' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('refuses a malformed phone projection', () => {
+    for (const bad of [{ ...data, phone: '98000 00001' }, { ...data, extra: true }, { ...data, actions: ['phone.sms_resend'] },
+      { ...data, challenge: { ...data.challenge, state: 'sent' } }, { ...data, challenge: { ...data.challenge, checks_left: 6 } }, { ...data, challenge: { ...data.challenge, retry_at: undefined } }])
+      expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: bad }).success, JSON.stringify(bad)).toBe(false);
   });
 });

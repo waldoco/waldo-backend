@@ -1,3 +1,5 @@
+import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
+import { PROFILE_KINDS } from '../memory/claims';
 import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
 import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
@@ -141,8 +143,9 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set'] as const;
-export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set','phone.sms_send','phone.sms_check'] as const;
+// made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
+export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
 // accepts any string, and several actions ignore the id entirely), so it must never reach the
@@ -178,6 +181,11 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'telegram.unlink': 'Telegram unlinked. Waldo will not message it again until you link an account.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
+  'spot.pin': 'Pinned. Waldo keeps it in mind on every turn, as something you said.',
+  'spot.pin.failed': 'Nothing was pinned. Refresh Memory and try again.',
+  'spot.unpin': 'Unpinned. Waldo still remembers it and finds it when it matters.',
+  'spot.edit': 'Saved in your words. Waldo uses this from now on; the old version is kept as history.',
+  'spot.edit.failed': 'Nothing was changed. The text must be 1 to 1,000 characters and hold no password, key or token.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
   'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
@@ -399,8 +407,16 @@ const spotProvenance = (spot: Claim): string => {
   return `${status}${source}${validity}`;
 };
 
+// A pinned spot rides every turn as the owner's own word; only the kinds the pinned blocks carry can be pinned.
+const spotPin = (view: ConsoleView, spot: ConsoleView['spots'][number]) => spot.pinned
+  ? form(view.csrf, 'spot.unpin', spot.pinned === 'facts' ? 'Unpin from facts' : 'Unpin from profile', { id: String(spot.id) })
+  : PROFILE_KINDS.includes(spot.kind) ? `${form(view.csrf, 'spot.pin', 'Pin to profile', { id: String(spot.id), value: 'profile' })}${form(view.csrf, 'spot.pin', 'Pin to facts', { id: String(spot.id), value: 'facts' })}` : '';
+// An edit replaces the spot with the owner's text; only a live spot (not a promoted one) can be corrected.
+const spotEdit = (view: ConsoleView, spot: ConsoleView['spots'][number]) => spot.status !== 'active' ? ''
+  : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="spot.edit"><input type="hidden" name="id" value="${spot.id}"><input name="value" value="${esc(spot.text)}" maxlength="${APP_CLAIM_TEXT_MAX_V1}" required aria-label="Edit this spot"><button class="btn quiet">Save edit</button></form>`;
+
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory at once; older copies are cleared from storage in the background, listed under Forgetting until they are.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', awaitsOwnerConfirm(spot) || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${awaitsOwnerConfirm(spot) ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
+  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, edit it here or tell Waldo in chat. Pin what Waldo should keep in mind on every turn. Forget removes it from memory at once; older copies are cleared from storage in the background, listed under Forgetting until they are.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', awaitsOwnerConfirm(spot) || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${awaitsOwnerConfirm(spot) ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${spotPin(view, spot)}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}${spotEdit(view, spot)}</div></div>`).join('')}`;
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -605,7 +621,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
     waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. You can approve calendar changes here; email sends can only be approved on the full review card in chat.', approvals(view)),
     setup: section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view)),
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
-    spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
+    spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, pin, edit, dismiss, or forget a spot here.', spots(view) + forgetting(view) + retired(view) + held(view)),
     constellation: section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s uncalibrated estimate from 0 to 1, not a probability of truth.', constellation(view)),
     day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view) + '<h3>Scheduled behaviors</h3>' + schedules(view)),
     memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),

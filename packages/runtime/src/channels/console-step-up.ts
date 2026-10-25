@@ -24,6 +24,13 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
+  'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  // The app's memory actions, named for themselves so each carries its own reason.
+  'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
+  'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
@@ -70,6 +77,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
+  'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
+  'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.
