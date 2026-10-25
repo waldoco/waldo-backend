@@ -500,7 +500,7 @@ it('revocation after a reply is queued withdraws it as not_started; a delivered 
   expect(w.host.nativeSends).toHaveLength(0);
 });
 
-it('groups, SMS/RCS, echoes, media, reactions, receipts and unknown senders are retained evidence, never owner turns', async () => {
+it('groups, SMS/RCS, echoes, reactions, receipts and unknown senders are retained evidence, never owner turns', async () => {
   const w = await world();
   await w.pairAndActivate();
   const base = w.host.message('x');
@@ -509,7 +509,6 @@ it('groups, SMS/RCS, echoes, media, reactions, receipts and unknown senders are 
     w.host.message('sms text', { service: 'SMS', chatGuid: 'SMS;-;+15550000001', senderHandle: '+15550000001' }),
     w.host.message('rcs text', { service: 'RCS', chatGuid: 'RCS;-;+15550000002', senderHandle: '+15550000002' }),
     w.host.message('my own echo', { isFromMe: true }),
-    w.host.message('photo caption', { attachments: [{ reference: 'att-1', sourceMessageGuid: 'placeholder', filename: 'photo.png', mimeType: 'image/png', byteLength: 4, sha256: '0'.repeat(64), kind: 'image', nativeVoice: false }] }),
     w.host.message('stranger text', { senderHandle: 'stranger@example.invalid' }),
     { ...base, eventId: 'sim-reaction', kind: 'reaction', action: 'add', actorHandle: SUBJECT, reaction: { kind: 'standard', type: 'love' }, text: undefined, attachments: undefined,
       target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT, messageGuid: 'sim-guid-1', partIndex: 0 } },
@@ -1830,3 +1829,48 @@ it('an owner who chose the app and iMessage gets a Mac result in the app and one
   expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: MAC_REPORT, binding: { subject: SUBJECT, chatGuid: CHAT } });
   expect(forbiddenEgress).toEqual([]);
 }, 20_000);
+
+// IMESSAGE_MEDIA is "0" in this suite, as wrangler declares it: a photo or file is answered once, honestly, and never opened.
+const deliverOne = async (w: Awaited<ReturnType<typeof world>>) => {
+  await w.pump();
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'one reply reached the host').not.toBeNull();
+  await w.host.postResult(delivery!, await w.host.execute(delivery!));
+  await w.pump(2);
+  return JSON.parse(delivery!.body).text as string;
+};
+
+it('with IMESSAGE_MEDIA off, a photo, a Mac file and a voice note each get one honest reply, settle, and reach neither the model nor Photon', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const photo = { ...w.host.message('what is this?'), photonAttachments: [{ id: 'photon-att-1', name: 'IMG_0001.png', mimeType: 'image/png', size: 8 }] };
+  expect((await w.host.send(photo)).status).toBe(200);
+  expect(await deliverOne(w)).toBe("I got your photo but couldn't open it here; send it in the app.");
+  const mac = w.host.message('');
+  mac.attachments = [{ reference: 'att-1', sourceMessageGuid: mac.messageGuid, filename: 'scan.pdf', mimeType: 'application/pdf', byteLength: 4, sha256: '0'.repeat(64), kind: 'document', nativeVoice: false }];
+  expect((await w.host.send(mac)).status).toBe(200);
+  expect(await deliverOne(w)).toBe("I got your file but couldn't open it here; send it in the app.");
+  const voice = { ...w.host.message(''), photonAttachments: [{ id: 'photon-att-2', name: 'Audio Message.caf', mimeType: 'audio/x-caf', size: 8 }] };
+  expect((await w.host.send(voice)).status).toBe(200);
+  expect(await deliverOne(w)).toBe("I can't listen to voice notes here yet; type it out or send it in the app.");
+  // A lost ACK resends the same event: it is the same turn, so still one reply.
+  expect((await w.host.send(photo)).status).toBe(200);
+  await w.pump(2);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(proof.turns).toHaveLength(0);
+  expect(w.host.nativeSends).toHaveLength(3);
+  const counts = (await w.bridgeStub().status()).events;
+  expect(counts).toMatchObject({ pending: 0, handed: 3 });
+  expect(counts.held ?? 0).toBe(0);
+  expect((await inbox(w.ownerStub)).map(r => [r.state, r.text, r.media])).toEqual([['completed', '', undefined], ['completed', '', undefined], ['completed', '', undefined]]);
+  expect(forbiddenEgress).toEqual([]);
+});
+
+it('an empty Photon attachment list is an ordinary text message', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  expect((await w.host.send({ ...w.host.message('Plain words'), photonAttachments: [] })).status).toBe(200);
+  expect(await deliverOne(w)).toBe(proof.reply);
+  expect(proof.turns).toHaveLength(1);
+  expect(forbiddenEgress).toEqual([]);
+});
