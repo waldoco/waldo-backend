@@ -267,3 +267,22 @@ it('the bridge refuses a tapback on a message outside the bound chat', async () 
     .toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'target_not_in_chat' } });
   expect((await w.host.pull()).delivery).toBeNull();
 });
+
+// The owner inbox's tapback lines by themselves: the newest eight wait, the next turn on their chat takes them once, and a
+// line noted under an earlier binding of that chat is dropped unread.
+it('tapback lines are bounded, taken once by their chat\'s next turn, and never read under another binding', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`imsg-notes-${crypto.randomUUID()}`)), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage);
+    const chat = JSON.stringify(['imessage', 'b', 'a', CHAT]), other = JSON.stringify(['imessage', 'b', 'a', 'iMessage;-;other@example.invalid']);
+    for (let n = 0; n < 10; n++) inbox.noteReaction({ key: `k${n}`, conversationRef: chat, bindingDigest: n < 9 ? 'earlier' : 'now', line: `line ${n}` }, 'add');
+    inbox.noteReaction({ key: 'elsewhere', conversationRef: other, bindingDigest: 'now', line: 'other chat' }, 'add');
+    inbox.noteReaction({ key: 'k9', conversationRef: chat, bindingDigest: 'now', line: 'line 9' }, 'remove');
+    inbox.noteReaction({ key: 'latest', conversationRef: chat, bindingDigest: 'now', line: 'line now' }, 'add');
+    expect(inbox.notes().map(note => note.line)).toEqual(['line 3', 'line 4', 'line 5', 'line 6', 'line 7', 'line 8', 'other chat', 'line now']);
+    const admitted = await inbox.admit({ dedupKey: 'd1', digest: 'x', text: 'hi', conversationRef: chat, bindingDigest: 'now', revision: 'r', environment: 'test', bridgeDoName: 'bridge', ownerDoName: 'owner',
+      binding: { ownerId: 'o', presenceId: 'p', subject: SUBJECT, bridgeId: 'b', accountId: 'a', chatGuid: CHAT, verified: true, conversationKind: 'direct', service: 'iMessage' }, commandId: 'wrc_1', occurredAt: Date.now() });
+    if (admitted.kind !== 'admitted') throw new Error(admitted.kind);
+    expect(inbox.claim(admitted.record.id, true)?.reactions).toEqual(['line now']);
+    expect(inbox.notes().map(note => note.line)).toEqual(['other chat']);
+  });
+});
