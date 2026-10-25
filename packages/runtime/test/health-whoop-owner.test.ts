@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import handoffMigration from '../../../supabase/migrations/20261023060000_waldo_connect_session_handoff.sql?raw';
 import { whoopDeletions } from '../src/health/providers/whoop-map';
+import { handoffHash, HANDOFF_CODE_TTL_MS } from '../src/channels/connect-confirm';
 import { addNight, connected, DAY, harness, NOW, night, newPlane, newWorld, recoveryRecord, sleepRecord, workoutRecord } from './helpers/whoop-fakes';
 
 // Distinctive synthetic readings: if one shows up in a log line, the owner object kept a value.
@@ -7,17 +9,27 @@ const LEAKS = ['47.318', '430', '93.5'];
 const signals = (plane: { samples: Map<string, { payload: Record<string, unknown> }> }) => [...plane.samples.values()].map(s => s.payload.signal as string);
 
 describe('WHOOP connect and callback', () => {
-  it('starts with both of the owner\'s WHOOP grants live, and sends an eight-character state, hashed', async () => {
+  it('starts with both of the owner\'s WHOOP grants live, and hands the app a first-party start link carrying an eight-character state and a one-time code, both stored hashed', async () => {
     const h = harness();
-    const url = (await h.owner.connect() as { authorize_url: string }).authorize_url;
-    const query = new URL(url).searchParams;
-    expect([new URL(url).origin + new URL(url).pathname, query.get('client_id'), query.get('response_type'), query.get('redirect_uri')]).toEqual(['https://api.prod.whoop.com/oauth/oauth2/auth', 'client-id-fixture', 'code', 'https://worker.example.invalid/oauth/whoop/callback']);
-    expect(query.get('scope')).toBe('offline read:profile read:sleep read:recovery read:workout');
-    expect(query.get('state')).toMatch(/^[A-Za-z0-9]{8}$/);
+    const url = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
+    expect(url.origin).toBe('https://worker.example.invalid');
+    expect(url.pathname).toMatch(/^\/oauth\/whoop\/start\/[A-Za-z0-9]{8}$/);
+    expect(url.search).toMatch(/^\?handoff=[A-Za-z0-9_-]{22}$/);
+    const state = url.pathname.split('/').at(-1)!, code = url.searchParams.get('handoff')!;
     expect(h.plane.sessions).toHaveLength(1);
     expect(h.plane.sessions[0]).toMatch(/^[0-9a-f]{64}$/);
-    expect(h.plane.sessions[0]).not.toContain(query.get('state')!);
-    expect(url).not.toContain('client-secret-fixture');
+    expect(h.plane.sessions[0]).not.toContain(state);
+    expect(h.plane.handoffs).toEqual([await handoffHash(code)]);
+    expect(url.toString()).not.toContain('client-secret-fixture');
+    // Each start is its own code, so a link the app opened once is never reissued.
+    const again = new URL((await h.owner.connect() as { authorize_url: string }).authorize_url);
+    expect(again.searchParams.get('handoff')).not.toBe(code);
+  });
+
+  it('tells the app the link works for as long as its one-time code does, and that lifetime is the one the directory enforces', async () => {
+    const h = harness();
+    expect(await h.owner.connect()).toMatchObject({ expires_at: NOW + HANDOFF_CODE_TTL_MS });
+    expect(handoffMigration).toContain(`handoff_expires_at)\n    values (v_owner, p_provider, p_channel, p_ticket_hash, now() + interval '12 hours', p_handoff_hash, now() + interval '${HANDOFF_CODE_TTL_MS / 60_000} minutes')`);
   });
 
   // WHOOP's express authorization is the two grants for the whoop source. The answer names the missing one so the app can send

@@ -72,7 +72,8 @@ const transcribeMedia = async (media: TelegramMedia, what: string, download?: Te
   if (!download || !transcribe) return { parts: noted(`[Owner sent a ${what}, but voice reading is not set up here.]`) };
   try {
     const text = (await transcribe(await download(media.fileId), media.fileName ?? 'audio', media.mimeType ?? 'application/octet-stream')).trim();
-    return { parts: text.length > 0 ? [...noted(`[Owner sent a ${what}.]`), { authorship: 'file_transcript', text }] : noted(`[Owner sent a ${what} with no speech that could be made out.]`) };
+    // Telegram marks a forward, so a forwarded recording is someone else speaking, whatever it says.
+    return { parts: text.length > 0 ? [...noted(`[Owner sent a ${what}.]`), { authorship: media.forwarded ? 'forwarded' : 'file_transcript', text }] : noted(`[Owner sent a ${what} with no speech that could be made out.]`) };
   } catch {
     return { parts: noted(`[Owner sent a ${what}, but it could not be transcribed.]`) };
   }

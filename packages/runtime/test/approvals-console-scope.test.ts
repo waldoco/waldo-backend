@@ -3,13 +3,15 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
-import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import type { GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const iso = (s: string) => s as never;
 
-// The console renders a stored review itself, so a card shown anywhere would serve it. The desk still lets it approve one
-// kind only, a calendar change without invite details: the route rule (consoleMayApprove) is not the only guard.
-it('the console approves a plain calendar change and no other kind, whatever card was shown', async () => {
+// The console renders a stored review itself, so a card shown anywhere would serve it. The desk lets it decide only the
+// kinds it shows in full, a send's draft and a calendar change without invite details: the route rule (consoleMayApprove)
+// is not the only guard.
+it('the console approves a plain calendar change, an email and a message, and no other kind, whatever card was shown', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-console-scope')), async (_instance, state) => {
     const effects: string[] = [];
     let n = 0;
@@ -17,6 +19,8 @@ it('the console approves a plain calendar change and no other kind, whatever car
       account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
       event: async (id: string) => ({ id, title: 'Walk', start: '2026-09-26T07:00:00+05:30', end: '2026-09-26T07:30:00+05:30', all_day: false, etag: 'v1' }),
       createEvent: async () => { effects.push('create'); return { id: 'new1', title: 'Walk', start: '', end: '', all_day: false, etag: 'v2' }; },
+      sendRaw: async () => { effects.push('email'); return { message_id: 'g1', thread_id: 't1' }; },
+      findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't1', rfc822_message_id: id, label_ids: ['SENT'] }),
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, {
       call: async () => ({}), owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
@@ -24,22 +28,23 @@ it('the console approves a plain calendar change and no other kind, whatever car
       canSendMessage: () => true, sendMessage: async () => { effects.push('send'); return { provider_id: 'tg-1' }; },
     });
     const mcp = await desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { number: 1 } });
-    const message = await desk.proposeSendMessage({ channel: 'telegram', content: 'On my way', idempotency_key: 'm-1' });
-    for (const id of [mcp, message]) {
-      expect((await desk.decide(id, 'a', 'trace', { surface: 'console' })).toast).toBe('Not available here');
-      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('open');
-    }
+    expect((await desk.decide(mcp, 'a', 'trace', { surface: 'console' })).toast).toBe('Not available here');
+    expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', mcp).one().status).toBe('open');
     expect(effects).toEqual([]);
+    const message = await desk.proposeSendMessage({ channel: 'telegram', content: 'On my way', idempotency_key: 'm-1' });
+    expect((await desk.decide(message, 'a', 'trace', { surface: 'console' })).toast).toBe('Sent');
+    const email = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<console@waldo-send>' }));
+    expect((await desk.decide(email, 'a', 'trace', { surface: 'console' })).toast).toBe('Sent');
     const walk = await desk.propose({ action: 'create', title: 'Walk', start: iso('2026-09-26T07:00:00+05:30'), end: iso('2026-09-26T07:30:00+05:30'), reason: 'morning' });
     await desk.decide(walk, 'a', 'trace', { surface: 'console' });
-    expect(effects).toEqual(['create']);
-    expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', walk).one().status).toBe('done');
+    expect(effects).toEqual(['send', 'email', 'create']);
+    for (const id of [message, email, walk]) expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('done');
   });
 });
 
 // Neither approve nor change reaches the console for any other kind, nor for a calendar change that invites someone, and
 // no effect runs: the desk gate holds without the route rule.
-it('the console can neither approve nor change a send, a browser action, a task change or an invite', async () => {
+it('the console can neither approve nor change an MCP call, a browser action, a task change or an invite', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-console-scope-kinds')), async (_instance, state) => {
     const effects: string[] = [];
     let n = 0;
@@ -63,11 +68,8 @@ it('the console can neither approve nor change a send, a browser action, a task 
         apply: async () => { effects.push('task'); return {} as never; },
       }) as never,
     });
-    const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
     const ids = [
       await desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { number: 1 } }),
-      await desk.proposeSendMessage({ channel: 'telegram', content: 'On my way', idempotency_key: 'm-1' }),
-      await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<c1@waldo-send>', raw, digest: await sha256Hex(raw) }),
       await desk.proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
       await desk.proposeGoogleTaskChange(task),
       await desk.propose({ action: 'create', title: 'Lunch', start: iso('2026-09-26T12:00:00+05:30'), end: iso('2026-09-26T13:00:00+05:30'), reason: 'lunch', location: 'The cafe' }),

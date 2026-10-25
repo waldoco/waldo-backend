@@ -62,6 +62,8 @@ it.each([401, 403, 451])('HTTP %s is a typed refusal that names the status and s
   expect(result.error).toContain(`HTTP ${status}`); expect(result.error).toContain('will not help');
   expect(result.error).toContain('retain_session:true'); expect(result.error).toContain('owner_login');
   expect(result.error).not.toMatch(/example\.com|private-id|Vegetarian/);
+  // Only a 401 says for certain the page wants a sign-in.
+  expect((result as { blocked?: string }).blocked).toBe(status === 401 ? 'login_required' : undefined);
   expect(f.calls).toContain('Browser.close');
 });
 it.each([404, 410])('HTTP %s is not_found', async status => {
@@ -92,6 +94,7 @@ it.each([403, 503])('a Cloudflare challenge (HTTP %s) is a typed refusal naming 
   expect(result).toMatchObject({ ok: false, code: 'rejected' });
   if (result.ok) return;
   expect(result.error).toContain('verification_challenge'); expect(result.error).toContain('owner_login');
+  expect(result).toMatchObject({ blocked: 'challenge' });
   expect(f.calls).toContain('Browser.close');
 });
 it('returns typed empty-page and timeout failures while terminating the owned session', async () => {

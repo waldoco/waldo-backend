@@ -7,12 +7,14 @@ import { handleProbeTurn, PROBE_TURN_PATH } from './channels/probe-turn';
 import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
 import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
-import { handleWhoopCallback, WHOOP_CALLBACK_PATH } from './health/providers/whoop-routes';
+import { handleWhoopCallback, handleWhoopStart, WHOOP_CALLBACK_PATH, WHOOP_START_PATH } from './health/providers/whoop-routes';
 import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
+import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
-import { CONSOLE_PATH } from './channels/console';
+import { CONSOLE_PATH, consoleCookie } from './channels/console';
+import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
 import { handleApp } from './channels/app-api';
 import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
@@ -34,6 +36,9 @@ export { OwnerDO } from './channels/owner-do';
 import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
+import { photonCallback } from './channels/imessage/photon-routes';
+import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
+import { photonKeepAlive } from './channels/imessage/enrollment';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -62,6 +67,7 @@ declare global {
       WALDO_ENVIRONMENT?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
+      WALDO_OAUTH_STATE_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
       GOOGLE_CLIENT_SECRET?: string;
       WHOOP_CLIENT_ID?: string;
@@ -100,23 +106,30 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   const ticket = await readConsoleTicket(value, env.WALDO_ROUTER_HMAC_SECRET);
   const auth = consoleAuth(env);
   if (!ticket || !auth) return rejected();
-  const hasOwner = (request.headers.get('cookie') ?? '').split(';').some(part => part.trim().startsWith(`${OWNER_COOKIE}=`));
-  try { if (hasOwner && await auth.readOwnerCookie(request) !== ticket.owner) return rejected(); }
+  let presented: string | null;
+  try { presented = await auth.readOwnerCookie(request); }
   catch { return new Response('Sign-in is temporarily unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } }); }
+  // A link never switches a browser signed in to another owner. A cookie that names no live session (it outlives its
+  // row) is no account to protect: the sign-in replaces it.
+  if (presented !== null && presented !== ticket.owner) return rejected();
   const response = await forwardTicketConsole(request, env, ticket.owner);
   if (request.method !== 'POST' || response.status !== 303 || !response.headers.get('set-cookie')) return response;
   let ownerCookie: string | null;
-  try { ownerCookie = await auth.ownerCookie(ticket.owner); }
+  try { ownerCookie = await auth.ownerCookie(ticket.owner, request); }
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`);
+  headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, headers });
 };
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
+    oauthStateSecret(env);
+    const crossSite = consoleCrossSiteRefusal(request);
+    if (crossSite) return crossSite;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
@@ -126,6 +139,7 @@ export default {
     const devicePath = new URL(request.url).pathname;
     // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
     if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
+    if (devicePath === PHOTON_CALLBACK_PATH) return photonCallback(request, env as never);
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {
@@ -180,6 +194,7 @@ export default {
     if (new URL(request.url).pathname === WHOOP_CALLBACK_PATH) {
       return handleWhoopCallback(request, env);
     }
+    if (new URL(request.url).pathname.startsWith(WHOOP_START_PATH)) return handleWhoopStart(request, env);
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);
     }
@@ -196,6 +211,13 @@ export default {
   },
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
+    if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
+} satisfies ExportedHandler<Env>;
+
+export default {
+  ...worker,
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
 } satisfies ExportedHandler<Env>;

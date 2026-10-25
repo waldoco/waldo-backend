@@ -213,6 +213,15 @@ export class BridgeStore {
     return row ? toDelivery(row) : null;
   }
   deliveries(): DeliveryRow[] { return this.rows('SELECT * FROM deliveries ORDER BY created_at, delivery_id').map(toDelivery); }
+  /** One owner's deliveries whose replyRef is exactly `ref`, or starts with it when `ref` ends in ':'. Turn ids are per owner. */
+  deliveriesFor(ownerDoName: string, ref: string): DeliveryRow[] {
+    return this.rows(`SELECT * FROM deliveries WHERE owner_do = ?1 AND ${ref.endsWith(':') ? 'substr(reply_ref, 1, length(?2)) = ?2' : 'reply_ref = ?2'} ORDER BY created_at`, ownerDoName, ref).map(toDelivery);
+  }
+  /** The command holding the mailbox's one slot, if any. */
+  outstanding(): DeliveryRow | null {
+    const row = this.rows("SELECT * FROM deliveries WHERE state IN ('queued','delivered') LIMIT 1")[0];
+    return row ? toDelivery(row) : null;
+  }
 
   /** Marks the single outstanding command delivered (attempt+1) and returns its unchanged bytes. */
   pull(h: S2Headers): DeliveryRow | null {

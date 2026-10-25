@@ -2,13 +2,14 @@ import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
 import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
-import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { computeDailyScores } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
 import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -118,7 +119,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
+    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : ''); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
     let credential: string | null;
     try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
@@ -130,19 +131,24 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+  // A link code or a provider connection outlives this session, so it needs a sign-in from the last two hours. Throws when
+  // the directory cannot list the sessions.
+  const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.created_at, Date.now()); };
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
-    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret });
+    if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, signedInRecently: signedIn });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
-        notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day) } : {}) });
+        notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
+        notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName) } : {}) });
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
-  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
+  const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -152,9 +158,14 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
   if (linkCode) {
     if (request.method !== 'POST') return fail(405);
-    const address = env.IMESSAGE_WALDO_ADDRESS;
-    if (!address || !auth.issueProviderLinkCode) return fail(503);
+    if (!auth.issueProviderLinkCode) return fail(503);
     try {
+      // With Photon, each owner texts their own assigned number; an owner not yet enrolled has none.
+      // Loaded lazily: this module also runs in plain Node, where the Durable Object classes behind it cannot load.
+      const { iMessageNumberView } = await import('./imessage/enrollment');
+      if (!await signedIn()) return ok({ error: 'step_up_required', code: 'step_up_required' }, 403);
+      const address = (await iMessageNumberView(env as never, who.doName)).number;
+      if (!address) return fail(503);
       const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
       if (!code) return fail(503);
       return ok(appIMessageLinkCodeV1Schema.parse({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 }));
@@ -170,7 +181,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
     if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
@@ -198,7 +209,10 @@ export type AppMessage = AppMessageV1;
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
 // to a run also carries the approval cards presented for that run.
 const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
+// to it and before that reply's receipt line, which stays last.
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
+  consoleLink: (parentId: string) => string | null = () => null): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
@@ -207,12 +221,15 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
-    const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    const newest = entry.parentId && newestReply.get(entry.parentId) === entry.id ? entry.parentId : null;
+    const presented = newest ? cards(newest) : NO_CARDS, link = newest ? consoleLink(newest) : null;
     // `text` keeps the receipt line at its end: a reader without the receipt part shows the line in the text, and a reader with the
     // part hides that one line, which the part repeats as its fallback byte for byte. Changing what `text` carries would change
     // what installed builds show, which the additive app.v1 rule forbids.
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
-    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
+    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,

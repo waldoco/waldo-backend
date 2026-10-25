@@ -22,7 +22,7 @@ const validGuard = (guard: unknown): string | undefined =>
 const SAFE_DETAIL_HOPS = new Set([
   'stop', 'steer', 'connect_offer', 'google_token_migrated', 'memory_backup',
   'egress_scrub', 'egress_redacted', 'oauth_exchange', 'oauth_callback', 'google_linked',
-  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
+  'day_plan', 'nightly_memory', 'memory_flush', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
 ]);
 
 // These receipts are strictly enum/count-only, even if a caller supplies a free-form
@@ -53,7 +53,7 @@ const TYPED_FIELDS = {
   error_code: turnErrorCodeSchema, job_id: turnIdentifierSchema, job_profile: turnIdentifierSchema,
   tools_called: z.number().int().min(0), parallel_batches: z.number().int().min(0),
   browser_ms: z.number().finite().min(0), sandbox_ms: z.number().finite().min(0), ttft_ms: z.number().finite().min(0),
-  fallback_fired: z.boolean(),
+  fallback_fired: z.boolean(), tool_search_degraded: z.boolean(),
 } as const;
 const typedFieldsOnly = (entry: TurnLogEntry): TurnLogEntry => {
   const copy: Record<string, unknown> = { ...entry };

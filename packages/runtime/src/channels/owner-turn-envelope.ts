@@ -49,8 +49,9 @@ export type OwnerResponder = Readonly<{
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external'): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
-  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
-  migrate(trace: string, input: string): Promise<string>;
+  // policy.health false keeps no health notes from this pass, or from the migration.
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   promote(trace: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
@@ -59,6 +60,8 @@ export type OwnerResponder = Readonly<{
   // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract. The scope
   // is the call's own: its deadline bounds every attempt and its signal aborts the request in flight.
   threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
+  // The model's raw answer writing one progress note for a turn still running; the scope is the note's own, as above.
+  progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 

@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { HEALTH_PROVIDER_SOURCES_V1, healthInstantV1Schema, healthPurposeV1Schema, healthRequestIdV1Schema } from './health-ingest';
 
 // Cloud wearables Waldo syncs for the owner (health contract revision 2). The app starts a connection, opens the returned
-// address in a browser session, and the provider sends the owner back to Waldo's own callback; no token ever reaches the
-// app. The owner's express authorization for storage and AI use (the provider's storage_compute and model_processing
+// address in a browser session, and the provider sends the owner back to Waldo's own callback in that same session; no
+// token ever reaches the app. The owner's express authorization for storage and AI use (the provider's storage_compute and model_processing
 // consents) must both be live before a connection starts, so the app grants them first. Self-contained: it imports only zod and siblings.
 export const healthProviderV1Schema = z.enum(HEALTH_PROVIDER_SOURCES_V1);
 // connected: syncing. needs_reconnect: the provider no longer accepts the saved access, so the owner connects again.
@@ -18,8 +18,14 @@ export const healthProviderStatusV1Schema = z.strictObject({
 export const healthProviderListV1Schema = z.strictObject({ providers: z.array(healthProviderStatusV1Schema).max(HEALTH_PROVIDER_SOURCES_V1.length) });
 
 export const healthProviderConnectV1Schema = z.strictObject({ request_id: healthRequestIdV1Schema, provider: healthProviderV1Schema });
-// The address is the provider's own authorization page. It expires, and the connection is complete only when the status
-// reads connected.
+// The address is Waldo's own start link, and it carries a one-time code (?handoff=) only this response holds. The app
+// opens it exactly as returned, once, in one browser session, within 10 minutes. The first load redeems the code and binds
+// whichever browser made it, so after that load, or once the code lapses, the address opened in any other browser starts
+// nothing; a copy opened before the app's own load binds its opener instead. The page shows
+// whose Waldo the account will join; on Continue it hands the browser to the provider's authorization page and binds the
+// attempt to that browser, so a callback that returns to any other browser connects nothing. Each connect is a fresh
+// request_id and a fresh address: a replayed response's address is spent once opened. It expires, and the connection is
+// complete only when the status reads connected.
 export const healthProviderConnectResultV1Schema = z.strictObject({
   provider: healthProviderV1Schema,
   authorize_url: z.url({ protocol: /^https$/ }).max(2048),
@@ -34,8 +40,9 @@ export const healthProviderDisconnectResultV1Schema = z.strictObject({
   revoked_at_provider: z.boolean(),
 });
 // With consent_required, missing names the provider's grants that are not live, so the app sends the owner to exactly those.
+// step_up_required (403): starting a connection needs a sign-in from the last two hours.
 export const healthProviderErrorV1Schema = z.strictObject({
-  error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable']),
+  error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable', 'step_up_required']),
   message: z.string().max(1000).optional(),
   missing: z.array(healthPurposeV1Schema).min(1).max(2).optional(),
 });

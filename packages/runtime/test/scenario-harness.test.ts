@@ -6,6 +6,8 @@ import { checkScenario, runScenario, type ScenarioRun } from '../scenarios/run-l
 import { scriptedGateway } from '../src/testing/scripted-gateway';
 import { sanitise } from '../src/scribe/sanitiser';
 import { TURN_CONTEXT_HEADER } from '../src/prompt/turn-prompt';
+import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
+import { ANTHROPIC_PROVIDER, WALDO_CHAT_FALLBACK_MODEL } from '@waldo/contracts';
 import type { Scenario } from '../scenarios/types';
 
 describe('L1 scenario harness', () => {
@@ -53,6 +55,78 @@ describe('L1 harness extensions', () => {
     const second = await gateway.complete(request('claim_ops'));
     expect([first, second].map((result) => (result.ok ? result.data.text : ''))).toEqual(['ops-0', 'ops-1']);
     expect(gateway.requests()).toHaveLength(3);
+  });
+});
+
+// The provider caches a request by its leading bytes: tools, then the system prompt, then the messages. A turn that moves
+// any of them re-bills everything after the move, so these fail when a change breaks the cached prefix.
+describe('prompt cache prefix', () => {
+  const scenario: Scenario = {
+    id: 'cache-prefix',
+    category: 'tools',
+    turns: ['remind me to call mom at 7pm', 'and the dentist at 8pm', 'what did I ask you for?'],
+    llm: [
+      { match: /call mom/, rounds: [{ toolCalls: [{ name: 'set_reminder', arguments: { note: 'call mom', at: '2026-09-24T19:00', repeat: 'none' } }] }, { text: 'Set for 7.' }] },
+      { match: /dentist/, rounds: [{ toolCalls: [{ name: 'set_reminder', arguments: { note: 'dentist', at: '2026-09-24T20:00', repeat: 'none' } }] }, { text: 'Set for 8.' }] },
+      { match: /what did I ask/, rounds: [{ text: 'Two reminders.' }] },
+    ],
+    assert: { replies: ['Set for 7.', 'Set for 8.', 'Two reminders.'], mustCall: ['set_reminder'] },
+  };
+  const replyCalls = (run: ScenarioRun) => run.modelRequests.map((requests) => requests.filter((sent) => sent.request.tools?.length).map((sent) => sent.request));
+
+  it('sends one tool array and one system prompt to every reply call, and each turn resends the history the last one sent', async () => {
+    const run = await runScenario(scenario);
+    expect(checkScenario(scenario, run)).toEqual([]);
+    const turns = replyCalls(run);
+    expect(turns.map((calls) => calls.length)).toEqual([2, 2, 1]);
+    const all = turns.flat();
+    expect(new Set(all.map((request) => JSON.stringify(request.tools))).size).toBe(1);
+    expect(new Set(all.map((request) => request.system)).size).toBe(1);
+    // The scenario clock stands still, so a per-turn fact in the system prompt would not move it here; none may be there.
+    const context = all[0]!.messages.at(-1)!.content.split(TURN_CONTEXT_HEADER)[1]!;
+    for (const line of context.split('\n').filter((text) => text.trim().length > 20)) expect(all[0]!.system).not.toContain(line);
+    for (const [index, calls] of turns.entries()) {
+      const history = calls[0]!.messages.slice(0, -1);
+      if (index > 0) expect(history.slice(0, -2)).toEqual(turns[index - 1]![0]!.messages.slice(0, -1));
+      expect(calls[0]!.messages.at(-1)!.content.startsWith(`${scenario.turns[index]}\n\n`)).toBe(true);
+      expect(calls[0]!.messages.at(-1)!.content).toContain(TURN_CONTEXT_HEADER);
+      for (const later of calls.slice(1)) expect(later.messages).toEqual(calls[0]!.messages);
+    }
+  });
+
+  it('rendered for the Anthropic fallback, every call reads all the messages it shares with an earlier call, at a block that call marked', async () => {
+    const run = await runScenario(scenario);
+    const bodies: Array<{ system: unknown; messages: Array<{ content: Array<Record<string, unknown>> }> }> = [];
+    const adapter = new AnthropicMessagesAdapter({ apiKey: 'test-key', client: { messages: { create: async (body: never) => { bodies.push(body); return { id: 'msg', type: 'message', role: 'assistant', model: WALDO_CHAT_FALLBACK_MODEL, stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }; } } } as never });
+    const step = { provider: ANTHROPIC_PROVIDER, model: WALDO_CHAT_FALLBACK_MODEL, cache: 'anthropic_native' as const };
+    for (const request of replyCalls(run).flat()) {
+      await adapter.complete({ request: { ...request, model: WALDO_CHAT_FALLBACK_MODEL }, route: { trigger: 'user_message', primary: step, fallback: [], floor: 'template' }, step, context: 'full_context', fallback_step: 'configured_model', headers: { 'cf-aig-collect-log-payload': 'false' } });
+    }
+    expect(bodies).toHaveLength(5);
+    // A marker is not content, so prefixes compare without them.
+    const unmarked = (value: unknown) => JSON.stringify(value).replaceAll(',"cache_control":{"type":"ephemeral"}', '');
+    const marks = (body: (typeof bodies)[number]) => body.messages.flatMap((message, at) => message.content.some((block) => block.cache_control) ? [at] : []);
+    const shared = (a: (typeof bodies)[number], b: (typeof bodies)[number]) => {
+      let length = 0;
+      while (length < Math.min(a.messages.length, b.messages.length) && unmarked(a.messages[length]) === unmarked(b.messages[length])) length += 1;
+      return length;
+    };
+    const reads: number[] = [];
+    for (const [index, body] of bodies.entries()) {
+      expect(body.system).toEqual([expect.objectContaining({ cache_control: { type: 'ephemeral' } })]);
+      expect(marks(body)).toEqual(body.messages.map((_message, at) => at).slice(-3));
+      // The longest run of leading messages this call shares with an earlier one must end at a block an earlier call
+      // marked (a cache entry exists there), within the 20-block lookback of this call's first marker.
+      const earlier = bodies.slice(0, index);
+      const longest = Math.max(0, ...earlier.map((before) => shared(before, body)));
+      reads.push(longest);
+      if (longest === 0) continue;
+      expect(earlier.some((before) => shared(before, body) === longest && marks(before).includes(longest - 1))).toBe(true);
+      expect(marks(body)[0]! - (longest - 1)).toBeLessThan(20);
+    }
+    // Rounds of a turn share all of the last call; a turn shares the history the turn before it sent. The second turn has
+    // no message in common with the first (its first message carried that turn's context), so it reads tools and system only.
+    expect(reads).toEqual([0, 1, 0, 3, 2]);
   });
 });
 

@@ -1,6 +1,6 @@
 # Errands parity set
 
-These are twenty everyday tasks that Waldo's general-assistant waves are judged on. They come from three sources:
+These are twenty-two everyday tasks that Waldo's general-assistant waves are judged on. They come from three sources:
 
 - the [agent build plan](https://claude.ai/artifact/MGDBPSqzWQibPfCVvCqzY3)'s ten core jobs and India pack;
 - the [health wedge](https://claude.ai/artifact/V5cYvfv58wZfFB4EcmDExm)'s care loop;
@@ -17,7 +17,9 @@ The source of truth is `packages/runtime/evals/nightly/errands.ts`. The table be
 
 ## Runs
 
-Thirteen errands run nightly in the isolated world. They are `x01` to `x13` in the catalogue. The recorded gate's floor rises from 36 to 49 to cover them.
+Fifteen errands run nightly in the isolated world: `x01` to `x13`, `x21` and `x22`. The recorded gate's floor counts each of them.
+
+`x21` and `x22` test multi-part asks. `x21` asks for three things in one message, and its receipts require all three, so finishing two and dropping one fails. `x22` forces a mail read to fail once partway through a two-part errand; its receipts require the failure, a successful read after it, and both parts done.
 
 The other seven need something the isolated world cannot provide: a browser, a booking or commerce partner, a per-market payment hand-off, or a live account. They are listed below as "later" with the reason. Each one becomes a nightly case when its rung exists. `x14`, the live half of the hotel test, is the browser rung's first case.
 
@@ -48,6 +50,8 @@ The 14 October hotel test failed because Waldo asked for what it could look up a
 | x11-hotel-research | Hotel research, the 14 October test | Instinct and Muse bar; the 14 October hotel test Waldo failed | nightly | web_search | No booking, no mail, no card; Judge: recommends the one listing that meets all three constraints, names the source, says the rate is unchecked on the booking page | not run | not run |
 | x12-deliveries-and-returns | What is arriving or due back | Core job 9: package tracking and return windows; India pack 6 | nightly | search_communication, read_thread | No mail, no card; Judge: the delivery today and the 30 September return deadline | not run | not run |
 | x13-offer-times | Offer someone two times | Core job 5: scheduling by free/busy and email | nightly | search_communication, query_availability, draft_email. Card: If a send card: to arjun@kestrel.example, two specific free hours next week | A draft or send card to arjun@kestrel.example; No calendar event before Arjun picks | not run | not run |
+| x21-three-part-ask | Three asks in one message | Core jobs 4 and 5; multi-part asks where part done is not done | nightly | query_calendar, propose_calendar_change, search_communication, draft_email, set_reminder. Card: Move "Design review" to 25 September 16:00-17:00, owner time; waits for approval | One move card for the design review starting 25 September 16:00; A draft or send card to priya@northwind.example; One reminder at 18:00 today; Missing any one of the three fails | not run | not run |
+| x22-mail-read-fails-mid-errand | A mail read fails partway through a two-part errand | Core jobs 4 and 6; recovery after a forced tool failure | nightly | set_reminder, search_communication, search_communication, draft_email | A mail read failed and a later one succeeded; One reminder at 17:00 today; One draft to sara@northwind.example; No send card | not run | not run |
 | x14-hotel-live-rate | Hotel rate checked on the booking page | The 14 October hotel test: the live half | later: Needs the browser rung and live pages; browser work is on hold while the team redrafts. | web_search, browse_page | Every quoted rate traces to a page read in the trace; No booking | not run | not run |
 | x15-cancel-subscription | Cancel a subscription | Core job 8: cancellation as a guided handoff; Instinct and Muse bar | later: Needs a browser and a live merchant account; the build plan defers cancellation execution until the browser rung or a partner. | search_communication, browse_page. Card: The cancellation step, the merchant, the date and what is lost; waits for approval | A cancellation confirmation from the merchant in the receipts, or an honest handoff with the exact link and steps | not run | not run |
 | x16-restaurant-booking | Book a table | Instinct and Muse bar; India pack 8 (Dineout) | later: Partner-gated: needs a booking partner (Dineout MCP, OpenTable) or a browser; t12 covers the honest no-booking answer today. | web_search, call_mcp_tool. Card: Restaurant, party size, time and any deposit; waits for approval | A booking reference from the partner in the receipts | not run | not run |

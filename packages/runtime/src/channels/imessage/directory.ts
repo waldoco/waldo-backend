@@ -22,6 +22,9 @@ export type BridgeListing = Readonly<{
   observed: boolean; host_version: string; created_at: string; activated_at: string | null; revoked_at: string | null;
 }>;
 
+/** What enrolling an owner with Photon needs, and their current enrollment. */
+export type EnrollmentContext = Readonly<{ email: string; phone: string | null; phoneVerified: boolean; enrollment: Readonly<{ phone: string; assignedNumber: string; photonUserId: string }> | null }>;
+
 export class IMessageDirectoryUnavailable extends Error { constructor() { super('imessage_directory_unavailable'); } }
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
@@ -52,7 +55,7 @@ const parseSenderAuthority = (raw: unknown): SenderAuthority | null => {
 
 export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
   const rpc = signedRpc(env, fetcher, now);
-  const call = async (fn: string, op: string, params: Record<string, string | number>): Promise<unknown> => {
+  const call = async (fn: string, op: string, params: Record<string, string | number | boolean>): Promise<unknown> => {
     if (!rpc) throw new IMessageDirectoryUnavailable();
     const locator = JSON.stringify(Object.values(params));
     try { return await rpc(fn, `imsg.${op}.${await sha256Hex(locator)}`, { ...params, p_locator: locator }); }
@@ -69,7 +72,9 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
         p_account_id: input.accountId, p_wrapped_credential: input.wrappedCredential, p_host_version: input.hostVersion, p_transport_version: input.transportVersion, p_generation: input.generation, p_pending_seconds: input.pendingSeconds });
       if (r === null) return null;
       const row = r as Record<string, unknown>;
-      return str(row.bridge_id) && str(row.account_id) && str(row.do_name) && row.bridge_id === input.bridgeId && row.account_id === input.accountId && typeof row.expires_at_ms === 'number' ? { doName: row.do_name, expiresAtMs: row.expires_at_ms } : null;
+      // A shared host goes live at redemption ('active'); an owner host starts 'pending' until its challenge.
+      return str(row.bridge_id) && str(row.account_id) && str(row.do_name) && row.bridge_id === input.bridgeId && row.account_id === input.accountId && typeof row.expires_at_ms === 'number'
+        ? { doName: row.do_name, expiresAtMs: row.expires_at_ms, state: row.state === 'active' ? 'active' as const : 'pending' as const } : null;
     },
     authority: async (environment: string, bridgeId: string, accountId: string) =>
       parseAuthority(await call('imessage_bridge_authority', 'authority', { p_environment: environment, p_bridge_id: bridgeId, p_account_id: accountId })),
@@ -90,6 +95,22 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
     recordChallenge: async (input: { environment: string; bridgeId: string; accountId: string; challengeHash: string; subject: string; chatGuid: string; generation: string; eventId: string; digest: string }) =>
       bool(await call('imessage_record_challenge', 'challenge', { p_environment: input.environment, p_bridge_id: input.bridgeId, p_account_id: input.accountId, p_challenge_hash: input.challengeHash,
         p_subject: input.subject, p_chat_guid: input.chatGuid, p_generation: input.generation, p_event_id: input.eventId, p_event_digest: input.digest })),
+    async enrollmentRead(doName: string, environment: string): Promise<EnrollmentContext | null> {
+      const r = await call('imessage_enrollment_read', 'enroll_read', { p_do_name: doName, p_environment: environment });
+      if (r === null) return null;
+      const row = r as Record<string, unknown> | null, e = row?.enrollment as Record<string, unknown> | null | undefined;
+      if (!row || typeof row !== 'object' || !str(row.email)) throw new IMessageDirectoryUnavailable();
+      return { email: row.email, phone: nullable(row.phone), phoneVerified: row.phone_verified === true,
+        enrollment: e && str(e.phone) && str(e.assigned_number) && str(e.photon_user_id) ? { phone: e.phone, assignedNumber: e.assigned_number, photonUserId: e.photon_user_id } : null };
+    },
+    async enrollmentRecord(doName: string, environment: string, phone: string, photonUserId: string, assignedNumber: string, photonCreated: boolean)
+      : Promise<{ result: 'recorded' | 'phone_taken' | 'rejected'; release: string | null }> {
+      const r = await call('imessage_enrollment_record', 'enroll_record', { p_do_name: doName, p_environment: environment, p_phone: phone,
+        p_photon_user_id: photonUserId, p_assigned_number: assignedNumber, p_photon_created: photonCreated }) as Record<string, unknown> | null;
+      const result = r?.result === 'recorded' || r?.result === 'phone_taken' ? r.result : 'rejected' as const;
+      return { result, release: result === 'recorded' ? nullable(r?.release) : null };
+    },
+    enrolledHandle: async (environment: string, subject: string) => bool(await call('imessage_enrolled_handle', 'enrolled', { p_environment: environment, p_subject: subject })),
     async activate(doName: string, bridgeId: string, subject: string, chatGuid: string) {
       const r = await call('imessage_activate', 'activate', { p_do_name: doName, p_bridge_id: bridgeId, p_subject: subject, p_chat_guid: chatGuid });
       return r !== null && typeof r === 'object' && (r as Record<string, unknown>).bridge_id === bridgeId;

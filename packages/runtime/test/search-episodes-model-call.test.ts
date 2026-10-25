@@ -20,7 +20,7 @@ const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { episodeIndex } = await import('../src/channels/episodes');
 const { searchEpisodesHandler } = await import('../src/tools/live/search-episodes');
 
-const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], settle: () => {} };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], forgetGeneration: () => 0, settle: () => {} };
 const FULL = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 22k, B leaves 17:45 for 18.5k`;
 
 // Model-call layer: the scripted model calls search_episodes through the real owner turn,

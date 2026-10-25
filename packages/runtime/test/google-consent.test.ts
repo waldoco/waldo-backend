@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { b64url, readConsentState } from '../src/connectors/google';
-import { CONSENT_TTL_MS, finishConsent, startConsent, type ConsentFlow, type ConsentGrant } from '../src/connectors/google-consent';
+import { CONSENT_TTL_MS, finishConsent, startConsent, takeStart, type ConsentFlow, type ConsentGrant } from '../src/connectors/google-consent';
 import { consentPage, handleGoogleCallback, GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { googleProxy } from '../src/connectors/connections';
+import { GOOGLE_CALLBACK_PATH } from '../src/connectors/google';
+import { bindBrowser } from '../src/connectors/oauth-browser-binding';
+import { cookieJar } from './support/cookie-jar';
+import { forgedBinding } from './support/forged-binding';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
 const SECRET = 'state-secret';
@@ -26,6 +30,18 @@ const begin = async (deps: Parameters<typeof startConsent>[0], owner = '54584463
 };
 
 describe('google consent attempt', () => {
+  it('hands out a held start address once, and never after the attempt expires', async () => {
+    const fresh = setup();
+    const held = await startConsent(fresh.deps, app, SECRET, '5458446350', { surface: 'dashboard', hold: true });
+    fresh.advance(CONSENT_TTL_MS - 1);
+    expect(await takeStart(fresh.deps, held.nonce)).toBe(held.url);
+    expect(await takeStart(fresh.deps, held.nonce)).toBeNull();
+    const stale = setup();
+    const late = await startConsent(stale.deps, app, SECRET, '5458446350', { surface: 'dashboard', hold: true });
+    stale.advance(CONSENT_TTL_MS);
+    expect(await takeStart(stale.deps, late.nonce)).toBeNull();
+  });
+
   it('records the connect-session ticket hash on the attempt when started from a /c/ link (S3)', async () => {
     const { deps, memory } = setup();
     const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'hashabc' });
@@ -211,18 +227,29 @@ describe('google callback in the Worker', () => {
       },
     };
   };
-  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: ns }) as never;
-  const callback = (query: string) => new Request(`https://w.example/oauth/google/callback?${query}`);
+  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', WALDO_OAUTH_STATE_SECRET: SECRET, OWNER_DO: ns }) as never;
+  const callback = (query: string, cookie?: string) => new Request(`https://w.example/oauth/google/callback?${query}`, cookie ? { headers: { cookie } } : {});
+  // The cookie the /c/ hop left in the browser that started the attempt.
+  const bound = async (nonce: string, at = Date.now()) => (await bindBrowser(SECRET, 'google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, at)).split(';')[0]!;
 
   it('forwards a verified attempt to the owner Durable Object and renders its outcome', async () => {
     const { deps } = setup();
     const { url, nonce } = await begin(deps, 'owner.with.dots', 'telegram');
     const owner = ownerNamespace(async () => Response.json({ outcome: { kind: 'linked', email: 'me@example.com', scopes: [] }, bot: 'waldo_bot' }));
     const state = encodeURIComponent(url.searchParams.get('state')!);
-    const response = await handleGoogleCallback(callback(`state=${state}&code=c1&scope=openid`), env(owner.ns));
+    const response = await handleGoogleCallback(callback(`state=${state}&code=c1&scope=openid`, await bound(nonce)), env(owner.ns));
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('https://t.me/waldo_bot');
     expect(owner.calls).toEqual([{ name: 'owner.with.dots', url: `https://telegram-owner${GOOGLE_FINISH_PATH}`, body: { nonce, code: 'c1', error: null } }]);
+  });
+
+  it('verifies state only with its own key: the Telegram webhook secret alone signs nothing and the callback is absent', async () => {
+    const { deps } = setup();
+    const { url, nonce } = await begin(deps);
+    const owner = ownerNamespace(async () => Response.json({ outcome: { kind: 'linked', email: null, scopes: [] }, bot: null }));
+    const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, await bound(nonce)), { GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: owner.ns } as never);
+    expect(response.status).toBe(404);
+    expect(owner.calls).toEqual([]);
   });
 
   it('drops a tampered or missing state without waking any Durable Object', async () => {
@@ -238,9 +265,9 @@ describe('google callback in the Worker', () => {
 
   it('shows the failure page, never a blank error, when the owner Durable Object fails', async () => {
     const { deps } = setup();
-    const { url } = await begin(deps);
+    const { url, nonce } = await begin(deps);
     const owner = ownerNamespace(async () => { throw new Error('do reset'); });
-    const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`), env(owner.ns));
+    const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, await bound(nonce)), env(owner.ns));
     expect(response.status).toBe(502);
     expect(await response.text()).toContain('could not be connected');
   });
@@ -250,16 +277,79 @@ describe('google callback in the Worker', () => {
     const owner = ownerNamespace(async () => { throw new Error('do reset'); });
     // telegram origin: failure must NOT strand the owner on /console
     const tg = await begin(deps, '5458446350', 'telegram');
-    const tgResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(tg.url.searchParams.get('state')!)}&code=c1`), env(owner.ns));
+    const tgResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(tg.url.searchParams.get('state')!)}&code=c1`, await bound(tg.nonce)), env(owner.ns));
     expect(tgResponse.status).toBe(502);
     const tgHtml = await tgResponse.text();
     expect(tgHtml).toContain('go back to Telegram');
     expect(tgHtml).not.toContain('Back to your console');
     // dashboard origin: failure keeps the console back-link
     const dash = await begin(deps, '5458446350', 'dashboard');
-    const dashResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(dash.url.searchParams.get('state')!)}&code=c1`), env(owner.ns));
+    const dashResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(dash.url.searchParams.get('state')!)}&code=c1`, await bound(dash.nonce)), env(owner.ns));
     expect(dashResponse.status).toBe(502);
     expect(await dashResponse.text()).toContain('Back to your console');
+  });
+
+  describe('bound to the browser that started the attempt', () => {
+    const linked = () => ownerNamespace(async () => Response.json({ outcome: { kind: 'linked', email: 'me@example.com', scopes: [] }, bot: null }));
+
+    it('links for the browser that took the /c/ hop, then spends that browser\'s binding', async () => {
+      const { deps } = setup();
+      const { url, nonce } = await begin(deps, '5458446350', 'dashboard');
+      const owner = linked(), jar = cookieJar();
+      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser(SECRET, 'google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) } }));
+      const response = jar.take(await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, jar.header()), env(owner.ns)));
+      expect(response.status).toBe(200);
+      expect(owner.calls).toHaveLength(1);
+      expect(jar.size()).toBe(0);
+    });
+
+    it('links nothing for a browser with no binding or another attempt\'s, and wakes no owner object, even for a denial', async () => {
+      const { deps } = setup();
+      const { url } = await begin(deps, '5458446350', 'telegram');
+      const other = await begin(deps, '5458446350', 'telegram');
+      const owner = linked();
+      const state = encodeURIComponent(url.searchParams.get('state')!);
+      for (const request of [callback(`state=${state}&code=attacker-code`), callback(`state=${state}&code=attacker-code`, await bound(other.nonce)), callback(`state=${state}&error=access_denied`)]) {
+        const response = await handleGoogleCallback(request, env(owner.ns));
+        expect(response.status).toBe(403);
+        const html = await response.text();
+        expect(html).toContain('Start the connection again');
+        expect(html).not.toContain('attacker-code');
+        expect(response.headers.get('set-cookie')).toBeNull();
+      }
+      expect(owner.calls).toEqual([]);
+    });
+
+    it('links nothing for a binding built from the authorize address alone', async () => {
+      const { deps } = setup();
+      const { url } = await begin(deps, '5458446350', 'telegram');
+      const owner = linked();
+      const state = url.searchParams.get('state')!;
+      const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(state)}&code=attacker-code`, await forgedBinding('google', state.split('.')[1]!)), env(owner.ns));
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(SECRET);
+      expect(owner.calls).toEqual([]);
+    });
+
+    it('refuses a replayed callback once the browser\'s binding is spent', async () => {
+      const { deps } = setup();
+      const { url, nonce } = await begin(deps);
+      const owner = linked(), jar = cookieJar();
+      jar.take(new Response(null, { headers: { 'set-cookie': await bindBrowser(SECRET, 'google', nonce, GOOGLE_CALLBACK_PATH, CONSENT_TTL_MS, Date.now()) } }));
+      const query = `state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`;
+      expect(jar.take(await handleGoogleCallback(callback(query, jar.header()), env(owner.ns))).status).toBe(200);
+      expect((await handleGoogleCallback(callback(query, jar.header()), env(owner.ns))).status).toBe(403);
+      expect(owner.calls).toHaveLength(1);
+    });
+
+    it('refuses a binding older than the attempt lifetime', async () => {
+      const { deps } = setup();
+      const { url, nonce } = await begin(deps);
+      const owner = linked();
+      const response = await handleGoogleCallback(callback(`state=${encodeURIComponent(url.searchParams.get('state')!)}&code=c1`, await bound(nonce, Date.now() - CONSENT_TTL_MS - 1)), env(owner.ns));
+      expect(response.status).toBe(403);
+      expect(owner.calls).toEqual([]);
+    });
   });
 });
 

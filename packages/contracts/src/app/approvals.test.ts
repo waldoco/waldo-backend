@@ -243,3 +243,47 @@ describe('calendar details, approvals revision 2', () => {
     expect(appApprovalAtRevision(mail, 1)).toBe(mail);
   });
 });
+
+describe('the exact draft of a send, approvals revision 3', () => {
+  const mailDraft = { ...email, exact: { ...email.exact, message: { subject: 'Friday', body: 'See you at 4.' } } };
+  const messageDraft = { ...message, exact: { ...message.exact, message: { subject: null, body: 'Running late.' } } };
+  const withMessage = <T extends { exact: object }>(approval: T, draft: unknown) => ({ ...approval, exact: { ...approval.exact, message: draft } });
+
+  it('accepts the subject and body of an email and the body of a message, up to the longest the send tools draft', () => {
+    expect(appApprovalV1Schema.safeParse(mailDraft).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(messageDraft).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withMessage(email, { subject: 'x'.repeat(200), body: 'x'.repeat(10_000) })).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withMessage(message, { subject: null, body: 'x'.repeat(4_096) })).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withMessage(email, { subject: 'Friday', body: ' \n ' })).success).toBe(true);
+  });
+
+  it.each([
+    ['an email without its subject', email, { subject: null, body: 'See you at 4.' }],
+    ['a message with a subject', message, { subject: 'Hi', body: 'Running late.' }],
+    ['an empty body', email, { subject: 'Friday', body: '' }],
+    ['an empty subject', email, { subject: '', body: 'See you at 4.' }],
+    ['a subject that breaks the header line', email, { subject: 'Friday\r\nBcc: x@example.com', body: 'See you at 4.' }],
+    ['a body over the reply limit', email, { subject: 'Friday', body: 'x'.repeat(32_001) }],
+    ['a body missing', email, { subject: 'Friday' }],
+    ['a truncation flag', email, { subject: 'Friday', body: 'See you', truncated: true }],
+    ['attachments', email, { subject: 'Friday', body: 'See you at 4.', attachments: [] }],
+    ['a draft on a calendar change', calendar, { subject: null, body: 'Move it.' }],
+    ['a draft on a browser action', browser, { subject: null, body: 'Book it.' }],
+    ['a draft on an MCP call', mcp, { subject: null, body: 'Run it.' }],
+    ['a draft on a task change', task, { subject: null, body: 'Buy oat milk.' }],
+  ] as const)('rejects %s', (_shape, approval, draft) => {
+    expect(appApprovalV1Schema.safeParse(withMessage(approval, draft)).success).toBe(false);
+  });
+
+  it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(3);
+    for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
+      const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
+      for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
+      expect(appApprovalAtRevision(parsed, 3)).toBe(parsed);
+    }
+    const detailed = appApprovalV1Schema.parse({ ...calendar, exact: { changes: { ...calendar.exact.changes, time_zone: 'Europe/London' } } }) as AppApprovalV1;
+    expect(appApprovalAtRevision(detailed, 2)).toBe(detailed);
+    expect(appApprovalAtRevision(detailed, 3)).toBe(detailed);
+  });
+});

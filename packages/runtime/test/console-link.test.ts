@@ -3,7 +3,11 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { handlerAllowlistMatchesAcl, sendConsoleLinkResultSchema, type SendConsoleLinkResult } from '@waldo/contracts';
 import { consoleLinkHandler, type ConsoleLinkTurn } from '../src/tools/live/console-link';
-import { consoleLinkSender, consoleLinkText, CREDENTIAL_REPLY_TEXT, maskCredentialReply, recordCredentialMessage, type ConsoleLinkRoute } from '../src/channels/console-link';
+import { APP_CONSOLE_LINK_GONE, appConsoleLinks, appConsoleRoute, whatsappConsoleRoute, consoleLinkSender, consoleLinkText, CREDENTIAL_REPLY_TEXT, maskCredentialReply, recordCredentialMessage, type ConsoleLinkRoute } from '../src/channels/console-link';
+import { appTranscriptPage } from '../src/channels/app-api';
+import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
+import { WHATSAPP_HELD } from '../src/channels/whatsapp-api';
+import type { ConversationEntry } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { iMessageConsoleRoute } from '../src/channels/imessage/console-link';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
@@ -105,12 +109,6 @@ describe('console link sender: one link per turn, minted only when it can be del
     expect(s.mint).not.toHaveBeenCalled();
   });
 
-  it.each([['app', 'app_unsupported'], ['whatsapp', 'surface_unsupported']] as const)('on %s mints nothing', async (_surface, reason) => {
-    const s = sender({ unsupported: reason });
-    expect(await s.send(turn)).toEqual({ sent: false, reason });
-    expect(s.mint).not.toHaveBeenCalled();
-  });
-
   it('mints nothing while the host cannot hand the link to the owner (a capture probe)', async () => {
     const s = sender(telegramRoute(), async () => LINK, () => false);
     expect(await s.send(turn)).toEqual({ sent: false, reason: 'unavailable' });
@@ -191,7 +189,6 @@ describe('iMessage console route: the link answers only the inbound message this
   const withRoute = (name: string, record: IMessageInboxRecord | null, run: (route: Extract<ConsoleLinkRoute, { surface: string }>, state: DurableObjectState) => Promise<void>) =>
     runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const route = iMessageConsoleRoute(state.storage, () => record);
-      if ('unsupported' in route) throw new Error('the iMessage route always delivers');
       await run(route, state);
     });
 
@@ -227,6 +224,73 @@ describe('iMessage console route: the link answers only the inbound message this
       await expect(route.deliver(consoleLinkText(LINK), { turnId: 'imessage-1', runScope: scope(state, 'imsg-1', 'attempt-1') })).rejects.toThrow(ClosedRunError);
       expect(new IMessageFinalOutbox(state.storage).records()).toEqual([]);
     });
+  });
+});
+
+describe('WhatsApp console route: sent now or not at all', () => {
+  const route = (answer: unknown) => {
+    const bodies: object[] = [];
+    const built = whatsappConsoleRoute(async (body) => { bodies.push(body); return answer; });
+    return { built, bodies };
+  };
+  it('asks for a send that is never held and never previewed, and counts only an accepted send', async () => {
+    const { built, bodies } = route({ messages: [{ id: 'wamid.out' }] });
+    expect(await built.deliver(consoleLinkText(LINK), { turnId: 'wa-1' })).toBe(true);
+    expect(bodies).toEqual([{ text: consoleLinkText(LINK), link_preview_options: { is_disabled: true }, [SEND_NOW_ONLY]: true }]);
+    expect(built.sent({ turnId: 'wa-1' })).toBe(false);
+  });
+  it.each([['a closed window or a blocked send', undefined], ['a held send', WHATSAPP_HELD]])('reports %s as not delivered', async (_label, answer) => {
+    expect(await route(answer).built.deliver(consoleLinkText(LINK), { turnId: 'wa-1' })).toBe(false);
+  });
+});
+
+describe('app console route: the link shows under the reply to the message that asked, and nowhere the model reads', () => {
+  const scope = (state: DurableObjectState, runId: string): RunEffectScope => ({
+    runId, attempt: 'attempt-1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => state.storage.transactionSync(work),
+  });
+  const withKv = (name: string, run: (state: DurableObjectState) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => run(state));
+  const row = (id: string, role: 'user' | 'assistant', text: string, parentId: string | null, extra: Partial<ConversationEntry> = {}): ConversationEntry => ({
+    id, ownerId: 'prn_owner', chatId: 'app-main', parentId, threadAnchorId: null, surface: 'app', modelPayload: text, appPayload: text,
+    modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), createdAt: 1, ...extra,
+  });
+
+  it('records the link for the running message once, and reads it back as sent', async () => {
+    await withKv('app-console-route-once', async state => {
+      const route = appConsoleRoute(state.storage.kv);
+      const turn = { turnId: 'msg-1', runScope: scope(state, 'msg-1') };
+      expect(route.sent(turn)).toBe(false);
+      expect(await route.deliver(consoleLinkText(LINK), turn)).toBe(true);
+      expect(route.sent(turn)).toBe(true);
+      expect(route.sent({ turnId: 'msg-2', runScope: scope(state, 'msg-2') })).toBe(false);
+      expect(appConsoleLinks(state.storage.kv)('msg-1')).toBe(consoleLinkText(LINK));
+      expect(appConsoleLinks(state.storage.kv)('msg-2')).toBeNull();
+      await expect(route.deliver(consoleLinkText(LINK), { turnId: 'msg-3' })).rejects.toThrow(ClosedRunError);
+    });
+  });
+
+  it('shows an expired or replaced link as a fixed note, never the dead link', async () => {
+    await withKv('app-console-route-expiry', async state => {
+      let now = 1_000_000;
+      const route = appConsoleRoute(state.storage.kv, () => now);
+      await route.deliver(consoleLinkText(LINK), { turnId: 'msg-1', runScope: scope(state, 'msg-1') });
+      await route.deliver(consoleLinkText(`${LINK}b`), { turnId: 'msg-2', runScope: scope(state, 'msg-2') });
+      const links = () => appConsoleLinks(state.storage.kv, () => now);
+      expect([links()('msg-1'), links()('msg-2')]).toEqual([APP_CONSOLE_LINK_GONE, consoleLinkText(`${LINK}b`)]);
+      now += 10 * 60_000 + 1;
+      expect(links()('msg-2')).toBe(APP_CONSOLE_LINK_GONE);
+    });
+  });
+
+  it('adds the link to the newest reply to that message at read time, before its receipt line, and only there', () => {
+    const receipt = { items: [], more: 0, line: 'Done: one thing.' } as unknown as NonNullable<ConversationEntry['receipt']>;
+    const entries = [row('msg-1', 'user', REQUEST, null), row('msg-1-reply', 'assistant', 'It is below.\n\nDone: one thing.', 'msg-1', { receipt }), row('msg-2', 'user', 'Thanks', 'msg-1-reply'), row('msg-2-reply', 'assistant', 'Any time.', 'msg-2')];
+    const page = appTranscriptPage(entries, null, 20, undefined, run => run === 'msg-1' ? consoleLinkText(LINK) : null);
+    const reply = page.messages.find(message => message.id === 'msg-1-reply')!;
+    expect(reply.text).toBe(`It is below.\n\n${consoleLinkText(LINK)}\n\nDone: one thing.`);
+    expect(reply.parts[0]).toEqual({ type: 'text', text: reply.text });
+    expect(page.messages.filter(message => message.text.includes('console?t='))).toHaveLength(1);
+    expect(entries.map(entry => entry.appPayload).join('\n')).not.toContain('console?t=');
   });
 });
 

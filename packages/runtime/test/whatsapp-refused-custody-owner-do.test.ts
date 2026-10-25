@@ -66,6 +66,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+let startedAt = '';
 type Record = { id: string; status: string; reason?: string; providerMessageIds?: (string | null)[] };
 type Run = { status: string; summary: string | null };
 
@@ -97,11 +98,13 @@ const owned = async (name: string, script: (steps: Readonly<{
   runs(): Run[];
   outbox(): Record[];
 }>) => Promise<void>, wrote = HOUR) => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  // Each start gets its own owner, since every scenario runs once per start.
+  const doName = `${name}-${startedAt}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     traceBook(state.storage.sql);
-    state.storage.kv.put('do_name', name);
+    state.storage.kv.put('do_name', doName);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
     state.storage.kv.put('wa_last_inbound_ms', Date.now() - wrote);
     const plans = dayPlanBook(state.storage.sql);
@@ -175,8 +178,14 @@ const owned = async (name: string, script: (steps: Readonly<{
   });
 };
 
-// Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
-describe('a WhatsApp send Meta refuses for the window our check let through', { timeout: 20_000 }, () => {
+// The clock is pinned. A scenario schedules its card a minute before the current time and expects it to wait until the end of
+// that day. On the real clock, when that minute crossed midnight UTC (a start just after it, or the step that moves the clock a
+// day and a minute on from a start just before it), the card belonged to the day before and had already expired. One start
+// on each side of midnight, clear of that minute, covers a day change. Each alarm pass waits out the 250 ms a queued record
+// takes to fall due, so these run past the 5 s default.
+describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before midnight', '2026-10-21T23:30:00Z']])('a WhatsApp send Meta refuses for the window our check let through (%s)', { timeout: 20_000 }, (_side, start) => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: Date.parse(start), shouldAdvanceTime: true }); startedAt = start; });
+  afterEach(() => { vi.useRealTimers(); });
   it('a card refused at the send waits in the outbox, goes out once on the reply, and is recorded only when Meta says it arrived', async () => {
     await owned('wa-refused-at-send', async ({ alarms, reply, card, status, ids, texts, held, update, folded, planned, outbox }) => {
       wire.refuse.add(CARD);
@@ -371,6 +380,17 @@ describe('a WhatsApp send Meta refuses for the window our check let through', { 
       expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'lapsed' });
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report waited 30 days for your WhatsApp window and was not sent' }]);
     }, 30 * HOUR);
+  });
+
+  // The same order runs for an owner on iMessage, so the line names no surface.
+  it('a report Meta accepted and then failed says it could not be delivered, naming no surface', async () => {
+    await owned('wa-order-failed', async ({ alarms, order, status, ids, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      await status('failed', ids());
+      expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed' });
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
+    });
   });
 
   it('a card and a report still waiting for Meta\'s report never hold back their next occurrence', async () => {

@@ -1,3 +1,4 @@
+import { HANDOFF_PARAM } from '../../channels/connect-confirm';
 import type { ClientPins } from '../../connectors/mcp-oauth';
 import { whoopRecovery, whoopSleep, whoopWorkout, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
 
@@ -9,6 +10,9 @@ export type WhoopConfig = Readonly<{ clientId: string; redirectUri: string }>;
 // offline is what makes a refresh token exist. The scopes are the three record kinds and the account id, no more.
 export const WHOOP_SCOPES = 'offline read:profile read:sleep read:recovery read:workout';
 export const WHOOP_CALLBACK_PATH = '/oauth/whoop/callback';
+export const WHOOP_START_PATH = '/oauth/whoop/start/';
+// How long the browser binding of a WHOOP connect lasts, from the moment the browser takes the hop.
+export const WHOOP_ATTEMPT_TTL_MS = 30 * 60_000;
 const ISSUER = 'https://api.prod.whoop.com';
 const AUTH_URL = `${ISSUER}/oauth/oauth2/auth`;
 const API_BASE = `${ISSUER}/developer/v2/`;
@@ -20,6 +24,14 @@ export const whoopPins = (config: WhoopConfig): ClientPins => ({
   issuer: ISSUER, token_endpoint: `${ISSUER}/oauth/oauth2/token`, client_id: config.clientId, client_auth: 'client_secret_post', redirect_uri: config.redirectUri,
   api_base: API_BASE, account_url: `${API_BASE}user/profile/basic`, account_field: 'user_id', rotation: 'single_use', refresh_scope: 'offline',
 });
+// The app opens Waldo's own start link, never WHOOP's page directly, so the browser that will receive the callback is
+// the one that took the hop and holds the attempt's binding. It is served from the callback's origin for the same reason,
+// and carries the one-time handoff code that binds the hop to the browser the app opened it in.
+export const whoopStartUrl = (config: WhoopConfig, state: string, handoff: string): string => {
+  const url = new URL(`${WHOOP_START_PATH}${state}`, config.redirectUri);
+  url.searchParams.set(HANDOFF_PARAM, handoff);
+  return url.toString();
+};
 export const whoopAuthorizeUrl = (config: WhoopConfig, state: string): string =>
   `${AUTH_URL}?${new URLSearchParams({ client_id: config.clientId, redirect_uri: config.redirectUri, response_type: 'code', scope: WHOOP_SCOPES, state })}`;
 

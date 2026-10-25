@@ -103,6 +103,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     return [
       attr('langfuse.observation.metadata.context_system_bytes', String(shape.system_bytes)),
       attr('langfuse.observation.metadata.context_request_bytes', String(shape.request_bytes)),
+      ...(shape.voice_version === undefined ? [] : [attr('langfuse.observation.metadata.voice_version', String(shape.voice_version))]),
       ...Object.entries(counts).map(([key, value]) => attr(`langfuse.observation.metadata.context_${key}`, String(value))),
       ...Object.entries(sections).map(([key, value]) => attr(`langfuse.observation.metadata.context_system_${key}_bytes`, String(value))),
       ...Object.entries(turnSections).map(([key, value]) => attr(`langfuse.observation.metadata.context_turn_${key}_bytes`, String(value))),
@@ -132,6 +133,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   const hopTelemetry = (entry: TurnLogEntry) => [
     ...optional('langfuse.observation.metadata.provider', entry.provider),
     ...optional('langfuse.observation.metadata.fallback_fired', entry.fallback_fired),
+    ...optional('langfuse.observation.metadata.tool_search_degraded', entry.tool_search_degraded),
     ...optional('langfuse.observation.metadata.ttft_ms', entry.ttft_ms),
     ...optional('langfuse.observation.metadata.rung', entry.rung),
     ...optional('langfuse.observation.metadata.blocked_reason', entry.blocked_reason),
@@ -167,6 +169,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       ...optional('langfuse.trace.metadata.ttft_ms', generations.find(({ ttft_ms }) => ttft_ms !== undefined)?.ttft_ms),
       ...optional('langfuse.trace.metadata.provider', providers.length === 0 ? undefined : providers.length === 1 ? providers[0] : 'mixed'),
       ...optional('langfuse.trace.metadata.fallback_fired', entries.some(({ fallback_fired }) => fallback_fired !== undefined) ? entries.some(({ fallback_fired }) => fallback_fired) : undefined),
+      ...optional('langfuse.trace.metadata.tool_search_degraded', entries.some(({ tool_search_degraded }) => tool_search_degraded) ? true : undefined),
       ...(rungs.length ? [list('langfuse.trace.metadata.rungs', rungs)] : []),
       ...optional('langfuse.trace.metadata.blocked_reason', blocked),
       ...optional('langfuse.trace.metadata.error_code', errorCode),

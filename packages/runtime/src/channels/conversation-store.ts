@@ -1,9 +1,9 @@
 import type { RunEffectScope } from './run-effect-scope';
 import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
-import { hidesTopic } from '../memory/forget-guard';
-import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
-import { supersededCompaction } from '../conversation/compaction';
+import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
+import { supersededCompaction, type CompactionSettings } from '../conversation/compaction';
 import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
@@ -26,6 +26,8 @@ export type ConversationStore = Readonly<{
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
+  compaction?: CompactionSettings;
 }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
@@ -137,9 +139,9 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   };
   const add = (key: string, entry: ConversationEntry) => {
     const fields = [['model', entry.modelPayload], ['app', entry.appPayload], ...(entry.modelProjection.mode === 'replace' ? [['replace', entry.modelProjection.payload]] : [])] as const;
-    // Shared safety line: a hiding escape can spell the topic where asciiLiteralIncludes cannot see it, so the entry is held, never read as clean.
+    // Shared safety line: a hiding escape can spell the topic where carriesTopic cannot see it, so the entry is held, never read as clean.
     if (fields.some(([, text]) => conversationHides(text, topic))) incomplete = true;
-    for (const [field, text] of fields) if (asciiLiteralIncludes(text, topic)) {
+    for (const [field, text] of fields) if (carriesTopic(text, topic)) {
       if (!verified(key, entry)) { incomplete = true; continue; }
       sources.push({ ref: `conversation:${key}:${field}`, text });
     }
@@ -151,7 +153,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   }
   return { sources, incomplete };
 };
-const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
+const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])];
 
 // The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
 // reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
@@ -205,7 +207,7 @@ export const redactConversationEntries = async (
       if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryTexts(entry).some(text => carriesTopic(text, needle) || conversationHides(text, needle)));
   // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
   // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
   // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this

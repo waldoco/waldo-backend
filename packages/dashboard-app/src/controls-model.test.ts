@@ -17,6 +17,16 @@ describe('modern owner controls read', () => {
     expect(JSON.stringify(readControls({ ...connections, data: { ...connections.data, sessions: { ...connections.data.sessions, items: [{ ...connections.data.sessions.items[0], token: 'never-retain' }] } } }, 'connections'))).not.toContain('never-retain');
   });
 
+  it('keeps each MCP tool\'s shown digest, which a grant sends back, and refuses a server record without one', () => {
+    const server = { id: 'c1', name: 'notion', host: 'mcp.notion.com', server_url: 'https://mcp.notion.com/mcp', auth: 'oauth', status: 'active', scopes: [], wants_scopes: [], tools: 1, hidden_tools: 0, runs_without_asking: 0, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64), tool_list: [{ tool: 'search', runs: 'asks_first', read_only_hint: true, digest: 'a'.repeat(64) }] };
+    const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
+    expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
+    expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+      expect(() => readControls(withServer(broken), 'connections')).toThrow();
+    }
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);
@@ -45,18 +55,30 @@ describe('modern owner controls read', () => {
     expect(() => readControls(envelope('files', { ...files.data, items: [{ ...files.data.items[0], id: '../other-owner' }] }), 'files')).toThrow();
   });
 
-  it('validates exact reviews and never admits email approval or unsupported calendar undo', () => {
-    const proposal = { id: 'email', kind: 'email_send', state: 'open', summary: 'Send proposal', actions: ['approval.skip'], review: { kind: 'email_send', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words', raw: 'never-retain' } };
-    const value = { ...day, view: 'waiting', data: { proposals: [proposal] } };
+  it('validates exact reviews, admits Send and Change it only on an open draft, and no unsupported calendar undo', () => {
+    const proposal = { id: 'email', kind: 'email_send', state: 'open', summary: 'Send proposal', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words', raw: 'never-retain' } };
+    const message = { id: 'message', kind: 'message_send', state: 'open', summary: 'Send message', actions: ['approval.send', 'approval.edit', 'approval.skip'], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message' } };
+    const value = { ...day, view: 'waiting', data: { proposals: [proposal, message] } };
     const parsed = readControls(value, 'waiting');
-    expect(parsed.data.proposals[0]?.review).toMatchObject({ body: 'Exact words' }); expect(JSON.stringify(parsed)).not.toContain('never-retain');
+    expect(parsed.data.proposals[0]?.review).toEqual({ kind: 'email_send', account: 'me@test.invalid', to: ['to@test.invalid'], cc: [], bcc: [], subject: 'Exact subject', body: 'Exact words' });
+    expect(parsed.data.proposals.map(item => item.actions)).toEqual([proposal.actions, message.actions]);
+    expect(JSON.stringify(parsed)).not.toContain('never-retain');
     expect(parsed.data.timezone).toBeNull();
     expect(readControls({ ...value, data: { timezone: 'Asia/Kolkata', proposals: [proposal] } }, 'waiting').data.timezone).toBe('Asia/Kolkata');
     expect(readControls({ ...value, data: { timezone: 'Not/AZone', proposals: [proposal] } }, 'waiting').data.timezone).toBeNull();
-    expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, actions: ['approval.approve'] }] } }, 'waiting')).toThrow();
-    expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, state: 'done', actions: ['approval.undo'] }] } }, 'waiting')).toThrow();
-    expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, review: { kind: 'message_send', channel: 'telegram', content: 'Other review' } }] } }, 'waiting')).toThrow();
-    expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, review: { ...proposal.review, to: 'to@test.invalid' } }] } }, 'waiting')).toThrow();
+    const { account: _account, ...withoutAccount } = proposal.review;
+    expect(readControls({ ...value, data: { proposals: [{ ...proposal, review: withoutAccount }] } }, 'waiting').data.proposals[0]?.review).not.toHaveProperty('account');
+    const earlier = (at: unknown) => readControls({ ...value, data: { proposals: [{ ...proposal, review: { ...proposal.review, earlier_unknown_at: at } }] } }, 'waiting').data.proposals[0]?.review;
+    expect(earlier('Fri 23 Oct, 14:05')).toMatchObject({ earlier_unknown_at: 'Fri 23 Oct, 14:05' });
+    expect(readControls(value, 'waiting').data.proposals[0]?.review).not.toHaveProperty('earlier_unknown_at');
+    expect(() => earlier(42)).toThrow();
+    const calendar = { id: 'walk', kind: 'calendar_change', state: 'open', summary: 'Walk', actions: ['approval.approve', 'approval.skip'], review: { kind: 'calendar_change', action: 'create', title: 'Walk', event_id: null, start: null, end: null, reason: 'asked' } };
+    expect(readControls({ ...value, data: { proposals: [calendar] } }, 'waiting').data.proposals[0]?.actions).toEqual(calendar.actions);
+    for (const wrong of [
+      { ...proposal, state: 'review_only' }, { ...proposal, state: 'review_only', actions: ['approval.edit'] }, { ...proposal, review: null }, { ...proposal, actions: ['approval.edit'], review: null },
+      { ...calendar, actions: ['approval.edit'] }, { ...calendar, actions: ['approval.send'] }, { ...proposal, actions: ['approval.approve'] }, { ...proposal, state: 'done', actions: ['approval.undo'] }, { ...proposal, actions: ['approval.later'] },
+      { ...proposal, review: { kind: 'message_send', channel: 'telegram', content: 'Other review' } }, { ...proposal, review: { ...proposal.review, to: 'to@test.invalid' } }, { ...proposal, review: { ...proposal.review, account: 7 } },
+    ]) expect(() => readControls({ ...value, data: { proposals: [wrong] } }, 'waiting')).toThrow();
   });
 
   it('keeps activity summaries narrow and passes independently selected cursors', async () => {
@@ -139,16 +161,24 @@ describe('revision-bound owner control actions', () => {
 
 describe('iMessage and device setup reads', () => {
   const bridge = { id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid', observed: true, host_version: 'host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] };
-  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
+  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, phone: null, photon: null, phone_on_file: null, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
   const device = { id: 'dev_fixture', label: '<b>Mac</b>', capabilities: ['machine_state_query'], created_at: '2026-10-16', actions: ['device.revoke', 'device.query'] };
   const devices = { ...day, view: 'devices', data: { actions: ['device.pair'], devices: [device], query_kinds: ['session_status'], notification_bodies: ['Your Mac is connected.'] }, status: { devices: [{ id: device.id, online: false, last_seen_at: null, commands: [{ class: 'machine_state_query', state: 'queued', result_state: null }] }] } };
+  it('reads the number on file and whether it is verified; an older server reads as not known', () => {
+    const { phone_on_file: _absent, ...older } = imessage.data;
+    expect(readControls({ ...imessage, data: older }, 'imessage').data.phone_on_file).toBeNull();
+    const onFile = { phone: '+15550000001', verified: false };
+    expect(readControls({ ...imessage, data: { ...imessage.data, phone_on_file: { ...onFile, raw: 'never-retain' } } }, 'imessage').data.phone_on_file).toEqual(onFile);
+    for (const phone_on_file of ['+15550000001', { phone: 5, verified: false }, { phone: '+15550000001', verified: 'no' }, { verified: true }])
+      expect(() => readControls({ ...imessage, data: { ...imessage.data, phone_on_file } }, 'imessage')).toThrow('unsupported');
+  });
   it('keeps only the listed fields and actions, and liveness beside the data', () => {
     const parsed = readControls({ ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, wrapped_credential: 'never-retain' }] }, status: { bridges: [{ ...imessage.status.bridges[0], quarantine: 'never-retain' }] } }, 'imessage');
     expect(parsed).toEqual(imessage); expect(JSON.stringify(parsed)).not.toContain('never-retain');
     expect(readControls({ ...devices, data: { ...devices.data, devices: [{ ...device, pubkey: 'never-retain' }] } }, 'devices')).toEqual(devices);
     for (const value of [
       { ...imessage, status: undefined }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'invite.create'] } }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'imessage.link'] } },
-      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } },
+      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } }, { ...imessage, data: { ...imessage.data, photon: 'maybe' } }, { ...imessage, data: { ...imessage.data, phone: 5 } },
     ]) expect(() => readControls(value, 'imessage')).toThrow('unsupported');
     for (const value of [{ ...devices, data: { ...devices.data, actions: ['device.revoke'] } }, { ...devices, data: { ...devices.data, devices: [{ ...device, actions: ['device.pair'] }] } }, { ...devices, status: { devices: [{ ...devices.status.devices[0], online: 'yes' }] } }])
       expect(() => readControls(value, 'devices')).toThrow('unsupported');

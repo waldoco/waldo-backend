@@ -5,13 +5,14 @@ import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
-import { IMessageFinalOutbox } from './final-outbox';
+import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
 
-export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace }>;
+// `wait` is the pause between busy-slot polls; absent, it is a real timer.
+export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace; wait?: (ms: number) => Promise<void> }>;
 
 /** Fresh canonical authority for an inbox record: same owner DO, same revision, same exact binding. */
 // The sender's own authority: on an owner bridge it is the bridge authority for its bound sender; on a
@@ -61,19 +62,60 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
   return context;
 };
 
+const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
+  const ns = host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
+  if (!ns) return Promise.resolve({ kind: 'retry' } as const);
+  return ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
+    ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
+};
+
+// The bridge's one slot frees within a host pull and a send, so a drain polls it for about 4 s before leaving the reply to
+// its retry. A retry runs in the owner's serial queue, where it would wait behind the next turn. The polls are counted
+// rather than timed, so the wait ends even when the clock does not move.
+const BUSY_POLL_MS = 500, BUSY_POLLS = 8;
+
 /** Hands frozen replies to their bridge mailbox; the bridge rechecks authority before publication. */
 export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Promise<void> => {
-  const ns = host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
   const outbox = new IMessageFinalOutbox(host.storage);
+  // A drain runs only between turns, so a progress note still frozen here lost its turn and is never handed over again.
+  outbox.dropProgress('progress_stale');
+  // A bridge has one slot, so once a reply is still waiting after its polls the replies behind it on that bridge keep their
+  // order and wait for the same retry, and a drain holds the owner's queue for one wait at most.
+  const waiting = new Set<string>(), wait = host.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   for (const row of outbox.due()) {
-    if (!ns) { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
+    if (waiting.has(row.bridgeDoName)) { outbox.retryLater(row.replyRef, maxAgeMs, IMESSAGE_BUSY_RETRY_MS); continue; }
     let outcome;
     try {
-      outcome = await ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
-        ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
+      outcome = await handOff(host, row);
+      for (let polls = 0; outcome.kind === 'busy' && polls < BUSY_POLLS; polls++) {
+        await wait(BUSY_POLL_MS);
+        outcome = await handOff(host, row);
+      }
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
     if (outcome.kind === 'queued') outbox.markQueued(row.replyRef);
     else if (outcome.kind === 'terminal') outbox.settle(row.replyRef, row.commandId, outcome.result);
-    else outbox.retryLater(row.replyRef, maxAgeMs);
+    else {
+      if (outcome.kind === 'busy') waiting.add(row.bridgeDoName);
+      outbox.retryLater(row.replyRef, maxAgeMs, outcome.kind === 'busy' ? IMESSAGE_BUSY_RETRY_MS : undefined);
+    }
   }
+};
+
+/**
+ * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
+ * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
+ * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
+ * A note never goes ahead of an earlier message still waiting for the same bridge, such as the last turn's reply on its
+ * retry; the bridge cannot see that one yet.
+ */
+export const handOffIMessageProgress = async (host: OwnerHost, replyRef: string): Promise<boolean> => {
+  const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef), turn = replyRef.split(':')[1];
+  if (!row || row.state !== 'frozen') return false;
+  if (outbox.messageWaiting(row.bridgeDoName)) { outbox.dropProgress('progress_yields', turn, true); return false; }
+  let outcome;
+  try { outcome = await handOff(host, row); } catch { outbox.dropProgress('progress_handoff_uncertain', turn); return false; }
+  if (outcome.kind === 'queued') { outbox.markQueued(replyRef); return true; }
+  if (outcome.kind === 'terminal') outbox.settle(replyRef, row.commandId, outcome.result);
+  else outbox.dropProgress('progress_unsent', turn, true);
+  return false;
 };

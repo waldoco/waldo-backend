@@ -40,7 +40,8 @@ export type FixtureWeb = Readonly<{ title: string; url: string; snippet: string 
 export type FixtureFreeBusy = Readonly<{ busy: readonly Readonly<{ start: string; end: string }>[]; errors?: readonly Readonly<{ reason: string }>[] }>;
 
 // A turn is owner text; the '@plan ' and '@prompt ' prefixes drive the planning and proactive
-// entry points, matching the evals runner's convention.
+// entry points, matching the evals runner's convention. '@job ' drives a proactive job that embeds
+// text someone else wrote (a day card, an update card), as the owner DO runs one.
 export type Scenario = Readonly<{
   id: string;
   category: ScenarioCategory;
@@ -61,8 +62,8 @@ export type Scenario = Readonly<{
     googleNotConnected?: boolean;
     // The owner's spend so far this month, read against MONTHLY_SPEND_CEILING_USD at each turn's start.
     spentUsd?: number;
-    // Offer a browse_page fixture whose page reads 'fixture page'.
-    browse?: boolean;
+    // Offer a browse_page fixture whose page reads 'fixture page', or one whose site blocks the read with that block.
+    browse?: boolean | 'challenge' | 'login_required' | 'js_required';
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];

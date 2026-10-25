@@ -38,7 +38,9 @@ export const appSendWireFits = (value: unknown): boolean => appJsonWireBytes(val
 const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
 export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
+// phone is the number a new member joins with, in E.164 as the console stores it. It is unverified contact data until the
+// owner texts their link code to Waldo from it. A member who already has an account is not changed by it.
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: z.string().regex(/^\+[1-9]\d{6,14}$/).optional() });
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
@@ -81,8 +83,9 @@ export const appRatingRequestV1Schema = z.strictObject({ request_id: z.string().
 export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingRequestV1Schema.shape.request_id, message_id: appMessageIdV1Schema, rating: appRatingRequestV1Schema.shape.rating });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
-// pre-authentication answer cannot say whether an address is invited.
-export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+// pre-authentication answer cannot say whether an address is invited. step_up_required (403): the action needs a sign-in
+// from the last two hours; the app signs in again with an email code and retries it.
+export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
 // "Connect iMessage": a one-time code the owner sends from their own iPhone to the Waldo iMessage address, which

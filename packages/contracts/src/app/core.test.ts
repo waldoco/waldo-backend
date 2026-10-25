@@ -59,8 +59,9 @@ describe('app problem envelope', () => {
   });
 
   it('adds an optional closed code to non-generic errors only', () => {
-    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+    expect(appErrorCodeV1Schema.options).toEqual(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'client_message_id_reused' }).success).toBe(true);
+    expect(appProblemV1Schema.safeParse({ error: 'step_up_required', code: 'step_up_required' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'stale_read', code: 'stale_read', message: 'Refresh.' }).success).toBe(true);
     expect(appProblemV1Schema.safeParse({ error: 'unavailable', code: 'inbox_full' }).success).toBe(false);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'approval_superseded' }).success).toBe(false);
@@ -77,6 +78,14 @@ describe('app sign-in requests', () => {
       expect(schema.safeParse({ ...body, invite: 'ABCDEFGHJKMNPQRSTUVW' }).success).toBe(true);
       expect(schema.safeParse({ ...body, invite: 'XYZ23456789ABCDEFGHJ' }).success).toBe(true);
     }
+  });
+
+  it('verify accepts an optional phone in E.164, the number a new member joins with; nothing else is a phone', () => {
+    const body = { email: 'new@example.test', code: '123456', invite: 'ABCDEFGHJKMNPQRSTUVW' };
+    expect(appVerifyRequestV1Schema.safeParse({ ...body, phone: '+919876543210' }).success).toBe(true);
+    for (const phone of ['919876543210', '+91 98765 43210', '+0123456789', '+123456', '+1234567890123456', '', null, 9198765432])
+      expect({ phone, ok: appVerifyRequestV1Schema.safeParse({ ...body, phone }).success }).toEqual({ phone, ok: false });
+    expect(appCodeRequestSchema.safeParse({ email: 'new@example.test', phone: '+919876543210' }).success).toBe(false);
   });
 
   it('refuse an invite code outside that alphabet or length; the app upper-cases and trims before sending', () => {

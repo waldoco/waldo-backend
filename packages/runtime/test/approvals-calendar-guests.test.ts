@@ -146,3 +146,28 @@ it('shows an invite\'s notes in the app review and the console, and leaves the a
     await state.storage.deleteAlarm();
   });
 });
+
+it('says on the card whether a new block is rest or deep work, so the owner can correct it before approving, and creates it with that kind', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-calendar-block-kind')), async (_instance, state) => {
+    const sent: string[] = [];
+    const created: Record<string, unknown>[] = [];
+    let n = 0;
+    const client = {
+      account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      createEvent: async (input: Record<string, unknown>) => { created.push(input); return { id: `new${created.length}`, title: String(input.title), start: '', end: '', all_day: false, etag: 'v1' }; },
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, {
+      call: async (method, body) => { if (method === 'sendMessage') sent.push(String((body as { text?: string }).text)); return {}; },
+      owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+    });
+    const block = (title: string, kind?: 'rest' | 'deep_work') => desk.propose({ action: 'create', title, start: iso('2026-09-24T15:00:00+05:30'), end: iso('2026-09-24T16:00:00+05:30'), reason: 'A lighter afternoon', ...(kind ? { block: kind } : {}) });
+    const rest = await block('Recharge', 'rest');
+    expect(sent.at(-1)).toContain("(rest: it won't add to your day's load)");
+    await block('Focus block', 'deep_work');
+    expect(sent.at(-1)).toContain("(deep work: it adds to your day's load)");
+    await block('Lunch with Sam');
+    expect(sent.at(-1)).not.toMatch(/rest:|deep work:/);
+    await desk.callback({ id: 'q1', from: { id: 42 }, data: `a:${rest}`, message: { message_id: 5, chat: { id: 42 } } }, 't');
+    expect(created.map(input => input.block)).toEqual(['rest']);
+  });
+});

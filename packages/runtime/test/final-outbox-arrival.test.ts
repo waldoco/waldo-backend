@@ -3,7 +3,7 @@
 // gone, never evicts a record that is still waiting, and says how many wait and since when.
 import { describe, expect, it, vi } from 'vitest';
 import { dashboardOverview } from '../src/channels/dashboard-overview';
-import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, observeSurfaceStatuses, outboxRunNotes, redactJobReportEntries, retireSurfaceRecords, unconfirmedCards, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { EARLY_STATUS_KEY, FINAL_OUTBOX_KEY, MAX_EARLY_STATUSES, TelegramFinalOutbox, observeSurfaceStatuses, outboxRunNotes, redactJobReportEntries, retireSurfaceRecords, unconfirmedCards, type FinalRecord } from '../src/channels/telegram-final-outbox';
 
 const DAY = 24 * 60 * 60 * 1000;
 const store = () => {
@@ -122,6 +122,41 @@ describe('a record a surface accepted and reports on later', () => {
   });
 });
 
+const SPLIT = { chat_id: 42, text: `${'a'.repeat(3000)}\n\n${'b'.repeat(3000)}` };
+// A two-part record whose head Meta refused after taking both: the tail's id stays, so part of it is on the owner's phone.
+const splitWithTailTaken = async () => {
+  const kv = store(), clock = { now: 1_000 };
+  const { surface } = await drained(kv, clock, { id: 'card', payload: SPLIT });
+  observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'refused', at: clock.now }], addressed, clock.now);
+  expect(new TelegramFinalOutbox(kv).records()[0]).toMatchObject({ status: 'pending', providerMessageIds: [null, 'wamid.2'] });
+  clock.now += 300;
+  return { kv, clock, surface };
+};
+
+describe('a pending record that ends without going out again', () => {
+  it.each([
+    ['its window never reopens and it lapses', 'lapsed', { lapsed: () => true }],
+    ['the route that held it is gone and refuses it', 'owner_binding', { allowed: async () => false }],
+  ] as const)('ends quarantined, not blocked, when part of it already reached the provider, and %s', async (_why, reason, route) => {
+    const { kv, clock, surface } = await splitWithTailTaken();
+    await new TelegramFinalOutbox(kv, () => clock.now).drain({ ...surface.delivery, ...route });
+    expect(rows(kv)).toEqual([{ id: 'card', status: 'quarantined', reason }]);
+    expect(surface.settled).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'quarantined', reason }));
+    expect(surface.sent).toHaveLength(2);
+  });
+
+  it('still ends blocked when nothing went out', async () => {
+    const kv = store(), clock = { now: 1_000 };
+    const outbox = new TelegramFinalOutbox(kv, () => clock.now);
+    await outbox.enqueue({ ...base, id: 'card', payload: SPLIT });
+    clock.now += 300;
+    const surface = accepting(clock);
+    await outbox.drain({ ...surface.delivery, lapsed: () => true });
+    expect(rows(kv)).toEqual([{ id: 'card', status: 'blocked', reason: 'lapsed' }]);
+    expect(surface.sent).toEqual([]);
+  });
+});
+
 describe('a report that lands while a drain pass waits on the network', () => {
   // The knock in a WhatsApp route's defer, a check in allowed and a settlement can all fetch; the object takes requests then.
   it.each(['defer', 'allowed', 'settled'] as const)('is kept, not overwritten by the pass (%s)', async step => {
@@ -203,6 +238,42 @@ describe('settling the records an unlink retired', () => {
   });
 });
 
+describe('the reports kept for a record the outbox cannot match yet', () => {
+  const counted = () => {
+    const kv = store(), puts: string[] = [];
+    return { puts, kv: { get: kv.get, put: (key: string, value: unknown) => { puts.push(key); kv.put(key, value); } }, plain: kv };
+  };
+  const early = (kv: ReturnType<typeof store>) => Object.keys(kv.get<Record<string, unknown>>(EARLY_STATUS_KEY) ?? {});
+
+  it('writes only when something changed: a report that matches a record, or one already kept, writes nothing', async () => {
+    const { kv, puts, plain } = counted(), clock = { now: 1_000 };
+    await drained(plain, clock, { id: 'card' });
+    expect(observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'arrived', at: clock.now }], addressed, clock.now)).toBe(1);
+    expect(puts.filter(key => key === EARLY_STATUS_KEY)).toEqual([]);
+    observeSurfaceStatuses(kv, [{ id: 'wamid.unknown', kind: 'arrived', at: clock.now }], addressed, clock.now);
+    expect(puts.filter(key => key === EARLY_STATUS_KEY)).toHaveLength(1);
+    observeSurfaceStatuses(kv, [{ id: 'wamid.unknown', kind: 'arrived', at: clock.now + 1 }], addressed, clock.now + 1);
+    expect(puts.filter(key => key === EARLY_STATUS_KEY)).toHaveLength(1);
+    expect(early(plain)).toEqual(['wamid.unknown']);
+  });
+
+  it('keeps only the newest reports, so a flood of reports for messages that are not records cannot grow it without bound', () => {
+    const kv = store();
+    const flood = Array.from({ length: MAX_EARLY_STATUSES + 40 }, (_, index) => ({ id: `wamid.reply.${index}`, kind: 'arrived' as const, at: 1_000 }));
+    observeSurfaceStatuses(kv, flood, addressed, 1_000);
+    expect(early(kv)).toHaveLength(MAX_EARLY_STATUSES);
+    expect(early(kv)).toContain(`wamid.reply.${MAX_EARLY_STATUSES + 39}`);
+    expect(early(kv)).not.toContain('wamid.reply.0');
+  });
+
+  it('drops a report older than a day when the next one comes in', () => {
+    const kv = store();
+    observeSurfaceStatuses(kv, [{ id: 'wamid.old', kind: 'arrived', at: 0 }], addressed, 1_000);
+    observeSurfaceStatuses(kv, [{ id: 'wamid.new', kind: 'arrived', at: 0 }], addressed, 1_000 + DAY + 1);
+    expect(early(kv)).toEqual(['wamid.new']);
+  });
+});
+
 describe('a full outbox', () => {
   it('refuses a new record with a reason and evicts none that is still waiting for its report', async () => {
     const kv = store(), clock = { now: 1_000 };
@@ -229,9 +300,11 @@ describe('what the owner and the operator can see while records wait', () => {
     const kv = store(), clock = { now: Date.parse('2026-10-18T09:00:00Z') };
     await drained(kv, clock, { id: 'report', standingOrder: { runId: 'run-1', gate: 'act_and_report' } });
     await drained(kv, clock, { id: 'card', dayCard: { day: '2026-10-18', card: 'card:brief', foldUpTo: 0 } });
+    await drained(kv, clock, { id: 'reminder', reminder: { id: 'rem-1', occurrence: 0, runId: 'run-2', schedulerRunId: null, once: true } });
     observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'refused', at: clock.now }], addressed, clock.now);
     const records = new TelegramFinalOutbox(kv).records();
-    expect([...outboxRunNotes(records)]).toEqual([['run-1', 'waiting for your next message']]);
+    // An accepted record claims no send and names no surface: on iMessage it may still be in Waldo's own outbox.
+    expect([...outboxRunNotes(records)]).toEqual([['run-1', 'waiting for your next message'], ['run-2', 'queued for delivery; waiting to hear it arrived']]);
     expect([...unconfirmedCards(records, '2026-10-18')]).toEqual(['card:brief']);
     const overview = dashboardOverview({ now: clock.now, timezone: 'UTC', plans: [{ card: 'card:brief', time: '08:00', reason: 'r', sent: false }], cards: [{ id: 'card:brief', name: 'The Brief' }],
       unconfirmed: unconfirmedCards(records, '2026-10-18'), approvals: [], run: null, trace: null, grants: [] });

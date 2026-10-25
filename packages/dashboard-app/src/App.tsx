@@ -12,15 +12,16 @@ import { MemoryPanel } from './Memory';
 import { ChatLink } from './Chat';
 import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { AdminPanel, type AdminState } from './Admin';
+import { AdminHealthPanel, HealthPanel } from './Health';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
 import type { OverviewV1 } from './model';
-import { fetchOverview, SignInRequired } from './model';
+import { fetchOverview, SignInRequired, signInHref } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'connections/imessage' | 'connections/devices' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'health' | 'admin/health' | 'connections' | 'connections/imessage' | 'connections/devices' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -32,7 +33,7 @@ export const resolveRoute = (raw: string): Route => {
   const value = raw.split('?')[0] ?? '';
   if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
   if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices'].includes(value))return value as Route;
-  if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
+  if (value === 'admin' || value === 'admin/health' || value === 'health' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
   if(isThreadRoute(value))return value as Route;
   if(value===''||value==='overview')return 'today';
@@ -52,7 +53,7 @@ const ownerActivity = (data: OverviewV1) => data.latest_activity?.kind === 'hear
 // The time-of-day word carries the one serif accent on the page.
 const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(\.)$/.exec(text); return match ? <>{match[1]}<em>{match[2]}</em>{match[3]}</> : <>{text}</>; };
 
-export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'connections/imessage', 'connections/devices', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
+export const isSettingsRoute = (route: Route) => route === 'admin' || route === 'admin/health' || route === 'health' || ['connections', 'connections/imessage', 'connections/devices', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
 const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
@@ -86,11 +87,13 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
   if(route==='invites')return <><SettingsHead selected="invites" isAdmin={isAdmin}/><OwnerControlsPanel view={route} embedded/></>;
   if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section} isAdmin={isAdmin}/>;}
+  if (route === 'health') return <><SettingsHead selected="health" isAdmin={isAdmin}/><HealthPanel/></>;
+  if (route === 'admin/health') return <><SettingsHead selected="admin-health" isAdmin={isAdmin}/><AdminHealthPanel/></>;
   if (route === 'memory' || route.startsWith('memory/')) return <MemoryPanel subview={route === 'memory/constellation' ? 'constellation' : route === 'memory/profile' ? 'profile' : 'spots'}/>;
 
   const brief = data.brief.status === 'sent_recorded'
     ? { title: 'Sent, as recorded.', body: 'Waldo logged a send. That doesn’t confirm delivery or show the message; check your chat.' }
-    : data.brief.status === 'sent_unconfirmed' ? { title: 'Sent, waiting for your phone.', body: 'WhatsApp took the Brief but hasn’t yet said it reached your phone. It counts as sent once it does.' }
+    : data.brief.status === 'sent_unconfirmed' ? { title: 'Waiting to hear it arrived.', body: 'Waldo queued the Brief for delivery and hasn’t yet heard that it reached you. It records it as arrived once it does.' }
     : data.brief.status === 'not_scheduled' ? { title: 'No Brief scheduled.', body: 'There’s nothing to send yet.' }
       : { title: 'Not sent yet.', body: 'No Brief content is shown here.' };
   const zone = data.timezone, next = data.next_card;
@@ -129,7 +132,7 @@ type FeedbackState = { kind: 'loading' } | { kind: 'error'; message: string; sig
 export function DashboardFeedback({ state, onRetry }: { state: FeedbackState; onRetry: () => void }) {
   if (state.kind === 'loading') return <div role="status" className="skeleton-page"><span className="visually-hidden">Checking what has been recorded…</span><i className="sk sk-title"/><i className="sk sk-rail"/><i className="sk sk-card"/><i className="sk sk-rows"/></div>;
   return <div role="alert" className="feedback tile"><h1>{state.signedOut ? 'Sign in to your Waldo.' : 'Couldn’t load your dashboard.'}</h1>
-    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href="/console/signin">Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
+    <p>{state.message}</p>{state.signedOut ? <a className="button-link" href={signInHref()}>Sign in</a> : <button className="primary" onClick={onRetry}>Try again</button>}</div>;
 }
 
 

@@ -74,12 +74,12 @@ it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it li
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
     add('[{"note":"plain private text"}]', 'plain card');
-    add('[{"note":"odd \\x41 escape PRIVATEWORDS"}]', 'a');
+    add('[{"note":"odd \\x44IFFTOPIC escape PRIVATEWORDS"}]', 'a');
     add('[{"n":"fine"}]', `SECRETTAIL\0nul ${topic}`);
     add('[{"note":"Meeting moved \\u2013 see agenda"}]', 'unrelated');
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
     sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'upper', null, 'ÉMILE visited', 0);
-    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'x\\y', 0);
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'D\\IFFTOPIC', 0);
     sql.exec('UPDATE day_plan SET rowid = -5 WHERE card = ?', 'neg');
     const real = realOf(state);
     const topics = [{ topic, state: 'pending' as const }, { topic: accented, state: 'pending' as const }];
@@ -111,7 +111,7 @@ it('HELDROWS budgets the scan, continues from a printed rowid, and keeps its not
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
-    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index}`, 0);
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a B\\UDGETTOPIC ${index}`, 0);
     const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
     const first = heldRowShapes(sql, 'day_plan', topics, 25, real);
     expect(first).toMatch(new RegExp(`${HELDROWS_SCAN_BUDGET} rows with a backslash or NUL; PARTIAL, continue with /heldrows day_plan \\d+`));

@@ -25,7 +25,9 @@ import {
   GENERAL_AGENT_TOOLS,
   handlerAllowlistMatchesAcl,
   PRIVILEGED_ACTION_TOOLS,
+  STANDING_CHANGE_TOOLS,
   taintGateBlocksDirectExecution,
+  taintGateNeedsOwnerApproval,
   toolResultSchema,
 } from './handler';
 import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS } from './permissions';
@@ -226,6 +228,52 @@ describe('taint gate — hostile path (ADR-0049)', () => {
     }
   });
 
+  it('sends every standing change from a tainted turn to the owner, and leaves the untainted turn alone', () => {
+    expect(STANDING_CHANGE_TOOLS).toEqual(['set_reminder', 'cancel_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory']);
+    for (const tool of STANDING_CHANGE_TOOLS) {
+      expect(taintGateNeedsOwnerApproval(tool, 'external', {})).toBe(true);
+      expect(taintGateNeedsOwnerApproval(tool, null, {})).toBe(false);
+      // Standing changes are not privileged: the trusted checkpoint law and the host approval line do not apply to them.
+      expect(PRIVILEGED_ACTION_TOOLS).not.toContain(tool);
+      expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(false);
+    }
+    for (const tool of PRIVILEGED_ACTION_TOOLS) expect(taintGateNeedsOwnerApproval(tool, 'external')).toBe(true);
+    for (const tool of ['get_crs', 'read_memory', 'web_search', 'track_responsibility'] as const) expect(taintGateNeedsOwnerApproval(tool, 'external')).toBe(false);
+  });
+
+  // close_loop names only an id, so the arguments cannot tell an owner's loop from a mail-bound one: the pure law sends
+  // every tainted close to the card, and only the runtime's loop read admits a mail-bound close.
+  it('sends every tainted loop close to the owner, whatever its arguments say', () => {
+    for (const args of [{ id: 'o1', outcome: 'done' }, { id: 'o1', outcome: 'dropped', source_ref: 'gmail:m1' }, {}, null, undefined]) {
+      expect(taintGateNeedsOwnerApproval('close_loop', 'external', args)).toBe(true);
+    }
+    expect(taintGateNeedsOwnerApproval('close_loop', null, { id: 'o1', outcome: 'done' })).toBe(false);
+  });
+
+  it('lets a loop bound to an observed source through, and nothing that only looks like one', () => {
+    expect(taintGateNeedsOwnerApproval('open_loop', 'external', { source_ref: 'gmail:m1', title: 'x', due: '2026-10-24' })).toBe(false);
+    expect(taintGateNeedsOwnerApproval('open_loop', 'external', { title: 'x', due: null })).toBe(true);
+    expect(taintGateNeedsOwnerApproval('open_loop', 'external', { source_ref: 7 })).toBe(true);
+    expect(taintGateNeedsOwnerApproval('open_loop', 'external', null)).toBe(true);
+    expect(taintGateNeedsOwnerApproval('open_loop', 'external')).toBe(true);
+    expect(taintGateNeedsOwnerApproval('set_reminder', 'external', { source_ref: 'gmail:m1' })).toBe(true);
+  });
+
+  it('sends every forget from a tainted turn to the owner, whatever it selects by', () => {
+    const scope_note = 'the plan';
+    for (const args of [
+      { claim_ids: [1], scope_note },
+      { claim_ids: [1], topic: 'plan', scope_note },
+      { topic: 'plan', scope_note },
+      { topic: 'e', scope_note },
+      { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note },
+      null,
+      undefined,
+    ]) expect(taintGateNeedsOwnerApproval('forget_memory', 'external', args)).toBe(true);
+    expect(taintGateNeedsOwnerApproval('forget_memory', null, { claim_ids: [1], scope_note })).toBe(false);
+    expect(taintGateNeedsOwnerApproval('forget_memory', null, { topic: 'plan', scope_note })).toBe(false);
+  });
+
   it('leaves reads off tainted content executable — the gate guards mutations, not analysis', () => {
     for (const tool of ['get_crs', 'read_memory', 'search_episodes', 'search_connector'] as const) {
       expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(false);
@@ -280,6 +328,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'browse_page',
       'browse_act',
       'delegate_task',
+      'list_owner_findings',
     ]);
   });
 });
