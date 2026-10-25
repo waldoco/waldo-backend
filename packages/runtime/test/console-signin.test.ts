@@ -70,6 +70,7 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   assertChannelPresence: vi.fn(async () => true),
   deleteOwner: vi.fn(async () => true),
   adminOverview: vi.fn(async () => null),
+  adminCostSummary: vi.fn(async () => null),
   invite: vi.fn(async () => false),
   memberInvite: vi.fn(async () => false),
   memberInvites: vi.fn(async () => []),
