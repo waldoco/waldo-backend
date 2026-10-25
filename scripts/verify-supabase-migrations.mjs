@@ -80,6 +80,7 @@ const expectedMigrations = [
   '20261023120000_health_console_freshness.sql',
   '20261023150000_waldo_phone_sms_proof.sql',
   '20261024010000_waldo_admin_cost_summary.sql',
+  '20261025130000_app_session_thirty_days.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
