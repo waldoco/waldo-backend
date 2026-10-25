@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_ACTIVITY_KINDS, ChatRequestError, ChatSignInRequired, fetchChatPage, readChatPage, readReceipt, sendChatMessage, visibleText, type ChatMessage } from './chat-model';
+import { CHAT_ACTIVITY_KINDS, ChatRequestError, ChatSignInRequired, fetchChatPage, fetchReceipt, readChatPage, readReceipt, sendChatMessage, visibleText, type ChatMessage } from './chat-model';
 
 const row = (over: Record<string, unknown> = {}) => ({ id: 'app-1', role: 'assistant', text: 'Hello', parts: [{ type: 'text', text: 'Hello' }], channel: 'app', parent_id: 'app-0', created_at: 1_760_000_000_000, ...over });
 afterEach(() => vi.unstubAllGlobals());
@@ -54,6 +54,13 @@ describe('talking to the console chat route', () => {
     expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', cache: 'no-store' });
     expect((init.headers as Record<string, string>)['x-waldo-console']).toBe('1');
     expect(JSON.parse(String(init.body))).toEqual({ client_message_id: 'console-abcdefgh', text: 'Hi' });
+  });
+  it('asks for chat revision 3 on a receipt, so it reads the draft and the activity', async () => {
+    const fetch = vi.fn(async () => Response.json({ accepted: true, message_id: 'app-5', state: 'running', activity: { kind: 'mail', since: 1 } }));
+    vi.stubGlobal('fetch', fetch);
+    expect(await fetchReceipt('console-abcdefgh')).toMatchObject({ activity: { kind: 'mail', since: 1 } });
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['x-waldo-app-contract']).toBe('chat=3');
   });
   it('turns 401 into sign-in, 429 into a calm retry with its wait, and a network failure into status 0', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));

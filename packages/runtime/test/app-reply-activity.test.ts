@@ -7,8 +7,9 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// Through the real owner object: while a turn's tools run, a chat revision 2 receipt says what kind of work it is on,
+// Through the real owner object: while a turn's tools run, a chat revision 3 receipt says what kind of work it is on,
 // named from the tool alone; it gives way to the draft once the answer streams, and is gone when the turn ends.
+// Revision 2 and older read the receipt as they always have.
 
 const ANSWER = `Two invoices are waiting on you. ${Array.from({ length: 80 }, (_, i) => `line${i}`).join(' ')}`;
 const EMAIL = 'alice.fixture@example.com';
@@ -48,7 +49,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const headers = (name: string, revision?: 1 | 2) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': HASH, 'content-type': 'application/json', ...(revision ? { 'x-waldo-app-contract': `chat=${revision}` } : {}) });
+const headers = (name: string, contract?: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': HASH, 'content-type': 'application/json', ...(contract ? { 'x-waldo-app-contract': contract } : {}) });
 const withOwner = <T,>(name: string, stream: boolean, work: (owner: InstanceType<typeof OwnerDO>) => Promise<T>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
@@ -61,33 +62,36 @@ const send = async (owner: InstanceType<typeof OwnerDO>, name: string, client: s
   expect(sent.status).toBe(202);
   return (await sent.json() as { message_id: string }).message_id;
 };
-const raw = async (owner: InstanceType<typeof OwnerDO>, name: string, client: string, revision?: 1 | 2) =>
-  (await owner.fetch(new Request(`https://telegram-owner/app/v1/chat/main/messages/${client}`, { headers: headers(name, revision) }))).text();
-const receipt = async (owner: InstanceType<typeof OwnerDO>, name: string, client: string, revision?: 1 | 2) => appMessageReceiptV1Schema.parse(JSON.parse(await raw(owner, name, client, revision)));
+const raw = async (owner: InstanceType<typeof OwnerDO>, name: string, client: string, contract?: string) =>
+  (await owner.fetch(new Request(`https://telegram-owner/app/v1/chat/main/messages/${client}`, { headers: headers(name, contract) }))).text();
+const receipt = async (owner: InstanceType<typeof OwnerDO>, name: string, client: string, contract?: string) => appMessageReceiptV1Schema.parse(JSON.parse(await raw(owner, name, client, contract)));
 const settled = (owner: InstanceType<typeof OwnerDO>) => vi.waitFor(() => expect((owner as unknown as { activeApp: unknown }).activeApp).toBeNull(), { timeout: 10_000, interval: 20 });
 
-it('names a mail tool round as mail work, from the tool alone, until the answer streams, and only to chat revision 2', async () => {
+it('names a mail tool round as mail work, from the tool alone, only to chat revision 3, until the answer streams', async () => {
   const name = 'app-reply-activity-on';
   await withOwner(name, true, async (owner) => {
     const id = await send(owner, name, 'activity-client-0001');
     await vi.waitFor(() => expect(gate.phase).toBe('after_tools'), { timeout: 10_000, interval: 20 });
-    const during = await receipt(owner, name, 'activity-client-0001', 2);
+    const during = await receipt(owner, name, 'activity-client-0001', 'chat=3');
     expect(during).toMatchObject({ state: 'running', activity: { kind: 'mail' } });
     expect(during.activity!.since).toBeGreaterThan(0);
     expect(during).not.toHaveProperty('draft');
-    const wire = await raw(owner, name, 'activity-client-0001', 2);
+    const wire = await raw(owner, name, 'activity-client-0001', 'chat=3');
     for (const leaked of [EMAIL, 'search_communication', 'invoice']) expect(wire).not.toContain(leaked);
-    for (const revision of [1, undefined] as const) expect(await receipt(owner, name, 'activity-client-0001', revision)).not.toHaveProperty('activity');
+    // Revision 2 and older, and a header that does not parse, read the receipt exactly as before.
+    const before = JSON.stringify({ accepted: true, message_id: id, state: 'running' });
+    for (const contract of ['chat=2', 'chat=1', undefined, 'approvals=3', 'chat=three', 'chat=3,chat=3', 'chat=03']) expect([contract, await raw(owner, name, 'activity-client-0001', contract)]).toEqual([contract, before]);
 
     gate.toolsDone!();
     let streaming = during;
-    await vi.waitFor(async () => { streaming = await receipt(owner, name, 'activity-client-0001', 2); expect(streaming.draft).toBeTruthy(); }, { timeout: 5_000, interval: 50 });
+    await vi.waitFor(async () => { streaming = await receipt(owner, name, 'activity-client-0001', 'chat=3'); expect(streaming.draft).toBeTruthy(); }, { timeout: 5_000, interval: 50 });
     expect(streaming.state).toBe('running');
     expect(streaming).not.toHaveProperty('activity');
+    expect(await receipt(owner, name, 'activity-client-0001', 'chat=2')).toEqual({ accepted: true, message_id: id, state: 'running', draft: streaming.draft });
 
     gate.answer!();
     await settled(owner);
-    expect(await receipt(owner, name, 'activity-client-0001', 2)).toEqual({ accepted: true, message_id: id, state: 'completed' });
+    for (const contract of ['chat=3', 'chat=2']) expect(await raw(owner, name, 'activity-client-0001', contract)).toBe(JSON.stringify({ accepted: true, message_id: id, state: 'completed' }));
   });
 });
 
@@ -96,7 +100,7 @@ it('with the switch off, a tool round puts no activity on any receipt', async ()
   await withOwner(name, false, async (owner) => {
     await send(owner, name, 'activity-client-0002');
     await vi.waitFor(() => expect(gate.phase).toBe('after_tools'), { timeout: 10_000, interval: 20 });
-    expect(await receipt(owner, name, 'activity-client-0002', 2)).not.toHaveProperty('activity');
+    expect(await receipt(owner, name, 'activity-client-0002', 'chat=3')).not.toHaveProperty('activity');
     gate.toolsDone!();
     await vi.waitFor(() => expect(gate.phase).toBe('streamed'), { timeout: 10_000, interval: 20 });
     gate.answer!();
