@@ -1866,6 +1866,15 @@ it('with IMESSAGE_MEDIA off, a photo, a Mac file and a voice note each get one h
   expect(forbiddenEgress).toEqual([]);
 });
 
+it('a setup challenge that carries a Photon attachment is refused', async () => {
+  const w = await world();
+  const code = (await (await w.action('imessage.pair')).text()).split('\n')[0]!;
+  expect((await w.host.redeem(code)).status).toBe(200);
+  const challenge = (await (await w.action('imessage.verify', { id: w.host.bridgeId, subject: SUBJECT, chat: CHAT })).text()).split('\n')[0]!;
+  expect((await w.host.send({ ...w.host.message(challenge), photonAttachments: [{ id: 'photon-att-1', name: 'IMG_0001.png', mimeType: 'image/png', size: 8 }] })).status).toBe(401);
+  expect((await w.host.send(w.host.message(challenge))).status).toBe(200);
+});
+
 it('an empty Photon attachment list is an ordinary text message', async () => {
   const w = await world();
   await w.pairAndActivate();
