@@ -89,7 +89,7 @@ describe('first run', () => {
   it('answers with the run and whether the request was replayed', () => {
     accepted(appOnboardingResultV1Schema, [{ request_id: 'onboarding-0001', onboarding: run, replayed: false }]);
     rejected(appOnboardingResultV1Schema, [{ request_id: 'onboarding-0001', onboarding: run }, { request_id: 'onboarding-0001', onboarding: { ...run, state: 'paused' }, replayed: false }]);
-    accepted(appOnboardingErrorV1Schema, [{ error: 'agreements_required' }, { error: 'stale_version', message: 'Notice copy 2 is current.' }]);
+    accepted(appOnboardingErrorV1Schema, [{ error: 'agreements_required' }, { error: 'step_up_required' }, { error: 'stale_version', message: 'Notice copy 2 is current.' }]);
     rejected(appOnboardingErrorV1Schema, [{ error: 'boom' }, { error: 'unavailable', stack: 'x' }]);
   });
 });
