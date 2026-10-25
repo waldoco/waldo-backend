@@ -13,6 +13,7 @@ export const IMESSAGE_UPDATE_BASE = 9_000_000_000_000;
 const PREFIX = 'imessage:inbox-record:';
 // The owner's tapbacks since their last turn, each one line that turn reads. Bounded: the newest are kept.
 const NOTE = 'imessage:reaction-note:';
+const NOTE_SEQ = 'imessage_reaction_note_seq';
 const MAX_NOTES = 8;
 const SEQ = 'imessage_seq';
 const MAX_ROWS = 4096;
@@ -36,8 +37,8 @@ export type IMessageInboxRecord = {
   closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
 };
 export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state' | 'reactions'>;
-// key names the tapback (chat, message, part, reaction), so the owner taking it back finds it.
-export type IMessageReactionNote = Readonly<{ key: string; conversationRef: string; bindingDigest: string; line: string; notedAt: number }>;
+// key names the tapback (chat, message, part, reaction), so the owner taking it back finds it. seq is arrival order.
+export type IMessageReactionNote = Readonly<{ key: string; conversationRef: string; bindingDigest: string; line: string; seq: number }>;
 
 const finished = (r: IMessageInboxRecord) => r.state === 'completed' || r.state === 'interrupted' || r.state === 'revoked';
 const open = (r: IMessageInboxRecord) => r.state === 'admitted' || r.state === 'running';
@@ -77,21 +78,24 @@ export class IMessageOwnerInbox {
     });
   }
   notes(): IMessageReactionNote[] {
-    return [...this.storage.kv.list<IMessageReactionNote>({ prefix: NOTE })].map(([, n]) => n).sort((a, b) => a.notedAt - b.notedAt);
+    return [...this.storage.kv.list<IMessageReactionNote>({ prefix: NOTE })].map(([, n]) => n).sort((a, b) => a.seq - b.seq);
   }
   /** An added tapback waits for the owner's next turn on that chat; a removed one takes its line back. Starts nothing. */
-  noteReaction(note: Omit<IMessageReactionNote, 'notedAt'>, action: 'add' | 'remove'): void {
+  noteReaction(note: Omit<IMessageReactionNote, 'seq'>, action: 'add' | 'remove'): void {
     this.storage.transactionSync(() => {
       if (action === 'remove') { this.storage.kv.delete(NOTE + note.key); return; }
-      this.storage.kv.put(NOTE + note.key, { ...note, notedAt: this.now() });
+      const seq = (this.storage.kv.get<number>(NOTE_SEQ) ?? 0) + 1;
+      this.storage.kv.put(NOTE_SEQ, seq);
+      this.storage.kv.put(NOTE + note.key, { ...note, seq });
       for (const old of this.notes().slice(0, -MAX_NOTES)) this.storage.kv.delete(NOTE + old.key);
     });
   }
-  // The lines a turn on this chat and binding reads, taken so no later turn reads them again.
+  // The lines a turn on this chat reads, taken so no later turn reads them again. One left under an earlier binding of the
+  // chat is dropped unread.
   private takeNotes(r: IMessageInboxRecord): string[] {
-    const mine = this.notes().filter((n) => n.conversationRef === r.conversationRef && n.bindingDigest === r.bindingDigest);
-    for (const n of mine) this.storage.kv.delete(NOTE + n.key);
-    return mine.map((n) => n.line);
+    const chat = this.notes().filter((n) => n.conversationRef === r.conversationRef);
+    for (const n of chat) this.storage.kv.delete(NOTE + n.key);
+    return chat.filter((n) => n.bindingDigest === r.bindingDigest).map((n) => n.line);
   }
   // `interrupted` runs inside the closing transaction for each turn this call closes as interrupted, and only for those.
   recover(live: ReadonlySet<string>, interrupted?: (record: IMessageInboxRecord) => void): void {
