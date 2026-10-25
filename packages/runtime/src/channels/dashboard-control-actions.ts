@@ -1,4 +1,4 @@
-import {parseConsoleAction,NOTICES,consoleMayApprove,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
+import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
 import {HANDOFF_PARAM} from './connect-confirm';
 import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
@@ -25,17 +25,19 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
- imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+ imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
+// One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
+const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
-// targets. The fresh read's list is the eligibility check, so the console view is never built.
-const listedRows:Readonly<Record<string,string>>={imessage:'bridges',devices:'devices'};
-const listedAction=(action:ConsoleAction,data:unknown,rows:string):boolean=>{
+// targets (null: top level only). The fresh read's list is the eligibility check, so the console view is never built.
+const listedRows:Readonly<Record<string,string|null>>={imessage:'bridges',devices:'devices',phone:null};
+const listedAction=(action:ConsoleAction,data:unknown,rows:string|null):boolean=>{
  const listing=data as Readonly<Record<string,unknown>>|null,has=(actions:unknown)=>Array.isArray(actions)&&actions.includes(action.action);
  if(action.id==='')return has(listing?.actions);
- const items=listing?.[rows];
+ const items=rows===null?undefined:listing?.[rows];
  return Array.isArray(items)&&items.some((item:Readonly<{id?:unknown;actions?:unknown}>)=>item?.id===action.id&&has(item.actions));
 };
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
@@ -91,9 +93,11 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
  if(action.action==='whatsapp.unlink')return view.whatsapp?.linked===true;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);
+ if(action.action==='session.revoke')return view.sessions.some(row=>row.ref!==undefined&&row.ref===action.value&&!row.current);
  if(action.action.startsWith('approval.')) {
   const p=view.approvals.find(p=>p.id===action.id);if(!p)return false;
   if(action.action==='approval.approve')return consoleMayApprove(p);
+  if(action.action==='approval.send'||action.action==='approval.edit')return waitingMaySend(p);
   if(action.action==='approval.undo')return p.state==='done'&&p.undoable&&p.kind==='calendar_change';
   return consoleMayApprove(p)||(['email_send','message_send'].includes(p.kind)&&['open','review_only'].includes(p.state));
  }
@@ -110,7 +114,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!action||!Object.hasOwn(CONTROL_VIEW_ACTIONS,view)||!CONTROL_VIEW_ACTIONS[view]!.includes(action.action))return reply({error:'invalid_action'},403);
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
- const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:values}:{view,action,revision:form.get('revision')});
+ const kept=Object.fromEntries(Object.entries(values).filter(([key])=>!unfingerprinted[view]?.includes(key)));
+ const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:kept}:{view,action,revision:form.get('revision')});
  const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`,bookKey=deps.book??RECEIPT_BOOK_KEY;
  const book=await loadReceiptBook(deps.store,deps.sessions,bookKey);
  const prior=book[key];
@@ -119,8 +124,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  const projection=await deps.projection(view,action.id);
  if(!projection)return reply({error:'unavailable'},503);
  if(await controlRevision(projection)!==form.get('revision'))return reply({error:'stale_read',message:'These records changed. Refresh and review again before applying a change.'},409);
- const rows=Object.hasOwn(listedRows,view)?listedRows[view]:undefined;
- if(rows?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
+ const rows=Object.hasOwn(listedRows,view)?listedRows[view]!:undefined;
+ if(rows!==undefined?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
  const kept_until=Date.now()+RECEIPT_RETENTION_MS,expires=Math.min(deps.expires,kept_until);
  const pending:StoredReceipt={fingerprint,expires,kept_until,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
  book[key]=pending;await deps.store.put(bookKey,book);
@@ -147,8 +152,8 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
  'Not available':'This approval cannot be applied here. Nothing was changed.','Not available here':'That approval was not shown in full here, so nothing was done.',
  'Review it in the app':'That approval was not shown in full here, so nothing was done.','Channel not connected':'That channel is not connected, so nothing was sent.',
  'Messaging is not set up':'Messaging is not set up, so nothing was sent.','Browsing is not set up':'Browsing is not set up, so nothing was done.','MCP is not set up':'MCP is not set up, so nothing ran.',
- 'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
- 'Not done':'The browser action was not done.','That failed':'That did not work. Nothing else ran.',
+ 'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Message changed':'The stored message no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
+ 'Not done':'The browser action was not done.','Not sent':'Gmail refused the send, so nothing went out.','That failed':'That did not work. Nothing else ran.',
  'Nothing ran':'Nothing ran. The server did not carry out that call.','Call changed':'The stored call no longer matches what was approved, so nothing ran.',
  'Outcome unknown':'The operation outcome is unknown. Check the result before retrying; nothing was run again.',
  'Result not verified':'The result could not be verified. Check it before retrying.','Receipt not checked':'The result could not be verified. Check it before retrying.',
@@ -156,7 +161,8 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
 const APPROVAL_RECEIPT_FALLBACK:Readonly<Record<ControlReceipt['state'],string>>={recorded:'The decision was recorded.',incomplete:'The decision was only partly applied. Refresh the records.',
  rejected:'That decision was not carried out. Refresh the records and try again.',unconfirmed:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
 const approvalReceiptState=(out:ApprovalDecision):ControlReceipt['state']=>['Done','Undone','Not now','Later','Sent','Already sent','Verified','Tell me what to change'].includes(out.toast)?'recorded':out.toast==='Outcome unknown'?'unconfirmed'
- :['Already handled.','Nothing ran','Call changed','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected'].includes(out.toast)?'rejected':'unconfirmed';
+ :['Already handled.','Nothing ran','Call changed','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected',
+  'Email changed','Message changed','Not sent','Key already used','Messaging is not set up'].includes(out.toast)?'rejected':'unconfirmed';
 // The console derives the state from the decision; the app passes the state its status transition proved.
 // A desk refusal the console treats as unconfirmed is still a definite "nothing was done" once the
 // app's transition proves the row did not move; unknown outcomes never read as refusals.

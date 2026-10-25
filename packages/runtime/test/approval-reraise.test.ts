@@ -30,7 +30,7 @@ const deskOn = async <T>(surface: 'app' | 'telegram' | 'whatsapp', name: string,
     const desk = approvalDesk(state.storage.sql, { surface, owner: surface === 'app' ? 7_000_000_000_006 : 42, call, appLink: appApprovalLink,
       google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {},
       currentRunRef: () => runRef.current ?? 'scope-run-0001', appReplyRef: () => runRef.current });
-    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const handler = approvalHandlers(desk).find(candidate => candidate.name === 'raise_approval')!;
     return run({ desk, clock, runRef, sql: state.storage.sql, sent, telegram,
       raise: async args => await handler.handle(handler.schema.parse(args) as never) as never,

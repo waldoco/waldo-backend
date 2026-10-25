@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
@@ -21,6 +22,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
+  WALDO_COMPACTION?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -31,6 +34,9 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_TOOL_SEARCH?: string;
   // 'on' shows owner replies while they are written (Telegram drafts, the app's receipt draft). Off when unset.
   WALDO_STREAM_REPLIES?: string;
+  // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
+  // earlier rule, which withholds a whole read that mentions the topic.
+  WALDO_FORGET_BARRIER?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
@@ -41,6 +47,8 @@ export type TelegramWebhookEnv = Readonly<{
   BROWSER?: import('@cloudflare/playwright').BrowserWorker;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
+  // Expo's access token for app push. Missing means push is not configured.
+  EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
   // '0' turns off progress notes on long iMessage turns.
@@ -71,7 +79,7 @@ export type TelegramWebhookEnv = Readonly<{
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
-}> & OwnerDirectoryEnv;
+}> & PhoneSmsEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 

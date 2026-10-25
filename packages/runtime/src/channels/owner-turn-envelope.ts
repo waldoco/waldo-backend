@@ -52,9 +52,12 @@ export type OwnerResponder = Readonly<{
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external'): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
-  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
-  migrate(trace: string, input: string): Promise<string>;
+  // policy.health false keeps no health notes from this pass, or from the migration.
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
+  migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   promote(trace: string): Promise<string>;
+  // One welcome-build stage's structured answer; its input and output never reach a trace.
+  welcome?(trace: string, stage: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.

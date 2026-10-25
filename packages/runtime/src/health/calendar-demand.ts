@@ -1,9 +1,10 @@
-import { googleHas, sha256Hex, validFreeBusyCalendar, type GoogleClient } from '../connectors/google';
+import { googleHas, sha256Hex, validFreeBusyCalendar, type CalendarListItem, type GoogleClient } from '../connectors/google';
 import { daysBetween, isDay, isTimeZone, localDayWindow, shiftDay } from './scores/time';
 
 // Weight's calendar input: busy minutes per local day from Google free/busy, across every selected calendar of every
-// connected account. Only minute counts are kept, never titles, attendees or event ids.
-export type DemandClient = Pick<GoogleClient, 'freeBusy' | 'calendarListsPage'>;
+// connected account, less the rest blocks Waldo put in (owner ruling: rest does not count, deep work does). Only minute
+// counts are kept, never titles, attendees or event ids.
+export type DemandClient = Pick<GoogleClient, 'freeBusy' | 'calendarListsPage' | 'restBlocks'>;
 export type DemandRequest = Readonly<{ from: string; to: string; timezone: string }>;
 // `partial` marks a day read without a calendar Google reported as permanently gone.
 export type DemandDay = Readonly<{ day: string; busy_minutes: number | null; partial: boolean }>;
@@ -19,24 +20,44 @@ export type CalendarDemandDeps = Readonly<{
 
 const MINUTE_MS = 60_000;
 const KEEP_DAYS = 35;
-const TODAY_FRESH_MS = 30 * MINUTE_MS;
+const RECHECK_MS = 30 * MINUTE_MS;
 const CHUNK_DAYS = 7;
 const CALENDARS_PER_CALL = 50;
 const LIST_PAGES = 4;
+// Waldo creates events only where the owner can write, so only there can one of its blocks sit.
+const WRITABLE: ReadonlySet<CalendarListItem['access_role']> = new Set(['owner', 'writer']);
 // A calendar Google no longer finds is left out and the day is marked partial; any other calendar error is unknown.
 const GONE = 'notFound';
 
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
-// Overlapping blocks from different calendars count once.
-export const busyMinutesByDay = (busy: readonly Readonly<{ start: string; end: string }>[], days: readonly string[], timeZone: string): Map<string, number> => {
-  const merged: [number, number][] = [];
-  for (const [start, end] of busy.map(b => [Date.parse(b.start), Date.parse(b.end)] as const).filter(([s, e]) => Number.isFinite(s) && Number.isFinite(e) && s < e).sort((a, b) => a[0] - b[0])) {
+type Span = [number, number];
+const spans = (blocks: readonly Readonly<{ start: string; end: string }>[]): Span[] => {
+  const merged: Span[] = [];
+  for (const [start, end] of blocks.map(b => [Date.parse(b.start), Date.parse(b.end)] as const).filter(([s, e]) => Number.isFinite(s) && Number.isFinite(e) && s < e).sort((a, b) => a[0] - b[0])) {
     const last = merged.at(-1);
     if (last && start <= last[1]) last[1] = Math.max(last[1], end);
     else merged.push([start, end]);
   }
+  return merged;
+};
+// What is left of `from` after taking out `taken`; both merged and in time order.
+const without = (from: readonly Span[], taken: readonly Span[]): Span[] => from.flatMap(([start, end]) => {
+  const left: Span[] = [];
+  let at = start;
+  for (const [s, e] of taken) {
+    if (e <= at || s >= end) continue;
+    if (s > at) left.push([at, s]);
+    at = Math.max(at, e);
+  }
+  if (at < end) left.push([at, end]);
+  return left;
+});
+
+// Overlapping blocks from different calendars count once.
+export const busyMinutesByDay = (busy: readonly Readonly<{ start: string; end: string }>[], days: readonly string[], timeZone: string): Map<string, number> => {
+  const merged = spans(busy);
   return new Map(days.map(day => {
     const window = localDayWindow(day, timeZone);
     const ms = merged.reduce((sum, [start, end]) => sum + Math.max(0, Math.min(end, window.end) - Math.max(start, window.start)), 0);
@@ -46,34 +67,67 @@ export const busyMinutesByDay = (busy: readonly Readonly<{ start: string; end: s
 
 const dayRange = (from: string, to: string): string[] => Array.from({ length: daysBetween(from, to) + 1 }, (_, i) => shiftDay(from, i));
 
-export const calendarDemand = (deps: CalendarDemandDeps) => {
-  const { sql } = deps;
+// calendar_demand_dropped holds when each day was last dropped, so a read already in flight then cannot write it back.
+const demandTable = (sql: Pick<SqlStorage, 'exec'>) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS calendar_demand (
     day TEXT NOT NULL, timezone TEXT NOT NULL, calendars TEXT NOT NULL, busy_minutes INTEGER NOT NULL, partial INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
     PRIMARY KEY (day, timezone, calendars))`);
+  // A day whose rest blocks could not be read counts them, and is read again after 30 minutes like today. Rows cached
+  // before the column existed were read whole.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(calendar_demand)').toArray().some(column => column.name === 'unconfirmed')) sql.exec('ALTER TABLE calendar_demand ADD COLUMN unconfirmed INTEGER NOT NULL DEFAULT 0');
+  sql.exec('CREATE TABLE IF NOT EXISTS calendar_demand_dropped (day TEXT PRIMARY KEY, at INTEGER NOT NULL)');
+};
 
-  const selectedCalendars = async (client: DemandClient): Promise<string[] | null> => {
+// A calendar change on a cached day at `at`: the next read fetches that day again, in whatever zone and calendar set it
+// runs, and a read that started by then keeps its answer to itself.
+export const forgetDemandDay = (sql: Pick<SqlStorage, 'exec'>, day: string, at: number): void => {
+  demandTable(sql);
+  sql.exec('INSERT INTO calendar_demand_dropped (day, at) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET at = max(at, excluded.at)', day, at);
+  sql.exec('DELETE FROM calendar_demand WHERE day = ?', day);
+};
+
+export const calendarDemand = (deps: CalendarDemandDeps) => {
+  const { sql } = deps;
+  demandTable(sql);
+
+  const selectedCalendars = async (client: DemandClient): Promise<CalendarListItem[] | null> => {
     if (!client.calendarListsPage) return null;
-    const ids: string[] = [];
+    const calendars: CalendarListItem[] = [];
     let token: string | undefined;
     for (let page = 0; page < LIST_PAGES; page += 1) {
       const listed = await client.calendarListsPage(250, false, token);
-      ids.push(...listed.items.filter(item => item.selected && !item.hidden).map(item => item.id));
-      if (!listed.next_page_token) return ids;
+      calendars.push(...listed.items.filter(item => item.selected && !item.hidden));
+      if (!listed.next_page_token) return calendars;
       token = listed.next_page_token;
     }
     return null;
   };
 
+  // The part of a calendar's rest blocks that nothing else busy on it covers: a meeting accepted over one keeps its
+  // minutes, and an all-day busy event keeps its whole days. Null when the blocks could not be read; they then count.
+  const restOnly = async (client: DemandClient, calendarId: string, from: string, to: string, timezone: string): Promise<Span[] | null> => {
+    try {
+      const { blocks, others } = await client.restBlocks!(calendarId, from, to);
+      return without(spans(blocks), spans(others.flatMap(other => {
+        if (!other.all_day) return [other];
+        if (!isDay(other.start) || !isDay(other.end) || other.start >= other.end) throw new Error('invalid all-day event');
+        return [{ start: new Date(localDayWindow(other.start, timezone).start).toISOString(), end: new Date(localDayWindow(other.end, timezone).start).toISOString() }];
+      })));
+    } catch {
+      return null;
+    }
+  };
+
   // Every account's selected calendars for one stretch of days. A calendar the provider could not read makes the whole
-  // stretch unknown, since an unread calendar is not a free one; only a calendar reported gone is left out.
-  const fetchStretch = async (sources: readonly Readonly<{ client: DemandClient; ids: readonly string[] }>[], days: readonly string[], timezone: string): Promise<Readonly<{ minutes: Map<string, number>; partial: boolean }> | null> => {
+  // stretch unknown, since an unread calendar is not a free one; only a calendar reported gone is left out. A stretch
+  // whose rest blocks could not be read counts them.
+  const fetchStretch = async (sources: readonly Readonly<{ client: DemandClient; ids: readonly string[]; writable: ReadonlySet<string> }>[], days: readonly string[], timezone: string): Promise<Readonly<{ minutes: Map<string, number>; partial: boolean; unconfirmed: boolean }> | null> => {
     const from = new Date(localDayWindow(days[0]!, timezone).start).toISOString();
     const to = new Date(localDayWindow(days.at(-1)!, timezone).end).toISOString();
     const busy: { start: string; end: string }[] = [];
-    let partial = false;
+    let partial = false, unconfirmed = false;
     try {
-      for (const { client, ids } of sources) {
+      for (const { client, ids, writable } of sources) {
         for (let i = 0; i < ids.length; i += CALENDARS_PER_CALL) {
           const batch = ids.slice(i, i + CALENDARS_PER_CALL);
           const observed = await client.freeBusy(from, to, batch, timezone);
@@ -85,14 +139,16 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
               partial = true;
               continue;
             }
-            busy.push(...row.busy);
+            const rest = writable.has(id) && row.busy.length ? await restOnly(client, id, from, to, timezone) : [];
+            if (rest === null) unconfirmed = true;
+            busy.push(...(rest?.length ? without(spans(row.busy), rest).map(([s, e]) => ({ start: new Date(s).toISOString(), end: new Date(e).toISOString() })) : row.busy));
           }
         }
       }
     } catch {
       return null;
     }
-    return { minutes: busyMinutesByDay(busy, days, timezone), partial };
+    return { minutes: busyMinutesByDay(busy, days, timezone), partial, unconfirmed };
   };
 
   return {
@@ -110,13 +166,15 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
       if (accounts.some(account => account.error)) return { state: 'unavailable', reason: 'provider_error' };
       // The read uses free/busy and the calendar list. An account with calendar access but not both cannot be read.
       if (accounts.some(account => !googleHas(account.scopes, 'availability') || !googleHas(account.scopes, 'calendar_list'))) return { state: 'unavailable', reason: 'scope_gap' };
-      const listed: { email: string; client: DemandClient; ids: string[] }[] = [];
+      const listed: { email: string; client: DemandClient; ids: string[]; writable: ReadonlySet<string> }[] = [];
       try {
         for (const account of accounts) {
           const client = await deps.client(account.email);
-          const ids = client && await selectedCalendars(client);
-          if (!client || !ids) return { state: 'unavailable', reason: 'provider_error' };
-          listed.push({ email: account.email, client, ids });
+          const calendars = client && await selectedCalendars(client);
+          if (!client || !calendars) return { state: 'unavailable', reason: 'provider_error' };
+          // Reading events needs event access; an account without it cannot hold one of Waldo's blocks.
+          const lists = googleHas(account.scopes, 'calendar') && client.restBlocks !== undefined;
+          listed.push({ email: account.email, client, ids: calendars.map(item => item.id), writable: new Set(lists ? calendars.filter(item => WRITABLE.has(item.access_role)).map(item => item.id) : []) });
         }
       } catch {
         return { state: 'unavailable', reason: 'provider_error' };
@@ -127,10 +185,12 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
       // The cache is keyed by the exact calendar set, so changing the selection or the zone reads again.
       const calendars = await sha256Hex(listed.map(source => `${source.email}\n${[...source.ids].sort().join('\n')}`).sort().join('\n\n'));
       sql.exec('DELETE FROM calendar_demand WHERE day < ? OR timezone <> ? OR calendars <> ?', shiftDay(today, -KEEP_DAYS), timezone, calendars);
-      // A past day is final only once it was read after it ended; today is read again after 30 minutes.
-      const cached = new Map(sql.exec<{ day: string; busy_minutes: number; partial: number; fetched_at: number }>(
-        'SELECT day, busy_minutes, partial, fetched_at FROM calendar_demand WHERE timezone = ? AND calendars = ? AND day BETWEEN ? AND ?', timezone, calendars, from, to,
-      ).toArray().filter(row => (row.day < today ? row.fetched_at >= localDayWindow(row.day, timezone).end : now - row.fetched_at < TODAY_FRESH_MS))
+      sql.exec('DELETE FROM calendar_demand_dropped WHERE day < ?', shiftDay(today, -KEEP_DAYS));
+      // A past day is final only once it was read whole after it ended; today, and a day whose rest blocks could not be
+      // read, are read again after 30 minutes.
+      const cached = new Map(sql.exec<{ day: string; busy_minutes: number; partial: number; fetched_at: number; unconfirmed: number }>(
+        'SELECT day, busy_minutes, partial, fetched_at, unconfirmed FROM calendar_demand WHERE timezone = ? AND calendars = ? AND day BETWEEN ? AND ?', timezone, calendars, from, to,
+      ).toArray().filter(row => (row.day < today && !row.unconfirmed ? row.fetched_at >= localDayWindow(row.day, timezone).end : now - row.fetched_at < RECHECK_MS))
         .map(row => [row.day, { busy_minutes: row.busy_minutes, partial: row.partial === 1 }]));
 
       const days = dayRange(from, to);
@@ -145,7 +205,8 @@ export const calendarDemand = (deps: CalendarDemandDeps) => {
         for (const day of stretch) {
           const value = read?.minutes.get(day) ?? null, partial = read?.partial ?? false;
           found.set(day, { busy_minutes: value, partial });
-          if (value !== null) sql.exec('INSERT OR REPLACE INTO calendar_demand (day, timezone, calendars, busy_minutes, partial, fetched_at) VALUES (?, ?, ?, ?, ?, ?)', day, timezone, calendars, value, partial ? 1 : 0, now);
+          if (value !== null) sql.exec(`INSERT OR REPLACE INTO calendar_demand (day, timezone, calendars, busy_minutes, partial, fetched_at, unconfirmed) SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM calendar_demand_dropped WHERE day = ? AND at >= ?)`, day, timezone, calendars, value, partial ? 1 : 0, now, read?.unconfirmed ? 1 : 0, day, now);
         }
       }
       return { state: 'available', days: days.map(day => ({ day, busy_minutes: found.get(day)?.busy_minutes ?? null, partial: found.get(day)?.partial ?? false })) };

@@ -1,6 +1,7 @@
 import {
   APP_ONBOARDING_SKIPPABLE_V1, appOnboardingStepV1Schema, appOnboardingV1Schema,
   type AppChatProviderV1, type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
+  type AppSetupAnswersRequestV1, type AppSetupAnswersResultV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
@@ -35,6 +36,49 @@ export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_start
 // The request the first look sends into main chat on the owner's tap. It reads as what the owner asked for, because it is.
 export const FIRST_LOOK_TEXT = 'Show me today as you see it, and what you noticed about how I work.';
 const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: priority';
+const calledText = (name: string) => `Wants to be called ${name}`;
+const named = (claims: ClaimStore) => claims.claims().some(candidate => candidate.source_ref === NAME_REF);
+
+// The setup answers, each one owner fact under its own ref, pinned after the name in this order. The text is the app's own
+// choice put in the third person, with the owner's words quoted as they typed them.
+type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
+const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = { name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable' };
+const SETUP_PIN_ORDER: Readonly<Record<SetupAnswer, number>> = { name: 0, day: 1, slips: 2, wearable: 3 };
+const DAY_TEXT = {
+  meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
+  fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
+} as const;
+const SLIP_TEXT = { replies: 'replies and follow-ups', overlaps: 'meetings running into each other', promises: "things they said they'd do", breaks: 'breaks and meals', evenings: 'work running into the evening' } as const;
+const WEARABLE_TEXT = { apple: 'an Apple Watch', samsung: 'a Samsung Galaxy Watch', oura: 'an Oura Ring', whoop: 'a WHOOP', garmin: 'a Garmin watch' } as const;
+const quoted = (words: string) => `"${words}"`;
+type SetupFact = Readonly<{ kind: string; text: string; evidence: string }>;
+// An empty choice with no words of the owner's own says nothing to keep, so it clears the answer as null does.
+const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null } = {
+  name: name => ({ kind: 'preference', text: calledText(name), evidence: name }),
+  day: ({ shape, own_words: own }) => !shape && !own ? null : {
+    kind: 'routine', evidence: `Setup answer: ${[shape, own].filter(Boolean).join('; ')}`,
+    text: shape ? `${DAY_TEXT[shape]}${own ? ` In their own words: ${quoted(own)}` : ''}` : `About their workdays, in their own words: ${quoted(own)}`,
+  },
+  slips: ({ picked, own_words: own }) => !picked.length && !own ? null : {
+    kind: 'preference', evidence: `Setup answer: ${[...picked, own].filter(Boolean).join('; ')}`,
+    text: picked.length ? `Things that tend to slip, for Waldo to watch first: ${picked.map(slip => SLIP_TEXT[slip]).join(', ')}.${own ? ` In their own words: ${quoted(own)}` : ''}`
+      : `Things that tend to slip, in their own words: ${quoted(own)}`,
+  },
+  wearable: wearable => ({ kind: 'fact', text: `Wears ${WEARABLE_TEXT[wearable]}.`, evidence: `Setup answer: ${wearable}` }),
+};
+const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>): SetupFact | null =>
+  (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null)(value);
+
+// The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
+// stands: a later change goes through name.set, which corrects this same claim.
+export const recordSignupName = (claims: ClaimStore, name: string, at: number): boolean => {
+  if (named(claims)) return false;
+  claims.add({ kind: 'preference', text: calledText(name), source: 'stated', evidence: name, origin: 'owner', source_ref: NAME_REF }, new Date(at).toISOString());
+  const saved = claims.claims().find(candidate => candidate.source_ref === NAME_REF);
+  if (!saved) throw new Error('sign-up name not stored');
+  claims.pin(saved.id, 'profile', 0);
+  return true;
+};
 
 // The owner's first run. One row survives restarts; a second start returns the same run. The answers themselves live where
 // they are used: the name and this week's priority as owner-stated claims, the Brief time in the day plan, the agreements in
@@ -58,6 +102,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
   const answer = (ref: string, kind: string, text: string, evidence: string) => {
     const at = new Date(now()).toISOString(), claim = { kind, text, source: 'stated', evidence, origin: 'owner', source_ref: ref };
     const previous = claims.claims().find(candidate => candidate.source_ref === ref);
+    if (previous?.text === text && previous.kind === kind) return previous;
     if (previous) { if (!claims.correct(previous.id, claim, at)) throw new Error('first-run answer not corrected'); }
     else claims.add(claim, at);
     return claims.claims().find(candidate => candidate.source_ref === ref) ?? null;
@@ -68,15 +113,17 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     const base = run ? steps(run) : Object.fromEntries(appOnboardingStepV1Schema.options.map(name => [name, 'pending'])) as Steps;
     // Connecting Google is its own flow; the step reads as done from the live connection.
     const google = base.google !== 'done' && run && await host.googleConnected() ? 'done' : base.google;
+    // A name sign-up recorded answers the name step.
+    const name = base.name === 'pending' && named(claims) ? 'done' : base.name;
     // While the run is open the agreements step reads from the ledger itself, however they were accepted, so a copy bump shows
-    // it pending again. A finished run keeps a done step; one finished while the agreements were held back reads the ledger, so
-    // accepting them later on the consent route shows them done.
-    const agreements = !run || (run.completed_at !== null && base.agreements === 'done') ? base.agreements : consent.agreed() ? 'done' : 'pending';
+    // it pending again. A finished run keeps its step: one finished while the agreements were held back records them done when
+    // they are accepted later on the consent route (agreementsAccepted), and keeps that through later copy changes too.
+    const agreements = !run || run.completed_at !== null ? base.agreements : consent.agreed() ? 'done' : 'pending';
     const body = {
       version: 1 as const,
       state: !run ? 'not_started' as const : run.completed_at === null ? 'in_progress' as const : 'completed' as const,
       run_id: run?.run_id ?? null, started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null,
-      steps: { ...base, google, agreements },
+      steps: { ...base, google, name, agreements },
       first_look: { message_id: run?.first_look_id ?? null },
       brief: { time: run?.brief_time ?? null, timezone_confirmed: host.timezoneConfirmed() },
       channel: { surface: host.proactiveSurface() },
@@ -112,7 +159,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     if (!consent.stepsOpen()) return 'agreements_required';
     switch (action.action) {
       case 'name.set': {
-        const saved = answer(NAME_REF, 'preference', `Wants to be called ${action.name}`, action.name);
+        const saved = answer(NAME_REF, 'preference', calledText(action.name), action.name);
         if (saved) claims.pin(saved.id, 'profile', 0);
         step(run, 'name', 'done');
         return null;
@@ -158,12 +205,33 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
         // What the owner left unanswered stays unasked: the rest is learned in the first week, in context.
         // The agreements are done only with a live ledger row behind them; a run finished while they are held back leaves them pending.
         const current = { ...steps(run), agreements: consent.agreed() ? 'done' as const : 'pending' as const };
-        for (const name of APP_ONBOARDING_SKIPPABLE_V1) if (current[name] === 'pending') current[name] = name === 'google' && await host.googleConnected() ? 'done' : 'skipped';
+        for (const name of APP_ONBOARDING_SKIPPABLE_V1) {
+          if (current[name] === 'pending') current[name] = (name === 'google' && await host.googleConnected()) || (name === 'name' && named(claims)) ? 'done' : 'skipped';
+        }
         write({ steps: current, completed_at: at });
         return null;
       }
     }
   };
-  return { view, act };
+  // The setup answers a request names, each set, corrected in place or cleared, and then which of them Waldo holds. A cleared
+  // answer is retired, not forgotten: it leaves the profile and recall, and the owner can still ask Waldo to forget it.
+  const live = (ref: string) => [...claims.claims(), ...claims.claims('promoted')].filter(candidate => candidate.source_ref === ref);
+  const saveAnswers = (request: AppSetupAnswersRequestV1): AppSetupAnswersResultV1['held'] => {
+    for (const name of Object.keys(SETUP_REFS) as SetupAnswer[]) {
+      const value = request[name];
+      if (value === undefined) continue;
+      const fact = value === null ? null : setupFact(name, value);
+      if (!fact) { for (const retired of live(SETUP_REFS[name])) claims.setStatus(retired.id, 'dismissed'); continue; }
+      const saved = answer(SETUP_REFS[name], fact.kind, fact.text, fact.evidence);
+      if (!saved || !claims.pin(saved.id, 'profile', SETUP_PIN_ORDER[name])) throw new Error('setup answer not pinned');
+    }
+    return { name: live(NAME_REF).length > 0, day: live(SETUP_REFS.day).length > 0, slips: live(SETUP_REFS.slips).length > 0, wearable: live(SETUP_REFS.wearable).length > 0 };
+  };
+  // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
+  const agreementsAccepted = (): void => {
+    const run = row();
+    if (run && run.completed_at !== null && steps(run).agreements !== 'done' && consent.agreed()) step(run, 'agreements', 'done');
+  };
+  return { view, act, agreementsAccepted, saveAnswers };
 };
 export type FirstRun = ReturnType<typeof firstRun>;

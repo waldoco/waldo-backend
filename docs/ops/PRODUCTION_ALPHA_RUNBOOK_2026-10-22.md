@@ -83,17 +83,33 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `LANGFUSE_CAPTURE_TEXT` | `true` | `false` | `false` (code forces it off in any case) |
 | `WHATSAPP_DEBUG_LOG` | `true` (#1398 commits `false`) | `false` | `false` |
 | `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
+| `WALDO_COMPACTION` | `off` | `off` | `off`. Only `on` turns it on, and only for the app chat. It waits for the compaction eval (`WALDO_EVAL_COMPACTION=on`, ADR draft §6) and a post-reply trigger; `off` is the rollback. |
 | `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
 | `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |
 | `OWNER_LOOKUP` | `0` | `0` | `0` until the privacy notice that discloses the look-up is published (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. |
+| `PHONE_SMS_VERIFY` | `0` | `0` | `0` until every precondition in §1.2.1 is met. Off unless `1`; with it on, the console and app phone views offer a texted code (`identity/phone-sms.ts`). |
+| `PHONE_SMS_COUNTRIES` | `+91` | `+91` | `+91`. The country codes a code may be texted to, comma-separated. The ledger refuses any other number (`unsupported`), and an empty or malformed list keeps texting off. `+1` would admit every NANP number, Caribbean ones included [inference: NANP spans the US, Canada and Caribbean countries]; Twilio's geo permissions are the finer control (§1.2.1). |
+| `PHONE_SMS_DAILY_LIMIT` | `20` | `20` | `20`. Texts per UTC day across the whole server, counted by the ledger. The ledger holds any higher value to 200; a missing or malformed value keeps texting off. |
 | `WALDO_MCP_SERVERS` | Google Workspace MCP JSON | `[]` (pinned by `google-mcp-catalogue.test.ts:175`) | `[]` for the alpha. Workspace MCP is a developer preview, and our client is not marked agentic (Google research doc §1). |
 | `WALDO_EGRESS_ALLOWLIST` | `*` | `""`, so egress fails closed (`allowlist_unavailable`) | Decision D6 |
 | `IMESSAGE_CONNECTOR_ENABLED`, `IMESSAGE_CONNECTOR_POLICY`, `IMESSAGE_ONBOARDING_URL`, `IMESSAGE_WALDO_ADDRESS` | enabled, heywaldo.in values | off, empty | off until a production host Mac and Apple Account exist (D5) |
 | `WHATSAPP_ONBOARDING_URL`, `WHATSAPP_REENGAGE_TEMPLATE`, `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` | onboarding URL set; templates empty | empty | empty until Meta verification and a production number (D5) |
 | `GMAIL_PUSH_PROJECT` | `waldo-dev-492217` | `""` | `""` until the production Cloud project has its `waldo-gmail-push` topic and push subscription (S7). While it is empty, production starts no Gmail watch (`gmail_watch_skipped:unconfigured`) and `/events/gmail` answers 404; mail reads still work (`connectors/google-push.ts`, `channels/event-ingress.ts`). |
-| `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_SEARCH`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, tool search off, offload on. |
+| `WALDO_TOOL_SEARCH` | `on` | `off` | `off` until staging's tool-search E2E and a live flag-on eval pass (`docs/ops/staging-e2e/tool-search.md`). `off` is the rollback. |
+| `WALDO_OWNER_TIMEZONE`, `WALDO_STT_PROVIDER`, `WALDO_TOOL_OFFLOAD` | not set | not set | not set. The defaults apply: UTC, the first provider with a key, offload on. |
 | `WALDO_STREAM_REPLIES` | not set | not set | not set. Owner replies arrive whole, and no request or receipt changes. `on` shows a reply while it is written: on the app and console, a `draft` on the running message's receipt, served only to clients that send `x-waldo-app-contract: chat=2`; on the Telegram test channel, a `sendMessageDraft` preview. Only a message the model labels its final answer streams; WhatsApp and iMessage always get whole messages (`channels/owner-do.ts`, `conversation/reply-stream.ts`). A streamed call that shows no output within 15 s (`FIRST_TOKEN_TIMEOUT_MS`) moves to the second provider when `ANTHROPIC_API_KEY` is deployed and that provider's circuit is closed; otherwise the call keeps the 120 s limit. A late first token does not count against the provider's circuit. The reply hop records `ttft_ms`. |
+
+#### 1.2.1 Before `PHONE_SMS_VERIFY=1` (hard preconditions)
+
+A texted code costs money for every send, and an open SMS endpoint is a target for SMS pumping. Every item below is done and checked before anyone sets the switch to `1`, on any environment.
+
+1. **Twilio account, Verify service and DPA.** A Verify service with six-digit codes valid ten minutes or less, and Twilio's DPA reviewed. The privacy notice naming Twilio is published.
+2. **Verify geo permissions.** In the Twilio console's Verify geo permissions, every country is off except those in `PHONE_SMS_COUNTRIES` (India for the alpha). Twilio: "Review your Verify Geographic Permissions and disable all countries that you do not plan to send messages to" [cited: [Twilio, preventing toll fraud](https://www.twilio.com/docs/verify/preventing-toll-fraud)].
+3. **Fraud Guard on.** Verify SMS Fraud Guard is on for the service, at Standard or Max (Verify > Services > the service > SMS tab). A blocked send shows as error 60410 in Twilio's logs [cited: [Twilio, SMS Fraud Guard](https://www.twilio.com/docs/verify/preventing-toll-fraud/sms-fraud-guard)]. Twilio's [60410 page](https://www.twilio.com/docs/api/errors/60410) gives no HTTP status: if the answer is a 4xx, Waldo logs `provider_refused` with `twilio_code: 60410`; otherwise the send is recorded as `unknown` [unverified]. Twilio's page does not say whether it is on by default, so check it.
+4. **Spend ceiling and alert.** Twilio's usage triggers only call a webhook; they stop nothing [cited: [Twilio, usage triggers](https://www.twilio.com/docs/usage/api/usage-trigger)]. The hard ceiling is the ledger's server-wide cap, `PHONE_SMS_DAILY_LIMIT` (at most 200 a day). Also set a daily usage trigger that alerts the owner, and add the service's own rate limits as Twilio recommends [cited: [Twilio, preventing toll fraud](https://www.twilio.com/docs/verify/preventing-toll-fraud)]. Keeping a small prepaid balance with auto-recharge off would bound spend further [inference: check that the account's billing works that way].
+5. **Credentials.** Prefer an API key restricted to Verify (`TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`) over the account auth token. Twilio's restricted keys list Verify among the supported products; choose the Verify permissions from Twilio's permission list [cited: [Twilio, restricted API keys](https://www.twilio.com/docs/iam/api-keys/restricted-api-keys)].
+6. **Open items, not settled here.** Whether India's DLT registration applies to Twilio Verify's own sender [inference: Twilio may handle it for Verify; confirm with Twilio before relying on it].
 
 ### 1.3 Worker secrets (names only)
 
@@ -117,7 +133,10 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REDIRECT_URI` | `health/providers/whoop-routes.ts:21` | WHOOP off | not set. WHOOP comes later (owner ruling, 22 Oct). |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
+| `WALDO_PROBE_TELEGRAM_ID` | `channels/probe-turn.ts` | none; without it the staging probe refuses (503) | not set |
+| `WALDO_PROBE_SYNTHETIC_DO_NAMES` | `channels/probe-turn.ts` | none; a probe target outside the list is refused (403) | not set |
 | `WALDO_EVENT_SOURCES` | `channels/event-ingress.ts:178` | event ingress returns 404 | not set |
+| `TWILIO_VERIFY_SERVICE_SID`, and either `TWILIO_API_KEY_SID` + `TWILIO_API_KEY_SECRET` (preferred) or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` | `identity/phone-sms.ts` | no texted code; the phone views offer the link code only | not set until `PHONE_SMS_VERIFY` goes on (§1.2.1). The API key, standard or restricted to Verify, is used whenever its SID is set; a malformed key (`SK…`), account (`AC…`) or service (`VA…`) id, or an empty secret or token, keeps texting off rather than falling back. |
 
 #1393 (merged 22 Oct as `e228a483`) moved Google and MCP OAuth state onto `WALDO_OAUTH_STATE_SECRET`. Freeze the secret list on the stand-up SHA (S0).
 
@@ -335,8 +354,8 @@ Status: **source** (verified in source at `c5e44093`), **staging (recorded)**, *
 - **App sessions last 12 hours** (`app-api.ts:87`), so 50 daily app users means 50 or more code emails a day [inference]. The built-in mailer cannot send them (§1.4). Console sessions stay signed in for up to 30 days while used (`identity/console-auth.ts`).
 
 **Cost ceiling.**
-- **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:26`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
-- **Not gated: background work.** Heartbeat, the nightly memory pass, briefs, reminders and standing orders never consult the ceiling. `spendPosture`, which would skip background work, is called only from `test/cost-ceiling.test.ts`, although its comment says background work is limited (`cost-ledger.ts:72`).
+- **The ceiling** is USD 25 per owner per month (`llm/cost-ledger.ts:4`), and it is off unless `WALDO_COST_LEDGER_SYNC=on` (`observability/cost-rollup.ts:32`). Past it, a turn degrades to the auxiliary model, and browse and execute tools are refused (`llm/provider.ts:443-448`, `owner-turn.ts:212-215`).
+- **Not gated: background work.** Heartbeat, the nightly memory pass, briefs, reminders and standing orders never consult the ceiling. (A DO-local `spendPosture` helper that would have skipped background work was never called outside a test and has been deleted with the rest of the unused DO-local `cost_ledger` code.)
 - **Not attributed.** No producer sets `cost_kind`, so every row files as `turn` (`cost-rollup.ts:39,46`).
 - **Not priced.** Browser, sandbox, search, speech-to-text and cache writes count as 0.
 - **No overall limit.** Nothing caps all owners together, and no per-owner daily cap exists.
@@ -516,8 +535,8 @@ Each item is one small PR against `beta-mvp`, proposed here and not implemented.
 - **Tests.** The eval cases pass for India, the US and the UK.
 
 **P12. Make the spend ceiling cover background work and attribute it.**
-- **Change.** Call `spendPosture` at the background entry points: heartbeat, nightly memory, briefs, reminders and standing orders. Past the ceiling, skip or defer the work, and never the owner's own turns. Set `cost_kind` at each producer so the ledger tells turn from background from worker.
-- **Files.** `channels/owner-do.ts` (the background entry points; hot file), `observability/cost-rollup.ts`, `llm/cost-ledger.ts` (fix the comment at `:72` to match), and `docs/ops/OBSERVABILITY.md`.
+- **Change.** Read the month's spend (`costs.monthSpendUsd`) against the ceiling at the background entry points, as owner turns already do: heartbeat, nightly memory, briefs, reminders and standing orders. Past the ceiling, skip or defer the work, and never the owner's own turns. Set `cost_kind` at each producer so the ledger tells turn from background from worker.
+- **Files.** `channels/owner-do.ts` (the background entry points; hot file), `observability/cost-rollup.ts`, `llm/cost-ledger.ts`, and `docs/ops/OBSERVABILITY.md`.
 - **Tests.**
   - A machine turn past the ceiling is skipped, with a `spend_hold` hop.
   - An owner turn past the ceiling still runs on the auxiliary route.

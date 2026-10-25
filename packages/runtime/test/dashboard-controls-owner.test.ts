@@ -84,7 +84,7 @@ describe('dashboard control owner route and real executors',()=>{
   const after=await readMemory();expect(after.revision).not.toBe(before.revision);expect(JSON.stringify(after.data)).toContain('Corrected saved preference');
   await runInDurableObject(stub,(_instance,state)=>expect(state.storage.sql.exec('SELECT source FROM claims WHERE id=?',Number(id.split(':').at(-1))).one()).toEqual({source:'inferred'}));
   const accepted=await postAction(stub,token,after,{view:'memory',action:'spot.confirm',id,request_id:'fresh-memory-request'});expect(accepted.status).toBe(200);
-  await runInDurableObject(stub,(_instance,state)=>expect(state.storage.sql.exec('SELECT source FROM claims WHERE id=?',Number(id.split(':').at(-1))).one()).toEqual({source:'confirmed'}));
+  await runInDurableObject(stub,(_instance,state)=>expect(state.storage.sql.exec('SELECT source,origin,verification_status,source_ref FROM claims WHERE id=?',Number(id.split(':').at(-1))).one()).toEqual({source:'confirmed',origin:'owner',verification_status:'owner-grounded',source_ref:'owner, console'}));
  });
  it('rejects yesterday’s card.today revision across an owner-local date rollover',async()=>{
   const clock=vi.spyOn(Date,'now').mockReturnValue(Date.parse('2026-10-01T23:59:00Z'));

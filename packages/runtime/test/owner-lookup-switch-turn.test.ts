@@ -96,6 +96,11 @@ it('with the look-up not offered, the tool answers not_offered too', async () =>
   expect(await lookupTurn('lookup-turn-unoffered', { APP_AGREEMENTS: '1', OWNER_LOOKUP: '0' })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 } });
 });
 
+// The turn reads the switches through the same helper as the onboarding routes: only "1" turns either on.
+it.each([['true', '1'], ['1', 'true'], ['', '1'], ['1', ' 1']])('with APP_AGREEMENTS %j and OWNER_LOOKUP %j, the tool answers not_offered', async (agreements, lookup) => {
+  expect(await lookupTurn(`lookup-turn-${agreements || 'unset'}-${lookup.trim() || 'blank'}`, { APP_AGREEMENTS: agreements, OWNER_LOOKUP: lookup })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 } });
+});
+
 it('with both switches on, the same yes is granted', async () => {
   expect(await lookupTurn('lookup-turn-on', { APP_AGREEMENTS: '1', OWNER_LOOKUP: '1' })).toMatchObject({ ok: true, data: { lookup: 'granted', total: 1 } });
 });

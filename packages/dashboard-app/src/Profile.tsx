@@ -11,10 +11,10 @@ function Stack({ title, facts, index }: { title: string; facts: string[]; index:
   const [at, setAt] = useState(0);
   const many = facts.length > 1, fact = facts[at]!;
   return <li className="pstack" data-depth={Math.min(facts.length - 1, 2)} style={{ '--i': index } as CSSProperties}>
-    <button type="button" className="pcard" disabled={!many} aria-label={many ? `Your ${title.toLowerCase()}: ${fact}. Fact ${at + 1} of ${facts.length}. Show the next one.` : `Your ${title.toLowerCase()}: ${fact}.`} onClick={() => setAt(n => (n + 1) % facts.length)}>
-      <span className="pcard-label">Your {title.toLowerCase()}</span>
+    <button type="button" className="pcard" disabled={!many} aria-label={many ? `${title}: ${fact}. Fact ${at + 1} of ${facts.length}. Show the next one.` : `${title}: ${fact}.`} onClick={() => setAt(n => (n + 1) % facts.length)}>
+      <span className="pcard-label">{title}</span>
       <span key={at} className="pcard-fact">{fact}</span>
-      <span className="pcard-foot"><span>{title}</span>{many && <span className="pcard-count">{at + 1} of {facts.length}</span>}</span>
+      {many && <span className="pcard-foot"><span className="pcard-count">{at + 1} of {facts.length}</span></span>}
     </button>
   </li>;
 }

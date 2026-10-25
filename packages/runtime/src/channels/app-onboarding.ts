@@ -2,7 +2,7 @@ import {
   APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
   appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
-  appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema,
+  appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
 } from '../../../contracts/src/app/onboarding';
 import type { AppConsentStateV1 } from '../../../contracts/src/app/onboarding';
 import type { ChatChannels } from './chat-channel-links';
@@ -16,12 +16,16 @@ import { loopBook } from './loops';
 import { md5Hex } from './md5';
 import { proactiveSurface, setProactiveSurface } from './proactive-surface';
 
-const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link';
-export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
+const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link', ANSWERS_PATH = '/app/v1/onboarding/answers';
+export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', ANSWERS_PATH, CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
 
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
   chat: ChatChannels;
+  // Whether this app session signed in within the last two hours, as a link code needs.
+  signedInRecently(): Promise<boolean>;
+  // Setup is done: the first-run complete action or the setup answers landed. Starts the owner's one welcome build; a repeat starts nothing.
+  setupDone?(): void;
   // The owner's proactive-surface setting (the console's own).
   proactiveSurface(): AppProactiveSurfaceV1;
   now(): number;
@@ -47,7 +51,7 @@ const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['consents']
 
 // An operator sees which step failed by a fixed code, never the error text, which may carry an owner's details.
 const logFailure = (code: 'channel_link_issue' | 'health_consent_list' | 'health_consent_shape') => console.error(JSON.stringify({ hop: 'app_onboarding', ok: false, code }));
-const STATUS = { invalid_request: 400, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, not_offered: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
+const STATUS = { invalid_request: 400, step_up_required: 403, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, not_offered: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
 type Problem = keyof typeof STATUS;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const problem = (error: Problem) => reply({ error }, STATUS[error]);
@@ -82,12 +86,13 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     }
     return path.startsWith('/app/v1/') && APP_ONBOARDING_PATHS.includes(path) ? reply({ error: 'method_not_allowed' }, 405) : problem('not_found');
   }
-  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
+  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', ANSWERS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
   const raw = await readBody(request);
   if (path === CHANNEL_LINK_PATH) {
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
     if (!link.success) return problem('invalid_request');
+    if (!await host.signedInRecently()) return problem('step_up_required');
     if (!host.consent.stepsOpen()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');
@@ -96,6 +101,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     return issued ? answer(appChannelLinkCodeV1Schema.parse(issued)) : problem('unavailable');
   }
   const parsed = path === '/app/v1/onboarding/actions' ? appOnboardingActionV1Schema.safeParse(raw)
+    : path === ANSWERS_PATH ? appSetupAnswersRequestV1Schema.safeParse(raw)
     : path === '/app/v1/consents' ? appConsentGrantV1Schema.safeParse(raw)
     : path === '/app/v1/consents/withdraw' ? appConsentWithdrawV1Schema.safeParse(raw)
     : appFindingActionV1Schema.safeParse(raw);
@@ -110,11 +116,24 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const action = appOnboardingActionV1Schema.parse(body);
     const error = await host.firstRun.act(action);
     if (error) return problem(error);
+    if (action.action === 'complete') host.setupDone?.();
     return record(appOnboardingResultV1Schema.parse({ request_id: action.request_id, onboarding: await host.firstRun.view(), replayed: false }));
+  }
+  if (path === ANSWERS_PATH) {
+    // The answers are the owner's personal details: none is kept before the agreements, while the server offers them.
+    if (!host.consent.stepsOpen()) return problem('agreements_required');
+    const answers = appSetupAnswersRequestV1Schema.parse(body);
+    const held = host.transaction(() => host.firstRun.saveAnswers(answers));
+    host.setupDone?.();
+    return record(appSetupAnswersResultV1Schema.parse({ request_id: answers.request_id, held, replayed: false }));
   }
   if (path === '/app/v1/consents') {
     const grant = appConsentGrantV1Schema.parse(body);
-    const result = host.transaction(() => { const outcome = host.consent.grant(grant.purpose, grant.version, host.now()); if (typeof outcome === 'object') host.consent.attestAge(host.now()); return outcome; });
+    const result = host.transaction(() => {
+      const outcome = host.consent.grant(grant.purpose, grant.version, host.now());
+      if (typeof outcome === 'object') { host.consent.attestAge(host.now()); host.firstRun.agreementsAccepted(); }
+      return outcome;
+    });
     if (result === 'stale_version' || result === 'not_offered') return problem(result);
     // The look-up is disclosed in the privacy notice, so it waits for the notice.
     if (result === 'notice_required') return problem('agreements_required');
@@ -146,6 +165,8 @@ export type OwnerOnboardingDeps = Readonly<{
   assertCurrent(): Promise<void>;
   // The chat channels the owner can link.
   chat: ChatChannels;
+  signedInRecently(): Promise<boolean>;
+  setupDone?(): void;
   // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
   // discloses it is published.
   agreementsOffered: boolean;
@@ -217,7 +238,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     withdrawLookup,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
+    firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
   };
 };

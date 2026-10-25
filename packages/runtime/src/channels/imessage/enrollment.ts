@@ -53,12 +53,14 @@ export async function enrollOwner(env: IMessageEnv, owner: string, rawPhone: unk
  * What the console shows for iMessage. With Photon configured, an owner texts their own assigned number and must
  * enroll first; without it, everyone texts the one configured address.
  */
-export type IMessageNumberView = Readonly<{ number: string | null; phone: string | null; enrollable: boolean }>;
+// onFile: the owner's number on file and whether a link code has arrived from it yet. Typed at sign-up, it proves nothing.
+export type IMessageNumberView = Readonly<{ number: string | null; phone: string | null; enrollable: boolean; onFile: Readonly<{ phone: string; verified: boolean }> | null }>;
 export async function iMessageNumberView(env: IMessageEnv, owner: string): Promise<IMessageNumberView> {
   const c = iMessageComposition(env);
-  if (!c || !photonConfig(env)) return { number: env.IMESSAGE_WALDO_ADDRESS || null, phone: null, enrollable: false };
+  if (!c || !photonConfig(env)) return { number: env.IMESSAGE_WALDO_ADDRESS || null, phone: null, enrollable: false, onFile: null };
   const context: EnrollmentContext | null = await iMessageDirectory(env).enrollmentRead(owner, c.environment);
-  return { number: context?.enrollment?.assignedNumber ?? null, phone: context?.enrollment?.phone ?? context?.phone ?? null, enrollable: !!context };
+  return { number: context?.enrollment?.assignedNumber ?? null, phone: context?.enrollment?.phone ?? context?.phone ?? null, enrollable: !!context,
+    onFile: context?.phone ? { phone: context.phone, verified: context.phoneVerified } : null };
 }
 
 /** Operator view of the Photon connection; null when Photon is not configured. */

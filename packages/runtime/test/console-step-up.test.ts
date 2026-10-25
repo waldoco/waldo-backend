@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { CONSOLE_ACTION_PATH, consoleAccess } from '../src/channels/console';
+import { signedInRecently } from '../src/identity/console-auth';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { OWNER_CONTROLS_ACTION_PATH, OWNER_CONTROLS_PATH } from '../src/channels/dashboard-owner-controls';
@@ -14,6 +15,11 @@ import { WHATSAPP_LINK_CONFIRM_ACTION } from '../src/channels/whatsapp-link-cons
 import { BROWSER_TRIAL_PATH } from '../src/channels/browser-trial-consent';
 import { MCP_START_PATH } from '../src/connectors/mcp-connections';
 import { consoleCrossSiteRefusal } from '../src/channels/console-cross-site';
+import { APP_PROVIDERS_PATH } from '../src/health/providers/app-providers';
+import { appControlActionV1Schema } from '../../contracts/src/app/controls';
+import { appChatProviderV1Schema } from '../../contracts/src/app/onboarding';
+import { approvalActionV1Schema, approvalKindV1Schema } from '../../contracts/src/app/parts';
+import { messagingSurfaceV1Schema } from '../../contracts/src/app/surfaces';
 
 const root = 'https://telegram-owner';
 const HOUR = 60 * 60_000;
@@ -138,12 +144,13 @@ const everyAction = (): readonly string[] => {
   const owner = (ownerControls as Record<string, unknown>).OWNER_CONTROL_VIEW_ACTIONS as Readonly<Record<string, string>> | undefined;
   expect(views, 'the controls registry is exported').toBeDefined();
   expect(owner, 'the owner controls registry is exported').toBeDefined();
-  return [...new Set([...CONSOLE_ACTIONS, ...IMESSAGE_CONSOLE_ACTIONS, WHATSAPP_LINK_CONFIRM_ACTION, ...Object.values(views ?? {}).flat(), ...Object.values(owner ?? {})])].sort();
+  const app = appControlActionV1Schema.shape.action.options.flatMap(action => (action === 'channel.unlink' ? messagingSurfaceV1Schema.options : [undefined]).map(id => stepUp.appControlStepUpAction({ action, id })));
+  return [...new Set([...CONSOLE_ACTIONS, ...IMESSAGE_CONSOLE_ACTIONS, WHATSAPP_LINK_CONFIRM_ACTION, ...Object.values(views ?? {}).flat(), ...Object.values(owner ?? {}), ...app])].sort();
 };
 const table = () => ((stepUp as Record<string, unknown>).STEP_UP_ACTIONS ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
 const routes = () => ((stepUp as Record<string, unknown>).STEP_UP_ROUTES ?? {}) as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown; startsFlow?: unknown }>>>;
-const LASTING = ['account.delete', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
-  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
+const LASTING = ['account.delete', 'approval.send', 'claim.edit', 'claim.pin', 'device.pair', 'google.connect', 'imessage.activate', 'imessage.activate_shared', 'imessage.enroll', 'imessage.link', 'imessage.pair',
+  'imessage.pair_shared', 'imessage.verify', 'invite.create', 'invite.member', 'mcp.connect', 'mcp.runs', 'node.correct', 'spot.edit', 'spot.pin', 'telegram.link', 'whatsapp.confirm', 'whatsapp.link'];
 const oneLine = (why: unknown) => typeof why === 'string' && why.length > 0 && why.length <= 160 && !why.includes('\n');
 
 describe('every console action is classified before it ships', () => {
@@ -156,7 +163,7 @@ describe('every console action is classified before it ships', () => {
     }
   });
 
-  it('needs a fresh code for exactly the actions that create or widen lasting access', () => {
+  it('needs a fresh code for exactly the actions that create or widen lasting access, or send as the owner', () => {
     expect(Object.entries(table()).filter(([, rule]) => rule.gated === true).map(([action]) => action).sort()).toEqual(LASTING);
   });
 
@@ -287,5 +294,73 @@ describe('a session a sign-in replaced in this browser', () => {
     expect(pair.status).toBe(403);
     expect(await pair.json()).toEqual({ error: 'step_up_required' });
     expect(calls).toEqual([]);
+  });
+});
+
+// The app reaches the same things through its own routes, so each app request is named by the console action it is, and one
+// table decides both surfaces. A new app action or approval kind fails here until the table names it.
+describe('every app action and approval decision is classified by the same table', () => {
+  it('names each app control, for each channel it can unlink, by a console action the table classifies', () => {
+    for (const action of appControlActionV1Schema.shape.action.options) {
+      for (const id of action === 'channel.unlink' ? messagingSurfaceV1Schema.options : [undefined]) {
+        const named = stepUp.appControlStepUpAction({ action, id });
+        expect([action, id, named in table()]).toEqual([action, id, true]);
+      }
+    }
+    expect(stepUp.appControlStepUpAction({ action: 'google.connect' })).toBe('google.connect');
+    expect(stepUp.appControlStepUpAction({ action: 'account.delete' })).toBe('account.delete');
+    for (const action of ['claim.pin', 'claim.unpin', 'claim.edit']) expect(stepUp.appControlStepUpAction({ action })).toBe(action);
+  });
+
+  it('names each chat channel the app can link by its gated console link action', () => {
+    for (const provider of appChatProviderV1Schema.options) {
+      const named = stepUp.appLinkStepUpAction(provider);
+      expect([provider, table()[named]?.gated]).toEqual([provider, true]);
+    }
+  });
+
+  it('classifies every approval kind, and a calendar change that reaches other people, with a one-line reason', () => {
+    const classified = stepUp.STEP_UP_APPROVALS as Readonly<Record<string, Readonly<{ gated: unknown; why: unknown }>>>;
+    expect(Object.keys(classified).sort()).toEqual([...approvalKindV1Schema.options, 'calendar_shared'].sort());
+    for (const [kind, rule] of Object.entries(classified)) {
+      expect(typeof rule.gated, kind).toBe('boolean');
+      expect(oneLine(rule.why), kind).toBe(true);
+    }
+    expect(Object.entries(classified).filter(([, rule]) => rule.gated === true).map(([kind]) => kind).sort())
+      .toEqual(['browser_submit', 'calendar_shared', 'email_send', 'mcp_call', 'message_send', 'tainted_action']);
+  });
+
+  it('gates only approving, and approving a send whatever else it carries', () => {
+    const exact = { recipients: { to: ['someone@example.test'], cc: [], bcc: [] } };
+    for (const kind of approvalKindV1Schema.options) {
+      for (const action of approvalActionV1Schema.options) {
+        const gated = stepUp.appApprovalStepUp({ kind, exact }, action);
+        expect([kind, action, gated]).toEqual([kind, action, action === 'approve' && kind !== 'calendar_change' && kind !== 'google_task_change']);
+      }
+    }
+  });
+
+  it('keeps a hold on the owner\'s own primary calendar one tap, and gates one with guests or on another calendar', () => {
+    const hold = { action: 'create', title: 'Focus', start: '2030-01-02T15:00:00Z', end: '2030-01-02T16:00:00Z' } as const;
+    const decide = (changes: Record<string, unknown>) => stepUp.appApprovalStepUp({ kind: 'calendar_change', exact: { changes: { ...hold, ...changes } } }, 'approve');
+    expect(decide({})).toBe(false);
+    expect(decide({ location: 'Home' })).toBe(false);
+    expect(decide({ guests: ['guest@example.test'] })).toBe(true);
+    expect(decide({ emails_guests: false })).toBe(true);
+    expect(decide({ calendar: 'team@group.calendar.google.com' })).toBe(true);
+  });
+
+  it('classifies the app routes with no console action of their own', () => {
+    expect(stepUp.APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated).toBe(true);
+    for (const [path, rule] of Object.entries(stepUp.APP_STEP_UP_ROUTES)) expect([path, typeof rule.gated, oneLine(rule.why)]).toEqual([path, 'boolean', true]);
+  });
+
+  it('counts an app session as recent proof for two hours after it signs in, and an unreadable sign-in time as none', () => {
+    const now = Date.parse('2030-01-02T12:00:00Z');
+    expect(signedInRecently(new Date(now - 60_000).toISOString(), now)).toBe(true);
+    expect(signedInRecently(new Date(now - 2 * HOUR).toISOString(), now)).toBe(false);
+    expect(signedInRecently(new Date(now - 3 * HOUR).toISOString(), now)).toBe(false);
+    expect(signedInRecently(undefined, now)).toBe(false);
+    expect(signedInRecently('not a time', now)).toBe(false);
   });
 });

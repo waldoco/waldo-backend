@@ -6,6 +6,7 @@ import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { appCaller } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
 const HOUR = 60 * 60_000;
@@ -184,8 +185,7 @@ describe('approval expiry', () => {
       let gate = false;
       const client = { sendRaw: async (raw: string) => { sent.push(raw); return { message_id: 'm1' }; } } as unknown as GoogleClient;
       const { desk, statusOf, clock } = deskIn(state, client, async () => { if (gate) await fetching.pass(); return client; });
-      const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
-      const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<exp@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const id = await desk.proposeSendEmail(await emailProposal({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<exp@waldo-send>' }));
       gate = true;
       const approving = desk.decide(id, 'a', 'test');
       await fetching.reached;
