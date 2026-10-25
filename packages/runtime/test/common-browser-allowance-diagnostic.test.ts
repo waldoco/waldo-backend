@@ -2,7 +2,7 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {commonRuntimeReadiness} from '../src/channels/common-runtime-readiness';
 import {commonStagingRegistration} from '../src/channels/common-staging-registration';
 const proof=vi.hoisted(()=>({owner:'10000000-0000-0000-0000-000000000001',custody:'a'.repeat(64),present:true,checks:0,revokeAt:0,providerReady:true}));
-vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>proof.present?{directoryOwnerId:proof.owner,custodyDigest:proof.custody}:null,assertCurrent:async()=>{if(++proof.checks===proof.revokeAt)throw Error('authority revoked');}})}));
+vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>proof.present&&++proof.checks!==proof.revokeAt?{directoryOwnerId:proof.owner,custodyDigest:proof.custody}:null})}));
 vi.mock('../src/identity/owner-directory',()=>({signedRpc:()=>undefined}));
 vi.mock('../src/channels/browser-public-read-configuration',()=>({cloudflareBrowserProviderReadiness:()=>proof.providerReady}));
 beforeEach(()=>{proof.present=true;proof.checks=0;proof.revokeAt=0;proof.providerReady=true;});
@@ -65,7 +65,7 @@ it('retained allocation exhaustion is reported without resetting or dispatching'
  expect((await f.read()).browser).toMatchObject({status:'exhausted',retainedAllocations:2,remainingRegisteredAllocations:0});expect(f.writes).not.toHaveBeenCalled();
 });
 it.each(['directory_unlinked','physical_unlinked','final_revocation'])('%s suppresses browser allowance before publication',async kind=>{
- const f=fixture();if(kind==='directory_unlinked')proof.present=false;if(kind==='physical_unlinked')f.rows.set('telegram_unlinked',true);if(kind==='final_revocation')proof.revokeAt=2;
+ const f=fixture();if(kind==='directory_unlinked')proof.present=false;if(kind==='physical_unlinked')f.rows.set('telegram_unlinked',true);if(kind==='final_revocation')proof.revokeAt=3;
  expect((await f.read()).browser).toBeUndefined();expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
 });
 it('current automatic pin is checked against current owner and deployment without renewing it',async()=>{

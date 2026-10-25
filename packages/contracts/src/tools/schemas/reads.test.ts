@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { connectIntentSchema } from '../connect-intent';
 import {
   callMcpToolArgsSchema,
+  searchMcpToolsArgsSchema,
   callMcpToolResultSchema,
   connectServiceArgsSchema,
   executeActionArgsSchema,
-  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
@@ -229,9 +230,17 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
-  it('accepts only explicitly supported browser providers without authority or session arguments', () => {
-    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'read', provider })).toMatchObject({ provider });
-    for (const extra of [{ provider: 'auto' }, { provider: 'cloudflare_playwright', session_id: 'foreign' }, { provider: 'cloudflare_playwright', owner_id: 'foreign' }, { provider: 'cloudflare_playwright', allow_hosts: ['*'] }]) expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+  it('still accepts a provider the earlier contract named, which the host ignores', () => {
+    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', provider }).success).toBe(true);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', provider }).success).toBe(true);
+    }
+  });
+  it('refuses an unknown provider and authority or session arguments', () => {
+    for (const extra of [{ provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', ...extra }).success).toBe(false);
+    }
   });
   it('accepts a url + instruction and rejects extras, empty instruction and non-urls', () => {
     expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'what is on this page' })).toEqual({
@@ -286,6 +295,32 @@ describe('callMcpToolArgs', () => {
     expect(callMcpToolArgsSchema.safeParse({ ...base, server: '' }).success).toBe(false);
     expect(callMcpToolArgsSchema.safeParse({ ...base, args: 'not-a-record' }).success).toBe(false);
   });
+
+  it('accepts the owner\'s answers to a server question and refuses answers without a handle', () => {
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { handle: 'q_abc', responses: { workspace: { action: 'accept', content: { workspace: 'Work' } } } } }).success).toBe(true);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { responses: {} } }).success).toBe(false);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { handle: 'q_abc', responses: {}, request_state: 'x' } }).success).toBe(false);
+  });
+
+  it('accepts a 128-character MCP tool name and refuses an empty one', () => {
+    expect(callMcpToolArgsSchema.safeParse({ ...base, tool: 't'.repeat(128) }).success).toBe(true);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, tool: '' }).success).toBe(false);
+  });
+});
+
+describe('searchMcpToolsArgs', () => {
+  it.each([
+    ['no arguments', {}],
+    ['a query', { query: 'create an issue' }],
+    ['one server', { server: 'linear' }],
+    ['the next page', { query: 'issue', cursor: '20' }],
+  ])('accepts %s', (_name, args) => expect(searchMcpToolsArgsSchema.safeParse(args).success).toBe(true));
+
+  it.each([
+    ['an empty query', { query: '' }],
+    ['a non-string server', { server: 7 }],
+    ['an unknown key', { query: 'x', url: 'https://evil.example.net/mcp' }],
+  ])('refuses %s', (_name, args) => expect(searchMcpToolsArgsSchema.safeParse(args).success).toBe(false));
 });
 
 describe('external-origin results carry taint (ADR-0049)', () => {
@@ -360,6 +395,25 @@ describe('date_range guidance and strictness', () => {
   });
 });
 
+describe('searchContactsArgs', () => {
+  it('needs a name or address of 1 to 100 characters and caps the limit at 10, defaulting to 5', () => {
+    expect(searchContactsArgsSchema.parse({ query: 'Priya' })).toEqual({ query: 'Priya', limit: 5 });
+    expect(searchContactsArgsSchema.safeParse({ query: 'priya@', limit: 10, account: 'owner@example.com' }).success).toBe(true);
+    for (const bad of [{}, { query: '' }, { query: 'x'.repeat(101) }, { query: 'x', limit: 0 }, { query: 'x', limit: 11 }, { query: 'x', account: 'not-an-address' }, { query: 'x', phone: true }])
+      expect(searchContactsArgsSchema.safeParse(bad).success).toBe(false);
+  });
+  it('a match holds a name and up to three addresses, and nothing else', () => {
+    const match = { name: 'Priya Nair', emails: ['priya@northwind.example'], source: 'contacts' };
+    expect(contactMatchSchema.safeParse(match).success).toBe(true);
+    expect(contactMatchSchema.safeParse({ ...match, name: null, source: 'other_contacts' }).success).toBe(true);
+    for (const bad of [{ ...match, phone: '+1 555 0100' }, { ...match, organization: 'Northwind' }, { ...match, photo: 'https://example.test/p.jpg' }, { ...match, emails: [] }, { ...match, emails: ['a@x.example', 'b@x.example', 'c@x.example', 'd@x.example'] }, { ...match, emails: ['not an address'] }, { ...match, source: 'directory' }])
+      expect(contactMatchSchema.safeParse(bad).success).toBe(false);
+  });
+  it('lets a connect intent name the contacts feature', () => {
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'contacts' }).success).toBe(true);
+  });
+});
+
 describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
   it('search requires a non-empty query, caps the limit at 20, and defaults it to 10', () => {
     expect(searchCommunicationArgsSchema.safeParse({ query: 'from:sam' }).success).toBe(true);
@@ -406,6 +460,17 @@ describe('Calendar page receipts',()=>{
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
  });
+ it('admits the owner status only as organizer or accepted',()=>{
+  const event={id:'e1',title:'Standup',start:'2026-10-06T09:00:00Z',end:'2026-10-06T09:30:00Z',all_day:false};
+  for(const owner_status of ['organizer','accepted'])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(true);
+  for(const owner_status of ['tentative','needsAction','',true])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(false);
+  });
+ it('admits the operation marker on an event Waldo changed, and refuses an empty or oversized one',()=>{
+  const event={id:'e1',title:'QA',start:'2026-10-13T10:30:00Z',end:'2026-10-13T11:30:00Z',all_day:false};
+  const withMarker=(operation_marker:string)=>({...page,events:[{...event,operation_marker}],fetched_count:1});
+  expect(calendarPageSchema.safeParse(withMarker('a'.repeat(64))).success).toBe(true);
+  for(const marker of ['','a'.repeat(1025)])expect(calendarPageSchema.safeParse(withMarker(marker)).success).toBe(false);
+ });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);
  });
@@ -427,10 +492,16 @@ it('browser native commands are strict and cannot smuggle owner, session or subm
 });
 
 it('validates explicit native filter choices without executable selectors or coerced checkbox state',()=>{
- const base={provider:'cloudflare_playwright',url:'https://example.com/',task:'Choose a public filter'};
+ const base={url:'https://example.com/',task:'Choose a public filter'};
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);
+});
+
+it('browser back is a bare command: it names no destination, steps or session', () => {
+  const base = { url: 'https://example.com/results', task: 'Return to the results' };
+  expect(browseActArgsSchema.safeParse({ ...base, command: { operation: 'back' } }).success).toBe(true);
+  for (const command of [{ operation: 'back', url: 'https://elsewhere.example/' }, { operation: 'back', steps: 2 }, { operation: 'back', session_id: 'foreign' }]) expect(browseActArgsSchema.safeParse({ ...base, command }).success).toBe(false);
 });
 
 describe('Calendar discovery', () => {

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
@@ -17,7 +18,7 @@ const session = (name: string, work: (store: ReturnType<typeof claimStore>, turn
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
     let id = 0;
-    await work(store, text => responder.respond({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }, (_n, fn) => fn()));
+    await work(store, text => responder.respond(ownerTyped({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }), (_n, fn) => fn()));
   });
 
 it('the main model remembers a grounded lab value, returns a receipt and explicitly recalls it on the next turn', async () => {
@@ -33,9 +34,12 @@ it('the main model remembers a grounded lab value, returns a receipt and explici
     expect(seen.inputs.at(-1)).toContain('context_only_not_action_approval');
     expect(store.claims()).toHaveLength(1);
     for (const input of seen.inputs) expect(input).not.toContain('claim_ops');
-    const system = JSON.parse(seen.inputs[2]!).instructions as string;
-    expect(system).toContain('HbA1c was 9.1 last week');
-    expect(system).not.toContain('<relevant_claims>');
+    // Owner memory rides the turn context on the owner's message; the cached system prompt stays the same every turn.
+    const body = JSON.parse(seen.inputs[2]!) as { instructions: string; input: Array<{ role?: string; content?: unknown }> };
+    const context = body.input.filter((item) => item.role === 'user').at(-1)!.content as string;
+    expect(context).toContain('HbA1c was 9.1 last week');
+    expect(context).not.toContain('<relevant_claims>');
+    expect(body.instructions).not.toContain('HbA1c was 9.1 last week');
   });
 });
 

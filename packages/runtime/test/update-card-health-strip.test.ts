@@ -7,6 +7,7 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { updateBook } from '../src/channels/update-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
+import { presenceAuthority } from './helpers/directory-presence';
 
 const UPDATE_TEXT = 'Synthetic update text.';
 const fixture = vi.hoisted(() => ({ changes: [] as CalendarChange[], requests: [] as string[], sent: [] as string[] }));
@@ -55,13 +56,14 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
     const originalNow = Date.now;
     const at = Date.parse('2026-10-03T08:05:00Z');
     Date.now = () => at;
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
       if (fn === 'health_log_recent') return Response.json([
         { id: 1, kind: 'meal', logged_at: new Date(at - 3_600_000).toISOString(), payload: { description: 'oat bowl', calories_estimate: 640 } },
         { id: 2, kind: 'workout', logged_at: new Date(at - 3_600_000).toISOString(), payload: { type: 'run', duration_minutes: 37 } },
       ]);
       if (fn === 'health_context_read') return Response.json(null);
+      if (fn === 'common_owner_authority') return presenceAuthority('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', init?.body);
       return Response.json(true);
     });
     try {

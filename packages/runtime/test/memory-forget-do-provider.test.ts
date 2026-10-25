@@ -4,6 +4,7 @@ import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
 import { claimStore } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
+import { holdTopic } from './helpers/pending-topic';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][], sent: [] as string[], status: undefined as string | undefined }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
@@ -54,7 +55,7 @@ it('a held coffee topic keeps unrelated profile available in the registered owne
   await runInDurableObject(stub(name), (_i, state) => {
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: 'fact', text: 'Works in AI', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-old' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
   });
   await turn(name, 1, 'What is on my calendar?');
   expect(seen.inputs.some(input => input.includes('Works in AI'))).toBe(true);
@@ -73,12 +74,12 @@ it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it li
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
     add('[{"note":"plain private text"}]', 'plain card');
-    add('[{"note":"odd \\x41 escape PRIVATEWORDS"}]', 'a');
+    add('[{"note":"odd \\x44IFFTOPIC escape PRIVATEWORDS"}]', 'a');
     add('[{"n":"fine"}]', `SECRETTAIL\0nul ${topic}`);
     add('[{"note":"Meeting moved \\u2013 see agenda"}]', 'unrelated');
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
     sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'upper', null, 'ÉMILE visited', 0);
-    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'x\\y', 0);
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'D\\IFFTOPIC', 0);
     sql.exec('UPDATE day_plan SET rowid = -5 WHERE card = ?', 'neg');
     const real = realOf(state);
     const topics = [{ topic, state: 'pending' as const }, { topic: accented, state: 'pending' as const }];
@@ -110,7 +111,7 @@ it('HELDROWS budgets the scan, continues from a printed rowid, and keeps its not
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
-    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index}`, 0);
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a B\\UDGETTOPIC ${index}`, 0);
     const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
     const first = heldRowShapes(sql, 'day_plan', topics, 25, real);
     expect(first).toMatch(new RegExp(`${HELDROWS_SCAN_BUDGET} rows with a backslash or NUL; PARTIAL, continue with /heldrows day_plan \\d+`));
@@ -299,7 +300,7 @@ it('/heldrows lists prefix candidates and gives a continue-from note when the sc
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     for (let i = 0; i < 300; i++) sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: `the secret code word that I told you about earlier today ${i}` }]));
     sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: topic }]));
-    const out = heldRowShapes(sql, 'update_cards', [{ topic, state: 'incomplete' }], 5, t => claimStore(sql).forgetSources(t, true));
+    const out = heldRowShapes(sql, 'update_cards', [{ topic, state: 'pending' }], 5, t => claimStore(sql).forgetSources(t, true));
     const text = JSON.stringify(out);
     expect(text).toContain('continue with /heldrows update_cards');
   });
@@ -562,7 +563,7 @@ it('REVIEW798 mixed matching card still erases unrelated sibling and summary', a
   updates.observeMail(sibling.source_ref,'thread-2',1,sibling.source_message_id);
   updates.record('d',1,[{detail:MAIL_T.slice(0,20)},{detail:MAIL_T.slice(20)},sibling] as any,summary);
   const store=claimStore(sql); expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);
-  console.log('REVIEW798-HELDROWS',heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true)));
+  console.log('REVIEW798-HELDROWS',heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'pending'}],5,t=>store.forgetSources(t,true)));
   store.purge([],new Date().toISOString(),[MAIL_T]);
   const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();
   console.log('REVIEW798-COLLATERAL',JSON.stringify({row,pending:updates.pendingMail()})); state.storage.deleteAlarm();
@@ -574,7 +575,7 @@ it('REVIEW798 mail split20 /heldrows incorrectly says no holding rows',async()=>
  const label='review798-shapes';
  await runInDurableObject(stub(label),(_instance,state)=> {
  const sql=state.storage.sql;updateBook(sql).record('d',1,[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20))],null);
- const store=claimStore(sql);const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+ const store=claimStore(sql);const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'pending'}],5,t=>store.forgetSources(t,true));
  console.log('REVIEW798-MAIL-SHAPE',shape);state.storage.deleteAlarm();expect(shape).toMatch(/^#1 t1\[projection/m);
  });
 });
@@ -600,7 +601,7 @@ it.each(['quote','backslash','space','keyvalue','upper','sigma','nested'] as con
   if(kind==='upper'){a=a.toUpperCase();b=b.toUpperCase();}
   const changes=kind==='keyvalue'?[{[a]:b},mailM(2,MAIL_U)]:kind==='nested'?[{payload:{detail:a}},{payload:{detail:b}},mailM(2,MAIL_U)]:[mailM(0,kind==='space'?a.trimEnd():a),mailM(1,kind==='space'?b.trimStart():b),mailM(2,MAIL_U)];
   updates.record('d',1,changes as any,'Clean summary');const store=claimStore(sql);
-  const before=store.forgetSources(T,true);const shape=heldRowShapes(sql,'update_cards',[{topic:T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+  const before=store.forgetSources(T,true);const shape=heldRowShapes(sql,'update_cards',[{topic:T,state:'pending'}],5,t=>store.forgetSources(t,true));
   store.purge([],new Date().toISOString(),[T]); const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();const after=store.forgetSources(T,true);
   console.log('ADVERSARIAL798-VARIANT',kind,JSON.stringify({before,shape,row,after}));state.storage.deleteAlarm();
   expect(before.incomplete).toBe(true);expect(shape).toMatch(/^#1 t1\[projection/m);expect(after.incomplete).toBe(false);expect(JSON.parse(row.changes).at(-1)).toEqual(changes.at(-1));expect(row.text).toBe('Clean summary');
@@ -753,7 +754,7 @@ it.each([64,65])('FRESH804 cap %s preserves unrelated content',async n=> {
  const label=`fresh804-cap-${n}`;
  await runInDurableObject(stub(label),(_instance,state)=> {
  const sql=state.storage.sql;const updates=updateBook(sql);updates.record('d',1,[],'S'); const p=[MAIL_T.slice(0,46),...Array.from({length:n-1},(_,i)=>`Invoice ${i}`)];sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(p));const store=claimStore(sql);
- const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));expect(shape).toMatch(/^#1 t1\[projection/m);
+ const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'pending'}],5,t=>store.forgetSources(t,true));expect(shape).toMatch(/^#1 t1\[projection/m);
  store.purge([],new Date().toISOString(),[MAIL_T]);const first=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;store.purge([],new Date().toISOString(),[MAIL_T]);const second=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;
  console.log('FRESH804-CAP',n,JSON.stringify({remaining:JSON.parse(first).filter((s:string)=>s.startsWith('Invoice')).length,incomplete:store.forgetSources(MAIL_T,true).incomplete}));state.storage.deleteAlarm();expect(second).toBe(first);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(JSON.parse(first).at(-1)).toBe(`Invoice ${n-2}`);
  });
@@ -767,7 +768,7 @@ it('FRESH804 full split beyond cap preserves unrelated mail siblings',async()=>{
 
 it('ADV804 unicode-expanded interior preserves unrelated siblings',async()=>{
  const label='adv804-unicode';await runInDurableObject(stub(label),(_instance,state)=>{
- const sql=state.storage.sql;const topic='AİİİİB';const items=['Unrelated invoice','A','i\u0307'.repeat(4),'B','Unrelated footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);expect(store.forgetSources(topic,true).incomplete).toBe(true);console.log('ADV804-HELDROWS',heldRowShapes(sql,'update_cards',[{topic,state:'incomplete'}],5,t=>store.forgetSources(t,true)));store.purge([],new Date().toISOString(),[topic]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ADV804-UNICODE',after);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);});
+ const sql=state.storage.sql;const topic='AİİİİB';const items=['Unrelated invoice','A','i\u0307'.repeat(4),'B','Unrelated footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);expect(store.forgetSources(topic,true).incomplete).toBe(true);console.log('ADV804-HELDROWS',heldRowShapes(sql,'update_cards',[{topic,state:'pending'}],5,t=>store.forgetSources(t,true)));store.purge([],new Date().toISOString(),[topic]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ADV804-UNICODE',after);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);});
 });
 
 it('ADV804 full split plus lone prefix settles',async()=>{
@@ -918,7 +919,7 @@ it('HELDCOST a held topic with a large claim store reads the purge tables a boun
   await runInDurableObject(stub(name), (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let index = 0; index < 1500; index += 1) memory.add({ kind: 'fact', text: `Fact number ${index} about topic ${index}`, evidence: `evidence ${index}`, source: 'stated', origin: 'owner', source_ref: `owner, tg-${index}` }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
   });
   const reads = await runInDurableObject(stub(name), async (_i, state) => {
     const sql = state.storage.sql as unknown as { exec: (query: string, ...bindings: unknown[]) => unknown };

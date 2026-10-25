@@ -14,7 +14,7 @@ describe('workers test pool egress',()=>{
   expect(JSON.parse(reply.body)).toMatchObject({error:{type:'invalid_request_error',code:'invalid_api_key'}});
  });
  it('answers a fictional WhatsApp send locally with the rejection Meta gives it',async()=>{
-  const reply=await egress('https://graph.facebook.com/v21.0/fictional-phone-id/messages',{method:'POST',headers:{authorization:'Bearer fictional','content-type':'application/json'},body:'{}'});
+  const reply=await egress('https://graph.facebook.com/v26.0/fictional-phone-id/messages',{method:'POST',headers:{authorization:'Bearer fictional','content-type':'application/json'},body:'{}'});
   expect(reply).toMatchObject({status:401,marker:'blocked'});
   expect(JSON.parse(reply.body)).toMatchObject({error:{type:'OAuthException',code:190}});
  });

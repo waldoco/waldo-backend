@@ -1,4 +1,6 @@
 import {
+  RUNG_BLOCKED_FIX,
+  TOOL_ERRORS,
   TOOL_PERMISSIONS,
   buildSessionState,
   executeActionArgsSchema,
@@ -24,14 +26,20 @@ import { describe, expect, it } from 'vitest';
 import {
   dispatchTool,
   formatToolDefinitions,
+  MAX_TOOL_ERROR_CHARS,
   parseToolCalls,
   type ToolDispatcherContext,
   type RuntimeToolCall,
 } from '../src/tools/dispatcher';
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { webSearchHandler } from '../src/tools/live/web-search';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+
+// The dispatcher's error shape for a catalogue code; cause overridden where the tool's own text rides it.
+const shaped = (code: keyof typeof TOOL_ERRORS, cause = TOOL_ERRORS[code].cause) => ({ error: cause, error_code: code, fix: TOOL_ERRORS[code].fix, retryable: TOOL_ERRORS[code].retryable });
 
 function triggerAllowlistFor(tool: ToolName): TriggerType[] {
   return (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) =>
@@ -272,7 +280,7 @@ describe('ToolDispatcher', () => {
         ok: false,
         call_id: `call-${label}-subject`,
         tool: 'get_crs',
-        error: 'tool authentication failed',
+        ...shaped('unauthenticated'),
         code: 'auth_failed',
         reason: 'hook_halt',
       });
@@ -340,7 +348,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-health-args',
       tool: 'send_message',
-      error: 'hook halted',
+      ...shaped('sanitise_denied'),
       code: 'forbidden',
       reason: 'sanitise_denied',
     });
@@ -377,6 +385,27 @@ describe('ToolDispatcher', () => {
 
     expect(result).toMatchObject({ ok: true, source_taint: null });
     expect(received?.content).toBe('email alice@example.com');
+  });
+
+  it("web_search after an earlier tool in the same turn still composes the run's own signal", async () => {
+    const run = new AbortController();
+    const runScope: RunEffectScope = { runId: 'run', attempt: 'one', deadline: Date.now() + 60_000, signal: run.signal, admit() {}, commit: work => work() };
+    const ctx = { ...dispatcherContext('user_message'), runScope };
+    const first: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs', description: 'Return a summary.', schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'), autonomy_gated: false,
+      async handle() { return { ok: true, data: { summary: 'steady' }, source_taint: null }; },
+    };
+    let seen: AbortSignal | undefined;
+    const search = webSearchHandler('key', (async (_url: string, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+    }) as typeof fetch);
+    await dispatchTool({ id: 'call-first', name: 'get_crs', args: {} }, ctx, { handlers: [first, search] });
+    const result = await dispatchTool({ id: 'call-search', name: 'web_search', args: { query: 'waldo', limit: 3 } }, ctx, { handlers: [first, search] });
+    expect(result).toMatchObject({ ok: true });
+    run.abort();
+    expect(seen?.aborted).toBe(true);
   });
 
   it('a non-external tool failure carrying source_taint null keeps its own error instead of invalid_handler_result', async () => {
@@ -546,11 +575,29 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-calendar-external-failure',
       tool: 'query_calendar',
-      error: 'provider-controlled failure text',
+      ...shaped('transient', 'provider-controlled failure text'),
       code: 'transient',
       reason: 'tool_result_error',
       source_taint: 'external',
     });
+  });
+
+  it('carries a page\'s structured block to the model, with the fix that names the next rung', async () => {
+    const blockedBy = (blocked: unknown): ToolHandler<QueryCalendarArgs, { events: string[] }, ToolDispatcherContext> => ({
+      name: 'query_calendar', description: 'Read external calendar events.', schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'), autonomy_gated: false,
+      async handle() { return { ok: false, error: 'The site answered with a bot check.', code: 'rejected', source_taint: 'external', blocked } as never; },
+    });
+    for (const blocked of ['challenge', 'login_required', 'js_required'] as const) {
+      await expect(dispatchTool({ id: `call-${blocked}`, name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy(blocked)] })).resolves.toEqual({
+        ok: false, call_id: `call-${blocked}`, tool: 'query_calendar',
+        error: 'The site answered with a bot check.', error_code: 'rejected', fix: RUNG_BLOCKED_FIX[blocked], retryable: false, blocked,
+        code: 'rejected', reason: 'tool_result_error', source_taint: 'external',
+      });
+    }
+    // A block outside the vocabulary is a malformed result, never a guessed reason passed on.
+    await expect(dispatchTool({ id: 'call-captcha', name: 'query_calendar', args: {} }, dispatcherContext('brief'), { handlers: [blockedBy('captcha')] }))
+      .resolves.toMatchObject({ ok: false, error_code: 'invalid_handler_result' });
   });
 
   it('runs immutable Scribe after malicious custom PreTool and PostTool transforms', async () => {
@@ -791,7 +838,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -830,7 +877,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-direct-acl-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -865,7 +912,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-drift',
       tool: 'get_crs',
-      error: 'tool handler ACL drift',
+      ...shaped('handler_acl_drift'),
       code: 'transient',
       reason: 'handler_acl_drift',
     });
@@ -907,7 +954,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-no-approval',
       tool: 'write_task',
-      error: 'hook halted',
+      ...shaped('approval_denied'),
       code: 'forbidden',
       reason: 'approval_denied',
     });
@@ -940,7 +987,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-large',
       tool: 'get_crs',
-      error: 'tool result exceeded bound',
+      ...shaped('result_oversize'),
       code: 'oversize',
       reason: 'result_oversize',
     });
@@ -1059,7 +1106,7 @@ describe('ToolDispatcher', () => {
       call_id: 'call-invalid-args',
       tool: 'get_crs',
       // The datetime hint is scoped to datetime validation failures; a range error gets none.
-      error: 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly',
+      ...shaped('invalid_args', 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly'),
       code: 'invalid_args',
       reason: 'invalid_args',
     });
@@ -1169,7 +1216,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-code',
       tool: 'execute_code',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -1247,7 +1294,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-error',
       tool: 'get_crs',
-      error: 'tool returned oversized error',
+      ...shaped('transient', `${'x'.repeat(MAX_TOOL_ERROR_CHARS)}\n[cut: ${20_000 - MAX_TOOL_ERROR_CHARS} more characters]`),
       code: 'transient',
       reason: 'tool_result_error',
     });

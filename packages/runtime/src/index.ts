@@ -2,26 +2,21 @@ import { handleDeviceRedeem } from './devices/redeem-route';
 import { handleDeviceConnect } from './devices/connect-route';
 import { genericReject } from './devices/generic-reject';
 import type { DeviceBridgeDO } from './devices/device-bridge-do';
-import { DurableObject } from 'cloudflare:workers';
-import {
-  canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
-  canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
-  canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
-  canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
-  canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
-  canonicalizeJudgmentAnswerRequestV05ForDigest,
-  responsibilityHttpProblemV01,
-} from '@waldo/contracts';
-import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import { handleProbeTurn, PROBE_TURN_PATH } from './channels/probe-turn';
 import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
 import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
+import { handleWhoopCallback, handleWhoopStart, WHOOP_CALLBACK_PATH, WHOOP_START_PATH } from './health/providers/whoop-routes';
+import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
+import { oauthStateSecret } from './connectors/oauth-state-secret';
+import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
-import { CONSOLE_PATH } from './channels/console';
+import { CONSOLE_PATH, consoleCookie } from './channels/console';
+import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
 import { handleApp } from './channels/app-api';
+import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
 import { sweepHealthRetention } from './health/retention-sweep';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
@@ -30,31 +25,20 @@ import { readConsoleTicket } from './identity/console-ticket';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
-import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
-import {
-  canonicalizeResponsibilityProjectionIngressForDigest,
-  canonicalizePlanningProjectionIngressForDigest,
-  canonicalizeJudgmentProjectionIngressForDigest,
-  signResponsibilityIngress,
-} from './responsibility/ingress-signature';
-import {
-  createResponsibilityWorkerAdapter,
-  type ResponsibilityOwnerRoot,
-  type TrustedResponsibilityContext,
-} from './responsibility/worker-adapter';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
-export { RunLoopDO } from './run-loop/do';
+export { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
 export { IMessageBridgeDO } from './channels/imessage/bridge-do';
 export { OwnerDO } from './channels/owner-do';
-export { TracerDO } from './tracer/tracer-do';
-import type { RunLoopDO } from './run-loop/do';
-import type { TracerDO } from './tracer/tracer-do';
+import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
+import { photonCallback } from './channels/imessage/photon-routes';
+import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
+import { photonKeepAlive } from './channels/imessage/enrollment';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -69,13 +53,10 @@ declare global {
       CLOUDFLARE_ACCOUNT_ID?: string;
       RUN_LOOP_PROVIDER_LIVE?: string;
       RUN_LOOP_PROVIDER_MODE?: string;
-      RESPONSIBILITY_PUBLIC_API_ENABLED?: string;
       RESPONSIBILITY_RATE_LIMITER?: RateLimit;
-      RESPONSIBILITY_INGRESS_HMAC_SECRET?: string;
       SUPABASE_PROJECT_URL?: string;
       SUPABASE_PUBLISHABLE_KEY?: string;
       WALDO_ROUTER_HMAC_SECRET?: string;
-      RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
       OWNER_DO?: DurableObjectNamespace;
       DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
@@ -86,10 +67,15 @@ declare global {
       WALDO_ENVIRONMENT?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
+      WALDO_OAUTH_STATE_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
       GOOGLE_CLIENT_SECRET?: string;
+      WHOOP_CLIENT_ID?: string;
+      WHOOP_CLIENT_SECRET?: string;
+      WHOOP_REDIRECT_URI?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
+      ANTHROPIC_API_KEY?: string;
       WALDO_ENV?: string;
       WALDO_RELEASE?: string;
     }
@@ -97,40 +83,6 @@ declare global {
 }
 
 type Env = Cloudflare.Env;
-
-// Test-only probe DO for the hermetic Gate-5 runtime substrate. No product logic:
-// it exercises DO SQLite durability, the alarm slot via the alarm-slot seam, and
-// eviction survival. `tick` is synthetic neutral state, not a physiological value.
-export class RuntimeProbeDO extends DurableObject<Env> {
-  // In-memory flag (not persisted). Reset to false when the instance is reconstructed
-  // after eviction — the test reads this to prove eviction actually tore down the
-  // instance rather than returning a still-live one.
-  inMemoryTouched = false;
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS probe_state(id TEXT PRIMARY KEY, tick INTEGER)');
-  }
-
-  async seed(): Promise<void> {
-    this.ctx.storage.sql.exec(
-      "INSERT INTO probe_state (id, tick) VALUES ('probe', 1) ON CONFLICT(id) DO UPDATE SET tick = 1",
-    );
-    this.inMemoryTouched = true;
-    await armAlarm(this.ctx.storage, Date.now() + 1000);
-  }
-
-  async readTick(): Promise<number> {
-    return this.ctx.storage.sql
-      .exec<{ tick: number }>("SELECT tick FROM probe_state WHERE id = 'probe'")
-      .one().tick;
-  }
-
-  override async alarm(): Promise<void> {
-    this.ctx.storage.sql.exec("UPDATE probe_state SET tick = 2 WHERE id = 'probe'");
-    this.inMemoryTouched = true;
-  }
-}
 
 const forwardTicketConsole = async (request: Request, env: Env, issuer?: string): Promise<Response> => {
   if (!env.OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
@@ -154,30 +106,40 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   const ticket = await readConsoleTicket(value, env.WALDO_ROUTER_HMAC_SECRET);
   const auth = consoleAuth(env);
   if (!ticket || !auth) return rejected();
-  const hasOwner = (request.headers.get('cookie') ?? '').split(';').some(part => part.trim().startsWith(`${OWNER_COOKIE}=`));
-  try { if (hasOwner && await auth.readOwnerCookie(request) !== ticket.owner) return rejected(); }
+  let presented: string | null;
+  try { presented = await auth.readOwnerCookie(request); }
   catch { return new Response('Sign-in is temporarily unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } }); }
+  // A link never switches a browser signed in to another owner. A cookie that names no live session (it outlives its
+  // row) is no account to protect: the sign-in replaces it.
+  if (presented !== null && presented !== ticket.owner) return rejected();
   const response = await forwardTicketConsole(request, env, ticket.owner);
   if (request.method !== 'POST' || response.status !== 303 || !response.headers.get('set-cookie')) return response;
   let ownerCookie: string | null;
-  try { ownerCookie = await auth.ownerCookie(ticket.owner); }
+  try { ownerCookie = await auth.ownerCookie(ticket.owner, request); }
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`);
+  headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, headers });
 };
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    // Read once per isolate at the first request, so a deploy without the key logs that Google and MCP sign-in are off.
+    oauthStateSecret(env);
+    const crossSite = consoleCrossSiteRefusal(request);
+    if (crossSite) return crossSite;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
     if (appResponse) return appResponse;
+    const consoleChat = await handleConsoleChat(request, env);
+    if (consoleChat) return consoleChat;
     const devicePath = new URL(request.url).pathname;
     // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
     if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
+    if (devicePath === PHOTON_CALLBACK_PATH) return photonCallback(request, env as never);
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {
@@ -220,7 +182,8 @@ export default {
         return withConsoleTrace(new Response(null, { status: 303, headers: { location: `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` } }), consoleRequestTrace ?? consoleTrace());
       }
       if (consoleRequestTrace) {
-        consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+        const routed = response.ok || (response.status >= 300 && response.status < 400);
+        consoleLog(consoleRequestTrace, 'console_route', routed, routed ? 'forwarded' : 'forward_failed');
         return withConsoleTrace(response, consoleRequestTrace);
       }
       return response;
@@ -228,230 +191,33 @@ export default {
     if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
       return handleConnectTicket(request, env);
     }
+    if (new URL(request.url).pathname === WHOOP_CALLBACK_PATH) {
+      return handleWhoopCallback(request, env);
+    }
+    if (new URL(request.url).pathname.startsWith(WHOOP_START_PATH)) return handleWhoopStart(request, env);
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);
     }
-    if (env.RESPONSIBILITY_PUBLIC_API_ENABLED !== 'true') {
-      return new Response('not found', {
-        status: 404,
-        headers: {
-          'cache-control': 'no-store',
-          'content-type': 'text/plain; charset=utf-8',
-          'vary': 'Authorization, Accept',
-        },
-      });
-    }
-    try {
-      return await createResponsibilityPublicHandler(env).fetch(request);
-    } catch (error) {
-      reportResponsibilityFailure('handler_unavailable', error);
-      return new Response(JSON.stringify(responsibilityHttpProblemV01(503)), {
-        status: 503,
-        headers: {
-          'cache-control': 'no-store',
-          'content-type': 'application/problem+json; charset=utf-8',
-          'vary': 'Authorization, Accept',
-        },
-      });
-    }
+    if (new URL(request.url).pathname === MCP_CLIENT_METADATA_PATH && request.method === 'GET') return handleMcpClientMetadata(request);
+    if (new URL(request.url).pathname === MCP_CALLBACK_PATH && request.method === 'GET') return handleMcpCallback(request, env);
+    return new Response('not found', {
+      status: 404,
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'text/plain; charset=utf-8',
+        'vary': 'Authorization, Accept',
+      },
+    });
   },
   // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
+    if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
 } satisfies ExportedHandler<Env>;
 
-export function createResponsibilityPublicHandler(env: Env) {
-  const projectUrl = env.SUPABASE_PROJECT_URL;
-  const publishableKey = env.SUPABASE_PUBLISHABLE_KEY;
-  if (typeof projectUrl !== 'string' || typeof publishableKey !== 'string') {
-    throw new Error('responsibility public authority is unconfigured');
-  }
-  if (env.RESPONSIBILITY_RATE_LIMITER === undefined) {
-    throw new Error('responsibility public rate limiter is unconfigured');
-  }
-  const ingressSecret = responsibilityIngressSecret(env);
-  return createResponsibilityWorkerAdapter({
-    authority: createSupabaseResponsibilityAuthority({ projectUrl, publishableKey }),
-    edgeRateLimit: {
-      async admit(request) {
-        const key = await responsibilityEdgeRateKey(request);
-        return (await env.RESPONSIBILITY_RATE_LIMITER!.limit({ key })).success;
-      },
-    },
-    failureReporter: { report: reportResponsibilityFailure },
-    async ownerRootFor(context) {
-      return ownerRootFor(env.RUN_LOOP_DO, context, ingressSecret);
-    },
-    now: () => new Date().toISOString(),
-    newId: (kind) => `${kind}_${crypto.randomUUID()}`,
-  });
-}
-
-function reportResponsibilityFailure(code: string, error: unknown): void {
-  const cause = error instanceof Error ? error.cause : undefined;
-  console.error(JSON.stringify({
-    event: 'responsibility_public_failure',
-    code,
-    error_name: error instanceof Error ? error.name : 'UnknownError',
-    cause_name: cause instanceof Error ? cause.name : null,
-  }));
-}
-
-export async function responsibilityEdgeRateKey(request: Request): Promise<string> {
-  const source = request.headers.get('cf-connecting-ip');
-  if (source === null || source.length < 3 || source.length > 64 || /[\s\0]/.test(source)) {
-    throw new Error('responsibility edge source unavailable');
-  }
-  return sha256Hex(`edge-source\0${source}`);
-}
-
-async function ownerRootFor(
-  namespace: DurableObjectNamespace<RunLoopDO>,
-  context: TrustedResponsibilityContext,
-  ingressSecret: string,
-): Promise<ResponsibilityOwnerRoot> {
-  const stub = namespace.get(namespace.idFromName(await responsibilityOwnerRootName(
-    context.ownerId,
-  )));
-  return {
-    async capture(input, ingress) {
-      const requestDigest = (input.trustedEnvelope as { requestDigest?: unknown }).requestDigest;
-      if (typeof requestDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(requestDigest)) {
-        throw new Error('responsibility ingress digest unavailable');
-      }
-      return stub.captureResponsibilityFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'capture',
-        requestDigest: requestDigest as `sha256:${string}`,
-        operationDigest: `sha256:${await sha256Hex(
-          (input.trustedEnvelope as { protocolVersion?: unknown }).protocolVersion === '0.1'
-            ? canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest(input.trustedEnvelope)
-            : canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest(input.trustedEnvelope),
-        )}`,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-    async readProjection(input, ingress) {
-      const projectionDigest = `sha256:${await sha256Hex(
-        canonicalizeResponsibilityProjectionIngressForDigest(input),
-      )}` as const;
-      return stub.readResponsibilityProjectionFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'projection',
-        requestDigest: projectionDigest,
-        operationDigest: projectionDigest,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-    async plan(input, ingress) {
-      const requestDigest = (input.trustedEnvelope as { requestDigest?: unknown }).requestDigest;
-      if (typeof requestDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(requestDigest)) {
-        throw new Error('planning ingress digest unavailable');
-      }
-      return stub.executePlanningTurnFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'planning_turn',
-        requestDigest: requestDigest as `sha256:${string}`,
-        operationDigest: `sha256:${await sha256Hex(
-          canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest(input.trustedEnvelope),
-        )}`,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-    async cancelPlanning(input, ingress) {
-      const digest = `sha256:${await sha256Hex(
-        canonicalizeWorkUnitPlanningCancelRequestV03ForDigest(input.request),
-      )}` as const;
-      return stub.cancelPlanningTurnFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'planning_cancel', requestDigest: digest, operationDigest: digest,
-        issuedAt: Date.now(), secret: ingressSecret,
-      }));
-    },
-    async readPlanningProjection(input, ingress) {
-      const digest = `sha256:${await sha256Hex(
-        canonicalizePlanningProjectionIngressForDigest(input),
-      )}` as const;
-      return stub.readPlanningProjectionFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'planning_projection', requestDigest: digest, operationDigest: digest,
-        issuedAt: Date.now(), secret: ingressSecret,
-      }));
-    },
-    async startExecution(input, ingress) {
-      const digest = `sha256:${await sha256Hex(
-        canonicalizeWorkUnitExecutionStartRequestV04ForDigest(input.request),
-      )}` as const;
-      return stub.startExecutionFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'execution_start',
-        requestDigest: digest,
-        operationDigest: digest,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-    async answerJudgment(input, ingress) {
-      const digest = `sha256:${await sha256Hex(
-        canonicalizeJudgmentAnswerRequestV05ForDigest(input.request),
-      )}` as const;
-      return stub.answerJudgmentFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'judgment_answer',
-        requestDigest: digest,
-        operationDigest: digest,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-    async readJudgmentProjection(input, ingress) {
-      const digest = `sha256:${await sha256Hex(
-        canonicalizeJudgmentProjectionIngressForDigest(input),
-      )}` as const;
-      return stub.readJudgmentProjectionFromWorker(input, await signResponsibilityIngress({
-        context: { ...ingress, ...authorityForIngress(context) },
-        operation: 'judgment_projection',
-        requestDigest: digest,
-        operationDigest: digest,
-        issuedAt: Date.now(),
-        secret: ingressSecret,
-      }));
-    },
-  };
-}
-
-function authorityForIngress(context: TrustedResponsibilityContext) {
-  return {
-    ownerId: context.ownerId,
-    authenticatedSubjectRef: context.authenticatedSubjectRef,
-    presenceId: context.presenceId,
-    presenceRegistrationId: context.presenceRegistrationId,
-    ownerRootRoutingVersion: context.ownerRootRoutingVersion,
-  };
-}
-
-function responsibilityIngressSecret(env: Env): string {
-  const secret = env.RESPONSIBILITY_INGRESS_HMAC_SECRET;
-  if (typeof secret !== 'string' || secret.length < 32) {
-    throw new Error('responsibility ingress signing is unconfigured');
-  }
-  return secret;
-}
-
-export async function responsibilityOwnerRootName(
-  ownerId: string,
-): Promise<string> {
-  const digest = await sha256Hex(`waldo-owner-root\0${ownerId}`);
-  return `owner-root:sha256:${digest}`;
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('');
-}
+export default {
+  ...worker,
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
+} satisfies ExportedHandler<Env>;

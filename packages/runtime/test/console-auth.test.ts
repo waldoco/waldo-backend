@@ -144,7 +144,7 @@ it('legacy signup cannot send an unverified phone to the atomic owner creation p
 
 
 it('malformed signed session inventory cannot prove absence or revocation', async () => {
-  const row={session:'a'.repeat(64),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()};
+  const row={session:'a'.repeat(64),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString(),expires_at:new Date().toISOString(),rotated_to:null};
   for(const invalid of [null,{},[{}],[{...row,session:'short'}],[{...row,created_at:'invalid'}],[{...row,extra:true}],[row,row]]) {
     const auth=consoleAuth(env,vi.fn().mockResolvedValue(json(invalid)) as unknown as typeof fetch,now)!;
     await expect(auth.listSessions('owner')).rejects.toThrow('session inventory unavailable');
@@ -155,13 +155,12 @@ it('malformed signed session inventory cannot prove absence or revocation', asyn
   await expect(signout.signOutAll('owner')).rejects.toThrow('session revocation unavailable');
 });
 
-it('a session inventory with expiry reads each row\'s own, and one from before the 30-day migration reads as 12 hours', async () => {
+it('the session inventory reads each row\'s own end and successor, and refuses a row without them', async () => {
   const created='2026-10-13T00:00:00.000Z',seen='2026-10-13T01:00:00.000Z',expires='2026-11-12T00:00:00.000Z';
   const read=async(rows:unknown)=>consoleAuth(env,vi.fn().mockResolvedValue(json(rows)) as unknown as typeof fetch,now)!.listSessions('owner');
   expect(await read([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,rotated_to:'b'.repeat(64)}]))
     .toEqual([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,rotated_to:'b'.repeat(64)}]);
-  expect(await read([{session:'a'.repeat(64),created_at:created,last_seen_at:seen}]))
-    .toEqual([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:'2026-10-13T12:00:00.000Z',rotated_to:null}]);
+  await expect(read([{session:'a'.repeat(64),created_at:created,last_seen_at:seen}])).rejects.toThrow('session inventory unavailable');
   const row={session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,rotated_to:null};
   for(const invalid of [{...row,expires_at:'invalid'},{...row,rotated_to:'yes'},{...row,rotated_to:true},(({rotated_to:_r,...rest})=>rest)(row),(({expires_at:_e,...rest})=>rest)(row)])
     await expect(read([invalid])).rejects.toThrow('session inventory unavailable');

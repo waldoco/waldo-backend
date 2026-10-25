@@ -80,9 +80,11 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
         const decision = fixture.requests.filter(r => r.request.response_format?.name === 'calendar_prep');
         expect(decision.length, 'prep decision ran').toBeGreaterThan(0);
         const system = decision.map(r => String(r.request.system)).join('\n');
-        expect(system, 'the base system prompt must survive a large owner profile (the sanitiser drops an oversize system prompt whole)').toContain('You are Waldo');
-        expect(system, 'the newest owner facts reach the decision prompt').toContain('Owner fact 219:');
-        expect(system.length, 'system prompt stays under the sanitiser limit').toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
+        const context = decision.map(r => String(r.request.messages.at(-1)?.content)).join('\n');
+        expect(system, 'the base system prompt must survive a large owner profile (the sanitiser drops an oversize request whole)').toContain('You are Waldo');
+        expect(system, 'owner facts ride the turn context, never the stable system prompt').not.toContain('Owner fact');
+        expect(context, 'the newest owner facts reach the decision prompt').toContain('Owner fact 219:');
+        expect(system.length + context.length, 'the decision stays under the sanitiser limit').toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
         return; // the rest of this table covers stale-delivery modes; this mode only proves the prompt
       }
       if (['changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters'].includes(mode)) {

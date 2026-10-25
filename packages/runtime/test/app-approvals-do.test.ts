@@ -6,6 +6,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature } from '../src/identity/owner-directory';
 import { sha256Hex } from '../src/connectors/google';
+import { emailProposal } from './fixtures/email-send';
 
 const proof = vi.hoisted(() => ({
   outputs: [] as any[][], telegram: [] as { method: string; body: any }[], moved: 0, sentRaw: [] as string[], eventTag: 'etag-3pm',
@@ -44,7 +45,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       if (fn === 'owner_for_auth') return Response.json(a.p_auth_user === AUTH ? name : null);
       if (fn === 'console_session_open') { hash = a.p_session_hash; live = true; return Response.json(true); }
       if (fn === 'console_session_touch') return Response.json(live && a.p_session_hash === hash);
-      if (fn === 'console_session_list') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created }] : []);
+      if (fn === 'console_session_inventory') return Response.json(live && a.p_do_name === name ? [{ session: hash, created_at: created, last_seen_at: created, expires_at: new Date(Date.parse(created) + 12 * 60 * 60_000).toISOString(), rotated_to: null }] : []);
       if (fn === 'owner_runtime_authority') return Response.json(a.p_do_name === name ? { owner_id: OWNER, auth_user_id: AUTH, do_name: name, state_version: 0, admission_revision: '1' } : null);
       if (fn === 'app_session_authority') return Response.json(live && a.p_do_name === name && a.p_session_hash === hash ? { owner_id: OWNER, do_name: name, session_hash: hash, state_version: 0, admission_revision: '1', expires_at: expires } : null);
       if (fn === 'workspace_owner_binding') return Response.json({ owner_id: OWNER, environment: 'staging', namespace: 'approvals-app-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 });
@@ -110,15 +111,15 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       expect(proof.moved).toBe(1);
 
       proof.telegram = [];
-      const raw = 'To: sam@example.test\r\nSubject: Friday\r\n\r\nSee you at four.';
-      const email = await telegramDesk().proposeSendEmail({ to: ['sam@example.test'], subject: 'Friday', body: 'See you at four.', message_id: '<friday@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const friday = await emailProposal({ to: ['sam@example.test'], subject: 'Friday', body: 'See you at four.', message_id: '<friday@waldo-send>' });
+      const email = await telegramDesk().proposeSendEmail(friday);
       const card = proof.telegram.find(call => call.method === 'sendMessage' && JSON.stringify(call.body.reply_markup ?? {}).includes(`a:${email}`))!;
       expect(card.body.chat_id).toBe(TELEGRAM);
       const [mail] = (await list(credential, '?state=open')).filter(item => item.approval_id === email);
       expect([...mail!.presented_surfaces!].sort()).toEqual(['app', 'telegram']);
       const emailed = await app('/approvals/decisions', { approval_id: email, action: 'approve', expected_digest: mail!.payload_digest, request_id: 'email-decision-0001' }, credential);
       expect(appApprovalDecisionResultV1Schema.parse(await emailed.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
-      expect(proof.sentRaw).toEqual([raw]);
+      expect(proof.sentRaw).toEqual([friday.raw]);
       expect(proof.telegram.filter(call => call.method === 'editMessageReplyMarkup')).toEqual([{ method: 'editMessageReplyMarkup', body: { chat_id: TELEGRAM, message_id: proof.telegram.indexOf(card) + 1, reply_markup: { inline_keyboard: [] } } }]);
       expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', email).one().n).toBe(0);
 
@@ -128,7 +129,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       expect(note).toMatchObject({ presented_surfaces: ['app'], exact: { recipients: { to: ['telegram'], cc: [], bcc: [] } } });
       const messaged = await app('/approvals/decisions', { approval_id: message, action: 'approve', expected_digest: note!.payload_digest, request_id: 'message-decision-0001' }, credential);
       expect(appApprovalDecisionResultV1Schema.parse(await messaged.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
-      expect(proof.telegram.filter(call => call.method === 'sendMessage').map(call => call.body)).toEqual([{ chat_id: TELEGRAM, text: 'Running ten minutes late.' }]);
+      expect(proof.telegram.filter(call => call.method === 'sendMessage').map(call => call.body)).toEqual([{ chat_id: TELEGRAM, text: 'Running ten minutes late.', link_preview_options: { is_disabled: true } }]);
 
       expect((await app('/approvals?state=approved', undefined, credential)).status).toBe(400);
       expect((await app('/approvals')).status).toBe(401);

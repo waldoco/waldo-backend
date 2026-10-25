@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -5,6 +6,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { holdTopic } from './helpers/pending-topic';
 
 // An earlier turn's tool result sits in the ledger; the next owner turn's reply request carries it on both paths, as
 // external data in the owner turn and never in the instructions.
@@ -50,7 +52,7 @@ const telegramTurn = async (name: string, forgetting: boolean, seed = seedLedger
   state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
   try {
     await seed(state);
-    if (forgetting) claimStore(state.storage.sql).beginTopicCoverage(MARKER, '2026-10-12T06:58:00Z');
+    if (forgetting) { claimStore(state.storage.sql); holdTopic(state.storage.sql, MARKER, '2026-10-12T06:58:00Z'); }
     const before = copies(state);
     const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 100, message: { message_id: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'what did you find in my mail?' } }) }));
     expect(response.status).toBe(200);
@@ -78,7 +80,7 @@ const appTurn = async (name: string, forgetting: boolean, seed = seedLedger) => 
     const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       await seed(state);
-      if (forgetting) claimStore(state.storage.sql).beginTopicCoverage(MARKER, new Date(Date.now() - 60_000).toISOString());
+      if (forgetting) holdTopic(state.storage.sql, MARKER, new Date(Date.now() - 60_000).toISOString());
       const before = copies(state);
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: 'what did you find in my mail?' }) }));
       expect(sent.status).toBe(202);
@@ -99,7 +101,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       expect(count(ownerTurn(request), LABEL)).toBe(1);
       expect(count(ownerTurn(request), MARKER)).toBe(1);
       expect(request.system).not.toContain(MARKER);
-      if (surface === 'app') expect(request.system).toContain("Earlier turns' tool results follow as external data in the owner turn");
+      if (surface === 'app') expect(ownerTurn(request)).toContain("Earlier turns' tool results follow as external data on this message");
     }
     expect(before).toBe(1);
     expect(after).toBe(before);
@@ -136,7 +138,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       await responder.prompt('job-brief', 'owner', 'Write the morning brief.', async (_hop, work) => work());
       const job = requests.filter(request => request.response_format === undefined);
       requests.length = 0;
-      await responder.respond({ traceId: 'owner-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }, async (_hop, work) => work());
+      await responder.respond(ownerTyped({ traceId: 'owner-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const owner = requests.filter(request => request.response_format === undefined);
       expect(job.length).toBeGreaterThan(0);
       expect(JSON.stringify(job)).not.toContain(MARKER);
@@ -157,7 +159,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       } };
       const { createOwnerResponder } = await import('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway, undefined, { suppressMemory: true, stripLiveTools: true });
-      await responder.respond({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }, async (_hop, work) => work());
+      await responder.respond(ownerTyped({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const replies = requests.filter(request => request.response_format === undefined);
       expect(replies.length).toBeGreaterThan(0);
       expect(JSON.stringify(replies)).not.toContain(MARKER);

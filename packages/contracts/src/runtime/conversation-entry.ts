@@ -9,6 +9,11 @@ export type ConversationRole = 'user' | 'assistant';
 
 export type ConversationModelMessage = Readonly<{ role: ConversationRole; content: string }>;
 
+// A compaction row summarises the span of original rows it covers, for the model's view only. Its role lives on the
+// entry alone: a model message never carries it, so no provider adapter can receive it on the wire.
+export type ConversationEntryRole = ConversationRole | 'compaction';
+export type ConversationCovers = Readonly<{ from_id: string; to_id: string; rows: number }>;
+
 export type ConversationEntry = Readonly<{
   id: string;
   ownerId: string;
@@ -21,7 +26,10 @@ export type ConversationEntry = Readonly<{
   modelProjection: ConversationProjection;
   // Stamped by the conversation path that appends the entry. Optional only for rows stored
   // before the seam existed; modelContext derives those from the assistant-entry id convention.
-  role?: ConversationRole;
+  role?: ConversationEntryRole;
+  // The original rows a compaction row carries, directly or through the summary it superseded: the first and last row
+  // ids on the chain and how many rows that is. Kept when the row is superseded or omitted, so a forget can find the span.
+  covers?: ConversationCovers;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
   // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
@@ -39,12 +47,66 @@ export type ConversationReceipt = Readonly<{
   more: number;
 }>;
 
+// The one rule every forget redactor and verifier matches by: the literal in any Unicode case, as a whole word where a word
+// edge can be read. That is only between letters of a space-delimited alphabet (Latin, Greek, Cyrillic), so forgetting "tea"
+// leaves "team" and "steady" whole. Everywhere else the literal matches inside the text, as substring matching did: scripts
+// written without spaces (Chinese, Japanese, Korean, Thai), Indic words that take suffixes (मुंबईत), and a literal whose edge is
+// a digit or symbol (a number inside +91..., "sarah2024", "C++17"). Under-forgetting is the worse failure, so the boundary
+// applies only where its absence is known to break words. A combining mark continues the letter before it.
+// Stored text can be raw JSON: a real escape (\n, \t, \u00a0) before the literal separates it like the character it decodes
+// to (read case-sensitively, so C:\Ntea is one word). In a stored JSON object or array a match never starts on the continuation of
+// an escape, which would leave a broken escape behind. Everywhere else a backslash is a character (C:\Users\tom), since
+// keeping a prose escape whole would leave the topic behind and report it gone. `openEnd` drops the end boundary,
+// for a literal cut short of its end. Case folds as Unicode simple folding, and dotted capital I also matches the i plus
+// combining dot it lowercases to, the one letter whose lowercase is longer, so the fold is a superset of toLowerCase.
+const ALPHABETIC = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]`;
+const ESCAPING_BACKSLASH = String.raw`(?<!\\)(?:\\\\)*\\`;
+const alphabeticEdge = new RegExp(`^${ALPHABETIC}$`, 'u');
+const afterLetter = new RegExp(`(?<=${ALPHABETIC}\\p{M}*)`, 'uy');
+const afterEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH}(?:[bfnrt]|u[0-9A-Fa-f]{4}))`, 'uy');
+// In text that parses as JSON every escaping backslash starts a valid escape, so nothing may start right after one.
+const insideEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH})`, 'uy');
+const beforeLetter = new RegExp(`\\p{M}|${ALPHABETIC}`, 'uy');
+const at = (pattern: RegExp, value: string, index: number) => { pattern.lastIndex = index; return pattern.test(value); };
+// Raw JSON here is a stored object or array. A lone quoted string is how claim evidence is kept, so it is text.
+const parsesAsJson = (value: string) => { try { const parsed: unknown = JSON.parse(value); return typeof parsed === 'object' && parsed !== null; } catch { return false; } };
+
+function* literalTextSpans(value: string, text: string, openEnd: boolean): Generator<readonly [number, number]> {
+  if (!text) return;
+  const body = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\u0130|i\u0307/gi, '(?:\\u0130|i\\u0307)');
+  const [first] = text, last = [...text.replace(/\p{M}+$/u, '')].at(-1);
+  const leading = first !== undefined && alphabeticEdge.test(first), trailing = !openEnd && last !== undefined && alphabeticEdge.test(last);
+  const json = value.includes('\\') && parsesAsJson(value);
+  let free = 0;
+  // Every start position is a candidate, so a candidate the boundary rejects cannot hide an overlapping one that passes.
+  for (const candidate of value.matchAll(new RegExp(`(?=(${body}))`, 'giu'))) {
+    const start = candidate.index, end = start + candidate[1]!.length;
+    if (start < free || (json && at(insideEscape, value, start))) continue;
+    if (leading && at(afterLetter, value, start) && !at(afterEscape, value, start)) continue;
+    if (trailing && at(beforeLetter, value, end)) continue;
+    free = end;
+    yield [start, end];
+  }
+}
+
+// Where the literal first occurs by that rule, or -1.
+export const literalTextIndex = (value: string, text: string, openEnd = false): number => {
+  const found = literalTextSpans(value, text, openEnd).next();
+  return found.done ? -1 : found.value[0];
+};
+
+// The value with every occurrence of the literal by that rule replaced.
+export const replaceLiteralText = (value: string, text: string, marker: string): string => {
+  let out = '', from = 0;
+  for (const [start, end] of literalTextSpans(value, text, false)) { out += value.slice(from, start) + marker; from = end; }
+  return from === 0 ? value : out + value.slice(from);
+};
+
 // Privacy redaction uses literal text only; it never decides what the owner meant.
 export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
   const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
-    .sort((a, b) => b.length - a.length)
-    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
-  return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
+    .sort((a, b) => b.length - a.length);
+  return value => patterns.reduce((text, pattern) => replaceLiteralText(text, pattern, marker), value);
 };
 
 // Protocol wrappers are preserved; arbitrary data keys are only data.
@@ -93,6 +155,21 @@ export const literalJsonTextRedactor = (
     return JSON.stringify(visit(parsed, mode === 'arguments')) + suffix;
   };
 };
+
+export const COMPACTION_SUMMARY_CLOSE = '[End of summary.]';
+export const compactionSummaryOpen = (rows: number): string => `[Waldo's summary of ${rows} earlier messages in this conversation; not the owner's words:]`;
+// The model sees a compaction row as one user message that names itself as a summary, so nothing grounds on it as the
+// owner's own words. The labels are part of the record, not of any one renderer.
+export const compactionMessage = (entry: ConversationEntry, text: string = entry.modelPayload): ConversationModelMessage =>
+  ({ role: 'user', content: `${compactionSummaryOpen(entry.covers?.rows ?? 0)}\n${text}\n${COMPACTION_SUMMARY_CLOSE}` });
+
+// The model's view of rows in chain order: each row's projection, with a compaction row rendered as its labelled summary.
+export const conversationModelMessages = (entries: readonly ConversationEntry[]): readonly ConversationModelMessage[] => entries.flatMap((entry) => {
+  const role = entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
+  const projected = entry.modelProjection.mode === 'omit' ? null : entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : entry.modelPayload;
+  if (projected === null) return [];
+  return [role === 'compaction' ? compactionMessage(entry, projected) : { role, content: projected }];
+});
 
 export const redactConversationEntry = (entry: ConversationEntry, redact: (value: string) => string): ConversationEntry => ({
   ...entry,
@@ -162,18 +239,25 @@ export class ConversationTree {
   }
 
   modelContext(leafId: string): readonly ConversationModelMessage[] {
-    return this.path(leafId).flatMap((entry) => {
-      const role = entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
-      switch (entry.modelProjection.mode) {
-        case 'include': return [{ role, content: entry.modelPayload }];
-        case 'omit': return [];
-        case 'replace': return [{ role, content: entry.modelProjection.payload }];
-      }
-    });
+    return conversationModelMessages(this.path(leafId));
   }
 
+  // The owner's transcript never carries a compaction row.
   appContext(leafId: string): readonly string[] {
-    return this.path(leafId).map((entry) => entry.appPayload);
+    return this.path(leafId).filter((entry) => entry.role !== 'compaction').map((entry) => entry.appPayload);
+  }
+
+  // Every row the tree holds, in no order; a reader that needs the chain walks path().
+  values(): IterableIterator<ConversationEntry> {
+    return this.entries.values();
+  }
+
+  // Rewrites one row in place (a compaction row superseded by a newer one); its id and links never change.
+  replace(entry: ConversationEntry): void {
+    const current = this.entries.get(entry.id);
+    if (!current) throw new Error('conversation entry not found');
+    if (current.parentId !== entry.parentId || current.threadAnchorId !== entry.threadAnchorId) throw new Error('conversation entry links cannot change');
+    this.entries.set(entry.id, Object.freeze({ ...entry, modelProjection: Object.freeze({ ...entry.modelProjection }) }));
   }
 
   private ancestorIds(parentId: string | null): string[] {

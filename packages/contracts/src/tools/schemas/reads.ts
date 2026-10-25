@@ -57,7 +57,7 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     signals: z.array(z.strictObject({
       signal: healthReadSignalSchema,
       unit: healthReadUnitSchema,
-      source: z.enum(['apple', 'samsung', 'health_connect']),
+      source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
       method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.
@@ -98,6 +98,7 @@ export const calendarPageSchema = z.strictObject({
     location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),operation_marker:z.string().min(1).max(1024).optional(),
     status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
     attendee_emails:z.array(z.string().min(1).max(320)).max(20).optional(),conference_url:z.string().max(2048).optional(),attachments:z.array(z.strictObject({title:z.string().min(1).max(255),file_id:z.string().max(1024).optional()})).max(20).optional(),
+    owner_status:z.enum(['organizer','accepted']).optional(),
   }).refine(event => {
     const time = event.all_day ? z.iso.date() : iso8601Schema;
     return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
@@ -137,12 +138,32 @@ export const searchCommunicationArgsSchema = z.strictObject({
 });
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
+// People search over the owner's own contacts and "other contacts" (people they have mailed).
+// Google matches name and address prefixes; the result carries names and addresses only.
+export const searchContactsArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  query: z.string().min(1).max(100),
+  limit: z.int().min(1).max(10).default(5),
+});
+export type SearchContactsArgs = z.infer<typeof searchContactsArgsSchema>;
+// A match carries a name and addresses only; there is no field for phone, organisation or photo.
+export const contactMatchSchema = z.strictObject({
+  name: z.string().min(1).max(200).nullable(),
+  emails: z.array(z.email().max(320)).min(1).max(3),
+  source: z.enum(['contacts', 'other_contacts']),
+});
+export type ContactMatch = z.infer<typeof contactMatchSchema>;
+
 export const readThreadArgsSchema = z.strictObject({
   account: z.email().optional(),
   cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
-});
+  // Continue one long message body: the id of a message whose body_next_offset was returned, and that offset.
+  body_message_id: z.string().min(1).max(128).optional(),
+  body_offset: z.int().min(0).max(100_000_000).optional(),
+}).refine(args => (args.body_message_id === undefined) === (args.body_offset === undefined), { error: 'body_message_id and body_offset go together', path: ['body_offset'] })
+  .refine(args => args.body_message_id === undefined || args.cursor === undefined, { error: 'a body continuation does not take a thread cursor', path: ['cursor'] });
 export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives
@@ -252,7 +273,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 export const browsePageArgsSchema = z.strictObject({
   retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
   session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
 });
@@ -283,10 +304,11 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('owner_login'), reason: z.string().min(1).max(1000) }),
   z.strictObject({ operation: z.literal('resume_owner_login') }),
   z.strictObject({ operation: z.literal('download'), element_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('back') }),
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   session_handle: z.string().min(1).max(80).optional(),
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),
@@ -315,10 +337,23 @@ export type ReadToolOutputArgs = z.infer<typeof readToolOutputArgsSchema>;
 // dispatch-time server allowlist (ADR-0049), whose shape is deliberately unpinned here.
 export const callMcpToolArgsSchema = z.strictObject({
   server: z.string().min(1).max(100),
-  tool: z.string().min(1).max(100),
+  // MCP tool names run to 128 characters; the server's own list decides which exist.
+  tool: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+  // The owner's answers to a connected server's questions (an input_required result), sent with the same
+  // call: handle names the questions, responses maps each question id to the owner's answer.
+  answers: z.strictObject({ handle: z.string().min(1), responses: z.record(z.string(), z.unknown()) }).optional(),
 });
 export type CallMcpToolArgs = z.infer<typeof callMcpToolArgsSchema>;
+
+// Finds tools on the MCP servers the owner connected: words to match, one server's full list, or the
+// next page of a previous search. All optional: no arguments lists every server and its first tools.
+export const searchMcpToolsArgsSchema = z.strictObject({
+  query: z.string().min(1).optional(),
+  server: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+});
+export type SearchMcpToolsArgs = z.infer<typeof searchMcpToolsArgsSchema>;
 
 // Results of the three general-agent tools are external-origin by construction, so the
 // taint field pins the single owner's (memory/sanitise) non-null arm: an untainted

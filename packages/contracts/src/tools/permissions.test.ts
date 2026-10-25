@@ -48,7 +48,6 @@ describe('toolName', () => {
       'query_availability',
       'read_owner_context',
       'read_memory',
-      'update_memory',
       'remember',
       'forget_memory',
       'search_episodes',
@@ -61,6 +60,7 @@ describe('toolName', () => {
       'read_artifact',
       'call_mcp_tool',
       'read_mcp_tool',
+      'search_mcp_tools',
       'read_drive',
       'write_task',
       'update_task',
@@ -96,6 +96,7 @@ describe('toolName', () => {
       'set_schedule_preference',
       'read_tool_output',
       'connect_service',
+      'send_console_link',
       'browse_page',
       'browse_act',
       'delegate_task',
@@ -114,6 +115,12 @@ describe('toolName', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'use_mac',
+      'search_contacts',
+      'send_progress_note',
+      'attach_file',
+      'record_owner_finding',
+      'list_owner_findings',
     ]);
   });
 
@@ -231,12 +238,17 @@ describe('TOOL_PERMISSIONS', () => {
       ],
       intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
       user_message: [
+        'use_mac',
         'get_crs',
         'get_health',
         'query_calendar',
         'connect_service',
+        'send_console_link',
+        'send_progress_note',
+        'attach_file',
         'get_communication',
         'search_communication',
+        'search_contacts',
         'read_thread',
         'get_tasks',
         'get_master_metrics',
@@ -257,6 +269,7 @@ describe('TOOL_PERMISSIONS', () => {
         'read_artifact',
         'call_mcp_tool',
         'read_mcp_tool',
+        'search_mcp_tools',
         'read_drive',
         'write_task',
         'update_task',
@@ -304,8 +317,10 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'record_owner_finding',
+      'list_owner_findings',
       ],
-      dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+      dreaming_mode: ['read_memory', 'search_episodes'],
       pre_activity_spot: [
         'get_crs',
         'query_calendar',
@@ -323,7 +338,7 @@ describe('TOOL_PERMISSIONS', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    const withheld = ['execute_code', 'update_todo', 'update_memory', 'list_responsibilities', 'close_responsibility'];
+    const withheld = ['execute_code', 'update_todo', 'list_responsibilities', 'close_responsibility'];
     expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - withheld.length);
     for (const name of withheld) expect(TOOL_PERMISSIONS.user_message).not.toContain(name);
   });
@@ -337,12 +352,20 @@ describe('TOOL_PERMISSIONS', () => {
     expect(triggersGranting('read_mcp_tool')).toEqual(['user_message']);
   });
 
+  it("grants 'search_mcp_tools' only in user_message, a read of the owner's connected servers' tool definitions", () => {
+    expect(triggersGranting('search_mcp_tools')).toEqual(['user_message']);
+  });
+
   it("grants 'call_mcp_tool' only in user_message — MCP is a gated bridge, not a bypass (ADR-0049)", () => {
     expect(triggersGranting('call_mcp_tool')).toEqual(['user_message']);
   });
 
   it("grants 'browse_act' in user_message only - bounded actions never run in a handoff", () => {
     expect(triggersGranting('browse_act')).toEqual(['user_message']);
+  });
+
+  it("grants 'send_console_link' in user_message only - a job, brief or handoff never mints a console credential", () => {
+    expect(triggersGranting('send_console_link')).toEqual(['user_message']);
   });
 
   it("grants 'web_search', 'browse_page' and 'read_document' only in the two verbose triggers", () => {
@@ -395,7 +418,7 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
   });
 
   it('pins the always-on discovery and skill metadata set', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list']);
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'send_console_link', 'skills_list', 'use_mac']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {

@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -43,7 +45,7 @@ vi.mock('../src/connectors/google', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8';
-const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-state-secret' };
+const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-webhook-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret' };
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const rpcs: string[] = [];
 beforeEach(() => {
@@ -93,7 +95,7 @@ describe('connecting Google from a chat turn', () => {
     });
   });
 
-  it('on the app, a grant that stops working mints no link: the Connections screen shows it needs a reconnect', async () => {
+  it('on the app, a grant that stops working mints no link: a plain notice is queued for the transcript', async () => {
     const name = 'connect-app-reauth';
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql); ensureSchema(state.storage);
@@ -106,12 +108,14 @@ describe('connecting Google from a chat turn', () => {
         expect(sent.status).toBe(202);
         const { message_id: id } = await sent.json() as { message_id: string };
         await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
-        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice_skipped:1'), { timeout: 5_000, interval: 20 });
+        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice:1'), { timeout: 5_000, interval: 20 });
         expect(await state.storage.get('google:health')).toEqual({ 'local:owner@example.test': 'invalid_grant' });
         expect(rpcs).not.toContain('connect_session_issue');
         expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);
         expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
-        expect(await state.storage.get('google:reauth-noticed')).toBeUndefined();
+        expect(Object.keys(await state.storage.get<Record<string, number>>('google:reauth-noticed') ?? {})).toEqual(['local:owner@example.test']);
+        expect((state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.id.startsWith('google-reauth:')).map(record => record.payload.text))
+          .toEqual([reconnectNoticeText('app', 'owner@example.test')]);
       } finally { await state.storage.deleteAlarm(); }
     });
   });

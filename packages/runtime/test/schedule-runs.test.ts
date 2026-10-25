@@ -3,14 +3,16 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
-import type { TracerDO } from '../src/tracer/tracer-do';
-import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
+import type { TestStorageDO } from './support/worker-entry';
+import { TelegramFinalOutbox, standingOrderFinalId } from '../src/channels/telegram-final-outbox';
 import { heartbeatEligible, heartbeatTick, settleHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let seq = 0;
-const stub = () => env.TRACER_DO.get(env.TRACER_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TracerDO>;
+const stub = () => env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TestStorageDO>;
 const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });
 
 type RunRow = {
@@ -118,7 +120,7 @@ describe('run decision + delivery lifecycle (owner shape call)', () => {
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
       const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
           id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
           ownerSubject: 'owner', doName: 'owner-do', heartbeat,
         }) });
@@ -209,6 +211,43 @@ describe('run decision + delivery lifecycle (owner shape call)', () => {
     expect(result.finals[0]).toMatchObject({ status: 'pending', attempts: 0 });
     expect(result.runs).toHaveLength(1);
     expect(result.runs[0]).toMatchObject({ outcome: 'running', delivery: 'pending', settled_at: null });
+  });
+
+  it('a committed standing-order report advances its producer without rerunning it after a postcommit error', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(60_000));
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => 60_000);
+      await scheduler.schedule({ id: 'committed-order', kind: 'standing_order', occurrenceAt: 60_000, dueAt: 60_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: { order_id: 'committed-order' } });
+      const first = await scheduler.dispatchDue({ standing_order: async (entry) => {
+        await outbox.enqueue({ id: standingOrderFinalId(entry.id, entry.occurrence_at), trace: 'order-trace', payload: { chat_id: 42, text: 'Synthetic report' },
+          ownerSubject: 'owner', doName: 'owner-do', standingOrder: { runId: 'producer-run', gate: 'act_and_report' } });
+        throw new Error('postcommit logging failed');
+      } });
+      let replayed = 0;
+      const second = await scheduler.dispatchDue({ standing_order: async () => { replayed += 1; } });
+      return { first, second, replayed, entry: scheduler.read('committed-order'), finals: outbox.records(),
+        runs: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray() };
+    });
+    expect(result.first).toHaveLength(1);
+    expect(result.replayed).toBe(0);
+    expect(result.entry).toMatchObject({ occurrence_at: 120_000, status: 'armed', attempts: 0 });
+    expect(result.finals).toHaveLength(1);
+    expect(result.runs.every(run => run.error_class !== 'run')).toBe(true);
+  });
+
+  it('a committed standing-order report of another occurrence does not suppress the current one', async () => {
+    const dispatched = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(60_000));
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => 60_000);
+      await scheduler.schedule({ id: 'current-order', kind: 'standing_order', occurrenceAt: 60_000, dueAt: 60_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: { order_id: 'current-order' } });
+      await outbox.enqueue({ id: standingOrderFinalId('current-order', 30_000), trace: 'prior-trace', payload: { chat_id: 42, text: 'Prior report' },
+        ownerSubject: 'owner', doName: 'owner-do', standingOrder: { runId: 'producer-run', gate: 'act_and_report' } });
+      return scheduler.dispatchDue({ standing_order: async () => undefined });
+    });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({ id: 'current-order', occurrence_at: 60_000 });
   });
 
   it.each(['schedule id', 'occurrence', 'producer kind'])('a committed final with a different %s does not suppress a heartbeat', async (difference) => {
@@ -380,7 +419,7 @@ describe('C3 dedupe + missed-run policy', () => {
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
       const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
           id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
           ownerSubject: 'owner', doName: 'owner-do', heartbeat,
         }) });

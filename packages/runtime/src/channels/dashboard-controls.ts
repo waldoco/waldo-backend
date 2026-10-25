@@ -1,5 +1,5 @@
 import type { ApprovalReview } from './approvals';
-import { consoleMayApprove, type ConsoleView } from './console';
+import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
@@ -24,8 +24,9 @@ export function readControlsQuery(params: URLSearchParams): ControlsQuery | null
 
 const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
-  if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
+  if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? { account: review.account } : {}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body, ...(review.earlier_unknown_at ? { earlier_unknown_at: review.earlier_unknown_at } : {}) };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if ('text' in review) return { kind: review.kind, text: review.text };
   if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
 };
@@ -37,7 +38,8 @@ const projections = {
     date: view.now.slice(0,10),
     cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
-    schedules: view.schedules,
+    // app.v1 names five behaviors in a strict object; a later kind stays out until a contract revision names it.
+    schedules: { daily_brief: view.schedules.daily_brief, followups: view.schedules.followups, event_briefs: view.schedules.event_briefs, nightly: view.schedules.nightly, heartbeat: view.schedules.heartbeat },
   }),
   connections: (view: ConsoleView) => ({
     google: {
@@ -46,15 +48,21 @@ const projections = {
     },
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
+    // Link state per channel, only when the directory answered. This view holds no part of the number, so a linked
+    // channel is labelled without one rather than with an invented mask.
+    ...(view.imessage || view.whatsapp ? { channels: [
+      ...(view.imessage ? [{ channel: 'imessage' as const, state: view.imessage.linked ? 'linked' as const : 'unlinked' as const, masked_label: view.imessage.linked ? 'Your iPhone' : null }] : []),
+      ...(view.whatsapp ? [{ channel: 'whatsapp' as const, state: view.whatsapp.linked ? 'linked' as const : 'unlinked' as const, masked_label: view.whatsapp.linked ? 'Your WhatsApp' : null }] : []),
+    ] } : {}),
   }),
   waiting: (view: ConsoleView) => ({
     // Proposal times are instants; the console draws them in this owner zone when it can read it.
     timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
-      const canApprove = consoleMayApprove(item) && review !== null;
+      const canApprove = consoleMayApprove(item) && review !== null, canSend = waitingMaySend(item) && review !== null;
       const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
-      const actions = canApprove ? ['approval.approve', 'approval.skip']
+      const actions = canApprove ? ['approval.approve', 'approval.skip'] : canSend ? ['approval.send', 'approval.edit', 'approval.skip']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions };
@@ -70,8 +78,8 @@ const projections = {
     ledger: view.ledger,
   }),
   profile: (view: ConsoleView) => ({
-    // Existing removal may leave derived text behind. Do not present that text as settled.
-    sections: view.forgettingSpots.length ? [] : view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
+    // The profile is built from memory as the model may see it, so what a forget is still clearing is already left out.
+    sections: view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
     barriers: view.barriers,
     removal: { state: view.forgettingSpots.length ? 'incomplete' as const : 'none_recorded' as const, pending_count: view.forgettingSpots.length },
     holds: view.holds.map((hold) => ({ kind: hold.kind, reason: hold.reason, created_at: hold.created_at })),
@@ -80,6 +88,7 @@ const projections = {
     telegram_linked: view.telegram.linked,
     google_access_granted: view.google.accounts.some((account) => !account.error),
     quiet_hours_set: view.proactivity.quiet_start !== null,
+    ...(view.imessage ? { imessage_linked: view.imessage.linked } : {}),
   }),
   usage: (view: ConsoleView) => ({ rows: view.usage.map((row) => ({ model: row.model, calls: row.calls, input: row.input, cached: row.cached, output: row.output, usd: row.usd })) }),
   files: (view: ConsoleView) => ({

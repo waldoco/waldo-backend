@@ -4,7 +4,7 @@
 import type { ScriptRule } from '../src/testing/scripted-gateway';
 
 export type ScenarioCategory =
-  | 'tools' | 'memory' | 'scheduler' | 'degradation' | 'injection' | 'approvals' | 'voice' | 'clinical' | 'fetch';
+  | 'tools' | 'memory' | 'scheduler' | 'degradation' | 'injection' | 'approvals' | 'voice' | 'clinical' | 'fetch' | 'asking';
 
 // Trace assertion over the turn's hop stream (the same feed traceBook persists live).
 export type HopAssert = Readonly<{
@@ -18,7 +18,8 @@ export type HopAssert = Readonly<{
 }>;
 
 // Assertion over what the scripted model actually received on an owner turn (1-based). Text is
-// the system prompt plus every message; roles lists the message roles in order.
+// the system prompt, every message and every tool result the request carried; roles lists the
+// message roles in order.
 export type ModelInputAssert = Readonly<{
   turn: number;
   mustContain?: readonly string[];
@@ -35,9 +36,12 @@ export type StateAssert =
 export type FixtureEvent = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean }>;
 export type FixtureMail = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
 export type FixtureWeb = Readonly<{ title: string; url: string; snippet: string }>;
+// One calendar's free/busy answer; a calendar that is absent, or carries errors, reads as unavailable.
+export type FixtureFreeBusy = Readonly<{ busy: readonly Readonly<{ start: string; end: string }>[]; errors?: readonly Readonly<{ reason: string }>[] }>;
 
 // A turn is owner text; the '@plan ' and '@prompt ' prefixes drive the planning and proactive
-// entry points, matching the evals runner's convention.
+// entry points, matching the evals runner's convention. '@job ' drives a proactive job that embeds
+// text someone else wrote (a day card, an update card), as the owner DO runs one.
 export type Scenario = Readonly<{
   id: string;
   category: ScenarioCategory;
@@ -52,9 +56,14 @@ export type Scenario = Readonly<{
     events?: readonly FixtureEvent[];
     mail?: readonly FixtureMail[];
     web?: readonly FixtureWeb[];
+    freeBusy?: Readonly<Record<string, FixtureFreeBusy>>;
     // The google client resolves to null: every google tool returns the not_connected auth
     // failure and the connect offer seam fires.
     googleNotConnected?: boolean;
+    // The owner's spend so far this month, read against MONTHLY_SPEND_CEILING_USD at each turn's start.
+    spentUsd?: number;
+    // Offer a browse_page fixture whose page reads 'fixture page', or one whose site blocks the read with that block.
+    browse?: boolean | 'challenge' | 'login_required' | 'js_required';
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];

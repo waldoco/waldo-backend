@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseJsonc } from '../jsonc.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const source = readFileSync(join(root, 'packages/runtime/wrangler.jsonc'), 'utf8');
@@ -24,16 +25,17 @@ const check = (config) => {
 
 try {
   if (check(source).status !== 0) throw new Error('current observability config rejected');
-  const config = JSON.parse(source.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1'));
+  const config = parseJsonc(source);
   // Inspect actual environments, not textual occurrence counts: adding an isolated
   // preview must not make the production/staging privacy regression stop running.
   for (const target of ['production', 'staging']) {
-    for (const setting of ['invocation_logs', 'traces']) {
+    for (const setting of ['invocation_logs', 'traces', 'redact_query_string']) {
       const changed = structuredClone(config);
       const env = target === 'production' ? changed : changed.env.staging;
       if (setting === 'invocation_logs') env.observability.logs.invocation_logs = true;
-      else env.observability.traces.enabled = true;
-      const expected = setting === 'invocation_logs' ? 'full-URL invocation logs' : 'automatic traces';
+      else if (setting === 'traces') env.observability.traces.enabled = true;
+      else env.observability.redact_query_string = false;
+      const expected = { invocation_logs: 'full-URL invocation logs', traces: 'automatic traces', redact_query_string: 'redact request query strings' }[setting];
       const result = check(JSON.stringify(changed));
       if (result.status !== 1 || !result.stderr.includes(expected)) {
         throw new Error(`guard accepted unsafe setting ${expected} in ${target}`);

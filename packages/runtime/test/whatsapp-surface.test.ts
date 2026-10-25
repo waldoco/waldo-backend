@@ -14,7 +14,9 @@ const input = () => ({ message, traceId: 'host-trace', runScope: scope });
 describe('native WhatsApp surface adapter', () => {
   it('normalizes admitted text with native presentation and host-owned scope/identity', () => {
     const { adapter } = fixture();
-    expect(adapter.toEnvelope(input())).toMatchObject({ surface: 'whatsapp', traceId: 'host-trace', conversationRef: 'opaque-wa-ref', text: 'Hello', runScope: scope, messageRef: { id: 'wamid.in', conversationRef: 'opaque-wa-ref' }, presentation: { delivery: { approval: 'native_buttons', attachments: true }, commands: [] } });
+    const envelope = adapter.toEnvelope(input());
+    expect(envelope).toMatchObject({ surface: 'whatsapp', traceId: 'host-trace', conversationRef: 'opaque-wa-ref', text: 'Hello', parts: [{ authorship: 'owner', text: 'Hello' }], runScope: scope, messageRef: { id: 'wamid.in', conversationRef: 'opaque-wa-ref' }, presentation: { delivery: { approval: 'native_buttons', attachments: true } } });
+    expect(envelope.presentation).not.toHaveProperty('commands');
     expect(adapter.limits).toMatchObject({ textMax: 4096, buttons: 3, attachmentsOut: true });
   });
   it('rejects foreign senders without a numeric identity cast', () => {
@@ -25,9 +27,20 @@ describe('native WhatsApp surface adapter', () => {
     const { adapter } = fixture();
     const attachments = [{ kind: 'image' as const, mime_type: 'image/png', filename: 'photo.png', data_base64: 'aGVsbG8=' }];
     const image = adapter.toEnvelope({ ...input(), message: { ...message, type: 'image', image: { id: 'media', caption: 'Look' } }, attachments });
-    expect(image).toMatchObject({ text: 'Look', attachments, runScope: scope });
-    expect(adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' } }, transcript: 'spoken words', mediaNote: 'Voice transcribed' })).toMatchObject({ text: 'spoken words', mediaNote: 'Voice transcribed', runScope: scope });
+    expect(image).toMatchObject({ text: 'Look', parts: [{ authorship: 'owner', text: 'Look' }], attachments, runScope: scope });
+    // A transcript is not the owner's typed text: the voice message has none, and the transcript is its own part.
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' } }, transcript: 'spoken words', mediaNote: 'Voice transcribed' })).toMatchObject({
+      text: '', parts: [{ authorship: 'media_note', text: 'Voice transcribed' }, { authorship: 'file_transcript', text: 'spoken words' }], runScope: scope,
+    });
     expect(() => adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' } } })).toThrow('resolved');
+  });
+  it('marks a forward the Cloud API flags, its caption and transcript included, as someone else\'s words', () => {
+    const { adapter } = fixture();
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, context: { forwarded: true } } }).parts).toEqual([{ authorship: 'forwarded', text: 'Hello' }]);
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' }, context: { frequently_forwarded: true } }, transcript: 'spoken words', mediaNote: 'Voice transcribed' }).parts)
+      .toEqual([{ authorship: 'media_note', text: 'Voice transcribed' }, { authorship: 'forwarded', text: 'spoken words' }]);
+    // Reply context alone is not a forward.
+    expect(adapter.toEnvelope({ ...input(), message: { ...message, context: {} } }).parts).toEqual([{ authorship: 'owner', text: 'Hello' }]);
   });
   it.each(['button_reply', 'list_reply'] as const)('decodes %s selection id without interpreting its display title as an instruction', type => {
     expect(whatsappSelection({ ...message, type: 'interactive', interactive: { type, [type]: { id: 'a:proposal', title: 'untrusted label' } } })).toEqual({ id: 'a:proposal', messageId: 'wamid.in' });

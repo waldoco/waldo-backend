@@ -35,7 +35,7 @@ Trace level, set on the root span:
 | environment | `WALDO_ENVIRONMENT` var (`staging`, `production`; `development` if unset) | `langfuse.environment` on every span |
 | release, version | `WALDO_RELEASE` var, the deployed commit SHA | `langfuse.release`, `langfuse.version` |
 | tags | `channel:<channel>` plus `feature:<area>` for every area with a hop in the turn | `langfuse.trace.tags` |
-| metadata.schema_version | `1` | filterable |
+| metadata.schema_version | `TURN_EVENT_SCHEMA_VERSION` (currently `12`) | filterable |
 | metadata.channel | `telegram` | filterable |
 | metadata.trace_key | runtime trace id (`tg-<update id>`), joins Langfuse to Worker logs | filterable |
 | metadata.outcome | `answered` or `failed` | filterable |
@@ -67,7 +67,7 @@ Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most s
 
 ### Context size per model call
 
-Each `llm_*` generation carries numeric metadata (bytes, UTF-8) describing what filled that call, never text: `context_system_bytes`, `context_request_bytes`, `context_tools_count`, `context_tools_bytes` (the tool definitions sent), `context_tool_turns_bytes`, `context_history_messages`, `context_history_bytes`, `context_current_bytes`, `context_attachments`, and on the owner reply one `context_system_<section>_bytes` per system-prompt section (`reasons`, `behavior`, `health`, `clock`, `memory`, `orders`, `loops`, `skill_catalog`, `task_context`, `skill_procedures`). The sections plus their joins equal `context_system_bytes`. Trace schema version 6.
+Each `llm_*` generation carries numeric metadata (bytes, UTF-8) describing what filled that call, never text: `context_system_bytes`, `context_request_bytes`, `context_tools_count`, `context_tools_bytes` (the tool definitions sent), `context_tool_turns_bytes`, `context_history_messages`, `context_history_bytes`, `context_current_bytes`, `context_attachments`, and on the owner reply one `context_system_<section>_bytes` per system-prompt section (`reasons`, `behavior`, `health`, `clock`, `memory`, `orders`, `loops`, `skill_catalog`, `task_context`, `skill_procedures`). The sections plus their joins equal `context_system_bytes`. What rides the owner's message as the turn context is sized per section as `context_turn_<section>_bytes`. Calls whose system prompt carries the voice block (`llm_reply`, `llm_background_decision`) also carry `voice_version`. Trace schema version 6.
 
 ### Model calls, tokens and cost
 
@@ -75,3 +75,32 @@ Each model call is a Langfuse generation with `model.name`, `usage_details` (`in
 
 Deploy with both vars so traces carry them:
 `npx wrangler deploy --name waldo-runtime-staging --var WALDO_OWNER_TELEGRAM_ID:<id> --var WALDO_ENVIRONMENT:staging --var WALDO_RELEASE:$(git rev-parse --short HEAD) --var LANGFUSE_CAPTURE_TEXT:true`
+
+### Durable cost ledger
+
+`waldo.cost_ledger_daily` (Supabase, migration `20261020120000_waldo_cost_ledger.sql`) holds one row per owner, UTC day, cost kind (`turn`, `background`, `worker`, `heartbeat`, `eval`) and model: calls, input, output and cached tokens, hosted web searches, `sandbox_ms`, `usd_estimate`, and the reserved `browser_ms` and `broker_calls` (no producer yet). Rows that are not a model call file under model `''`. The USD figure comes from `llm/pricing.ts`; an unpriced model counts tokens at `0` USD.
+
+The owner's Durable Object is the only writer. `packages/runtime/src/observability/cost-rollup.ts` folds each turn-log hop with usage into per-day deltas held in the DO's KV, and after the hop sends them over the signed router rail (`waldo.cost_ledger_add`). It is write-behind: the turn never waits on Supabase, a failed send keeps the deltas and retries the same batch id on the next hop (the database ignores a batch id it has already applied), and a batch refused 20 times is dropped with a `cost_ledger` hop (`code: sync_failed`). Deleting the owner deletes their ledger rows.
+
+It is off unless the Worker var `WALDO_COST_LEDGER_SYNC=on`. Staging sets it `on` (the migration is applied there); production sets it `off`. Rollback is the var back to `off`.
+
+The same KV keeps the owner's spend for the current UTC month (`cost_month_usd`), counted from every delta recorded while the ledger is on, whether or not it has reached Supabase yet. A turn that starts at or past `MONTHLY_SPEND_CEILING_USD` (USD 25 per owner per month in every environment, staging included, a code value in `packages/runtime/src/llm/cost-ledger.ts`) degrades rather than stops. The provider clamps each of its calls to the auxiliary route (Luna, then Haiku), which is where Briefs, check-ins, closes and other machine turns already run, so they keep going. `browse_page`, `browse_act` and `execute_code` are refused by the dispatcher before anything runs, with the tool refusal `spend_ceiling_reached`. Its fix tells the model what still works (the read tools, on the cheaper model) and the UTC day the ceiling resets, so it degrades the task rather than stopping. Each hold logs a `spend_hold` hop (`code: spend_ceiling_reached:<tool>`), and the ledger stores it as one call on model `held:<tool>` with `usd_estimate` 0. To count holds per owner per month, sum `calls` where `model like 'held:%'`; the month's spend is the sum of `usd_estimate` over the other rows. With the ledger off there is no month total and so no ceiling. The total counts model USD only (browser and sandbox time are priced at 0), and it starts at 0 in each DO storage, so the first month undercounts.
+
+Known gap: the ledger undercounts billed tokens, so treat the baseline as a floor. It misses:
+
+- an OpenAI call that ends `oversize` (incomplete output) returns no `spent`, so tokens the provider billed for are not logged;
+- failed routes and the template floor log no usage;
+- `failFromHook` in `llm/provider.ts` drops a call that was already billed;
+- `llm/pricing.ts` does not model cache writes, which bill above the uncached input rate.
+
+No test yet pins that a failed attempt's `spent` is added exactly once. Follow-up: make every billed attempt reach the turn log and add that test.
+
+Spend per owner per day for the last 30 days (service role):
+
+```sql
+select o.do_name, l.day, sum(l.usd_estimate) as usd, sum(l.input_tokens) as input, sum(l.cached_tokens) as cached
+from waldo.cost_ledger_daily l join waldo.owners o on o.id = l.owner_id
+where l.day >= current_date - 30 group by 1, 2 order by 2 desc, 3 desc;
+```
+
+`scripts/cost-report.mjs` turns the ledger (exported with the query in its header) and Langfuse's model calls into a per-owner, per-day table of calls, traces, input, cached tokens, cache share, output and USD, with a `--baseline` window for before and after. It is the baseline every cost change is judged against.

@@ -1,5 +1,6 @@
-import { toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { shiftDay } from './scores/time';
+import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, HrvMethod, Span } from './scores/types';
 
 // The producer turns an owner's stored readings into the derived row the app and the prompt read. It reads one 31-day
@@ -13,6 +14,12 @@ export type ProducerDeps = Readonly<{
   // Busy minutes per local day across the owner's calendars, for Weight. Absent, failing or late, Weight is unavailable.
   readDemand?: (range: { from: string; to: string; timezone: string }) => Promise<unknown>;
   demandGraceMs?: number;
+  // Told the owner's local today when its row moved to another zone word, against the same sources. It carries the day
+  // only: no pillar, zone or score. A failure here never fails the write.
+  onZoneChange?: (day: string) => Promise<void>;
+  // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
+  // zone is the score's own band.
+  readScores?: (day: string) => Promise<unknown>;
 }>;
 
 const WINDOW_DAYS = 30;
@@ -20,6 +27,10 @@ const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
 const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
+// ADR-0081's confidence order for whole sources (Apple > Oura > WHOOP), then the phone transports. Ranked, not counted:
+// a phone's hourly windows outnumber a ring's nightly records, and a choice that flips by count would re-base the owner
+// on another wearable from one day to the next.
+const SOURCE_RANK = ['apple', 'oura', 'whoop', 'health_connect', 'samsung'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
@@ -180,6 +191,34 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
   };
 };
 
+// The row this one replaces: the same day's, written by an earlier upload. A day's first row, a read that fails and an answer
+// for another day are no row.
+const storedBefore = async (read: ProducerDeps['readScores'], day: string): Promise<Record<string, unknown> | null> => {
+  try {
+    const same = asRecord(asRecord(await read?.(day))?.scores);
+    return same?.day === day ? same : null;
+  } catch { return null; }
+};
+// Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
+// report a change only on a real crossing. A day's first row is its own band, so the word never drifts from a fresh night's
+// score for longer than that day. A zone another algorithm version wrote is not the same state and holds nothing.
+const steadied = (scores: DailyScores, before: Record<string, unknown> | null): DailyScores => {
+  const zoneBefore = <P extends 'recovery' | 'form' | 'weight'>(pillar: P, version: string) => {
+    const stored = asRecord(before?.[pillar]);
+    return stored?.algorithm_version === version ? fromRowZone(pillar, stored.zone) : null;
+  };
+  const { recovery, form, weight } = scores;
+  return {
+    ...scores,
+    recovery: recovery.state === 'available' ? { ...recovery, zone: heldZone(recoveryZone, recovery.score, zoneBefore('recovery', recovery.algorithm_version)) } : recovery,
+    form: form.state === 'available' ? { ...form, zone: heldZone(formZone, form.score, zoneBefore('form', form.algorithm_version)) } : form,
+    weight: weight.state === 'available' ? { ...weight, zone: heldZone(weightZone, weight.score, zoneBefore('weight', weight.algorithm_version)) } : weight,
+  };
+};
+
+// The writer names the pillars whose zone word changed; only whether any did leaves this function.
+const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
+
 const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'failed' => {
   const a = asRecord(answer);
   if (a?.written === true) return 'written';
@@ -196,28 +235,39 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
     const parsed = parseSeries(await deps.readSeries({ ...range, signals: SIGNALS }));
     if (parsed.kind !== 'series') return parsed.kind;
-    // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
-    const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
-    if (!chosen) return 'no_readings';
-    const { days: readingDays, zoneChanged, overlapped } = daysOf(chosen.readings, at.timezone);
+    // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
+    // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
+    const present = [...parsed.series.sources].filter(s => s.readings.length > 0);
+    if (!present.length) return 'no_readings';
+    const rank = (source: string) => { const at = SOURCE_RANK.indexOf(source); return at < 0 ? SOURCE_RANK.length : at; };
+    const sleptOn = (s: Source, day: string) => s.readings.some(r => r.signal === 'sleep_duration' && r.day === day);
+    const chooseFor = (day: string): Source => [...present].sort((a, b) => Number(sleptOn(b, day)) - Number(sleptOn(a, day)) || rank(a.source) - rank(b.source) || a.source.localeCompare(b.source))[0]!;
     const read = demand && await demand;
     if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
     const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);
-    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: overlapped.has(day.day) ? null : physicalLoadOf(day) } }));
-    // A day the calendar reports and the phone sent nothing for still counts toward Weight. It carries no health reading,
-    // so Recovery, Form and sleep debt read it as missing, and its physical load is unknown.
-    for (const [day, { minutes }] of busy) {
-      if (!days.some(d => d.day === day)) days.push({ day, timezone: at.timezone, sleep: null, overnightHrv: null, restingHeartRate: null, hourly: [], workouts: [], demand: { meetingMinutes: minutes, messageCount: null, openTaskMinutes: null, physicalLoad: null } });
-    }
+    const recordsOf = (chosen: Source) => {
+      const { days: readingDays, zoneChanged: travelled, overlapped } = daysOf(chosen.readings, at.timezone);
+      const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: overlapped.has(day.day) ? null : physicalLoadOf(day) } }));
+      // A day the calendar reports and the phone sent nothing for still counts toward Weight. It carries no health reading,
+      // so Recovery, Form and sleep debt read it as missing, and its physical load is unknown.
+      for (const [day, { minutes }] of busy) {
+        if (!days.some(d => d.day === day)) days.push({ day, timezone: at.timezone, sleep: null, overnightHrv: null, restingHeartRate: null, hourly: [], workouts: [], demand: { meetingMinutes: minutes, messageCount: null, openTaskMinutes: null, physicalLoad: null } });
+      }
+      return { readingDays, travelled, days };
+    };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
+      const chosen = chooseFor(targetDay);
+      const { readingDays, travelled, days } = recordsOf(chosen);
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
-      const tags = [...(zoneChanged.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, tags);
-      outcomes.push(writeOutcome(await deps.writeContext(JSON.stringify(row))));
+      const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), chosen, parsed.series.readAt, at.timezone, tags);
+      const answer = await deps.writeContext(JSON.stringify(row));
+      outcomes.push(writeOutcome(answer));
+      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
     return 'no_readings';

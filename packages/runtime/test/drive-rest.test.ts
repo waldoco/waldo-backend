@@ -8,7 +8,7 @@ it('recent metadata uses one fixed GET, bounded page and strips content',async()
 });
 it('search escapes literal name and uses explicit single-page parameters',async()=>{
  const f=vi.fn(async()=>Response.json({files:[]}));await driveRestClient(f,async()=> 'fixture').driveSearchFiles({nameContains:"O'Reilly",pageSize:50,pageToken:'opaque'});
- const u=new URL((f.mock.calls[0] as unknown as [string])[0]);expect(u.searchParams.get('q')).toBe("trashed = false and name contains 'O\\'Reilly'");expect(u.searchParams.get('pageToken')).toBe('opaque');expect(u.searchParams.get('corpora')).toBe('user');expect(u.searchParams.get('spaces')).toBe('drive');
+ const u=new URL((f.mock.calls[0] as unknown as [string])[0]);expect(u.searchParams.get('q')).toBe("trashed = false and (name contains 'O\\'Reilly' or fullText contains 'O\\'Reilly')");expect(u.searchParams.get('pageToken')).toBe('opaque');expect(u.searchParams.get('corpora')).toBe('allDrives');expect(u.searchParams.get('spaces')).toBe('drive');
 });
 it('get fixes fields and rejects content flags and injected paths',async()=>{
  const f=vi.fn(async()=>Response.json({id:'f_1',name:'R',mimeType:'text/plain',description:'PRIVATE'}));const c=driveRestClient(f,async()=> 'fixture');expect(await c.driveGetFileMetadata({fileId:'f_1'})).toEqual({id:'f_1',name:'R',mimeType:'text/plain',modifiedTime:null,webViewLink:null,size:null});
@@ -36,6 +36,10 @@ it('only structured provider evidence identifies scope or disabled service',asyn
  }
  const c=driveRestClient(vi.fn(async()=>Response.json({error:{status:'PERMISSION_DENIED',message:'PRIVATE',details:[{'@type':'type.googleapis.com/google.rpc.ErrorInfo',domain:'googleapis.com',reason:'SERVICE_DISABLED',metadata:{service:'drive.googleapis.com',consumer:'PRIVATE'}}]}},{status:403})),async()=> 'fixture');
  await expect(c.driveListFiles({})).rejects.toMatchObject({status:403,code:'drive_service_disabled',reason:'SERVICE_DISABLED',service:'drive.googleapis.com'});
+});
+it.each(['userRateLimitExceeded','rateLimitExceeded'])('a 403 carrying %s is a rate limit to back off from, not a denial',async reason=>{
+ const c=driveRestClient(vi.fn(async()=>Response.json({error:{code:403,message:'PRIVATE',errors:[{domain:'usageLimits',reason,message:'PRIVATE'}]}},{status:403})),async()=> 'fixture');
+ await expect(c.driveListFiles({})).rejects.toMatchObject({status:429,code:'drive_rate_limited'});
 });
 it.each([401,403])('non-JSON provider error %i keeps status and safe code',async status=>{
  const c=driveRestClient(vi.fn(async()=>new Response('PRIVATE_CANARY',{status})),async()=> 'fixture');

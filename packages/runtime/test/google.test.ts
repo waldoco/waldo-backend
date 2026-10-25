@@ -44,7 +44,7 @@ describe('google oauth state', () => {
     expect(url.searchParams.get('prompt')).toBe('consent select_account');
     const scopes = url.searchParams.get('scope')!.split(' ');
     expect(scopes).toEqual([
-      'openid', 'email',
+      'openid', 'email', 'profile',
       'https://www.googleapis.com/auth/calendar.events',
       'https://www.googleapis.com/auth/calendar.events.freebusy',
       'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
@@ -56,9 +56,12 @@ describe('google oauth state', () => {
       'https://www.googleapis.com/auth/documents.readonly',
       'https://www.googleapis.com/auth/spreadsheets.readonly',
       'https://www.googleapis.com/auth/presentations.readonly',
+      'https://www.googleapis.com/auth/contacts.readonly',
+      'https://www.googleapis.com/auth/contacts.other.readonly',
+      'https://www.googleapis.com/auth/user.phonenumbers.read',
     ]);
-    // Read-only Workspace set only: no write, file or contacts scope.
-    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |contacts|gmail\.modify/);
+    // Read-only Workspace and contacts set only: no write or file scope.
+    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |auth\/contacts( |$)|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });
@@ -337,7 +340,7 @@ describe('gmail search + thread read (A1)', () => {
     if (url.includes('/gmail/v1/users/me/threads/t1')) return Response.json({ messages: [
       { id: 'm1', internalDate: '1759140000000', snippet: 'snip',
         payload: { mimeType: 'multipart/alternative', headers: [{ name: 'From', value: 'sam@example.com' }, { name: 'Subject', value: 'Dinner' }],
-          parts: [{ mimeType: 'text/plain', body: { data: b64('Thursday works, 7pm.') } }, { mimeType: 'text/html', body: { data: b64('<p>ignored</p>') } }] } },
+          parts: [{ mimeType: 'text/plain', body: { data: b64('Thursday works, 7pm.') } }, { mimeType: 'text/html', body: { data: b64('<p>Thursday works, <b>7pm</b>.</p>') } }] } },
       { id: 'm2', internalDate: '1759143600000', snippet: 'code falls back',
         payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'noreply@example.com' }, { name: 'Subject', value: 'Sign in' }], body: { data: b64('Your login code is 123456.') } } },
     ] });
@@ -378,7 +381,7 @@ describe('gmail search + thread read (A1)', () => {
     expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
   });
 
-  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 32,000 chars', async () => {
+  it('readThread decodes the last alternative (here HTML), and caps at 32,000 chars', async () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);
@@ -505,5 +508,101 @@ describe('Calendar mutation notification compatibility', () => {
       if (action === 'cancel') expect(body).toEqual({ status: 'cancelled', extendedProperties: { private: { waldoOperation: marker } } });
       else expect(body).toMatchObject({ start: { dateTime: start, date: null }, end: { dateTime: end, date: null } });
     }
+  });
+});
+
+// A block Waldo adds to protect the owner's time carries its kind in a private property on the event in the calendar it
+// was written to, so the calendar demand behind Weight can tell a rest block from deep work after the owner moves or
+// retitles it.
+describe('the kind of a protected block on the owner\'s calendar', () => {
+  const start = '2026-10-11T10:00:00Z', end = '2026-10-11T11:00:00Z';
+  const recording = (answer: (url: URL) => unknown) => {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      calls.push({ url, init: init ?? {} });
+      return Response.json(answer(url));
+    }) as typeof fetch;
+    return { calls, client: googleClient(app, { refresh_token: 'synthetic' }, fetcher, undefined, { connection_id: 'local:owner@example.test', email: 'owner@example.test' }) };
+  };
+  const created = () => ({ id: 'blk-1', summary: 'Recharge', start: { dateTime: start }, end: { dateTime: end }, etag: 'v1' });
+  const privateOf = (init: RequestInit) => (JSON.parse(String(init.body)) as { extendedProperties?: { private?: Record<string, string> } }).extendedProperties?.private;
+
+  it('writes the kind with the operation marker, and on its own when there is no marker', async () => {
+    const marker = 'a'.repeat(64);
+    for (const [input, expected] of [
+      [{ block: 'rest', operationMarker: marker }, { waldoOperation: marker, waldoBlock: 'rest' }],
+      [{ block: 'deep_work' }, { waldoBlock: 'deep_work' }],
+      [{ operationMarker: marker }, { waldoOperation: marker }],
+      [{}, undefined],
+    ] as const) {
+      const { calls, client } = recording(created);
+      await client.createEvent({ title: 'Recharge', start, end, ...input });
+      expect(privateOf(calls[0]!.init)).toEqual(expected);
+    }
+  });
+
+  it('never names the kind when Waldo moves or cancels an event, so Google keeps the one already on it', async () => {
+    const marker = 'b'.repeat(64);
+    const { calls, client } = recording(created);
+    await client.moveEvent('blk-1', start, end, 'v1', marker);
+    await client.cancelEvent('blk-1', 'v2', marker);
+    // A patch replaces only the keys it names; a key sent as null would delete the kind.
+    expect(calls.map(call => privateOf(call.init))).toEqual([{ waldoOperation: marker }, { waldoOperation: marker }]);
+  });
+});
+
+// Calendar demand asks for Waldo's rest blocks on one calendar: one query finds them by their private kind, and only their
+// own windows are read again to see what else keeps that time busy.
+describe('Waldo\'s rest blocks on one calendar', () => {
+  const from = '2026-10-11T00:00:00.000Z', to = '2026-10-12T00:00:00.000Z';
+  const timed = (id: string, start: string, end: string, over: Record<string, unknown> = {}) => ({ id, summary: id, start: { dateTime: `2026-10-11T${start}:00Z` }, end: { dateTime: `2026-10-11T${end}:00Z` }, ...over });
+  const tag = (where: 'private' | 'shared', kind = 'rest') => ({ extendedProperties: { [where]: { waldoBlock: kind } } });
+  const reading = (answer: (url: URL) => Record<string, unknown>) => {
+    const urls: URL[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      urls.push(url);
+      return Response.json({ kind: 'calendar#events', ...answer(url) });
+    }) as typeof fetch;
+    return { urls, client: googleClient(app, { refresh_token: 'synthetic' }, fetcher) };
+  };
+
+  it('finds them with one filtered query, then reads only their merged windows for what else is busy there', async () => {
+    const recharge = timed('recharge', '13:00', '14:00', tag('private')), stretch = timed('stretch', '13:30', '15:00', tag('private')), evening = timed('evening', '18:00', '19:00', tag('private'));
+    const { urls, client } = reading(url => url.searchParams.has('privateExtendedProperty') ? { items: [
+      recharge, stretch, evening,
+      // What a filter should never return, and is never taken for a rest block if it does: an invite whose organiser set
+      // the shared kind, an all-day event, a cancelled one, and deep work.
+      timed('invite', '09:00', '10:00', tag('shared')), { id: 'allday', start: { date: '2026-10-11' }, end: { date: '2026-10-12' }, ...tag('private') },
+      timed('gone', '11:00', '12:00', { status: 'cancelled', ...tag('private') }), timed('focus', '16:00', '17:00', tag('private', 'deep_work')),
+    ] } : url.searchParams.get('timeMin') === '2026-10-11T13:00:00.000Z' ? { items: [
+      recharge, stretch, timed('review', '14:30', '15:30'), { id: 'offsite', start: { date: '2026-10-11' }, end: { date: '2026-10-12' } },
+      timed('free', '13:00', '14:00', { transparency: 'transparent' }), timed('declined', '13:00', '14:00', { attendees: [{ self: true, responseStatus: 'declined' }] }),
+      timed('dropped', '13:00', '14:00', { status: 'cancelled' }),
+    ] } : { items: [evening] });
+    const found = await client.restBlocks!('primary', from, to);
+    expect(found).toEqual({
+      blocks: [recharge, stretch, evening].map(e => ({ start: e.start.dateTime, end: e.end.dateTime })),
+      others: [{ start: '2026-10-11T14:30:00Z', end: '2026-10-11T15:30:00Z', all_day: false }, { start: '2026-10-11', end: '2026-10-12', all_day: true }],
+    });
+    const [query, ...windows] = urls;
+    expect([query!.pathname, query!.searchParams.get('privateExtendedProperty'), query!.searchParams.get('timeMin'), query!.searchParams.get('timeMax'), query!.searchParams.get('singleEvents')])
+      .toEqual(['/calendar/v3/calendars/primary/events', 'waldoBlock=rest', from, to, 'true']);
+    expect(windows.map(url => [url.searchParams.get('timeMin'), url.searchParams.get('timeMax'), url.searchParams.has('privateExtendedProperty')]))
+      .toEqual([['2026-10-11T13:00:00.000Z', '2026-10-11T15:00:00.000Z', false], ['2026-10-11T18:00:00.000Z', '2026-10-11T19:00:00.000Z', false]]);
+  });
+
+  it('reads nothing more when there are no rest blocks', async () => {
+    const { urls, client } = reading(() => ({ items: [] }));
+    expect(await client.restBlocks!('team@group.calendar.google.com', from, to)).toEqual({ blocks: [], others: [] });
+    expect(urls.map(url => url.pathname)).toEqual(['/calendar/v3/calendars/team%40group.calendar.google.com/events']);
+  });
+
+  it('fails rather than answer from a listing that does not end', async () => {
+    const { client } = reading(url => url.searchParams.has('privateExtendedProperty') ? { items: [timed('recharge', '13:00', '14:00', tag('private'))] } : { items: [], nextPageToken: 'more' });
+    await expect(client.restBlocks!('primary', from, to)).rejects.toThrow('Calendar listing did not end');
   });
 });

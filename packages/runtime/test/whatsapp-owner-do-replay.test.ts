@@ -41,7 +41,7 @@ describe('WhatsApp owner DO replay', () => {
       state.storage.kv.put('wamid:within-retention', now - WAMID_RETENTION_MS + 1);
       const sent: unknown[] = [];
       const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-        expect(String(input)).toBe('https://graph.facebook.com/v21.0/fictional-phone-id/messages');
+        expect(String(input)).toBe('https://graph.facebook.com/v26.0/fictional-phone-id/messages');
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fictional-whatsapp-token');
         sent.push(JSON.parse(String(init?.body)));
         return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });
@@ -85,8 +85,8 @@ describe('WhatsApp owner DO replay', () => {
         await deliver(payload);
         expect(routed).toHaveBeenCalledTimes(2);
         expect(turns).toHaveBeenCalledTimes(1);
-        expect(turns).toHaveBeenNthCalledWith(1, expect.objectContaining({ update_id: WA_UPDATE_BASE + 1 }), 'whatsapp');
-        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Nothing is running right now.' } }]);
+        expect(turns).toHaveBeenNthCalledWith(1, expect.objectContaining({ update_id: WA_UPDATE_BASE + 1 }), 'whatsapp', false, expect.objectContaining({ runId: expect.any(String), attempt: expect.any(String) }));
+        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: `+${SUBJECT}`, type: 'text', text: { body: 'Nothing is running right now.' } }]);
         expect(state.storage.kv.get('wamid:wamid.A')).toBe(now);
         expect(state.storage.kv.get('wamid:expired')).toBeUndefined();
         expect(state.storage.kv.get('wamid:within-retention')).toBe(now - WAMID_RETENTION_MS + 1);
@@ -94,7 +94,7 @@ describe('WhatsApp owner DO replay', () => {
 
         await deliver(body('wamid.B'));
         expect(turns).toHaveBeenCalledTimes(2);
-        expect(turns).toHaveBeenNthCalledWith(2, expect.objectContaining({ update_id: WA_UPDATE_BASE + 2 }), 'whatsapp');
+        expect(turns).toHaveBeenNthCalledWith(2, expect.objectContaining({ update_id: WA_UPDATE_BASE + 2 }), 'whatsapp', false, expect.objectContaining({ runId: expect.any(String), attempt: expect.any(String) }));
         expect(graph).toHaveBeenCalledTimes(2);
         expect(state.storage.kv.get('wamid:wamid.B')).toBe(now);
         expect(await state.storage.get('wa_seq')).toBe(2);

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { errorCodeSchema, type ErrorCode } from '../core/error';
+import { errorCodeSchema, rungBlockedOutcomeSchema, type ErrorCode, type RungBlockedOutcome } from '../core/error';
 import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { isExternalSourceTaint, sourceTaintSchema, type SourceTaint } from '../memory/sanitise';
 import { waldoCardSchema, type WaldoCard } from '../ui/card';
@@ -19,14 +19,15 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       card: waldoCardSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), blocked: rungBlockedOutcomeSchema.optional() }),
   ]);
 
 export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent };
+  // blocked: why a page or site stopped the call, when the tool knows it for certain; the refusal's fix names the next rung.
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; blocked?: RungBlockedOutcome };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -79,6 +80,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       code: errorCodeSchema,
       source_taint: z.literal('external'),
       connect: connectIntentSchema.optional(),
+      blocked: rungBlockedOutcomeSchema.optional(),
     }),
   ]);
 
@@ -100,12 +102,15 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_availability',
   'get_communication',
   'search_communication',
+  'search_contacts',
   'read_thread',
   'get_tasks',
   'web_search',
   'read_document',
   'call_mcp_tool',
   'read_mcp_tool',
+  // search_mcp_tools: tool names, titles and descriptions are the connected server's own text.
+  'search_mcp_tools',
   'read_drive',
   'search_connector',
   'read_tool_output',
@@ -119,6 +124,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',
+  // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
+  'list_owner_findings',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
@@ -152,6 +159,7 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   // Changing durable procedure availability is owner-controlled, never provider-authorized.
   'skills_install',
   'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
@@ -163,6 +171,40 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
 // picks per tool is its decision; that it can never pick direct execution is this contract.
 export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTaint): boolean {
   return isExternalSourceTaint(taint) && PRIVILEGED_ACTION_TOOLS.includes(tool);
+}
+
+// Standing changes: what outlives the turn and later steers Waldo or reaches the owner without being asked again. A
+// reminder or a loop schedules a later turn, a standing order rides every prompt, proactivity and schedule preferences
+// decide when Waldo speaks. Text that arrived from outside (a mail, a page, a contact card, a server's tool description)
+// can ask for any of them, and one write would make the injection persist, so a tainted turn sends them to the owner's
+// card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
+// their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
+// Forgetting is the same kind of change in reverse: one injected forget erases what Waldo knows for good, and so is
+// closing a loop: a mail that says "paid" would end what the owner asked Waldo to stay on.
+export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
+  'set_reminder',
+  'cancel_reminder',
+  'open_loop',
+  'close_loop',
+  'set_standing_order',
+  'cancel_standing_order',
+  'set_proactivity',
+  'set_schedule_preference',
+  'forget_memory',
+];
+
+// The owner-approval law for a tainted turn: every privileged action, and every standing change. One exception, read
+// from the frozen arguments: a loop bound to an observed mail source records that source, its title never enters a
+// prompt as the owner's (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back;
+// it is the owner-enabled mail follow-through, so it needs no card. Arguments that are not a plain record are no loop.
+// close_loop names only an id, which cannot say whose loop it is, so this law cards every tainted close; the runtime
+// admits closing a mail-bound loop by reading the owner's loop store (hooks/registry.ts taintedCallNeedsOwnerApproval).
+export function taintGateNeedsOwnerApproval(tool: ToolName, taint: SourceTaint, args?: unknown): boolean {
+  if (taintGateBlocksDirectExecution(tool, taint)) return true;
+  if (!isExternalSourceTaint(taint) || !STANDING_CHANGE_TOOLS.includes(tool)) return false;
+  const record = typeof args === 'object' && args !== null ? args as { source_ref?: unknown } : undefined;
+  if (tool === 'open_loop') return typeof record?.source_ref !== 'string';
+  return true;
 }
 
 // ADR-0008 conformance rule, deterministic: a handler's trigger_allowlist is the
@@ -210,6 +252,11 @@ export interface ToolHandler<Args, Result, Ctx> {
   // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
   // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
   turn_only_output?: true;
+  // proposal_only marks a handler that never performs its effect: it only raises the owner's approval card, which
+  // carries the exact effect and performs it on Do it. The taint gate admits such a call with external arguments
+  // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
+  // from the handler it routes to, so a tool name alone never earns it.
+  proposal_only?: true;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;

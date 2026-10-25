@@ -10,12 +10,12 @@ const SECRET = 'fictional-renew-router-secret-0000000000000', DIRECTORY = 'https
 const OWNER = '10000000-0000-0000-0000-0000000000a1', AUTH = '20000000-0000-0000-0000-0000000000a1';
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 type Row = { created: number; expires: number; seen: number; rotatedTo?: string };
-// The directory's session table as the 30-day migration defines it: each row keeps its own expiry.
-const directory = vi.hoisted(() => ({ rows: new Map<string, Row>(), migrated: true, legacyList: false, calls: [] as string[], pushRevoked: [] as string[] }));
+// The directory's session table as the 30-day migration defines it: each row keeps its own end.
+const directory = vi.hoisted(() => ({ rows: new Map<string, Row>(), migrated: true, calls: [] as string[], pushRevoked: [] as string[] }));
 const live = (hash: string) => { const row = directory.rows.get(hash); return row && row.expires > Date.now() ? row : undefined; };
 const iso = (ms: number) => new Date(ms).toISOString();
 
-beforeEach(() => { directory.rows.clear(); directory.migrated = true; directory.legacyList = false; directory.calls = []; directory.pushRevoked = []; });
+beforeEach(() => { directory.rows.clear(); directory.migrated = true; directory.calls = []; directory.pushRevoked = []; });
 afterEach(() => { vi.restoreAllMocks(); });
 
 const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, state: DurableObjectState) => Promise<void>) =>
@@ -27,7 +27,7 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
       const fn = url.pathname.split('/').at(-1)!; directory.calls.push(fn);
       const signed: Record<string, string> = {
         console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`, console_session_touch: `consolesess.touch.${a.p_do_name}.${a.p_session_hash}`,
-        console_session_list: `consolesess.list.${a.p_do_name}`, console_session_revoke: `consolesess.revoke.${a.p_do_name}.${a.p_session_hash}`,
+        console_session_inventory: `consolesess.inventory.${a.p_do_name}`, console_session_revoke: `consolesess.revoke.${a.p_do_name}.${a.p_session_hash}`,
         app_session_rotate: `appsess.rotate.${a.p_do_name}.${a.p_session_hash}.${a.p_new_session_hash}`, app_session_authority: `app.session.${a.p_do_name}.${a.p_session_hash}`,
       };
       if (signed[fn]) expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, signed[fn]!));
@@ -39,12 +39,15 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
         case 'app_session_rotate': {
           if (!directory.migrated) return new Response('{"code":"PGRST202"}', { status: 404 });
           const old = live(a.p_session_hash); if (!old || old.rotatedTo) return Response.json(false);
-          directory.rows.set(a.p_new_session_hash, { created: now, expires: now + 30 * DAY, seen: now }); old.expires = Math.min(old.expires, now + 20 * 60_000); old.rotatedTo = a.p_new_session_hash;
+          directory.rows.set(a.p_new_session_hash, { created: now, expires: now + 30 * DAY, seen: now }); old.expires = Math.min(old.expires, now + 5 * 60_000); old.rotatedTo = a.p_new_session_hash;
           return Response.json(true);
         }
         case 'console_session_touch': { const row = live(a.p_session_hash); if (row) row.seen = now; return Response.json(row !== undefined); }
-        case 'console_session_list': return Response.json([...directory.rows].filter(([hash]) => live(hash)).map(([session, row]) =>
-          ({ session, created_at: iso(row.created), last_seen_at: iso(row.seen), ...(directory.legacyList ? {} : { expires_at: iso(row.expires), rotated_to: row.rotatedTo ?? null }) })));
+        case 'console_session_inventory': {
+          if (!directory.migrated) return new Response('{"code":"PGRST202"}', { status: 404 });
+          return Response.json([...directory.rows].filter(([hash]) => live(hash)).map(([session, row]) =>
+            ({ session, created_at: iso(row.created), last_seen_at: iso(row.seen), expires_at: iso(row.expires), rotated_to: row.rotatedTo ?? null })));
+        }
         case 'console_session_revoke': { let dropped = false; for (const [hash, row] of directory.rows) if (hash === a.p_session_hash || row.rotatedTo === a.p_session_hash) dropped = directory.rows.delete(hash) || dropped; return Response.json(dropped); }
         case 'app_session_authority': { const row = live(a.p_session_hash);
           return Response.json(row ? { owner_id: OWNER, do_name: a.p_do_name, session_hash: a.p_session_hash, state_version: 0, admission_revision: '1', expires_at: row.expires } : null); }
@@ -89,25 +92,23 @@ it('signing in gives a credential that lasts 30 days, in the shape installed app
     expect(auth.absolute_expires_at).toBeLessThanOrEqual(after + 30 * DAY);
     expect(auth.renew_after).toBeUndefined();
     expect(directory.calls.filter(fn => fn === 'console_session_open' || fn === 'app_session_rotate')).toEqual(['console_session_open', 'app_session_rotate']);
+    expect(directory.calls).not.toContain('console_session_list');
     const session = await app('/session', undefined, auth.credential);
     expect(session.status).toBe(200);
     expect(shippedSession.parse(await session.json())).toEqual({ state: 'active', session_ref: auth.session_ref, account_ref: auth.account_ref, surface: 'app', absolute_expires_at: auth.absolute_expires_at });
   });
 });
 
-it('before the migration, signing in still works with today\'s 12-hour credential, and renewal is unavailable', async () => {
+it('before the migration this Worker signs nobody in: the migration is applied first', async () => {
   await withOwner('renew-unmigrated', async app => {
-    directory.migrated = false; directory.legacyList = true;
-    const before = Date.now(), auth = await signIn(app);
-    expect(auth.absolute_expires_at - before).toBeGreaterThanOrEqual(12 * HOUR - 1_000);
-    expect(auth.absolute_expires_at - before).toBeLessThanOrEqual(12 * HOUR + 1_000);
-    expect((await app('/session', undefined, auth.credential)).status).toBe(200);
-    expect((await app('/auth/renew', {}, auth.credential)).status).toBe(503);
-    expect((await app('/session', undefined, auth.credential)).status).toBe(200);
+    directory.migrated = false;
+    const verified = await app('/auth/verify', { email: EMAIL, code: '123456' });
+    expect(verified.status).toBe(503);
+    expect(JSON.stringify(await verified.json())).not.toContain('credential');
   });
 });
 
-it('renewal gives a new credential for 30 days and says when to renew it; the old one works for 20 minutes and renews no more', async () => {
+it('renewal gives a new credential for 30 days and says when to renew it; the old one works for 5 minutes and renews no more', async () => {
   await withOwner('renew-rotate', async app => {
     const first = await signIn(app);
     const next = await renew(app, first.credential);
@@ -116,7 +117,7 @@ it('renewal gives a new credential for 30 days and says when to renew it; the ol
     expect(next.absolute_expires_at).toBeGreaterThanOrEqual(Date.now() + 30 * DAY - 5_000);
     expect(next.renew_after).toBe(next.absolute_expires_at - 29 * DAY);
     const old = directory.rows.get(await hashOf(first.credential))!;
-    expect(old.expires).toBeLessThanOrEqual(Date.now() + 20 * 60_000);
+    expect(old.expires).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
     expect(shippedSession.parse(await (await app('/session', undefined, first.credential)).json()).absolute_expires_at).toBe(old.expires);
     const sessions = directory.rows.size;
     expect((await app('/auth/renew', {}, first.credential)).status).toBe(401);
@@ -126,16 +127,6 @@ it('renewal gives a new credential for 30 days and says when to renew it; the ol
     expect((await app('/session', undefined, first.credential)).status).toBe(401);
     expect((await app('/auth/renew', {}, first.credential)).status).toBe(401);
     expect((await app('/session', undefined, next.credential)).status).toBe(200);
-  });
-});
-
-it('a list from before the migration, without expiry, still reads as a 12-hour session', async () => {
-  await withOwner('renew-legacy-list', async app => {
-    const auth = await signIn(app);
-    directory.legacyList = true;
-    const created = directory.rows.get(await hashOf(auth.credential))!.created;
-    const shown = shippedSession.parse(await (await app('/session', undefined, auth.credential)).json());
-    expect(shown.absolute_expires_at).toBe(Date.parse(iso(created)) + 12 * HOUR);
   });
 });
 

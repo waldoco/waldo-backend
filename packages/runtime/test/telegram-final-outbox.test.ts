@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY } from '../src/channels/telegram-final-outbox';
+import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY, dayCardFinalId, standingOrderFinalId } from '../src/channels/telegram-final-outbox';
 import { TelegramRejection } from '../src/channels/telegram-api';
 import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 const fixture = () => {
@@ -12,6 +12,46 @@ const fixture = () => {
   return { kv, outbox, input, settled, advance: () => { now += 31000; }, now: () => now };
 };
 describe('frozen Telegram final outbox', () => {
+  it('supersedes only waiting records that never went out, in the same save as the record that replaces them', async () => {
+    const f = fixture();
+    const report = (id: string) => ({ ...f.input, id, standingOrder: { runId: `bg:${id}`, gate: 'act_and_report' as const } });
+    await f.outbox.enqueue(report('standing-order:o:1'));
+    await f.outbox.enqueue(report('standing-order:o:2'));
+    await f.outbox.enqueue(report('standing-order:other:1'));
+    await f.outbox.enqueue(report('standing-order:o:uncertain'));
+    // standing-order:o:2 had one part reach the provider before a retryable refusal of the next; the uncertain one may have gone out.
+    const rows = f.outbox.records();
+    rows[1] = { ...rows[1]!, deliveredParts: 1, attempts: 1 };
+    rows[3] = { ...rows[3]!, status: 'quarantined', reason: 'send_unknown', attempts: 1, settled: true };
+    f.kv.put(FINAL_OUTBOX_KEY, rows);
+    await f.outbox.enqueue(report('standing-order:o:3'), { supersedes: record => record.id.startsWith('standing-order:o:') });
+    expect(f.outbox.records().map(record => [record.id, record.status, record.reason, record.settled])).toEqual([
+      ['standing-order:o:1', 'blocked', 'superseded', false],
+      ['standing-order:o:2', 'pending', undefined, undefined],
+      ['standing-order:other:1', 'pending', undefined, undefined],
+      ['standing-order:o:uncertain', 'quarantined', 'send_unknown', true],
+      ['standing-order:o:3', 'pending', undefined, undefined],
+    ]);
+  });
+  it('never supersedes a record whose send is in flight, one the surface accepted, or one whose later part the surface took', async () => {
+    const f = fixture();
+    const report = (id: string) => ({ ...f.input, id, standingOrder: { runId: `bg:${id}`, gate: 'act_and_report' as const } });
+    for (const id of ['standing-order:o:waiting', 'standing-order:o:attempting', 'standing-order:o:accepted', 'standing-order:o:tail']) await f.outbox.enqueue(report(id));
+    const rows = f.outbox.records();
+    rows[1] = { ...rows[1]!, status: 'attempting', attempts: 1 };
+    rows[2] = { ...rows[2]!, status: 'accepted', attempts: 1, deliveredParts: 1, providerMessageIds: ['wamid.accepted'] };
+    // The head was refused and goes again, but the tail is already on the owner's phone.
+    rows[3] = { ...rows[3]!, status: 'pending', reason: 'window_refused', attempts: 1, deliveredParts: 0, providerMessageIds: [null, 'wamid.tail'] };
+    f.kv.put(FINAL_OUTBOX_KEY, rows);
+    await f.outbox.enqueue(report('standing-order:o:next'), { supersedes: record => record.id.startsWith('standing-order:o:') });
+    expect(f.outbox.records().map(record => [record.id, record.status, record.reason])).toEqual([
+      ['standing-order:o:waiting', 'blocked', 'superseded'],
+      ['standing-order:o:attempting', 'attempting', undefined],
+      ['standing-order:o:accepted', 'accepted', undefined],
+      ['standing-order:o:tail', 'pending', 'window_refused'],
+      ['standing-order:o:next', 'pending', undefined],
+    ]);
+  });
   it('expires before quiet deferral and clamps a future hold to expiry for every receipt kind', async () => {
     for (const receipt of [{}, { mailFollowup: { loopId: 'l', due: '2026-10-03T10:00', sourceRef: 'mail:t', timezone: 'UTC', messageId: 'm' } }, { heartbeat: { id: 'h', occurrence: 1, schedulerRunId: 'r', loops: [] } }]) {
       const f = fixture();
@@ -109,4 +149,11 @@ it('idle maintenance scrubs delivered and ambiguous text independently of enqueu
   const rows = f.outbox.records(); rows[0]!.status = 'delivered'; rows[0]!.settled = true; rows[0]!.createdAt = -90000000;
   f.kv.put(FINAL_OUTBOX_KEY, rows); await f.outbox.maintain();
   expect(f.outbox.records()[0]?.payload.text).toBe(''); expect(f.kv.get(FINAL_OUTBOX_DUE_KEY)).toBeNull();
+});
+
+describe('the ids a producer and the scheduler both find a queued record by', () => {
+  it('names a day card by its day and card, and a standing order\'s report by its order and occurrence', () => {
+    expect(dayCardFinalId('2026-10-03', 'card:brief')).toBe('day-card:2026-10-03:card:brief');
+    expect(standingOrderFinalId('order:ord1', 7)).toBe('standing-order:order:ord1:7');
+  });
 });

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ConversationEntry } from '@waldo/contracts';
 import type { TelegramMedia } from '../src/channels/telegram-polling';
@@ -17,17 +18,18 @@ vi.mock('openai', () => ({ default: class {
 
 const { createTelegramResponder } = await import('../src/channels/telegram-turn');
 const time = <T>(_hop: string, work: () => Promise<T>) => work();
-const cases: readonly { name: string; media: TelegramMedia; text: string; note: string; image: boolean }[] = [
+// `note` is what the model reads; `stored` is the conversation's copy when it differs (a transcript is labelled only for the model).
+const cases: readonly { name: string; media: TelegramMedia; text: string; note: string; stored?: string; image: boolean }[] = [
   { name: 'downloaded photo', media: { kind: 'photo', fileId: 'photo-fixture', fileName: null, mimeType: 'image/jpeg', fileSize: 3 }, text: "What's on my calendar?", note: '[Owner sent a photo, attached.]', image: true },
   { name: 'attachment note without readable bytes', media: { kind: 'document', fileId: 'archive-fixture', fileName: 'notes.zip', mimeType: 'application/zip', fileSize: 3 }, text: "What's on my calendar?", note: '[Owner sent a file "notes.zip". This file type cannot be read yet.]', image: false },
-  { name: 'voice-only calendar request', media: { kind: 'voice', fileId: 'voice-fixture', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 3 }, text: '', note: "[Owner sent a voice note. Transcript: What's on my calendar?]", image: false },
+  { name: 'voice-only calendar request', media: { kind: 'voice', fileId: 'voice-fixture', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 3 }, text: '', note: "[Owner sent a voice note.]\n[Transcript of a file the owner sent; the speaker may not be the owner:]\n\"What's on my calendar?\"\n[End of transcript.]", stored: "[Owner sent a voice note.]\nTranscript: What's on my calendar?", image: false },
 ];
 
 beforeEach(() => { model.requests = []; model.queryCalendar = true; });
 
 describe('media-scope: media and voice retain tools and conversation history', () => {
   for (const surface of ['telegram', 'whatsapp']) {
-    it.each(cases)(`${surface}: $name executes calendar without source-scope admission`, async ({ media, text, note, image }) => {
+    it.each(cases)(`${surface}: $name executes calendar without source-scope admission`, async ({ media, text, note, stored, image }) => {
       const priorOwner = 'Please keep the earlier discussion about the design review in mind.';
       const priorReply = 'We discussed the design review agenda.';
       const entries: ConversationEntry[] = [
@@ -52,7 +54,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
         admit: () => undefined, commit: <T>(work: () => T) => work(),
       } };
 
-      expect(await responder.respond(turn, time)).toBe('Calendar checked.');
+      expect(await responder.respond(ownerTyped(turn), time)).toBe('Calendar checked.');
       expect(calendar).toHaveBeenCalledTimes(1);
       expect(prepare).toHaveBeenCalledTimes(1);
       expect(model.requests).toHaveLength(2);
@@ -60,7 +62,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
         const body = JSON.stringify(request);
         expect(body).toContain(priorOwner);
         expect(body).toContain(priorReply);
-        expect(body).toContain(note.replaceAll('"', '\\"'));
+        expect(body).toContain(JSON.stringify(note).slice(1, -1));
         expect(body).toContain('query_calendar');
         expect(body).not.toContain('Current owner task source scope is unavailable');
         expect(body).not.toContain('propose_task_sources');
@@ -69,19 +71,19 @@ describe('media-scope: media and voice retain tools and conversation history', (
       expect(JSON.stringify(model.requests[1])).toContain('"ok":true'.replaceAll('"', '\\"'));
       expect(JSON.stringify(model.requests[0]).includes('data:image/jpeg;base64,AQID')).toBe(image);
       const saved = entries.find(entry => entry.id === (surface === 'telegram' ? 'tg-12' : 'whatsapp-12'))!;
-      expect(saved).toMatchObject({ chatId: `${surface}-7`, surface, modelPayload: [text, note].filter(Boolean).join('\n'), appPayload: [text, note].filter(Boolean).join('\n') });
+      expect(saved).toMatchObject({ chatId: `${surface}-7`, surface, modelPayload: [text, note].filter(Boolean).join('\n'), appPayload: stored ?? [text, note].filter(Boolean).join('\n') });
       expect(JSON.stringify(entries)).not.toContain('AQID');
 
       // Recreate the responder to prove the note and earlier conversation survive a store reload.
       model.requests = [];
       model.queryCalendar = false;
       const restored = createTelegramResponder(...args);
-      await restored.respond({ ...turn, updateId: 13, messageId: 13, text: 'Thanks for checking.', media: undefined }, time);
+      await restored.respond(ownerTyped({ ...turn, updateId: 13, messageId: 13, text: 'Thanks for checking.', media: undefined }), time);
       expect(model.requests).toHaveLength(1);
       const next = JSON.stringify(model.requests[0]);
       expect(next).toContain(priorOwner);
       expect(next).toContain(priorReply);
-      expect(next).toContain(note.replaceAll('"', '\\"'));
+      expect(next).toContain(JSON.stringify(note).slice(1, -1));
       expect(next).not.toContain('data:image/jpeg;base64,AQID');
       expect(calendar).toHaveBeenCalledTimes(1);
     });
