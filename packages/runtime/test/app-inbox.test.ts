@@ -148,3 +148,31 @@ it('revoking a session closes its admitted and running messages and nobody else\
     expect(inbox.revokeSession(mine)).toBe(0);
   });
 });
+
+it('serves a running message its activity on the draft receipt only, for its own attempt, with when the kind began',async()=>{
+  const name=`app-inbox-activity-${crypto.randomUUID()}`,stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    let now=1_761_400_000_000;const inbox=new AppInbox(state.storage,()=>now);
+    await inbox.admit(name,'d'.repeat(64),'activity-client-0001','check my mail','owner:prn_fixture');
+    const running=inbox.claim(inbox.records()[0]!.id,true)!,surface=inbox.replyDraft(running)!;
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).not.toHaveProperty('activity');
+    surface.activity!('mail');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).toMatchObject({state:'running',activity:{kind:'mail',since:now}});
+    expect(inbox.receipt(name,'activity-client-0001')).not.toHaveProperty('activity');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,2)).toEqual({accepted:true,message_id:running.id,state:'running'});
+    inbox.replyDraft(running)!.show('Two invoices');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,2)).toEqual({accepted:true,message_id:running.id,state:'running',draft:'Two invoices'});
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).toMatchObject({draft:'Two invoices',activity:{kind:'mail'}});
+    const began=now;now+=4_000;surface.activity!('mail');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)?.activity).toEqual({kind:'mail',since:began});
+    surface.activity!('calendar');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)?.activity).toEqual({kind:'calendar',since:now});
+    inbox.replyDraft({...running,attempt:'another-attempt'})!.activity!('web');
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).not.toHaveProperty('activity');
+    surface.activity!('mail');surface.activity!(null);
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).not.toHaveProperty('activity');
+    surface.activity!('mail');inbox.settle(running,true);
+    expect(inbox.receipt(name,'activity-client-0001',undefined,3)).toEqual({accepted:true,message_id:running.id,state:'completed'});
+    await state.storage.deleteAlarm();
+  });
+});

@@ -74,10 +74,10 @@ describe('console chat', () => {
 
   it('passes on the chat contract revision the dashboard reads, and drops a header that does not parse', async () => {
     const { env, forwards } = setup();
-    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`, { headers: { 'x-waldo-app-contract': 'chat=2' } }), env, fakeAuth());
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`, { headers: { 'x-waldo-app-contract': 'chat=3' } }), env, fakeAuth());
     await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`, { headers: { 'x-waldo-app-contract': 'chat=two' } }), env, fakeAuth());
     await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages/console-0001`), env, fakeAuth());
-    expect(forwards.map(request => request.headers.get('x-waldo-app-contract'))).toEqual(['chat=2', null, null]);
+    expect(forwards.map(request => request.headers.get('x-waldo-app-contract'))).toEqual(['chat=3', null, null]);
   });
 
   it('refuses unknown paths, odd client ids and the wrong method', async () => {
