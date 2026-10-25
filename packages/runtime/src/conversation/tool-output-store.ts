@@ -30,7 +30,10 @@ export const MAX_STORED_OUTPUT_CHARS = 512_000;
 // guard (defense in depth): nothing larger is ever held, whatever path called put.
 export const MAX_STORED_ITEM_CHARS = 65_536;
 
-export const inMemoryToolOutputStore = (): ToolOutputStore => {
+// idPrefix names whose store an id belongs to: an id from any other store (another owner turn's to-N, another task attempt's)
+// is not found here. maxItems bounds the count beside the character budget.
+export const inMemoryToolOutputStore = (options: Readonly<{ idPrefix?: string; maxItems?: number }> = {}): ToolOutputStore => {
+  const maxItems = options.maxItems ?? Infinity;
   const outputs = new Map<string, string>();
   const originals = new Map<string, number>();
   const provenance = new Map<string, string | undefined>();
@@ -40,7 +43,7 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
     clear() { outputs.clear(); originals.clear(); provenance.clear(); total = 0; },
     put(output, prov) {
       next += 1;
-      const id = `to-${next}`;
+      const id = `${options.idPrefix ?? ''}to-${next}`;
       provenance.set(id, prov?.call_id);
       // never a silent slice: callers get the stored length and the truncation flag and the
       // receipt/read-back contract must carry them (a claimed full length for a stored prefix
@@ -51,7 +54,7 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
       originals.set(id, output.length);
       total += stored.length;
       for (const oldest of outputs.keys()) {
-        if (total <= MAX_STORED_OUTPUT_CHARS || outputs.size <= 1) break;
+        if ((total <= MAX_STORED_OUTPUT_CHARS && outputs.size <= maxItems) || outputs.size <= 1) break;
         if (oldest === id) break;
         total -= outputs.get(oldest)?.length ?? 0;
         outputs.delete(oldest);

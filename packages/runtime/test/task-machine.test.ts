@@ -90,13 +90,13 @@ describe('the machine reader allowlist', () => {
       });
       const machine = book.startAttempt(enqueue(book, spec()).job.id)!;
       const claim = await host.claim(machine);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'read_tool_output']);
       expect(await host.tool(machine, { call_id: 'c1', name: 'web_search', arguments: '{"query":"asha"}' }, ['a1b2c3d4e5f60718'])).toMatchObject({ ok: false, error_code: 'acl_denied' });
       expect(ran).toEqual([]);
       // An owner's reader task keeps web_search.
       const owner = book.startAttempt(book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'owner-1', origin: 'tg-1', surface: 'app', brief: ownerBrief, dueAt: T0, deadlineAt: T0 + 3_600_000 }).job.id)!;
       const ownerClaim = await host.claim(owner);
-      expect(ownerClaim === 'fenced' ? [] : ownerClaim.tools.map(tool => tool.name)).toEqual(['search_communication', 'web_search']);
+      expect(ownerClaim === 'fenced' ? [] : ownerClaim.tools.map(tool => tool.name)).toEqual(['search_communication', 'web_search', 'read_tool_output']);
     });
   });
 });

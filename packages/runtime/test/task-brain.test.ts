@@ -13,7 +13,9 @@ import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-
 import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
-import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
+import { MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
+import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { TOOL_RECORDS } from '../src/tools/records';
 
 // The brain's side of the job protocol over the real job book: every worker call is checked against its ticket, the
@@ -88,7 +90,7 @@ describe('the task brain host', () => {
     await withHost(async ({ host, ticket, ran, released }) => {
       const t = ticket('reader');
       const claim = await host.claim(t);
-      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page']);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication', 'browse_page', 'read_tool_output']);
       for (const name of ['browse_act', 'propose_action', 'send_message', 'send_email', 'start_task']) {
         expect(await host.tool(t, call(name), CANARIES), name).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
       }
@@ -863,7 +865,8 @@ describe('task profiles', () => {
   const forbidden: Readonly<Record<string, readonly ToolName[]>> = {
     send: names.filter(name => name.startsWith('send_') || name === 'attach_file'),
     approve: ['propose_action', 'raise_approval', 'execute_action', 'propose_calendar_change', 'propose_google_task_change', 'propose_schedule'],
-    memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory'), 'read_memory', 'remember'],
+    // read_tool_output is placed with memory, but a worker's handler reads only what its own attempt stored (tasks/brain.ts).
+    memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory' && name !== 'read_tool_output'), 'read_memory', 'remember'],
     delegation: ['delegate_task', 'use_mac'],
     tasks: ['start_task', 'cancel_task'],
     health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
@@ -881,5 +884,16 @@ describe('task profiles', () => {
       expect(tools.length, group).toBeGreaterThan(0);
       expect(TASK_PROFILE_SPECS[profile].tools.filter(tool => tools.includes(tool)), `${profile} ∩ ${group}`).toEqual([]);
     }
+  });
+
+  // A worker pages its stored large reads. A resumed attempt may call it again freely: it is a safe read, so a crash while
+  // it ran never parks the job. Child agents and outside-text turns still go without it.
+  it('every worker profile pages stored output with read_tool_output, a safe read that never parks a job', () => {
+    for (const profile of ['reader', 'errand'] as const) expect(TASK_PROFILE_SPECS[profile].tools).toContain('read_tool_output');
+    expect(MACHINE_READER).toContain('read_tool_output');
+    expect(TOOL_RECORDS.read_tool_output.replay.replay).toBe('safe_read');
+    expect(unreplayable('read_tool_output')).toBe(false);
+    expect(CHILD_READ_TOOLS).not.toContain('read_tool_output');
+    expect(OUTSIDE_TEXT_JOB_TOOLS).not.toContain('read_tool_output');
   });
 });

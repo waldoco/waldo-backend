@@ -449,9 +449,10 @@ export const jobsCarry = (sql: Sql, texts: readonly string[]): boolean => {
 // The forget purge job's store for task jobs (memory/forget-purge.ts). One transaction cancels the open jobs that carry a text,
 // fences their attempts and withdraws their errands' cards (cancelled), and redacts every row; a fence that throws rolls it
 // all back, so the job's retry cancels and fences again. Storage with no job book has nothing to clean and gets none made.
-export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(work: () => T) => T; book: () => JobBook; cancelled: (id: string) => void }>): ForgetStore => ({
+// storedOutputs empties the running attempts' stored large reads, which live in memory and are not searched for the texts.
+export const taskJobsForgetStore = (deps: Readonly<{ sql: Sql; transaction: <T>(work: () => T) => T; book: () => JobBook; cancelled: (id: string) => void; storedOutputs?: () => void }>): ForgetStore => ({
   name: 'task_jobs',
-  run: (texts) => (!jobsKept(deps.sql) ? 0 : deps.transaction(() => {
+  run: (texts) => (deps.storedOutputs?.(), !jobsKept(deps.sql) ? 0 : deps.transaction(() => {
     const { cancelled, remaining } = deps.book().forget(texts);
     for (const id of cancelled) deps.cancelled(id);
     return remaining;

@@ -163,6 +163,16 @@ describe('trace health scrub at the gate, capture on', () => {
     expect(gated[1]!.text!.output).toBe(HEALTH_WITHHELD);
   });
 
+  // A task worker's calls log under task_tool_<name>. Its read of a stored output is withheld like an owner turn's: the hop
+  // alone cannot say what the stored output was (a connected server's reply can carry readings).
+  it('withholds a task worker\'s read_tool_output hop the same way', async () => {
+    const { gated } = await sinks([
+      { trace: 'task:job_1:1', hop: 'task_tool_read_tool_output', ms: 1, ok: true, text: { input: '{"id":"job_1.1.to-1"}', output: '{"ok":true,"data":{"text":"Resting heart rate fifty eight this week"}}' } },
+    ]);
+    expect(gated[0]!.text!.output).toBe(HEALTH_WITHHELD);
+    expect(gated[0]!.text!.input).toContain('job_1.1.to-1');
+  });
+
   it('runs the free-text floor over error, detail and code too', async () => {
     const { gated, notes, otlp } = await sinks([{ trace: 'tg-4', hop: 'llm_reply', ms: 1, ok: false, error: 'provider echoed: resting heart rate 58 bpm', detail: 'HRV was 39', code: 'failed:HRV was 39' }]);
     for (const value of ['rate 58', 'was 39']) { expect(notes).not.toContain(value); expect(otlp).not.toContain(value); expect(JSON.stringify(gated)).not.toContain(value); }

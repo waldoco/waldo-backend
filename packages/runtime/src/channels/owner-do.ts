@@ -1407,7 +1407,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
-      taskJobsForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), book: () => this.jobs(), cancelled: (id) => this.tasks.cancelled(id) }),
+      taskJobsForgetStore({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), book: () => this.jobs(), cancelled: (id) => this.tasks.cancelled(id), storedOutputs: () => this.tasks.forgetOutputs() }),
       // An owner who has not had a turn yet has no episodes table.
       { name: 'episodes', run: (texts) => {
         if (storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'episodes'").toArray().length) scrubEpisodeTexts(storage.sql, texts, FORGOTTEN);
