@@ -327,10 +327,15 @@ export const taskHost = (deps: TaskHostDeps) => {
       const row = claimed, brief = replayBrief(row), started = deps.now();
       const { scope } = attemptFor(ticket, row);
       let outcome: ReplayOutcome;
+      let refused = null as 'dormant' | 'retry' | null;
       if (md5Hex(row.brief_json) !== row.brief_digest) {
         outcome = { status: 'failed', message: 'The stored action changed after you approved it, so nothing ran.' };
       } else {
         const run = async () => {
+          // Asked after any wait for the browser lane and before the intent, as for a worker's call: no approved action runs for
+          // an owner the directory no longer admits, and one whose admission could not be read waits and is asked again.
+          const admission = deps.admitted ? await deps.admitted().catch(() => 'retry' as const) : 'admitted';
+          if (admission !== 'admitted') { refused = admission; throw new ClosedRunError(); }
           if (!deps.book.beginEffect(ticket, { tool: brief.tool, call_id: row.idempotency_key })) throw new ClosedRunError();
           return deps.replayApproval(row.surface, brief, scope);
         };
@@ -339,6 +344,20 @@ export const taskHost = (deps: TaskHostDeps) => {
         try {
           outcome = BROWSER_TOOLS.has(brief.tool as never) ? await deps.serialBrowser(scope, run) : await run();
         } catch (error) {
+          if (refused === 'dormant') {
+            deps.book.suspend(row.id);
+            fence(row.id);
+            hop(row, 'task_suspended', { ok: false, code: 'owner_not_admitted' });
+            return;
+          }
+          if (refused === 'retry') {
+            const dueAt = deps.now() + deferDelay(row.deferrals);
+            deps.book.defer(ticket, dueAt, { rounds: 0, costUsd: 0 });
+            fence(row.id);
+            hop(row, 'approval_replay_deferred', { ok: false, code: 'admission_unchecked' });
+            await deps.wake(dueAt);
+            return;
+          }
           // Fenced before the intent was written: nothing ran, and the cancel that fenced it settles the card.
           if (error instanceof ClosedRunError && deps.book.get(ticket.jobId)?.inflight_json == null) { fence(ticket.jobId); return; }
           outcome = { status: 'uncertain', message: 'The outcome of that action is unknown.' };
