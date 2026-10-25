@@ -59,16 +59,70 @@ describe('actual owner DO admin route',()=>{
    Object.assign(host.env,env);state.storage.kv.put('do_name','admin-json-test');
    const session=await consoleAccess(state.storage).session(token);
    const original=globalThis.fetch;const calls:RequestInit[]=[];
-   globalThis.fetch=async(_input,init)=>{calls.push(init!);return json(calls.length===1?{owners:[],invites:[]}:true);};
+   globalThis.fetch=async(_input,init)=>{calls.push(init!);return json(calls.length===1?{owners:[],invites:[]}:calls.length===2?{rows:[],truncated:false}:true);};
    try{
     const read=await host.fetch(new Request('https://w.test/console/admin?owner=other',{headers:{cookie,accept:'application/json'}}));
     expect(read.status).toBe(200);expect((await read.json() as {csrf:string}).csrf).toBe(session!.csrf);
-    expect(JSON.parse(String(calls[0]?.body)).p_do_name).toBe('admin-json-test');
+    // The overview, then the spend summary, both for this DO's owner.
+    expect(calls.map(call=>JSON.parse(String(call.body)).p_do_name)).toEqual(['admin-json-test','admin-json-test']);
     const post=(csrf:string)=>host.fetch(new Request('https://w.test/console/action',{method:'POST',headers:{cookie,accept:'application/json'},body:new URLSearchParams({action:'invite.create',csrf,value:'real-handler@test.invalid'})}));
-    expect((await post('wrong')).status).toBe(403);expect(calls).toHaveLength(1);
-    const created=await post(session!.csrf);expect(created.status).toBe(200);expect(await created.json()).toHaveProperty('code');expect(calls).toHaveLength(2);
+    expect((await post('wrong')).status).toBe(403);expect(calls).toHaveLength(2);
+    const created=await post(session!.csrf);expect(created.status).toBe(200);expect(await created.json()).toHaveProperty('code');expect(calls).toHaveLength(3);
     const revoked=await host.fetch(new Request('https://w.test/console/action',{method:'POST',headers:{cookie,accept:'application/json'},body:new URLSearchParams({action:'invite.revoke',csrf:session!.csrf,id:'hash-id'})}));
-    expect(revoked.status).toBe(200);expect(calls).toHaveLength(3);expect(JSON.parse(String(calls[2]?.body)).p_invite).toBe('hash-id');
+    expect(revoked.status).toBe(200);expect(calls).toHaveLength(4);expect(JSON.parse(String(calls[3]?.body)).p_invite).toBe('hash-id');
+   }finally{globalThis.fetch=original;}
+  });
+ });
+});
+
+describe('admin read rate limit',()=>{
+ it('counts the admin read, JSON or page, against the console read budget: the 91st in a minute is refused with a retry',async()=>{
+  const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');
+  const {consoleAccess}=await import('../src/channels/console');
+  const stub=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-rate-test'));
+  const token=await runInDurableObject(stub,(_instance,state)=>consoleAccess(state.storage).grant());
+  const cookie=`waldo_console=${token}`;
+  await runInDurableObject(stub,async(instance,state)=>{
+   const host=instance as unknown as {env:Record<string,unknown>;fetch:(r:Request)=>Promise<Response>};
+   Object.assign(host.env,env);state.storage.kv.put('do_name','admin-rate-test');
+   const original=globalThis.fetch;let asked=0;
+   globalThis.fetch=async(input)=>{asked++;return json(String(input).includes('admin_overview')?{owners:[],invites:[]}:{rows:[],truncated:false});};
+   try{
+    const read=(accept?:string)=>host.fetch(new Request('https://w.test/console/admin',{headers:{cookie,...(accept?{accept}:{})}}));
+    for(let i=0;i<90;i++)expect((await read('application/json')).status).toBe(200);
+    const before=asked;
+    for(const accept of ['application/json',undefined]){
+     const refused=await read(accept);
+     expect(refused.status).toBe(429);expect(refused.headers.get('retry-after')).toBe('60');
+     expect(await refused.json()).toEqual({error:'rate_limited'});
+    }
+    expect(asked).toBe(before);
+    // Any other method is refused outright, before the budget or a directory call, so it cannot read past the limit.
+    for(const method of ['POST','HEAD','PUT']){
+     const other=await host.fetch(new Request('https://w.test/console/admin',{method,headers:{cookie,'sec-fetch-site':'same-origin'}}));
+     expect(other.status).toBe(405);
+    }
+    expect(asked).toBe(before);
+   }finally{globalThis.fetch=original;}
+  });
+ });
+
+ it('refuses an admin read by any method but GET with no directory call, even with budget left',async()=>{
+  const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');
+  const {consoleAccess}=await import('../src/channels/console');
+  const stub=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-method-test'));
+  const token=await runInDurableObject(stub,(_instance,state)=>consoleAccess(state.storage).grant());
+  await runInDurableObject(stub,async(instance,state)=>{
+   const host=instance as unknown as {env:Record<string,unknown>;fetch:(r:Request)=>Promise<Response>};
+   Object.assign(host.env,env);state.storage.kv.put('do_name','admin-method-test');
+   const original=globalThis.fetch;let asked=0;
+   globalThis.fetch=async()=>{asked++;return json({owners:[],invites:[]});};
+   try{
+    for(const accept of ['application/json',undefined]){
+     const posted=await host.fetch(new Request('https://w.test/console/admin',{method:'POST',headers:{cookie:`waldo_console=${token}`,'sec-fetch-site':'same-origin',...(accept?{accept}:{})},body:new URLSearchParams({csrf:'x'})}));
+     expect(posted.status).toBe(405);
+    }
+    expect(asked).toBe(0);
    }finally{globalThis.fetch=original;}
   });
  });
