@@ -7,7 +7,8 @@ import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, textFingerprint } from '../src/memory/claims';
+import { FORGET_PURGE_ID } from '../src/memory/forget-purge';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -375,6 +376,64 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       await transportPass(owner, state);
       expect(checkBackRequests()).toEqual([]);
       expect(wire.sent).toEqual([]);
+    });
+  });
+});
+
+// The owner is forgetting a topic a due loop's title carries: the tick writes no check-back job, so the worker never reads it,
+// and it marks nothing, so the tick after the forget settles asks again. The topic is in custody with the purge job armed for
+// its next try, as a forget whose first pass left a copy is.
+describe('a heartbeat while the owner is forgetting a topic', () => {
+  const TOPIC = 'launch email';
+  const hold = async (state: DurableObjectState) => {
+    state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(TOPIC), TOPIC, new Date(clock.now).toISOString());
+    await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: FORGET_PURGE_ID, kind: 'forget_purge', payloadRefs: { id: FORGET_PURGE_ID }, occurrenceAt: clock.now + 3_600_000, dueAt: clock.now + 3_600_000 });
+  };
+  const jobs = (state: DurableObjectState) => state.storage.sql.exec('SELECT origin, status FROM task_jobs').toArray();
+
+  it('a due loop whose title carries the topic gets no check-back job, logs only a code, and is not marked', async () => {
+    await withOwner('check-back-held-topic', async (owner, state) => {
+      dueLoop(state);
+      await hold(state);
+      await dueHeartbeat(state);
+      await schedulePass(owner, state);
+      expect(jobs(state)).toEqual([]);
+      expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check' AND trace LIKE ?", `${HEARTBEAT_ID}:%`).toArray()).toEqual([{ note: 'held_topic' }]);
+      expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM trace_log').toArray())).not.toContain(TOPIC);
+      expect(state.storage.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);
+      expect(state.storage.sql.exec("SELECT heartbeat_result FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ heartbeat_result: 'quiet' }]);
+      expect(checkBackRequests()).toEqual([]);
+    });
+  });
+
+  // The tick's due loops are one job, so a loop due beside the held one waits with it. The forget drops the loop that named
+  // the topic; the tick after it settles writes the job for the rest.
+  it('the next tick after the forget settles writes the check-back job for the loops still due', async () => {
+    await withOwner('check-back-held-topic-settled', async (owner, state) => {
+      const held = dueLoop(state);
+      const invoice = loopBook(state.storage.sql, { now: () => AT - 3_600_000, newId: () => 'invoice' }).open({ title: 'send the invoice to Asha', due: '2026-10-03T08:45' });
+      await hold(state);
+      await dueHeartbeat(state);
+      await schedulePass(owner, state);
+      expect(jobs(state)).toEqual([]);
+      await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+      expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM topic_purge_pending').one()).toEqual({ n: 0 });
+      expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', held.id).toArray()).toEqual([{ status: 'dropped' }]);
+      clock.now += 60_000;
+      await dueHeartbeat(state);
+      await schedulePass(owner, state);
+      const written = state.storage.sql.exec<{ origin: string; brief_json: string }>('SELECT origin, brief_json FROM task_jobs').toArray();
+      expect(written.map(row => [row.origin, (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs])).toEqual([['machine:heartbeat', [invoice.id]]]);
+    });
+  });
+
+  it('a due loop that does not carry the topic gets its check-back job meanwhile', async () => {
+    await withOwner('check-back-held-topic-unrelated', async (owner, state) => {
+      loopBook(state.storage.sql, { now: () => AT - 3_600_000, newId: () => 'invoice' }).open({ title: 'send the invoice to Asha', due: '2026-10-03T08:30' });
+      await hold(state);
+      await dueHeartbeat(state);
+      await schedulePass(owner, state);
+      expect(jobs(state)).toEqual([{ origin: 'machine:heartbeat', status: 'queued' }]);
     });
   });
 });
