@@ -2438,7 +2438,9 @@ describe('sanitiseRequest structural degradation', () => {
       runtimeCtx({ sanitise: recording as never }),
     );
     expect(result.ok).toBe(true);
-    expect(seenTaints).toEqual(['external', null]);
+    // The third pass checks the owner-side turn for health at external taint because outside content shares the request;
+    // its result is used only to withhold, never as the turn's own provenance.
+    expect(seenTaints).toEqual(['external', null, 'external']);
   });
 
   it('still fails the whole request closed when one tool turn carries a hard scribe deny', async () => {
