@@ -3,7 +3,7 @@ import { literalTextRedactor, redactConversationEntry, type ConversationEntry, t
 import { redactSecretUrls } from './egress-guard';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
-import { supersededCompaction } from '../conversation/compaction';
+import { supersededCompaction, type CompactionSettings } from '../conversation/compaction';
 import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
@@ -26,6 +26,8 @@ export type ConversationStore = Readonly<{
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
+  compaction?: CompactionSettings;
 }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
