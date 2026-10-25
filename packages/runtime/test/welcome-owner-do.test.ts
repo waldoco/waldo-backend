@@ -71,10 +71,13 @@ it('setup done in the app starts one welcome build for an app-only owner who has
       expect(node.map(row => row.label)).toEqual(['Late weekend sleeper']);
       const [support] = JSON.parse(node[0]!.supporting_spots) as number[];
       expect(state.storage.sql.exec('SELECT origin, source, source_ref FROM claims WHERE id = ?', support).one()).toEqual({ origin: 'agent', source: 'inferred', source_ref: 'welcome:apple_health:sleep_midpoint' });
-      // No DO table holds a number from the health input.
+      // No DO table holds a number from the health input. Whole numbers only: a millisecond time or a digest carries the same
+      // digits inside a longer run.
       for (const table of ['claims', 'constellation_nodes', 'welcome_builds']) {
         for (const value of state.storage.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray().flatMap(row => Object.values(row))) {
-          if (typeof value === 'string') { expect(value).not.toContain('230'); expect(value).not.toContain('300'); }
+          if (typeof value !== 'string') continue;
+          const numbers = (value.match(/(?<![\w.])\d+(?:\.\d+)?(?![\w.])/g) ?? []).map(Number);
+          expect(numbers, table).not.toContain(230); expect(numbers, table).not.toContain(300);
         }
       }
 

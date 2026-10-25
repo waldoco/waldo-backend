@@ -79,11 +79,13 @@ it('lists app approvals and decides them once against the reviewed digest, with 
 it('approving a send, or a calendar change that reaches guests, needs a sign-in from the last two hours; a hold on the owner\'s own calendar and declining do not', async () => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-step-up-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
-    let n = 0, sends = 0, events = 0;
+    let n = 0, sends = 0, events = 0, moves = 0, seen: Record<string, unknown> = {};
     const client = {
       sendRaw: async () => { sends++; return { message_id: 'g1' }; },
       findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }),
       createEvent: async () => { events++; return { id: `ev${events}`, etag: 'e1' }; },
+      event: async () => seen,
+      moveEvent: async () => { moves++; return { ...seen, etag: 'v2' }; },
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_003, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `stepup${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0003' });
@@ -111,6 +113,17 @@ it('approving a send, or a calendar change that reaches guests, needs a sign-in 
     expect(events).toBe(1);
     const skipped = await decide(old, { approval_id: invite, action: 'skip', expected_digest: await digest(invite), request_id: 'step-up-skip-0001' });
     expect(appApprovalDecisionResultV1Schema.parse(await skipped.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'skipped' });
+
+    // Google gave the guest event's time without an offset, a detail the app's card schema drops; its guests still gate it.
+    const offsetless = (at: string) => at.slice(0, 19);
+    seen = { id: 'e9', title: 'Standup', start: offsetless(later(5)), end: offsetless(later(6)), all_day: false, etag: 'v1', attendees: 3 };
+    const move = await desk.propose({ action: 'move', event_id: 'e9', title: 'Standup', start: later(7), end: later(8), reason: 'clash' });
+    const [card] = await desk.approvals(Date.now(), { id: move });
+    expect(card!.exact.changes?.guests ?? card!.exact.changes?.emails_guests).toBeUndefined();
+    expect(card!.actions).toContain('approve');
+    const moved = await decide(old, { approval_id: move, action: 'approve', expected_digest: await digest(move), request_id: 'step-up-move-0001' });
+    expect([moved.status, await moved.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
+    expect(moves).toBe(0);
 
     // The refusal recorded nothing, so the same request from a fresh sign-in sends exactly once.
     const sent = await decide(fresh, send);
@@ -186,7 +199,7 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_004, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `refused${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0004' });
     // A decision that raced this one: the desk answers that the row was already handled.
-    const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
+    const raced = { approvals: desk.approvals, stepUp: desk.stepUp, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, signedInAt: new Date().toISOString(), storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
     const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
     const id = await desk.proposeSendEmail(await emailProposal({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>' }));

@@ -1,5 +1,5 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
 import { ftsQuery } from '../../channels/episodes';
@@ -184,12 +184,15 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
         const swept = args.topic !== undefined || args.source !== undefined;
         const history = swept
-          ? 'copies in older chat history carrying that text are hidden'
+          ? 'older chat messages carrying the forgotten words have those words hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
         // A named topic or span also deletes other claims that carry it (aliases and other messages included), so the receipt
         // lists those beside the selected ones.
         const removed = [...new Set([...selected.keys(), ...deletedWith])].sort((a, b) => a - b);
-        return success({ removed_ids: removed, scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running', scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        // The forgotten words are masked in this turn's saved reply too, so a confirmation that names them reads back masked.
+        return success({ removed_ids: removed, scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', cleanup: cleaned ? 'done' : 'running',
+          scope: `removed from memory and recall now; ${history} ${cleaned ? 'now' : 'in the background, and hidden from Waldo until that finishes'}; not removed: an earlier message that put the fact in other words, and messages already delivered to the owner's chat apps, which Waldo cannot delete; backups expire per retention`,
+          reply: `Confirm briefly without repeating the forgotten words; your saved reply shows them as ${FORGOTTEN}. Say what was removed and what was not, from scope.` });
       } },
   ];
 };
