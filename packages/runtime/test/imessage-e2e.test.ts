@@ -205,6 +205,7 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
     await replyFor(w, 'Move my 3pm to 4');
+    console.log('DEBUG0', JSON.stringify((await outbox(w.ownerStub)).map(r => [r.replyRef, r.state, r.attempts, r.frozenAt - t0, r.nextAttemptAt - t0])), JSON.stringify(await inbox(w.ownerStub)).slice(0, 300));
     // The card is its own message, ahead of the reply on the bridge's one slot.
     const first = (await w.host.pull()).delivery!;
     const card = JSON.parse(first.body);
@@ -213,6 +214,7 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
     expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
     await moveClock(w, t0 + 6_000);
     await w.pump(3);
+    console.log('DEBUGOUTBOX', JSON.stringify((await outbox(w.ownerStub)).map(r => [r.replyRef, r.state, r.result, r.attempts, r.nextAttemptAt - Date.now()])));
     const second = (await w.host.pull()).delivery!;
     expect(JSON.parse(second.body).text.startsWith(proof.reply)).toBe(true);
     expect((await w.host.postResult(second, await w.host.execute(second))).status).toBe(200);

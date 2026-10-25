@@ -165,6 +165,8 @@ export type ApprovalDesk = Readonly<{
   reraise(id: string): Promise<ReraiseOutcome>;
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
+  // An iMessage message that is exactly 1 or 2 decides the latest numbered card there while it waits; anything else is a turn (null).
+  numberedReply(text: string, trace: string): Promise<ApprovalDecision | null>;
   placement(id: string): CardPlacement;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
@@ -292,6 +294,17 @@ const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessag
 const approvedInApp = (entry: LedgerRow): boolean => {
   try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, 'approve'); } catch { return true; }
 };
+// iMessage shows no buttons, so a card chat approves there asks for the owner's next message, 1 or 2, naming the change 1 makes.
+const NUMBERED_VERBS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  calendar_change: { create: 'add it', move: 'move it', cancel: 'cancel it' },
+  google_task_change: { create: 'add it', update: 'change it', complete: 'mark it done', reopen: 'reopen it' },
+};
+const numberedVerb = (entry: LedgerRow) => {
+  const p = JSON.parse(entry.payload_json);
+  return NUMBERED_VERBS[entry.kind]?.[entry.kind === 'google_task_change' ? p.args?.action : p.action] ?? 'do it';
+};
+// The reply protocol, not a reading of intent: only a message that is the digit itself decides.
+const NUMBERED_REPLY = /^\s*([12])\s*$/;
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
 const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be approved at all.";
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
@@ -444,6 +457,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (ack?.message_id !== undefined) return `${String(ack.chat?.id ?? deps.owner)}:${String(ack.message_id)}`;
     return ack?.messages?.[0]?.id !== undefined ? String(ack.messages[0].id) : 'unreferenced';
   };
+  // The latest card on iMessage that offered numbers. The numbers answer it alone, and only while it waits.
+  const latestNumbered = () => sql.exec<{ approval_id: string; message_ref: string; retired_at: number | null }>(
+    "SELECT approval_id, message_ref, retired_at FROM approval_presentations WHERE surface = 'imessage' AND approvable = 1 ORDER BY presented_at DESC, rowid DESC LIMIT 1").toArray()[0];
   // Where a request a chat surface hands to the app can be approved: in the app, by its link when there is one, or nowhere.
   const appHandoff = (id: string, inApp: boolean) => !inApp ? `${NOT_IN_APP} Nothing was done.` : deps.appLink ? `Review and approve it there: ${deps.appLink(id)}` : 'Approve it in the Waldo app.';
   // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
@@ -474,12 +490,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
     }
     if (surface !== 'app') {
-      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp;
+      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp, numbered = surface === 'imessage';
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
+      const earlier = numbered && approvable ? latestNumbered() : undefined;
+      const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
       const text = handsToApp ? `${fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`}\n\n${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}`
-        : approvable ? card : `${unreviewable(title, summaryOf(entry))}${link}`;
+        : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
-        const sent = await say(text, approvable ? buttons : laterButtons(id, deferrable), true);
+        const sent = await say(text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
         if (sent != null) { shown.push({ surface, message_ref: sentRef(sent), approvable }); sentHere = true; }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
@@ -1100,6 +1118,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
+    async numberedReply(text, trace) {
+      const number = NUMBERED_REPLY.exec(text)?.[1];
+      const latest = surface === 'imessage' && number ? latestNumbered() : undefined;
+      if (!latest || latest.retired_at !== null) return null;
+      return decideOnce(latest.approval_id, number === '1' ? 'a' : 's', trace, { surface, messageRef: latest.message_ref });
+    },
     async ownerWrote() {
       expireDue();
       const passStarted = deps.now();
