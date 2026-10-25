@@ -4247,14 +4247,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: `${card.id} queued`, text: { input: said, output: text } });
           return log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
         }
+        let appRow: string | undefined;
         if (!skipped) {
           const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
-          if (typeof receipt.app_row_id === 'string') recordCardDelivery(this.ctx.storage.kv, day, card.id, receipt.app_row_id, Date.now());
+          if (typeof receipt.app_row_id === 'string') { appRow = receipt.app_row_id; recordCardDelivery(this.ctx.storage.kv, day, card.id, appRow, Date.now()); }
         }
         if (skipped) plans.skipped(day, card.id); else plans.sent(day, card.id);
         updates.fold(now);
-        // Pushed only once the Brief is in the app chat and recorded as sent, so a push can never cause a second Brief.
-        if (!skipped && channel === 'app' && card.id === 'card:brief') await push('brief');
+        // Pushed only once the Brief has a row in the app chat and is recorded as sent, so a push can never cause a second Brief.
+        if (appRow !== undefined && card.id === 'card:brief') await push('brief');
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
       } catch (error) {
