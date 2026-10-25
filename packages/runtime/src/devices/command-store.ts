@@ -8,7 +8,7 @@ import { commandPayload, identifier, type Ack, type NotifyPayload, type QueryPay
 export type CommandInput = { owner_id: string; device_id: string; request_id: string; class: Capability; payload: QueryPayload | NotifyPayload | MacPayload; ttl_seconds?: number };
 export type CommandSummary = { command_id: string; class: string; state: string; result_status: string | null; result_state: string | null; issued_at: number; expires_at: number };
 type Row = CommandSummary & { owner_id: string; device_id: string; request_id: string; fingerprint: string; idempotency_key: string; message_id: string; wire: string | null; delivered_generation: string | null; result_message_id: string | null; result_fingerprint: string | null };
-export type EnqueueResult = { accepted: true; command_id: string; state: string; duplicate: boolean } | { accepted: false; reason: 'invalid_shape' | 'idempotency_conflict' | 'rate_limited' | 'unavailable' };
+export type EnqueueResult = { accepted: true; command_id: string; state: string; duplicate: boolean } | { accepted: false; reason: 'invalid_shape' | 'idempotency_conflict' | 'rate_limited' | 'unavailable' | 'offline' };
 export type Receipt = { contract_version: string; type: 'receipt'; message_id: string; device_id: string; owner_id: string; command_id: string; revision: 1; idempotency_key: string; payload: { result_message_id: string; received_at: number } };
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export function newMessageId(at: number): string {
@@ -23,7 +23,9 @@ export class DeviceCommandStore {
     storage.sql.exec('CREATE TABLE IF NOT EXISTS mac_issues(request_id TEXT PRIMARY KEY, issued_at INTEGER NOT NULL)');
     storage.sql.exec('CREATE TABLE IF NOT EXISTS notify_issues(notification_id TEXT PRIMARY KEY, issued_at INTEGER NOT NULL)');
   }
-  async enqueue(input: CommandInput, at: number, capabilities: readonly string[]): Promise<EnqueueResult> {
+  // `offline`: the device has no live connection now. A new Mac request is then refused instead of queued; a retry of a request
+  // already admitted still answers with that request, so a refusal never hides work that was sent.
+  async enqueue(input: CommandInput, at: number, capabilities: readonly string[], offline = false): Promise<EnqueueResult> {
     // An owner request must remain inside the paired device's declared display/read capability.
     const ttl = input.ttl_seconds ?? (macClass(input.class) ? MAC_APPROVAL_TTL_SECONDS : COMMAND_DEFAULT_TTL_SECONDS);
     if (!identifier(input.owner_id) || !identifier(input.device_id) || !identifier(input.request_id) || !capabilities.includes(input.class) || !commandPayload(input.class, input.payload) || !Number.isInteger(ttl) || ttl < 1 || ttl > (macClass(input.class) ? MAC_APPROVAL_TTL_SECONDS : COMMAND_MAX_TTL_SECONDS)) return { accepted: false, reason: 'invalid_shape' };
@@ -39,6 +41,7 @@ export class DeviceCommandStore {
         const row = previous[0]!;
         return { accepted: true, command_id: row.command_id, state: row.state, duplicate: true };
       }
+      if (offline && macClass(input.class)) return { accepted: false, reason: 'offline' };
       // Backpressure preserves lifelong receipt and command identity evidence instead of evicting it.
       if (Number(this.storage.sql.exec('SELECT count(*) AS count FROM commands').one().count) >= MAX_DEVICE_COMMANDS) return { accepted: false, reason: 'unavailable' };
       if (macClass(input.class)) {
@@ -66,6 +69,7 @@ export class DeviceCommandStore {
     });
     return this.storage.sql.exec<{ command_id: string; wire: string; state: string; delivered_generation: string | null }>("SELECT command_id,wire,state,delivered_generation FROM commands WHERE state IN ('queued','sent','acked') ORDER BY issued_at,command_id").toArray();
   }
+  state(command: string): string | null { return this.storage.sql.exec<{ state: string }>('SELECT state FROM commands WHERE command_id=?', command).toArray()[0]?.state ?? null; }
   hasInFlight(): boolean { return this.storage.sql.exec("SELECT command_id FROM commands WHERE state IN ('sent','acked') LIMIT 1").toArray().length > 0; }
   markSent(command: string, generation = ''): void { this.storage.sql.exec("UPDATE commands SET state=CASE WHEN state='queued' THEN 'sent' ELSE state END,delivered_generation=? WHERE command_id=? AND state IN ('queued','sent','acked')", generation, command); }
   private command(frame: Ack | Result): Row {

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { appControlRequestIdV1Schema, appControlResultV1Schema } from './controls';
 import {
   approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalLabelsV1Schema, approvalQuestionV1Schema, approvalReviewV1Schema,
-  epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, type ApprovalActionV1, type ApprovalKindV1,
+  epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, REPLY_TEXT_MAX_CHARS, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
 import { surfaceNameV1Schema } from './surfaces';
 
@@ -38,8 +38,14 @@ const instant = z.iso.datetime({ offset: true });
 // whether Google emails the guests, the place, a calendar other than the primary one, the Google account, the event's
 // time before a move, and the time zone the review's times are written in.
 const CALENDAR_DETAILS = ['guests', 'emails_guests', 'location', 'calendar', 'account', 'previous', 'time_zone'] as const;
+// The draft of a send is approvals revision 3: the frozen words that go out, byte for byte. An email's subject is its
+// one header line, so it never breaks across lines; a message has no subject.
+export const appApprovalMessageV1Schema = z.strictObject({
+  subject: z.string().min(1).max(998).regex(/^[^\r\n]*$/).nullable(), body: z.string().min(1).max(REPLY_TEXT_MAX_CHARS),
+});
 export const appApprovalExactV1Schema = z.strictObject({
   recipients: z.strictObject({ to: addresses.min(1), cc: addresses, bcc: addresses }).optional(),
+  message: appApprovalMessageV1Schema.optional(),
   changes: z.strictObject({
     action: z.enum(['create', 'move', 'cancel']), title: z.string().min(1).max(200).nullable(),
     start: instant.nullable(), end: instant.nullable(),
@@ -66,17 +72,24 @@ export const appApprovalV1Schema = z.strictObject({
   // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
   question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
+  .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
+    { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
   .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
-export const APP_APPROVALS_CONTRACT_REVISION = 2;
-// An approval as a build reading `revision` parses it: revision 1 is the shape before the calendar details.
+export const APP_APPROVALS_CONTRACT_REVISION = 3;
+// An approval as a build reading `revision` parses it: revision 2 is the shape before the draft of a send, and
+// revision 1 the shape before the calendar details too. An approval a revision leaves whole is returned as it is.
 export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
-  const changes = approval.exact.changes;
-  if (revision >= 2 || !changes) return approval;
-  const first = Object.fromEntries(Object.entries(changes).filter(([key]) => !(CALENDAR_DETAILS as readonly string[]).includes(key))) as typeof changes;
-  return { ...approval, exact: { ...approval.exact, changes: first } };
+  const { message, ...withoutMessage } = approval.exact;
+  const exact = revision < 3 && message !== undefined ? withoutMessage : approval.exact;
+  const changes = exact.changes;
+  if (revision < 2 && changes) {
+    const first = Object.fromEntries(Object.entries(changes).filter(([key]) => !(CALENDAR_DETAILS as readonly string[]).includes(key))) as typeof changes;
+    return { ...approval, exact: { ...exact, changes: first } };
+  }
+  return exact === approval.exact ? approval : { ...approval, exact };
 };
 export const appApprovalListQueryV1Schema = z.strictObject({ state: appApprovalStateV1Schema.optional() });
 export const appApprovalListV1Schema = z.strictObject({ approvals: z.array(appApprovalV1Schema).max(100) });

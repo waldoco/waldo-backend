@@ -28,3 +28,23 @@ describe('propose_calendar_change: guests, calendar, place and Meet', () => {
     expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
   });
 });
+
+describe('propose_calendar_change: the kind of protected time a new block is', () => {
+  it.each([
+    ['a rest block', { ...create, title: 'Recharge', block: 'rest' }],
+    ['a deep-work block', { ...create, title: 'Focus block', block: 'deep_work' }],
+    ['a new event that is not a block', create],
+  ])('accepts %s', (_name, args) => {
+    const parsed = proposeCalendarChangeArgsSchema.safeParse(args);
+    expect(parsed.success && parsed.data.block).toBe('block' in args ? args.block : undefined);
+  });
+
+  it.each([
+    ['a kind on a move', { action: 'move', event_id: 'e1', start: create.start, end: create.end, block: 'rest', reason: 'x' }],
+    ['a kind on a cancel', { action: 'cancel', event_id: 'e1', block: 'deep_work', reason: 'x' }],
+    ['a kind it does not know', { ...create, block: 'nap' }],
+    ['an empty kind', { ...create, block: '' }],
+  ])('refuses %s', (_name, args) => {
+    expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
+  });
+});
