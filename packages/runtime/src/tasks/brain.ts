@@ -10,7 +10,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import { eligibleHandlers } from '../tools/eligibility';
 import { md5Hex } from '../channels/md5';
 import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
-import { BROWSER_TOOLS, TASK_PROFILE_SPECS, unreplayable } from './profiles';
+import { BROWSER_TOOLS, FINISH_TASK, TASK_PROFILE_SPECS, unreplayable } from './profiles';
 import { type ProviderOutcome, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 
 // The brain's side of the job protocol. Workers call in through four methods (claim, tool, checkpoint, report); each one
@@ -80,6 +80,13 @@ const keptTurn = (turn: LLMToolTurn): LLMToolTurn => {
     ...(unkeptOutput ? { output: `${leadingNote(turn.output)}${unreplayable(turn.call.name) ? UNKEPT_EFFECT : UNKEPT_OUTPUT}` } : {}),
   };
 };
+
+// A step the taint gate sends to the owner's card. A worker cannot raise a card (no profile holds propose_action) and never
+// approves, so the task stops at the step and hands it back: the report's apply turn puts the proposal to the owner.
+const OWNER_STEP = {
+  error: 'This step needs the owner\'s approval, which a task cannot ask for, so it did not run.',
+  fix: `Do not try it again. Call ${FINISH_TASK} now with status blocked, this exact step (the tool and its arguments) in proposals, and what you found so far: Waldo asks the owner.`,
+} as const;
 
 // A spend that cannot be read holds the worker at the ceiling (the cheap route, no paid tools): read as no ceiling, a worker's
 // spend would have no bound at all.
@@ -202,6 +209,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         return 'fenced';
       }
       if (effect && !entered && !deps.book.endEffect(ticket)) return 'fenced';
+      if (result.error_code === 'taint_needs_approval') result = { ...result, ...OWNER_STEP, retryable: false };
     }
     if (!deps.book.touch(ticket, result.source_taint === 'external' ? 'external' : null)) return 'fenced';
     deps.log({
