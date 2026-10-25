@@ -181,11 +181,11 @@ const vitalsOf = (rs: readonly Reading[], night: readonly Reading[], sleep: DayR
 const MIN_ASLEEP_HOURS = 3;
 const LOW_HOURS = 2;
 // A night with no measured resting heart rate takes one from its own heart-rate hours: the mean of the two lowest hour means
-// among the hours wholly inside the asleep span, from at least three such hours. A resting rate lies at the night's low, and
-// it takes two hours, not one, because the read returns each hour's mean without its number of readings, so one sparsely
-// read hour must not set it alone. An hour partly awake is left out. The asleep span decides, not the date, so the hour
-// before midnight, dated the day before, counts. A night touching a day with an overlapping window, or begun before the
-// first hour the read holds, was not read whole and takes none.
+// among the hours wholly inside the sleep's span (its time-asleep reading's start to end), from at least three such hours. A
+// resting rate lies at the night's low, and it takes two hours, not one, because the read returns each hour's mean without
+// its number of readings, so one sparsely read hour must not set it alone. An hour partly outside the span is left out. The
+// span decides, not the date, so the hour before midnight, dated the day before, counts. A night touching a day with an
+// overlapping window, or begun before the first hour the read holds, was not read whole and takes none.
 const asleepLow = (sleep: DayRecord['sleep'], hours: readonly Reading[], overlapped: ReadonlySet<string>, firstHourMs: number): MethodReading<RestingMethod>[] => {
   if (!sleep || Date.parse(sleep.startAt) < firstHourMs) return [];
   const from = Date.parse(sleep.startAt), to = Date.parse(sleep.endAt);

@@ -723,6 +723,19 @@ describe('produceHealthScores', () => {
       expect(await run(h)).toBe('written');
       expect(dayIn(h, TODAY).restingHeartRate).toEqual([{ value: expect.any(Number), method: 'asleep_hours_low' }]);
       expect(todayRow(h).recovery).toMatchObject({ score: expect.any(Number), confidence: 0.7, algorithm_version: 'recovery.candidate.v4', hrv_method: null });
+      // With no daylight or movement, Form's daytime input is stress, which needs eight settled waking hours: at noon today
+      // has five, while yesterday, a finished day, has them all.
+      expect(todayRow(h).form).toEqual({ reason: 'baseline_immature' });
+      expect(h.writes.find(w => w.day === addDays(TODAY, -1))!.form).toMatchObject({ score: expect.any(Number), algorithm_version: 'form.candidate.v8' });
+    });
+
+    it('never takes a stored reading labelled with the producer\'s own method for a measured one', async () => {
+      const computed = harness(hc(hcHistory(25)));
+      await run(computed);
+      const planted = harness(hc([...hcHistory(25), sample('resting_heart_rate', TODAY, { start_at: `${TODAY}T05:00:00.000Z`, end_at: `${TODAY}T05:00:00.000Z`, value: 40, method: 'asleep_hours_low' })]));
+      await run(planted);
+      expect(dayIn(planted, TODAY).restingHeartRate).toEqual(dayIn(computed, TODAY).restingHeartRate);
+      expect(planted.writes).toEqual(computed.writes);
     });
 
     it('takes the mean of the two lowest hours wholly inside the asleep span, across local midnight, never a waking or half-asleep hour', async () => {
