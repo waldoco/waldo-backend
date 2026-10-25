@@ -45,7 +45,7 @@ describe('health scores: Recovery', () => {
     expect(r.score).toBeGreaterThanOrEqual(0);
     expect(r.score).toBeLessThanOrEqual(100);
     expect(r.activation).toBe('candidate_unaccepted');
-    expect(r.algorithm_version).toBe('recovery.candidate.v2');
+    expect(r.algorithm_version).toBe('recovery.candidate.v4');
     expect(r.coverage).toBe(1);
     expect(r.hrv_method).toBe('rmssd');
     expect(r.used.signals).toEqual(expect.arrayContaining(['sleep', 'hrv', 'resting_heart_rate']));
@@ -229,7 +229,7 @@ describe('health scores: Form on a day still in progress', () => {
     if (afternoon.state !== 'available' || wholeDay.state !== 'available') throw new Error('expected available');
     expect(afternoon.used.signals).toEqual(expect.arrayContaining(['daylight', 'movement', 'stress']));
     expect(afternoon.score).toBe(wholeDay.score);
-    expect(afternoon.algorithm_version).toBe('form.candidate.v5');
+    expect(afternoon.algorithm_version).toBe('form.candidate.v8');
   });
   it('still reads a day that is really behind its usual hours as lower', () => {
     const quiet = (record: DayRecord): DayRecord => ({ ...record, hourly: record.hourly.map(bucket => ({ ...bucket, daylightMinutes: bucket.daylightMinutes && 5, movementMinutes: bucket.movementMinutes && 2 })) });

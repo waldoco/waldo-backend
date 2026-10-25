@@ -39,10 +39,10 @@ const withTarget = (days: DayRecord[], over: Partial<DayRecord>): DayRecord[] =>
 const scoreOf = (pillar: { state: string; score?: number }) => (pillar.state === 'available' ? pillar.score : null);
 
 describe('health scores v2: versions', () => {
-  it('labels Recovery v2, Form v5 and Weight v4, all still candidates', () => {
+  it('labels Recovery v4, Form v8 and Weight v4, all still candidates', () => {
     const scores = computeDailyScores(input(month()));
     expect([scores.recovery, scores.form, scores.weight].map(p => (p.state === 'available' ? [p.algorithm_version, p.activation] : p.reason)))
-      .toEqual([['recovery.candidate.v2', 'candidate_unaccepted'], ['form.candidate.v5', 'candidate_unaccepted'], ['weight.candidate.v4', 'candidate_unaccepted']]);
+      .toEqual([['recovery.candidate.v4', 'candidate_unaccepted'], ['form.candidate.v8', 'candidate_unaccepted'], ['weight.candidate.v4', 'candidate_unaccepted']]);
   });
 });
 
@@ -104,6 +104,13 @@ describe('Recovery v2: resting heart rate, a baseline per method', () => {
     const dailyOfBoth = computeDailyScores(input(withTarget(bothMature, { restingHeartRate: [{ value: 56, method: 'provider_resting_daily' }] }))).recovery;
     expect(scoreOf(preferred)).toBe(scoreOf(overnightOnly));
     expect(scoreOf(preferred)).not.toBe(scoreOf(dailyOfBoth));
+  });
+  it('reads a night\'s asleep low only against earlier asleep lows, never a measured night', () => {
+    const asleepLow = (i: number) => ({ overnightHrv: [], restingHeartRate: [{ value: 51 + wobble(i, 1), method: 'asleep_hours_low' as const }] });
+    const measured = (i: number) => ({ overnightHrv: [], restingHeartRate: [{ value: 55 + wobble(i, 1), method: 'unknown' as const }] });
+    expect(computeDailyScores(input(month(i => (i % 2 ? asleepLow(i) : measured(i))))).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    const recovery = computeDailyScores(input(month(i => (i <= 15 ? asleepLow(i) : measured(i))))).recovery;
+    expect(recovery.state === 'available' && [recovery.used.signals, recovery.used.days]).toEqual([['sleep', 'resting_heart_rate'], month().slice(0, 16).map(d => d.day).sort()]);
   });
 });
 
