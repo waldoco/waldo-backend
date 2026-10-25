@@ -4781,7 +4781,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       titleThread: (trace, exchange, scope) => responder.threadTitle(trace, exchange, scope),
       progressNote: (trace, input, scope) => responder.progressNote(trace, input, scope),
-      timezone: clock.timezone, ready };
+      get timezone() { return clock.timezone; }, ready };
     this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
     return runtime;
   }
