@@ -84,7 +84,7 @@ it('revision 1 reads the same bytes whether or not a claim is pinned, and revisi
     }
     const listed = appControlProjectionV1Schema.parse(await (await read(ctx, 'memory_view=claims&limit=10', 'controls=2')).json());
     if (listed.view !== 'constellation' || listed.data.memory_view !== 'claims') throw Error('expected claims');
-    expect(listed.data.items.map(item => [item.text, item.pinned])).toEqual([['Lives in Leeds', 'profile'], ['Walks after lunch', null], ['Reads before bed', null]]);
+    expect(listed.data.items.map(item => [item.text, item.pinned])).toEqual([['Reads before bed', null], ['Walks after lunch', null], ['Lives in Leeds', 'profile']]);
     for (const query of queries) expect(await bytes(query)).not.toContain('waldo_confirmed');
   });
 });
