@@ -3,6 +3,8 @@ import { consoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { ConsoleLinkSend, ConsoleLinkTurn } from '../tools/live/console-link';
 import { consoleAccess, LINK_MS } from './console';
+import { SEND_NOW_ONLY } from './delivery-routes';
+import { whatsappHeld } from './whatsapp-api';
 import { ClosedRunError } from './run-effect-scope';
 import type { TurnLogEntry } from './owner-turn-types';
 
@@ -19,7 +21,7 @@ export const mintConsoleLink = async (storage: DurableObjectStorage, env: OwnerD
 // How a turn's own surface carries the link, or why it cannot. `sent` reads an earlier send this turn already made
 // durable, so a retried turn never mints a second link.
 export type ConsoleLinkRoute =
-  | Readonly<{ surface: 'telegram' | 'imessage' | 'app'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>
+  | Readonly<{ surface: 'telegram' | 'imessage' | 'app' | 'whatsapp'; sent(turn: ConsoleLinkTurn): boolean; deliver(text: string, turn: ConsoleLinkTurn): Promise<boolean> }>
   | Readonly<{ unsupported: 'app_unsupported' | 'surface_unsupported' }>;
 
 export const consoleLinkSender = (deps: Readonly<{
@@ -93,6 +95,17 @@ export const telegramConsoleRoute = (send: (body: Readonly<{ text: string; link_
     if (message === undefined) return false;
     recordCredentialMessage(kv, message);
     return true;
+  },
+});
+
+// WhatsApp sends the link now or not at all: a credential is never held for the window to reopen. The owner's request
+// opened the window, and Meta quotes a reply back only by message id, so no later turn reads the link.
+export const whatsappConsoleRoute = (send: (body: Readonly<{ text: string; link_preview_options: Readonly<{ is_disabled: true }>; [SEND_NOW_ONLY]: true }>) => Promise<unknown>): ConsoleLinkRoute => ({
+  surface: 'whatsapp',
+  sent: () => false,
+  async deliver(text) {
+    const sent = await send({ text, link_preview_options: { is_disabled: true }, [SEND_NOW_ONLY]: true });
+    return sent !== undefined && !whatsappHeld(sent);
   },
 });
 

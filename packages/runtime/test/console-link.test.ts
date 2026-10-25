@@ -3,8 +3,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { handlerAllowlistMatchesAcl, sendConsoleLinkResultSchema, type SendConsoleLinkResult } from '@waldo/contracts';
 import { consoleLinkHandler, type ConsoleLinkTurn } from '../src/tools/live/console-link';
-import { APP_CONSOLE_LINK_GONE, appConsoleLinks, appConsoleRoute, consoleLinkSender, consoleLinkText, CREDENTIAL_REPLY_TEXT, maskCredentialReply, recordCredentialMessage, type ConsoleLinkRoute } from '../src/channels/console-link';
+import { APP_CONSOLE_LINK_GONE, appConsoleLinks, appConsoleRoute, whatsappConsoleRoute, consoleLinkSender, consoleLinkText, CREDENTIAL_REPLY_TEXT, maskCredentialReply, recordCredentialMessage, type ConsoleLinkRoute } from '../src/channels/console-link';
 import { appTranscriptPage } from '../src/channels/app-api';
+import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
+import { WHATSAPP_HELD } from '../src/channels/whatsapp-api';
 import type { ConversationEntry } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { iMessageConsoleRoute } from '../src/channels/imessage/console-link';
@@ -107,7 +109,7 @@ describe('console link sender: one link per turn, minted only when it can be del
     expect(s.mint).not.toHaveBeenCalled();
   });
 
-  it('on whatsapp mints nothing', async () => {
+  it('on a surface with no route mints nothing', async () => {
     const reason = 'surface_unsupported';
     const s = sender({ unsupported: reason });
     expect(await s.send(turn)).toEqual({ sent: false, reason });
@@ -230,6 +232,24 @@ describe('iMessage console route: the link answers only the inbound message this
       await expect(route.deliver(consoleLinkText(LINK), { turnId: 'imessage-1', runScope: scope(state, 'imsg-1', 'attempt-1') })).rejects.toThrow(ClosedRunError);
       expect(new IMessageFinalOutbox(state.storage).records()).toEqual([]);
     });
+  });
+});
+
+describe('WhatsApp console route: sent now or not at all', () => {
+  const route = (answer: unknown) => {
+    const bodies: object[] = [];
+    const built = whatsappConsoleRoute(async (body) => { bodies.push(body); return answer; });
+    if ('unsupported' in built) throw new Error('the WhatsApp route always delivers');
+    return { built, bodies };
+  };
+  it('asks for a send that is never held and never previewed, and counts only an accepted send', async () => {
+    const { built, bodies } = route({ messages: [{ id: 'wamid.out' }] });
+    expect(await built.deliver(consoleLinkText(LINK), { turnId: 'wa-1' })).toBe(true);
+    expect(bodies).toEqual([{ text: consoleLinkText(LINK), link_preview_options: { is_disabled: true }, [SEND_NOW_ONLY]: true }]);
+    expect(built.sent({ turnId: 'wa-1' })).toBe(false);
+  });
+  it.each([['a closed window or a blocked send', undefined], ['a held send', WHATSAPP_HELD]])('reports %s as not delivered', async (_label, answer) => {
+    expect(await route(answer).built.deliver(consoleLinkText(LINK), { turnId: 'wa-1' })).toBe(false);
   });
 });
 
