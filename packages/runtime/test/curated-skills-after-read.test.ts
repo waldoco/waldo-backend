@@ -6,7 +6,9 @@ import { dispatchTool } from '../src/tools/dispatcher';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
 const canaries=['ababcdbcdbababcd','cdcdababcdcdabab','bababcdcbababcdc'];
-it('reviewed enabled selection remains owner-bound after an external workspace read without widening lifecycle grants',async()=>{
+// The owner's ruling cards every change in a turn that has read outside text, and loading a skill is one: after an external
+// read the selection waits for the owner, and the selection's owner and run binding still hold on the owner's own turn.
+it('an external workspace read sends skill selection to the owner, without widening lifecycle grants or loosening the owner binding',async()=>{
  const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('skill-selection-after-read'));
  await runInDurableObject(stub,async(_,state)=>{
   let closed=false;const scope={runId:'run',attempt:'attempt',deadline:Date.now()+15*60_000,signal:new AbortController().signal,admit(){if(closed)throw new Error('closed');},commit<T>(work:()=>T){this.admit();return work();}};
@@ -21,9 +23,12 @@ it('reviewed enabled selection remains owner-bound after an external workspace r
    const name=step++===0?'workspace_list':step===2?'skills_load':undefined;
    return name?{text:'',tool_calls:[{call_id:`call-${step}`,name,arguments:JSON.stringify(name==='workspace_list'?{}:version)}]}:{text:'done'};
   },onTool:event=>events.push({name:event.call.name,ok:event.ok})});
-  expect(events).toEqual([{name:'workspace_list',ok:true},{name:'skills_load',ok:true}]);
-  expect(ctx.toolArgSourceTaint).toBe('external');expect(await cap.prompt(canaries)).toContain('Prepare a reviewable draft.');
-  const call=(args:unknown,overrides={})=>dispatchTool({id:'check',name:'skills_load',args},{...ctx,...overrides},{handlers:cap.handlers});
+  expect(events).toEqual([{name:'workspace_list',ok:true},{name:'skills_load',ok:false}]);
+  expect(ctx.toolArgSourceTaint).toBe('external');expect(await cap.prompt(canaries)).toBe('');
+  const owner={...ctx,toolArgSourceTaint:null};
+  expect(await dispatchTool({id:'owner-load',name:'skills_load',args:version},owner,{handlers:cap.handlers})).toMatchObject({ok:true});
+  expect(await cap.prompt(canaries)).toContain('Prepare a reviewable draft.');
+  const call=(args:unknown,overrides={})=>dispatchTool({id:'check',name:'skills_load',args},{...owner,...overrides},{handlers:cap.handlers});
   for(const overrides of [{authenticatedUserId:'other'},{turnId:'other'},{runScope:{...scope,runId:'other'}},{runScope:{...scope,admit:()=>{}}}])expect(await call(version,overrides)).toMatchObject({ok:false});
   expect(await call({...version,version:2})).toMatchObject({ok:false});expect(await call({...version,name:'uploaded-skill'})).toMatchObject({ok:false});
   expect(await dispatchTool({id:'tainted-install',name:'skills_install',args:version},ctx,{handlers:cap.handlers})).toMatchObject({ok:false});

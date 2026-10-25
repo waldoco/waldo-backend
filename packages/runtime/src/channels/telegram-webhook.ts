@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
+import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
@@ -21,6 +22,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
+  WALDO_COMPACTION?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -72,7 +75,7 @@ export type TelegramWebhookEnv = Readonly<{
   // Calendar-only prep remains off until controlled owner-path acceptance.
   CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
-}> & OwnerDirectoryEnv;
+}> & PhoneSmsEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 

@@ -3,7 +3,7 @@ import { literalTextRedactor, redactConversationEntry, type ConversationEntry, t
 import { redactSecretUrls } from './egress-guard';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
-import { supersededCompaction } from '../conversation/compaction';
+import { supersededCompaction, type CompactionFence, type CompactionSettings } from '../conversation/compaction';
 import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
@@ -21,11 +21,14 @@ export type ConversationStore = Readonly<{
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;
   forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
-  // A compaction row and the row it supersedes, written as one unit that never moves the chain's leaf.
-  appendCompaction?(row: ConversationEntry, supersededId: string | null, scope?: RunEffectScope): Promise<void>;
+  // A compaction row and the row it supersedes, written as one unit that never moves the chain's leaf. False when the
+  // fence, checked in that unit, refused it and nothing was written.
+  appendCompaction?(row: ConversationEntry, supersededId: string | null, scope?: RunEffectScope, fence?: CompactionFence): Promise<boolean>;
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
+  compaction?: CompactionSettings;
 }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };

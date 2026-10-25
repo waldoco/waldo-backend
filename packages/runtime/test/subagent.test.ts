@@ -50,7 +50,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
       let exit: LoopExit = 'completed';
       const text = await runToolLoop({
         handlers: [stubRead('web_search'), stubRead('read_memory')],
-        ctx, maxSteps: 15,
+        ctx: { ...ctx }, maxSteps: 15,
         onSettle: (settled) => { exit = settled; },
         step: async (tools, turns) => {
           childToolSets.push(tools?.map((tool: LLMTool) => tool.name));
@@ -67,7 +67,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
     const outputs: string[] = [];
     let n = 0;
     const text = await runToolLoop({
-      handlers: [stubRead('web_search'), delegate], ctx, maxSteps: 10,
+      handlers: [stubRead('web_search'), delegate], ctx: { ...ctx }, maxSteps: 10,
       onTool: (event) => outputs.push(event.output),
       step: async (tools, turns) => {
         n += 1;
@@ -87,7 +87,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
     const outputs: string[] = [];
     let n = 0;
     await runToolLoop({
-      handlers: [delegate], ctx, maxSteps: 25,
+      handlers: [delegate], ctx: { ...ctx }, maxSteps: 25,
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => {
         n += 1;
@@ -108,7 +108,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
     const outputs: string[] = [];
     let n = 0;
     await runToolLoop({
-      handlers: [delegate], ctx, maxSteps: 5,
+      handlers: [delegate], ctx: { ...ctx }, maxSteps: 5,
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => {
         n += 1;
@@ -126,7 +126,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
     const outputs: string[] = [];
     let n = 0;
     await runToolLoop({
-      handlers: [delegate], ctx, maxSteps: 5,
+      handlers: [delegate], ctx: { ...ctx }, maxSteps: 5,
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => {
         n += 1;
@@ -144,7 +144,7 @@ describe('runToolLoop exit classification', () => {
   it('settles completed when the model closes with tools still offered', async () => {
     let exit: LoopExit | undefined;
     await runToolLoop({
-      handlers: [stubRead('web_search')], ctx, maxSteps: 5,
+      handlers: [stubRead('web_search')], ctx: { ...ctx }, maxSteps: 5,
       onSettle: (settled) => { exit = settled; },
       step: async () => ({ text: 'done.' }),
     });
@@ -154,7 +154,7 @@ describe('runToolLoop exit classification', () => {
   it('settles budget_exhausted when maxSteps withdraws the tools', async () => {
     let exit: LoopExit | undefined;
     await runToolLoop({
-      handlers: [stubRead('web_search')], ctx, maxSteps: 2,
+      handlers: [stubRead('web_search')], ctx: { ...ctx }, maxSteps: 2,
       onSettle: (settled) => { exit = settled; },
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: `c${Math.random()}`, name: 'web_search', arguments: `{"q":"${Math.random()}"}` }] } : { text: 'out of rounds.' }),
     });
@@ -164,7 +164,7 @@ describe('runToolLoop exit classification', () => {
   it('settles budget_exhausted after failed rounds consume the hard budget', async () => {
     let exit: LoopExit | undefined;
     await runToolLoop({
-      handlers: [stubRead('web_search')], ctx, maxSteps: 25,
+      handlers: [stubRead('web_search')], ctx: { ...ctx }, maxSteps: 25,
       onSettle: (settled) => { exit = settled; },
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: `x${Math.random()}`, name: 'launch_rocket', arguments: `{"n":${Math.random()}}` }] } : { text: 'gave up.' }),
     });
@@ -331,7 +331,7 @@ describe('Codex #224 holds (regressions)', () => {
     let exit: LoopExit = 'completed';
     await runToolLoop({
       handlers: [stubRead('web_search')],
-      ctx, maxSteps: 25, budget,
+      ctx: { ...ctx }, maxSteps: 25, budget,
       onSettle: (settled) => { exit = settled; },
       step: async (tools) => {
         completions += 1;

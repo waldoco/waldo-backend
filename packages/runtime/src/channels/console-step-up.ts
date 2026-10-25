@@ -8,6 +8,10 @@ import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { OWNER_CONTROLS_ACTION_PATH } from './dashboard-owner-controls';
 import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
+import { APP_PROVIDERS_PATH } from '../health/providers/app-providers';
+import type { AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import type { AppChatProviderV1 } from '../../../contracts/src/app/onboarding';
+import type { ApprovalActionV1, ApprovalKindV1 } from '../../../contracts/src/app/parts';
 
 type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 
@@ -20,10 +24,20 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
+  'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  // The app's memory actions, named for themselves so each carries its own reason.
+  'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
+  'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
+  'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
+  'node.confirm': { gated: false, why: 'Confirms one remembered pattern as the owner\'s own; grants no access.' },
+  'node.correct': { gated: true, why: 'Replaces a remembered pattern with words stored as the owner\'s own, which every later turn reads.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
+  'health_memory.set': { gated: false, why: 'Sets whether Waldo keeps health patterns in memory; grants no access.' },
   'schedule.set': { gated: false, why: 'Sets when the daily cards arrive; grants no access.' },
   'schedule.reset': { gated: false, why: 'Restores the default card times; grants no access.' },
   'timezone.set': { gated: false, why: 'Sets the owner\'s time zone; grants no access.' },
@@ -38,6 +52,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
+  'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
   'google.connect': { gated: true, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
   'mcp.connect': { gated: true, why: 'Connects a tool server Waldo keeps calling after this session.' },
@@ -67,6 +82,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
+  'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
+  'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.
@@ -118,4 +135,38 @@ export const consoleStepUpRefusal = async (request: Request, session: ConsoleSes
     return Response.json({ error: 'step_up_required' }, { status: 403, headers: DASHBOARD_OVERVIEW_HEADERS });
   }
   return confirmPage(returnTarget(action, form));
+};
+
+// error is what a client acts on; code names it for the core app problem shape.
+export const appStepUpRefusal = () => Response.json({ error: 'step_up_required', code: 'step_up_required' }, { status: 403, headers: { 'cache-control': 'private, no-store' } });
+// An action the table does not name is gated, so a new app action fails closed until it is classified.
+export const stepUpGated = (action: string): boolean => STEP_UP_ACTIONS[action]?.gated !== false;
+// Each app control is the console action of the same name, except that unlinking names its channel in id.
+export const appControlStepUpAction = (action: Readonly<{ action: string; id?: string | undefined }>): string => action.action === 'channel.unlink' ? `${action.id}.unlink` : action.action;
+export const appLinkStepUpAction = (provider: AppChatProviderV1): string => `${provider}.link`;
+
+// App routes with no console action of their own.
+export const APP_STEP_UP_ROUTES: Readonly<Record<string, StepUpRule>> = {
+  [`${APP_PROVIDERS_PATH}/connect`]: { gated: true, why: 'Connects a health provider Waldo keeps syncing after this session.' },
+};
+
+// Approving is the only decision that can act for the owner: skipping, deferring and asking for a new draft act on nothing, and
+// undoing within its window reaches only those the approved change reached. Approving one change to the owner's own things
+// stays one tap; approving anything that reaches other people, or acts on a site, a tool or external content, is gated like
+// approval.send. A calendar change reaches other people when it has guests or is on a calendar other than the primary one.
+export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared', StepUpRule>> = {
+  email_send: { gated: true, why: 'Sends one email as the owner to other people; it cannot be called back.' },
+  message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },
+  calendar_change: { gated: false, why: 'Changes one event on the owner\'s own primary calendar, with no guests.' },
+  calendar_shared: { gated: true, why: 'Changes an event with guests, or on a calendar other people may share.' },
+  google_task_change: { gated: false, why: 'Changes one task on the owner\'s own list; reaches no one else.' },
+  browser_submit: { gated: true, why: 'Submits a form on a website as the owner.' },
+  mcp_call: { gated: true, why: 'Runs a tool on a connected server, which can act beyond the owner\'s own things.' },
+  tainted_action: { gated: true, why: 'Runs an action that content from outside asked for.' },
+};
+export const appApprovalStepUp = (item: Pick<AppApprovalV1, 'kind' | 'exact'>, action: ApprovalActionV1): boolean => {
+  if (action !== 'approve') return false;
+  const changes = item.exact.changes;
+  const shared = item.kind === 'calendar_change' && (changes?.guests !== undefined || changes?.emails_guests !== undefined || changes?.calendar !== undefined);
+  return STEP_UP_APPROVALS[shared ? 'calendar_shared' : item.kind]?.gated !== false;
 };

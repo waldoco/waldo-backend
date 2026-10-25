@@ -18,6 +18,7 @@ beforeEach(() => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
+    if (fn === 'console_session_inventory') { const now = new Date().toISOString(); return Response.json([{ session: 'a'.repeat(64), created_at: now, last_seen_at: now, expires_at: new Date(Date.parse(now) + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: now }]); }
     return new Response('unexpected', { status: 500 });
   });
 });
