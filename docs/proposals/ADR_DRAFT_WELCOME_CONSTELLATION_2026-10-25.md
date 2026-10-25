@@ -50,8 +50,12 @@ the nodes they back. Web text stays in look-up findings and is never copied.**
    no effects. Their only writes are rule 4's rows. The web stage's only writing tool is `record_owner_finding` (`honest_origin`).
 6. **Chat sees what the gift shows.** Each turn gets a bounded `<owner_constellation>` block. Untrusted-origin nodes are
    labelled as Waldo's read, and look-up findings are counted, not quoted. The block passes the held-topic filter.
-7. **Health stays numberless outside the health plane** (ADR-0081). Values reach the model only inside the welcome call, as
-   `get_health` already allows. No DO table, log, trace or event payload holds a value.
+7. **Health stays numberless outside the health plane** (ADR-0081).
+   - Values reach the model only inside the health stage's own untainted call (`source_taint: null`), under live
+     `model_processing` consent.
+   - Every welcome call's purpose is metadata-only, so trace capture records no text.
+   - No DO table, log, trace or event payload holds a value.
+   - When the `HealthPattern` contract (#1472) ships, the stage reads admitted patterns instead of daily values.
 8. **Forget is final.** A node forget barriers the label and each support's text, purges the supports and deletes the node. A
    rebuild cannot relearn it. Withdrawing `owner_lookup` erases findings (existing behaviour). Account deletion removes all of
    it with the DO (ADR-0055).
@@ -69,6 +73,9 @@ the nodes they back. Web text stays in look-up findings and is never copied.**
   prompts until kept.
 - **One agentic machine turn over all sources with tools.** Rejected: unbounded reads, a tool-taint fight with the write gate,
   and no per-source progress.
+- **Store welcome health nodes as `HealthPattern` rows** (#1472 §5). Rejected for now: that contract is computed evidence in
+  Supabase, with false-discovery control, and it is not built. A welcome node is Waldo's digit-free phrasing, not evidence.
+  Once patterns exist, the welcome node points at them, and the two do not compete.
 - **Wait for the nightly pass.** Rejected: its two-day evidence rule cannot produce a first-day gift, and the owner ruled for a gift.
 
 ## Consequences

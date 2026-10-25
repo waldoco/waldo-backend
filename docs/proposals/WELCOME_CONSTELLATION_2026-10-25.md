@@ -45,7 +45,7 @@ Callers, so that the build starts on whichever setup signal the app sends:
 1. the first run's `complete` action (`first-run.ts`);
 2. #1547's setup-answers route, on its first accepted write. That is the signal the #138 app actually sends at setup close.
 
-**Ask for Suyash (posted on waldo-app #138):** at setup close, send the answers (#1547), or `complete` if the app adopts the first
+**Ask for Suyash (posted on waldo-app #138, comment 6396896478):** at setup close, send the answers (#1547), or `complete` if the app adopts the first
 run. Either one starts the build. Without one of them nothing starts, and the app should not fake a gift.
 
 **Owner-job admission.** `lookupScheduledOwner()` (`owner-do.ts:851`) admits an app-bound owner through `appOwnerLookup`.
@@ -70,9 +70,17 @@ constellation fills in stage by stage.
 - **Read:** `HealthReadBook.consent()`, then `series()` over the last 90 local days for the eight `get_health` signals. This is
   the same signed read `get_health` uses, cut to the sources whose `storage_compute` and `model_processing` consent is live.
   The app's 90-day backfill (#1472 accepted) lands through ingest. This stage only reads what is there.
-- **To the model:** daily values per signal, in the welcome call's input only. This is the egress `get_health` already makes
-  under `model_processing` consent. Nothing from the input is stored. The model returns **patterns, not values** ("a late
-  sleeper on weekends", "steady evening walks").
+- **To the model:** daily values per signal, in the health stage's own call only, under live `model_processing` consent.
+  The model returns **patterns, not values** ("a late sleeper on weekends", "steady evening walks"). Three constraints, each
+  verified in source:
+  - **The call must be untainted.** The sanitiser lets owner health values through to the model only at `internal_context`
+    with `source_taint === null` (`scribe/sanitiser.ts:1300-1306`). Any other case is denied as `health_value_leak`. So the
+    health call never shares a request with mail, calendar or web text, which is one reason each stage gets its own call.
+  - **Its text must not reach traces.** `complete()` logs a call's input and output text into the Langfuse span whenever
+    capture is on, unless the purpose is metadata-only (`owner-turn.ts:303`: `memory*`, `task_source*`, `compaction`).
+    Staging has capture on and #1398 is unmerged. Every welcome call therefore uses a `memory_welcome_<stage>` purpose, and
+    only token counts are traced.
+  - **Nothing from the input is stored.** The raw model output is parsed in memory, and only admitted nodes are written.
 - **Admission (hard boundary, code):** no digit in any node string, and `numericHealthIn` finds no value (this catches spelled
   numbers). A failing node is dropped and counted, never rewritten.
 - **Source tag:** the reading's source, `apple` → Apple Health and `health_connect` / `samsung` → Health Connect.
@@ -81,6 +89,11 @@ constellation fills in stage by stage.
 - **Late data:** backfill often lands after setup. If the health stage settled `empty` and new readings arrive within 24 hours
   of the start (`healthChanged`), the stage runs once more. It never runs a third time.
 - **ADR-0081:** raw and derived numbers stay in Supabase. DO memory holds digit-free phrases only. Nothing here computes a score.
+- **Relation to #1472's `HealthPattern`:** a welcome health node is a digit-free interpretation in DO memory. It is not a
+  `health_patterns` row, and it is not computed evidence. When #1472's pattern contract ships, the health stage reads its
+  admitted patterns instead of daily values, and passes the model the pattern kinds without numbers. Its nodes are then backed
+  by those pattern ids as pointers, so one concept keeps one representation: the computed pattern in Supabase, and Waldo's
+  phrasing of it in memory. Until then, the stage is the stopgap the owner ruled for: a first-day gift.
 
 ### 2.2 Calendar and Tasks, across every connected Google account
 
@@ -203,6 +216,16 @@ job's code, with no tool and no action. #1494's law needs no change, because no 
 - **Step-up:** `node.correct` writes the owner's word, so it follows M-8's app ruling (app session authority, no separate
   step-up). `node.forget` and `node.confirm` are not gated, matching `spot.unpin`.
 
+**Until the app ships `node.*`:** today the app corrects a node by drafting a chat message ("That's not right"). It has no
+node actions, and gets none until it re-pins. Chat is therefore the real path for the cohort. A chat ask to forget a welcome node goes through the in-turn `forget_memory` tool (`tools/live/memory.ts:124-175`):
+- the tool barriers the topic and the selected support texts, and purges those claims;
+- the purge's `constellation_refs` pass then deletes any node left with no live support.
+
+The rerun is the owner's own act. Test 12 checks that a rerun after a chat forget does not bring the node back. If paraphrase
+gets past the barrier there, the welcome admission also checks each proposed label against the barriers. That is a hard
+check, not judgment. A chat
+correction goes through `remember` with `replaces_id` on the support claim. Both are tested (test 12).
+
 **Web items:** the gift reads `/app/v1/findings` as it stands, and keep, correct and forget go through `/app/v1/findings/actions`.
 
 **The gift screen:** the app has none today. "What Waldo knows" is the only constellation screen. The app lane decides where the
@@ -230,9 +253,10 @@ Consent and deletion:
 - **Deletion:** a forget barriers and purges, as in section 3. Withdrawing `owner_lookup` erases findings (existing behaviour).
   Withdrawing health consent stops the stage. Withdrawal does not need to scrub already-written health nodes, because they
   hold no values. They are deleted with a forget, or with the account (ADR-0055).
-- **Model egress:** health values reach the auxiliary model only inside the welcome call, under live `model_processing`
-  consent, as `get_health` already does. Trace capture: `otlp-turns.ts` records only the first user message and the final
-  reply. A test asserts that no welcome-call input reaches a trace entry or a DO table.
+- **Model egress:** health values reach the auxiliary model only inside the untainted health call, under live
+  `model_processing` consent. Every welcome call uses a metadata-only `memory_welcome_*` purpose, so no input or output text
+  reaches a trace (section 2.1). A test checks that no trace entry, and no DO table, holds a welcome call's input or raw
+  output.
 
 ## Build plan (step 2, after gate approval), red tests first
 
@@ -243,12 +267,13 @@ Consent and deletion:
 | 3 | Health: `consent_required`, `withdrawn`, no readings, a read failure, and a late-data rerun (once only) | empty and revoked paths |
 | 4 | Calendar and mail: no Google, a missing scope, `invalid_grant`, two accounts each read with an explicit `account` | empty, revoked and multi-account paths |
 | 5 | Web: lookup off, not offered, or consent missing gives `skipped`; on, findings are recorded and no node row is written | the web gate, and one representation |
-| 6 | A model node with a digit, or with a spelled-out health value, is dropped and counted; no DO table holds a digit from a health input | no digits; ADR-0081 |
+| 6 | A model node with a digit, or with a spelled-out health value, is dropped and counted. No DO table and no trace entry (with capture on) holds the health input or the raw model output. The health call carries `source_taint: null` and no other source's text. | no digits; ADR-0081; trace egress |
 | 7 | Nodes from mail and calendar: support origin `untrusted`, never in `recall()`, never pinnable; no tool dispatch in the job | tainted-text handling |
 | 8 | `node.forget` barriers the label; a rerun with the same model output writes nothing; the node is gone from app, chat block and nightly input | forget |
 | 9 | Nightly `applyPromotion` leaves a welcome node untouched | nightly coexistence |
 | 10 | Contract: valid and invalid pairs for `welcome`, `sources`, `confirmation` and the `node.*` actions; an old schema parses the new response with keys stripped | app projection |
 | 11 | A chat turn after the build carries `<owner_constellation>` within budget, and no web finding text | chat honesty |
+| 12 | The owner says "forget X" in chat about a welcome node: it is gone from the app and the chat block, and a rerun does not bring it back | the chat path the app uses today |
 
 Files: a new `packages/runtime/src/onboarding/welcome.ts` (the deep module: `start`, `run`, `progress`, admission); small hunks in
 `memory/claims.ts` (the chat block), `channels/memory-graph.ts` (`sources` and `confirmation`), `channels/app-controls.ts`
