@@ -11,14 +11,16 @@ it('guard unit: a topic containing a tab/newline is spelled by \\t / \\n in JSON
   expect(hidesTopic(JSON.stringify({ a: 'alpha\nbeta' }), 'alpha\nbeta')).toBe(true);
 });
 
-it('cleanup projection (memory_backups) with a tab-bearing topic must not read clean', async () => {
+it('cleanup projection (memory_backups) sees a tab-bearing topic, and the purge reads clean only because it deleted that backup', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-topic')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: `note ${topic} tail` }, at);
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
-    expect(store.purge([], at, [topic]).ready).toBe(false);
+    // A backup is a derived snapshot, so one that holds the topic, however escaped, is deleted rather than left behind.
+    expect(store.purge([], at, [topic]).ready).toBe(true);
+    expect(store.backups()).toEqual([]);
   });
 });
 
@@ -31,7 +33,7 @@ it('conversation store: JSON-escaped topic in a payload is held (unguarded forge
   });
 });
 
-it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behind \\t must not settle clean', async () => {
+it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behind \\t settles only by deleting that backup', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-json5')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
@@ -39,7 +41,9 @@ it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behi
     state.storage.sql.exec('UPDATE memory_backups SET payload = ?', '{"detail":"note alpha\\tbeta secret tail",}');
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
-    expect(store.purge([], at, [topic]).ready).toBe(false);
+    // A backup is a derived snapshot, so one that holds the topic, however escaped, is deleted rather than left behind.
+    expect(store.purge([], at, [topic]).ready).toBe(true);
+    expect(store.backups()).toEqual([]);
   });
 });
 

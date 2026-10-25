@@ -301,8 +301,8 @@ describe('owner console', () => {
 
   it('renders chips from the semantic taxonomy, every state backed by view data', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
-    // danger: a failed removal must stand out, not render as a default sand chip
-    expect(html).toContain('chip danger">Removal incomplete');
+    // muted: a forget still clearing storage is in hand, not a failure the owner must act on
+    expect(html).toContain('chip muted">Clearing');
     // good: settled positive states only (a promoted spot, a sent card)
     expect(html).toContain('chip good">In constellation');
     // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
@@ -386,6 +386,13 @@ describe('owner console', () => {
     expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
   });
 
+  it('names a job the scheduler paused and when it tries again, and shows nothing when none is paused', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'day');
+    expect(html).toContain('<b>My overnight memory pass</b>');
+    expect(html).toContain('Waldo tries again around Sat 2 Nov, 03:00.');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [] }, 'day')).not.toContain('tries again around');
+  });
+
   it('accepts only known actions carrying the session csrf token', () => {
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'good' }), 'good')).toEqual({ action: 'spot.dismiss', id: '4', value: '' });
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'bad' }), 'good')).toBeNull();
@@ -430,14 +437,13 @@ describe('owner console', () => {
     }
   });
 
-  it('a spot stuck mid-forget stays visible with a working Retry action', () => {
+  it('a topic still clearing stays visible, masked, with what is left and a working Retry action', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
-    expect(html).toContain('Forget in progress (1)');
-    expect(html).toContain('Old phone number ending 4123');
-    expect(html).toContain('Retry forget');
-    // The Retry form posts the same spot.forget action with the purging row's id, which
-    // act() selects from claims('purging').
-    expect(html).toMatch(/name="id" value="7"/);
-    expect(html).toContain('Removal incomplete');
+    expect(html).toContain('Forgetting (1)');
+    expect(html).toContain('p·········· (12)');
+    expect(html).toContain('1 of 2 stores clear · waiting on imessage');
+    // The page never repeats the forgotten words, neither the purging claim's text nor the topic.
+    expect(html).not.toContain('Old phone number ending 4123');
+    expect(html).toMatch(/name="action" value="forget\.retry"><input type="hidden" name="id" value="fnv1a:5e1c0a2b"/);
   });
 });

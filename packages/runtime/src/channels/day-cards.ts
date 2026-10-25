@@ -195,13 +195,13 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
-  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections });
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) });
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
   if (wireSize(build(whole)) <= cap) return build(whole);
   const wanted = [

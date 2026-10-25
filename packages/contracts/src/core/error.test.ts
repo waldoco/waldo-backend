@@ -18,8 +18,8 @@ describe('toolError', () => {
 });
 
 describe('a structured block', () => {
-  it('names one of three blocks, each with a fix naming the next rung, and is never retryable as is', () => {
-    expect(rungBlockedOutcomeSchema.options).toEqual(['challenge', 'login_required', 'js_required']);
+  it('names one of four blocks, each with a fix naming the next rung, and is never retryable as is', () => {
+    expect(rungBlockedOutcomeSchema.options).toEqual(['challenge', 'login_required', 'js_required', 'device_offline']);
     expect(Object.keys(RUNG_BLOCKED_FIX).sort()).toEqual([...rungBlockedOutcomeSchema.options].sort());
     for (const blocked of rungBlockedOutcomeSchema.options) {
       const error = toolError('transient', 'The site asked for something.', blocked);
@@ -28,6 +28,23 @@ describe('a structured block', () => {
     }
     expect(RUNG_BLOCKED_FIX.js_required).toContain('browse_page');
     expect(RUNG_BLOCKED_FIX.login_required).toMatch(/Never ask for a password/);
+  });
+
+  it('device_offline says nothing was sent, forbids claiming it was, and leaves the next step to the owner', () => {
+    expect(RUNG_BLOCKED_FIX.device_offline).toMatch(/nothing was sent/i);
+    expect(RUNG_BLOCKED_FIX.device_offline).toMatch(/do not say it was sent/i);
+    expect(RUNG_BLOCKED_FIX.device_offline).toMatch(/ask again/i);
+    expect(toolError('rejected', 'The Mac is offline.', 'device_offline')).toMatchObject({ code: 'rejected', retryable: false, blocked: 'device_offline' });
+  });
+
+  it('a result or error from before the Mac block still parses: the vocabulary only grew', () => {
+    for (const blocked of ['challenge', 'login_required', 'js_required']) expect(toolErrorSchema.safeParse({ ...toolError('rejected'), blocked }).success).toBe(true);
+    expect(toolErrorSchema.safeParse(toolError('rejected')).success).toBe(true);
+  });
+
+  it('parses device_offline as a block and rejects a near miss', () => {
+    expect(rungBlockedOutcomeSchema.safeParse('device_offline').success).toBe(true);
+    expect(rungBlockedOutcomeSchema.safeParse('mac_offline').success).toBe(false);
   });
 
   it('rejects a block outside the vocabulary', () => {

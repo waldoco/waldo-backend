@@ -26,6 +26,7 @@ const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
   if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? { account: review.account } : {}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body, ...(review.earlier_unknown_at ? { earlier_unknown_at: review.earlier_unknown_at } : {}) };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if ('text' in review) return { kind: review.kind, text: review.text };
   if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
 };
@@ -77,8 +78,8 @@ const projections = {
     ledger: view.ledger,
   }),
   profile: (view: ConsoleView) => ({
-    // Existing removal may leave derived text behind. Do not present that text as settled.
-    sections: view.forgettingSpots.length ? [] : view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
+    // The profile is built from memory as the model may see it, so what a forget is still clearing is already left out.
+    sections: view.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
     barriers: view.barriers,
     removal: { state: view.forgettingSpots.length ? 'incomplete' as const : 'none_recorded' as const, pending_count: view.forgettingSpots.length },
     holds: view.holds.map((hold) => ({ kind: hold.kind, reason: hold.reason, created_at: hold.created_at })),

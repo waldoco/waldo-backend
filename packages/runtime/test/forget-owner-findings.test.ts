@@ -199,7 +199,7 @@ describe('owner findings', () => {
     findings.record({ ...finding, text: 'Based in Pune', category: 'based_in', evidence_quote: 'Pune', source_url: 'https://samrivera.dev/about' }, 'About', 2);
     const purge = claims.purge([], new Date(3).toISOString(), ['Acme']);
     expect(purge.ready).toBe(true);
-    expect(storage.sql.exec<{ text: string }>('SELECT text FROM owner_findings ORDER BY found_at').toArray().map(row => row.text)).toEqual([`Product manager at ${FORGOTTEN}`, 'Based in Pune']);
+    expect(storage.sql.exec<{ text: string }>('SELECT text FROM owner_findings ORDER BY found_at').toArray().map(row => row.text)).toEqual(['Based in Pune']);
     expect(findings.page(50).items.map(item => item.text)).toEqual(['Based in Pune']);
     expect(storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM owner_findings WHERE text LIKE '%Acme%' OR source_url LIKE '%acme%'").one().n).toBe(0);
   }));
