@@ -60,8 +60,15 @@ export type IMessageResultReport = Readonly<{ replyRef: string; commandId: strin
 export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string }>;
 // busy: the one mailbox slot holds another command; the slot frees within a host pull and a send, so retry soon.
 export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' | 'busy' } | { kind: 'terminal'; result: IMessageResult };
+export type IMessageStandardReaction = Extract<Extract<IMessageEvent, { kind: 'reaction' }>['reaction'], { kind: 'standard' }>['type'];
+/** The owner's tapback on a message Waldo sent them, with the opening of that message's text. Never a turn. */
+export type IMessageReactionHandoff = Readonly<{
+  binding: IMessageBinding; revision: string; environment: string; bridgeDoName: string; ownerDoName: string;
+  action: 'add' | 'remove'; type: IMessageStandardReaction; target: Readonly<{ messageGuid: string; partIndex: number }>; quoted: string;
+}>;
 export interface OwnerIMessagePort {
   admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'>;
+  noteIMessageReaction(input: IMessageReactionHandoff): Promise<'noted' | 'refused'>;
   recordIMessageResult(input: IMessageResultReport): Promise<boolean>;
 }
 
@@ -74,6 +81,8 @@ const SYSTEM_REPLY_PREFIX = 'system:';
 // How long a reply that met a busy slot keeps notes off it: past the owner's 1 s retry, with room for its alarm.
 const REPLY_WAITING_MS = 5_000;
 const PROGRESS = 'progress:';
+// How much of the reacted-to message the owner's next turn reads with the tapback.
+const REACTION_QUOTE_CHARS = 80;
 export const SYSTEM_OWNER_ID = 'waldo-system';
 /** "waldo CODE": the one-time link code from the console (same alphabet as Telegram and WhatsApp codes). */
 const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
@@ -394,6 +403,12 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       if (!authority || (authority.state !== 'active' && authority.state !== 'pending')) { if (authority || store.revokedRevision() === null) this.applyRevocation(store, authority?.revision ?? 'deleted'); return true; }
       const settle = (state: 'handed' | 'acknowledged' | 'held', reason: string) => store.settleEvent(pending!.seq, state, reason);
       if (event.kind === 'receipt') { settle('acknowledged', store.sentCommandFor(event.target.messageGuid!) ? 'receipt_correlated' : 'receipt_uncorrelated'); continue; }
+      if (event.kind === 'reaction') {
+        const outcome = await this.noteReaction(event, authority, environment, bridgeId, accountId, store);
+        if (outcome === 'retry') return false;
+        settle('acknowledged', outcome);
+        continue;
+      }
       if (event.kind !== 'message') { settle('acknowledged', 'non_turn_evidence'); continue; }
       if (event.isFromMe || event.isGroup || event.service !== 'iMessage') { settle('acknowledged', event.isFromMe ? 'echo' : event.isGroup ? 'group' : 'non_imessage_service'); continue; }
       if (authority.kind === 'shared') {
@@ -457,6 +472,32 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       }
       return 'retry';
     }
+  }
+
+  /**
+   * The owner's standard tapback, in their own bound direct chat, on a message Waldo sent there: handed to their owner DO as a
+   * line for their next turn. It never starts a turn and never reaches approval code. Anything else is evidence only.
+   */
+  private async noteReaction(event: Extract<IMessageEvent, { kind: 'reaction' }>, authority: BridgeAuthority, environment: string, bridgeId: string, accountId: string, store: BridgeStore)
+    : Promise<'reaction_noted' | 'reaction_refused' | 'reaction_ignored' | 'reaction_untracked' | 'retry'> {
+    if (event.isFromMe || event.isGroup || event.service !== 'iMessage' || event.reaction.kind !== 'standard' || event.actorHandle !== event.senderHandle) return 'reaction_ignored';
+    let sender: SenderAuthority | null = authority;
+    if (authority.kind === 'shared') {
+      if (event.chatGuid !== `iMessage;-;${event.senderHandle}`) return 'reaction_ignored';
+      try { sender = await this.directory().senderAuthority(environment, bridgeId, accountId, event.senderHandle); } catch { return 'retry'; }
+    }
+    const owner = isSenderAuthority(sender) ? sender : null, binding = owner ? bindingFromAuthority(owner) : null;
+    if (!owner || !binding || binding.subject !== event.actorHandle || binding.chatGuid !== event.chatGuid) return 'reaction_ignored';
+    const commandId = store.sentCommandFor(event.target.messageGuid!), sent = commandId ? store.delivery({ commandId }) : null;
+    const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
+    if (!sent || command?.operation !== 'send' || sent.ownerDoName !== owner.doName || command.target.chatGuid !== event.chatGuid) return 'reaction_untracked';
+    const words = [...command.text];
+    try {
+      const noted = await this.owner(owner.doName).noteIMessageReaction({ binding, revision: owner.revision, environment, bridgeDoName: iMessageBridgeName(environment, bridgeId, accountId),
+        ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 },
+        quoted: words.length > REACTION_QUOTE_CHARS ? `${words.slice(0, REACTION_QUOTE_CHARS).join('')}…` : command.text });
+      return noted === 'noted' ? 'reaction_noted' : 'reaction_refused';
+    } catch { return 'retry'; }
   }
 
   /** Shared bridge: the sender's own authority decides; no linked Waldo means the stranger path. */

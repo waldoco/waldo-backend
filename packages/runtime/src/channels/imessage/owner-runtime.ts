@@ -1,13 +1,14 @@
-import { iMessageBindingSchema } from '@waldo/contracts';
+import { iMessageBindingSchema, opaqueIMessageIdSchema } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
-import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageTurnHandoff } from './bridge-do';
+import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageStandardReaction, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
+import { ownerWords, type InboundPart } from '../owner-inbound-turn';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -49,6 +50,39 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
     bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}),
   });
   return result.kind;
+};
+
+const TAPBACK: Readonly<Record<IMessageStandardReaction, string>> = { love: '❤️', like: '👍', dislike: '👎', laugh: '😂', emphasis: '‼️', question: '❓' };
+
+/**
+ * Bridge -> owner: the owner's tapback on a message Waldo sent them, kept as one line for their next turn on that chat. Fresh
+ * authority and the exact binding precede the write, as for a turn; nothing runs, and no approval or card is read or changed.
+ */
+export const noteIMessageReactionHandoff = async (host: OwnerHost, input: IMessageReactionHandoff): Promise<'noted' | 'refused'> => {
+  const c = iMessageComposition(host.env);
+  if (!c || !host.ownerNamespace || host.ownerNamespace.idFromName(input.ownerDoName).toString() !== host.id.toString()
+    || host.storage.kv.get<string>('do_name') !== input.ownerDoName) return 'refused';
+  const binding = iMessageBindingSchema.safeParse(input.binding);
+  if (!binding.success || binding.data.conversationKind !== 'direct' || !Object.hasOwn(TAPBACK, input.type) || !opaqueIMessageIdSchema.safeParse(input.target.messageGuid).success
+    || !Number.isInteger(input.target.partIndex) || typeof input.quoted !== 'string') return 'refused';
+  const record = { environment: input.environment, binding: binding.data, revision: input.revision, ownerDoName: input.ownerDoName, bindingDigest: await bindingDigest(binding.data) };
+  try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
+  const conversationRef = JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid]);
+  const key = await sha256Hex(JSON.stringify([conversationRef, input.target.messageGuid, input.target.partIndex, input.type]));
+  new IMessageOwnerInbox(host.storage).noteReaction({ key, conversationRef, bindingDigest: record.bindingDigest,
+    line: `[Owner reacted ${TAPBACK[input.type]} to your message: ${JSON.stringify(input.quoted)}]` }, input.action);
+  return 'noted';
+};
+
+/**
+ * What an iMessage turn's model reads beside its text when there is more than the text: the owner's words, the tapbacks they
+ * left since their last turn, then the files opened for it. Null for a turn that is its text alone.
+ */
+export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' | 'text' | 'reactions'>, opened: OpenedIMessageTurnMedia | null)
+  : Readonly<{ updateId: number; parts: readonly InboundPart[]; attachments: OpenedIMessageTurnMedia['attachments'] }> | null => {
+  const tapbacks = (record.reactions ?? []).map((text): InboundPart => ({ authorship: 'media_note', text }));
+  if (!opened && !tapbacks.length) return null;
+  return { updateId: record.updateId, parts: [...ownerWords(record.text), ...tapbacks, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
 };
 
 /** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */

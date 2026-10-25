@@ -7,13 +7,13 @@ import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
-import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
+import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTurnText, openIMessageTurnMedia, type OpenedIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -871,8 +871,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly imessageAttempts = new Set<string>();
   private activeIMessage: IMessageInboxRecord | null = null;
   private iMessageProgress: ProgressPacer | null = null;
-  // The running iMessage turn's files, opened before it started; held in memory for that turn only.
-  private iMessageOpened: Readonly<{ updateId: number; parts: OpenedIMessageTurnMedia['parts']; attachments: OpenedIMessageTurnMedia['attachments'] }> | null = null;
+  // The running iMessage turn's parts beyond its text (its files, opened before it started, and the owner's tapbacks); held in memory for that turn only.
+  private iMessageOpened: ReturnType<typeof iMessageTurnParts> = null;
   private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
   private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.OWNER_DO }; }
   /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
@@ -884,6 +884,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
     }
     return outcome;
+  }
+  /** Bridge DO RPC: the owner's tapback, kept as a line for their next turn. It starts no turn and reaches no approval. */
+  async noteIMessageReaction(input: IMessageReactionHandoff): Promise<'noted' | 'refused'> {
+    return noteIMessageReactionHandoff(this.imessageHost, input);
   }
   // Local fences after a canonical bridge revocation: queued turns from it close, a running one stops.
   private readonly iMessageBridgeRevoked = (bridgeDoName: string): void => {
@@ -916,7 +920,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const media = await openIMessageTurnMedia(this.imessageHost, record, scope);
         if (media.kind !== 'answered') {
-          this.iMessageOpened = media.kind === 'opened' ? { updateId: record.updateId, parts: [...ownerWords(record.text), ...media.parts], attachments: media.attachments } : null;
+          this.iMessageOpened = iMessageTurnParts(record, media.kind === 'opened' ? media : null);
           this.iMessageProgress = this.startIMessageProgress(record, scope);
           const subject = appSubjectFor(record.ownerDoName);
           await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: iMessageTurnText(record) } }, 'imessage', true, scope);

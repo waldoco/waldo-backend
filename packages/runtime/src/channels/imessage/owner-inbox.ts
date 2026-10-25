@@ -11,6 +11,9 @@ import type { IMessageMedia } from './photon-media';
 export const IMESSAGE_INBOX_DUE_KEY = 'imessage_owner_inbox_due_v1';
 export const IMESSAGE_UPDATE_BASE = 9_000_000_000_000;
 const PREFIX = 'imessage:inbox-record:';
+// The owner's tapbacks since their last turn, each one line that turn reads. Bounded: the newest are kept.
+const NOTE = 'imessage:reaction-note:';
+const MAX_NOTES = 8;
 const SEQ = 'imessage_seq';
 const MAX_ROWS = 4096;
 const MAX_OPEN = 256;
@@ -24,16 +27,20 @@ export type IMessageInboxRecord = {
   commandId: string; occurredAt: number; admittedAt: number;
   /** The message's files as references: the turn fetches the bytes, and they are never stored. */
   media?: IMessageMedia;
+  /** Tapback lines taken for this turn when it started; cleared with its text. */
+  reactions?: string[];
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
 };
-export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state'>;
+export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state' | 'reactions'>;
+// key names the tapback (chat, message, part, reaction), so the owner taking it back finds it.
+export type IMessageReactionNote = Readonly<{ key: string; conversationRef: string; bindingDigest: string; line: string; notedAt: number }>;
 
 const finished = (r: IMessageInboxRecord) => r.state === 'completed' || r.state === 'interrupted' || r.state === 'revoked';
 const open = (r: IMessageInboxRecord) => r.state === 'admitted' || r.state === 'running';
 const due = (rows: readonly IMessageInboxRecord[], now: number) => (rows.some((r) => r.state === 'admitted') ? now + 250 : null);
-const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; };
+const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; delete r.reactions; };
 
 export class IMessageOwnerInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
@@ -67,6 +74,23 @@ export class IMessageOwnerInbox {
       return { kind: 'admitted' as const, record };
     });
   }
+  notes(): IMessageReactionNote[] {
+    return [...this.storage.kv.list<IMessageReactionNote>({ prefix: NOTE })].map(([, n]) => n).sort((a, b) => a.notedAt - b.notedAt);
+  }
+  /** An added tapback waits for the owner's next turn on that chat; a removed one takes its line back. Starts nothing. */
+  noteReaction(note: Omit<IMessageReactionNote, 'notedAt'>, action: 'add' | 'remove'): void {
+    this.storage.transactionSync(() => {
+      if (action === 'remove') { this.storage.kv.delete(NOTE + note.key); return; }
+      this.storage.kv.put(NOTE + note.key, { ...note, notedAt: this.now() });
+      for (const old of this.notes().slice(0, -MAX_NOTES)) this.storage.kv.delete(NOTE + old.key);
+    });
+  }
+  // The lines a turn on this chat and binding reads, taken so no later turn reads them again.
+  private takeNotes(r: IMessageInboxRecord): string[] {
+    const mine = this.notes().filter((n) => n.conversationRef === r.conversationRef && n.bindingDigest === r.bindingDigest);
+    for (const n of mine) this.storage.kv.delete(NOTE + n.key);
+    return mine.map((n) => n.line);
+  }
   // `interrupted` runs inside the closing transaction for each turn this call closes as interrupted, and only for those.
   recover(live: ReadonlySet<string>, interrupted?: (record: IMessageInboxRecord) => void): void {
     this.storage.transactionSync(() => {
@@ -99,7 +123,11 @@ export class IMessageOwnerInbox {
     return this.storage.transactionSync(() => {
       const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + id);
       if (!r || r.state !== 'admitted') return null;
-      if (current) { r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline; }
+      if (current) {
+        r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline;
+        const reactions = this.takeNotes(r);
+        if (reactions.length) r.reactions = reactions;
+      }
       else { r.state = 'revoked'; r.closedReason = 'authority_revoked'; r.effectsUnconfirmed = false; r.closedAt = this.now(); clear(r); }
       this.storage.kv.put(PREFIX + id, r); this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
       return current ? structuredClone(r) : null;
@@ -116,7 +144,8 @@ export class IMessageOwnerInbox {
   /**
    * Literal owner forget: admitted (not yet started) turns are redacted before they run. A running turn is
    * left alone (it is usually the forget request itself) and its text is cleared when it closes; finished
-   * rows hold no text. Returns the rows rewritten and the not-running rows still holding a forgotten literal.
+   * rows hold no text. A waiting tapback line that quotes a forgotten literal is dropped. Returns the rows rewritten and
+   * the not-running rows still holding a forgotten literal.
    */
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
     const held = (r: IMessageInboxRecord) => (!!r.text && holds(r.text)) || !!r.media?.files.some((file) => holds(file.name));
@@ -127,6 +156,7 @@ export class IMessageOwnerInbox {
       if (r.media) r.media = { ...r.media, files: r.media.files.map((file) => ({ ...file, name: redact(file.name) })) };
       this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }
+    for (const n of this.notes()) if (holds(n.line)) { this.storage.kv.delete(NOTE + n.key); rewritten += 1; }
     return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && held(r)).length };
   }
   /** Called inside the scope's commit transaction together with the frozen reply. */
