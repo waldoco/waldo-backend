@@ -4,6 +4,7 @@ import {
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
+  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
 } from './onboarding';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
 
@@ -144,6 +145,32 @@ describe('chat channels', () => {
       { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null, expires_in_seconds: 60 },
       { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null },
     ]);
+  });
+});
+
+describe('setup answers', () => {
+  // The answers the app's setup conversation holds: its name, day shape, slips and watch, field for field.
+  const answers = { request_id: 'setup-answers-01', name: 'Asha', day: { shape: 'meetings', own_words: 'Calls start at 8' }, slips: { picked: ['replies', 'breaks'], own_words: '' }, wearable: 'apple' };
+  it('takes any of the answers, each set, cleared with null, or left out', () => {
+    accepted(appSetupAnswersRequestV1Schema, [
+      answers, { request_id: 'setup-answers-01', name: 'Asha' }, { request_id: 'setup-answers-01', wearable: null },
+      { ...answers, day: { shape: null, own_words: 'Different every week' } }, { ...answers, day: null, slips: null, name: null },
+      { ...answers, slips: { picked: [], own_words: '' } }, { ...answers, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: 'x'.repeat(280) } },
+      { ...answers, wearable: 'samsung' },
+    ]);
+    rejected(appSetupAnswersRequestV1Schema, [
+      { request_id: 'setup-answers-01' }, { ...answers, request_id: 'short' }, { ...answers, name: '' }, { ...answers, name: ' '.repeat(3) }, { ...answers, name: 'x'.repeat(81) },
+      { ...answers, day: { shape: 'night_shift', own_words: '' } }, { ...answers, day: { shape: 'focus' } }, { ...answers, day: 'meetings' },
+      { ...answers, day: { shape: 'focus', own_words: 'x'.repeat(281) } },
+      { ...answers, slips: { picked: ['replies', 'replies'], own_words: '' } }, { ...answers, slips: { picked: ['sleep'], own_words: '' } }, { ...answers, slips: ['replies'] },
+      { ...answers, wearable: 'other' }, { ...answers, wearable: 'none' }, { ...answers, watch_id: 'paired-watch' }, { ...answers, owner_id: 'forged' },
+    ]);
+  });
+  it('answers which answers Waldo now holds as owner facts', () => {
+    const held = { name: true, day: true, slips: false, wearable: false };
+    accepted(appSetupAnswersResultV1Schema, [{ request_id: 'setup-answers-01', held, replayed: false }]);
+    rejected(appSetupAnswersResultV1Schema, [{ request_id: 'setup-answers-01', held, }, { request_id: 'setup-answers-01', held: { name: true }, replayed: false },
+      { request_id: 'setup-answers-01', held: { ...held, day: 'yes' }, replayed: false }, { request_id: 'setup-answers-01', held, replayed: false, answers: [] }]);
   });
 });
 

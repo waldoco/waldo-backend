@@ -18,7 +18,7 @@ describe('send_console_link arguments', () => {
 
 describe('send_console_link result', () => {
   it('accepts a send on a surface that can carry the link, and every typed reason it was not sent', () => {
-    for (const surface of ['telegram', 'imessage']) expect(sendConsoleLinkResultSchema.safeParse({ sent: true, surface }).success, surface).toBe(true);
+    for (const surface of ['telegram', 'imessage', 'app']) expect(sendConsoleLinkResultSchema.safeParse({ sent: true, surface }).success, surface).toBe(true);
     for (const reason of ['app_unsupported', 'surface_unsupported', 'not_owner_typed', 'outside_content', 'already_sent', 'unavailable', 'send_failed']) {
       expect(sendConsoleLinkResultSchema.safeParse({ sent: false, reason }).success, reason).toBe(true);
     }
@@ -27,7 +27,6 @@ describe('send_console_link result', () => {
   it('rejects a link, a free-text reason, a mixed arm and a surface that cannot carry the link', () => {
     const rejected = [
       { sent: true, surface: 'telegram', link: 'https://waldo.invalid/console?t=c1.payload.signature' },
-      { sent: true, surface: 'app' },
       { sent: true, surface: 'whatsapp' },
       { sent: true },
       { sent: false, reason: 'the owner seemed unsure' },

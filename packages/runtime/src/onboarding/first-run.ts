@@ -1,6 +1,7 @@
 import {
   APP_ONBOARDING_SKIPPABLE_V1, appOnboardingStepV1Schema, appOnboardingV1Schema,
   type AppChatProviderV1, type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
+  type AppSetupAnswersRequestV1, type AppSetupAnswersResultV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
@@ -38,6 +39,40 @@ const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: pri
 const calledText = (name: string) => `Wants to be called ${name}`;
 const named = (claims: ClaimStore) => claims.claims().some(candidate => candidate.source_ref === NAME_REF);
 
+// The setup answers, each one owner fact under its own ref, pinned after the name in this order. The text is the app's own
+// choice put in the third person, with the owner's words quoted as they typed them.
+type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
+const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = { name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable' };
+const SETUP_PIN_ORDER: Readonly<Record<SetupAnswer, number>> = { name: 0, day: 1, slips: 2, wearable: 3 };
+const DAY_TEXT = {
+  meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
+  fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
+} as const;
+const SLIP_TEXT = { replies: 'replies and follow-ups', overlaps: 'meetings running into each other', promises: "things they said they'd do", breaks: 'breaks and meals', evenings: 'work running into the evening' } as const;
+const WEARABLE_TEXT = { apple: 'an Apple Watch', samsung: 'a Samsung Galaxy Watch', oura: 'an Oura Ring', whoop: 'a WHOOP', garmin: 'a Garmin watch' } as const;
+const quoted = (words: string) => `"${words}"`;
+type SetupFact = Readonly<{ kind: string; text: string; evidence: string }>;
+// null clears the answer: an empty choice with no words of the owner's own says nothing to keep.
+const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>): SetupFact | null => {
+  const request = { [answer]: value } as AppSetupAnswersRequestV1;
+  if (request.name) return { kind: 'preference', text: calledText(request.name), evidence: request.name };
+  if (request.wearable) return { kind: 'fact', text: `Wears ${WEARABLE_TEXT[request.wearable]}.`, evidence: `Setup answer: ${request.wearable}` };
+  if (request.day) {
+    const { shape, own_words: own } = request.day;
+    if (!shape && !own) return null;
+    const text = shape ? `${DAY_TEXT[shape]}${own ? ` In their own words: ${quoted(own)}` : ''}` : `About their workdays, in their own words: ${quoted(own)}`;
+    return { kind: 'routine', text, evidence: `Setup answer: ${[shape, own].filter(Boolean).join('; ')}` };
+  }
+  if (request.slips) {
+    const { picked, own_words: own } = request.slips;
+    if (!picked.length && !own) return null;
+    const listed = picked.map(slip => SLIP_TEXT[slip]).join(', ');
+    const text = picked.length ? `Things that tend to slip, for Waldo to watch first: ${listed}.${own ? ` In their own words: ${quoted(own)}` : ''}` : `Things that tend to slip, in their own words: ${quoted(own)}`;
+    return { kind: 'preference', text, evidence: `Setup answer: ${[...picked, own].filter(Boolean).join('; ')}` };
+  }
+  return null;
+};
+
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.
 export const recordSignupName = (claims: ClaimStore, name: string, at: number): boolean => {
@@ -71,6 +106,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
   const answer = (ref: string, kind: string, text: string, evidence: string) => {
     const at = new Date(now()).toISOString(), claim = { kind, text, source: 'stated', evidence, origin: 'owner', source_ref: ref };
     const previous = claims.claims().find(candidate => candidate.source_ref === ref);
+    if (previous?.text === text && previous.kind === kind) return previous;
     if (previous) { if (!claims.correct(previous.id, claim, at)) throw new Error('first-run answer not corrected'); }
     else claims.add(claim, at);
     return claims.claims().find(candidate => candidate.source_ref === ref) ?? null;
@@ -181,11 +217,25 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       }
     }
   };
+  // The setup answers a request names, each set, corrected in place or cleared, and then which of them Waldo holds. A cleared
+  // answer is retired, not forgotten: it leaves the profile and recall, and the owner can still ask Waldo to forget it.
+  const live = (ref: string) => [...claims.claims(), ...claims.claims('promoted')].filter(candidate => candidate.source_ref === ref);
+  const saveAnswers = (request: AppSetupAnswersRequestV1): AppSetupAnswersResultV1['held'] => {
+    for (const name of Object.keys(SETUP_REFS) as SetupAnswer[]) {
+      const value = request[name];
+      if (value === undefined) continue;
+      const fact = value === null ? null : setupFact(name, value);
+      if (!fact) { for (const retired of live(SETUP_REFS[name])) claims.setStatus(retired.id, 'dismissed'); continue; }
+      const saved = answer(SETUP_REFS[name], fact.kind, fact.text, fact.evidence);
+      if (!saved || !claims.pin(saved.id, 'profile', SETUP_PIN_ORDER[name])) throw new Error('setup answer not pinned');
+    }
+    return { name: live(NAME_REF).length > 0, day: live(SETUP_REFS.day).length > 0, slips: live(SETUP_REFS.slips).length > 0, wearable: live(SETUP_REFS.wearable).length > 0 };
+  };
   // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
   const agreementsAccepted = (): void => {
     const run = row();
     if (run && run.completed_at !== null && steps(run).agreements !== 'done' && consent.agreed()) step(run, 'agreements', 'done');
   };
-  return { view, act, agreementsAccepted };
+  return { view, act, agreementsAccepted, saveAnswers };
 };
 export type FirstRun = ReturnType<typeof firstRun>;
