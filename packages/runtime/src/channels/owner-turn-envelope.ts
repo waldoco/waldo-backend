@@ -53,6 +53,8 @@ export type OwnerResponder = Readonly<{
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   promote(trace: string): Promise<string>;
+  // One welcome-build stage's structured answer; its input and output never reach a trace.
+  welcome?(trace: string, stage: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.

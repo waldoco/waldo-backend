@@ -4,7 +4,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
-import { COMPACTION, supersededCompaction, type CompactionSettings } from './compaction';
+import { COMPACTION, supersededCompaction, type CompactionFence, type CompactionSettings } from './compaction';
 import { estimateMessageTokens } from './window';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
@@ -12,6 +12,10 @@ export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' 
 };
 // Rows a turn's read lists at a time, and the most keys one storage get takes.
 const PAGE_ROWS = 128, GET_KEYS = 128;
+// How many window budgets a turn reads back toward the row a live summary covers. The view shows at most one budget of
+// the rows after a summary, and re-compaction is due from 0.7 of one, so rows four budgets deep mean re-compaction has kept
+// failing; past that a turn reads the plain window, as with compaction off, instead of a read that grows every turn.
+const SUMMARY_TAIL_BUDGETS = 4;
 type Witness = Readonly<{ lineage: 'canonical_v1'; principal_ref: string; tenant_ref: string; entry: ConversationEntry }>;
 const writesInProgress = new WeakMap<object, Promise<unknown>>();
 const serialize = <T>(storage: object, work: () => Promise<T>): Promise<T> => {
@@ -114,8 +118,9 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   // A turn reads rows newest first, a page at a time, and stops once the rows read hold the window of the turn's chat and
   // of the stored leaf: the path back from each until it passes the window budget, counted from its newest owner message so
   // a retried message keeps its own window, or, with compaction on and a live summary on that chat, until the row the
-  // summary covers. Rows are written after their parents, so every row on that path is in the newest slots. A row read
-  // whose parent lies in the older slots not read hangs on no parent, in memory only. The page reads every row.
+  // summary covers or SUMMARY_TAIL_BUDGETS budgets back, whichever comes first. Rows are written after their parents, so
+  // every row on that path is in the newest slots. A row read whose parent lies in the older slots not read hangs on no
+  // parent, in memory only. The page reads every row.
   const read = async (turn: boolean, chat?: string): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;
@@ -176,7 +181,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         const message = conversationModelMessages([entry])[0];
         walk.counted += message ? estimateMessageTokens(message) : 0;
         const until = compaction.enabled ? coveredBy.get(entry.chatId) ?? null : null;
-        if (until !== null ? at === until || covered.has(at) : walk.counted > compaction.budgetTokens) walk.done = true;
+        if (until !== null ? at === until || covered.has(at) || walk.counted > SUMMARY_TAIL_BUDGETS * compaction.budgetTokens : walk.counted > compaction.budgetTokens) walk.done = true;
         else walk.at = entry.parentId;
       }
     };
@@ -275,8 +280,10 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     // one write that never touches `${prefix}leaf`: a turn that landed while the summary was in flight keeps its leaf, and a
     // crash cannot leave two live summaries. A row already witnessed under this id is the same span again, and a no-op. The
     // superseded row is found at the key the last read saw it under while that key still holds it, else by reading back
-    // from the newest row until it turns up.
-    appendCompaction(row, supersededId, scope) { return serialize(storage, async () => {
+    // from the newest row until it turns up. A fence is checked in the unit that writes, with no wait before the write: each
+    // source row must still be stored with the model text the summary was made from (a row this store wrote is compared as
+    // it scrubbed it), and fence.admits() must pass; otherwise nothing is written and the result is false.
+    appendCompaction(row, supersededId, scope, fence) { return serialize(storage, async () => {
       await context.assertCurrent();
       const entry = scrub(validate(row));
       if (entry.role !== 'compaction') throw new Error('canonical history entry invalid');
@@ -286,10 +293,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         if (prior) { const next = validate(supersededCompaction(prior.entry)); out[prior.key] = next; out[witnessKey(next.id)] = witness(next); }
         return out;
       };
+      const modelText = (stored: ConversationEntry | undefined) => stored && (conversationModelMessages([stored])[0]?.content ?? null);
+      const fenced = (fence: CompactionFence, read: (id: string) => ConversationEntry | undefined) =>
+        fence.sources.every(source => { const stored = modelText(read(source.id)); return stored !== undefined && stored === modelText(scrub(source)); }) && fence.admits();
       if (scope) {
         if (!storage.kv) throw new Error('fenced canonical history unavailable');
-        scope.commit(() => {
-          if (storage.kv!.get<Witness>(witnessKey(entry.id))) return;
+        return scope.commit(() => {
+          if (storage.kv!.get<Witness>(witnessKey(entry.id))) return true;
+          if (fence && !fenced(fence, id => storage.kv!.get<Witness>(witnessKey(id))?.entry)) return false;
           const key = previous === null ? undefined : keyOf.get(previous), hit = key === undefined ? undefined : storage.kv!.get<ConversationEntry>(key);
           const prior = previous === null ? null : key !== undefined && hit?.id === previous ? { key, entry: hit } : (() => {
             for (const [at, value] of storage.kv!.list<ConversationEntry>({ prefix: `${prefix}conv:`, reverse: true })) if (value.id === previous) return { key: at, entry: value };
@@ -298,9 +309,10 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
           const [last] = storage.kv!.list(lastSlot);
           const count = nextSlot(storage.kv!.get<number>(`${prefix}count`) ?? 0, last?.[0]);
           for (const [key, value] of Object.entries(writes(count, prior))) storage.kv!.put(key, value);
+          return true;
         });
       } else {
-        if (await storage.get<Witness>(witnessKey(entry.id))) return;
+        if (await storage.get<Witness>(witnessKey(entry.id))) return true;
         const key = previous === null ? undefined : keyOf.get(previous), hit = key === undefined ? undefined : await storage.get<ConversationEntry>(key);
         const prior = previous === null ? null : key !== undefined && hit?.id === previous ? { key, entry: hit } : await (async () => {
           for (let end: string | undefined; ;) {
@@ -311,7 +323,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
           }
         })();
         const [last] = (await storage.list(lastSlot)).keys();
-        await storage.put(writes(nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last), prior));
+        const count = nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last);
+        if (fence) {
+          const keys = fence.sources.map(source => witnessKey(source.id)), receipts = new Map<string, Witness>();
+          for (let at = 0; at < keys.length; at += GET_KEYS) for (const [key, receipt] of await storage.get<Witness>(keys.slice(at, at + GET_KEYS))) receipts.set(key, receipt);
+          if (!fenced(fence, id => receipts.get(witnessKey(id))?.entry)) return false;
+        }
+        await storage.put(writes(count, prior));
+        return true;
       }
     }); },
     compactionAttempt: async (chainRef) => (await storage.get<number>(`${prefix}compaction-attempt:${chainRef}`)) ?? null,

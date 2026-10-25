@@ -32,6 +32,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
   'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
+  'node.confirm': { gated: false, why: 'Confirms one remembered pattern as the owner\'s own; grants no access.' },
+  'node.correct': { gated: true, why: 'Replaces a remembered pattern with words stored as the owner\'s own, which every later turn reads.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
