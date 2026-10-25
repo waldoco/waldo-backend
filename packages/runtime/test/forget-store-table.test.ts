@@ -81,7 +81,7 @@ const TABLES: Record<string, Row> = {
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   // Product-schema tables (do-schema.ts), none wired to purge
   task_jobs: purged('memory-forget-do-provider.test.ts'),
-  memory_blocks: purged('memory-forget-do-provider.test.ts'), memory_inbox: purged('memory-forget-do-provider.test.ts'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
+  memory_blocks: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), memory_inbox: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
   skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
 };
 
