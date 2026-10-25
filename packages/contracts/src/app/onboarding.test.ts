@@ -4,7 +4,8 @@ import {
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
-  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
+  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, APP_CONSENTS_DIAGNOSTIC_REVISION_V1, appDiagnosticRecordingChangeV1Schema,
+  appDiagnosticRecordingGrantV1Schema, appDiagnosticRecordingStateV1Schema, appDiagnosticRecordingWithdrawV1Schema,
 } from './onboarding';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
 
@@ -39,6 +40,45 @@ describe('consent ledger', () => {
     rejected(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'terms' }, { request_id: 'withdraw-01', purpose: 'privacy_notice' }, { request_id: 'withdraw-01' }]);
     accepted(appConsentChangeV1Schema, [{ consent: granted, replayed: false, findings_erased: 0 }]);
     rejected(appConsentChangeV1Schema, [{ consent: granted, replayed: false }, { consent: granted, replayed: false, findings_erased: -1 }]);
+  });
+});
+
+describe('diagnostic recording, consents revision 2', () => {
+  const recording = { state: 'off', recorded_here: true, version: 'beta-2026-10-25', label: 'Let the team read my chats (optional)', detail: 'Synthetic wording.' };
+  const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null, active: false }));
+  const list = { age_attested_18_plus: false, agreements_offered: true, owner_lookup_offered: false, consents };
+  it('is listed only as its own field, so a revision 1 list parses unchanged', () => {
+    expect(APP_CONSENTS_DIAGNOSTIC_REVISION_V1).toBe(2);
+    accepted(appConsentListV1Schema, [list, { ...list, diagnostic_recording: recording }, { ...list, diagnostic_recording: { ...recording, state: 'unknown' } }]);
+    rejected(appConsentListV1Schema, [{ ...list, diagnostic_recording: null }, { ...list, consents: [...consents, { ...consents[0], purpose: 'diagnostic_recording' }] }]);
+    expect(appConsentPurposeV1Schema.options).not.toContain('diagnostic_recording');
+  });
+  it('reads on, off or unknown, with whether this server records text and the wording to show', () => {
+    accepted(appDiagnosticRecordingStateV1Schema, [recording, { ...recording, state: 'on' }, { ...recording, state: 'unknown' }, { ...recording, recorded_here: false }]);
+    rejected(appDiagnosticRecordingStateV1Schema, [{ ...recording, state: 'granted' }, { ...recording, state: undefined }, { ...recording, recorded_here: 'yes' }, { ...recording, version: 'Beta 1' },
+      { ...recording, version: '' }, { ...recording, label: '' }, { ...recording, detail: '' }, { ...recording, agreed_at: 1 }, { ...recording, owner_id: 'other' }]);
+  });
+  it('is granted against a wording version, needs no 18+ attestation, and is withdrawn by purpose alone', () => {
+    const grant = { request_id: 'diagnostic-01', purpose: 'diagnostic_recording', version: 'beta-2026-10-25' };
+    accepted(appDiagnosticRecordingGrantV1Schema, [grant]);
+    rejected(appDiagnosticRecordingGrantV1Schema, [{ ...grant, version: 1 }, { ...grant, version: 'Beta 1' }, { ...grant, version: undefined }, { ...grant, purpose: 'owner_lookup' },
+      { ...grant, purpose: 'Diagnostic_Recording' }, { ...grant, request_id: 'short' }, { ...grant, do_name: 'other-owner' }, { ...grant, source: 'console' }, { ...grant, agreed: true }]);
+    rejected(appConsentGrantV1Schema, [{ ...grant, age_attested_18_plus: true }]);
+    accepted(appDiagnosticRecordingWithdrawV1Schema, [{ request_id: 'diagnostic-02', purpose: 'diagnostic_recording' }]);
+    rejected(appDiagnosticRecordingWithdrawV1Schema, [{ request_id: 'diagnostic-02', purpose: 'owner_lookup' }, { request_id: 'diagnostic-02' }, { request_id: 'diagnostic-02', purpose: 'diagnostic_recording', do_name: 'other-owner' }]);
+    rejected(appConsentWithdrawV1Schema, [{ request_id: 'diagnostic-02', purpose: 'diagnostic_recording' }]);
+  });
+  it('answers a change with the state the directory recorded, never unknown', () => {
+    accepted(appDiagnosticRecordingChangeV1Schema, [{ diagnostic_recording: { ...recording, state: 'on' }, replayed: false }, { diagnostic_recording: recording, replayed: true }]);
+    rejected(appDiagnosticRecordingChangeV1Schema, [{ diagnostic_recording: { ...recording, state: 'unknown' }, replayed: false }, { diagnostic_recording: recording }, { diagnostic_recording: recording, replayed: false, findings_erased: 0 }]);
+  });
+  it('rides the same consent routes as the other purposes', () => {
+    const grantRoute = appOnboardingRoutesV1.find(route => route.method === 'POST' && route.path === '/app/v1/consents');
+    const withdrawRoute = appOnboardingRoutesV1.find(route => route.method === 'POST' && route.path === '/app/v1/consents/withdraw');
+    expect(grantRoute && 'request' in grantRoute && grantRoute.request.safeParse({ request_id: 'diagnostic-01', purpose: 'diagnostic_recording', version: 'beta-2026-10-25' }).success).toBe(true);
+    expect(grantRoute && 'request' in grantRoute && grantRoute.request.safeParse({ request_id: 'consent-001', purpose: 'terms', version: 1, age_attested_18_plus: true }).success).toBe(true);
+    expect(withdrawRoute && 'request' in withdrawRoute && withdrawRoute.request.safeParse({ request_id: 'diagnostic-02', purpose: 'diagnostic_recording' }).success).toBe(true);
+    expect(grantRoute?.response.safeParse({ diagnostic_recording: { ...recording, state: 'on' }, replayed: false }).success).toBe(true);
   });
 });
 
