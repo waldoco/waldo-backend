@@ -7,7 +7,7 @@ import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
-import { iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
+import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -51,6 +51,10 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   return result.kind;
 };
 
+/** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */
+export const iMessageTurnText = (record: Pick<IMessageInboxRecord, 'text' | 'media'>): string =>
+  record.text || iMessageMediaNotes(record.media?.files ?? []).map(note => note.text).join('\n');
+
 /** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority whenever its last matching read has aged out. */
 export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope, sources: Pick<OwnerContextSources, 'ownerProfile'> = {}) => {
   const lookup = async () => {
@@ -60,7 +64,7 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
     return { ownerId: a.ownerId, bindingRef: a.presenceId ?? a.bridgeId, revision: a.revision, physicalDoId: host.id.toString() };
   };
   const context = createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: host.id.toString(), surface: 'imessage',
-    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef, ...sources });
+    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: iMessageTurnText(record) }), { conversationRef: record.conversationRef, ...sources });
   if (context.conversationRef !== record.conversationRef) throw new ClosedRunError();
   return context;
 };

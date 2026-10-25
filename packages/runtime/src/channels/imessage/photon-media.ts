@@ -130,6 +130,11 @@ export const IMESSAGE_MEDIA_REPLIES = {
   tooMany: (files: readonly MediaFile[]) => `I got your ${phrasing(files).what} but can open at most ${LLM_ATTACHMENTS_MAX} at once here; send them in smaller batches or in the app.`,
 } as const;
 
+/** What the owner sent, as the model and the conversation read it beside the files. */
+export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly InboundPart[] => files.map(file => ({ authorship: 'media_note',
+  text: readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
+    ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached.]` }));
+
 export type OpenedIMessageMedia =
   | Readonly<{ kind: 'opened'; parts: readonly InboundPart[]; attachments: readonly LLMAttachment[] }>
   | Readonly<{ kind: 'reply'; text: string }>;
@@ -158,7 +163,7 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
   console.log(JSON.stringify({ hop: 'imessage_media', ok: true, files: files.length }));
   return {
     kind: 'opened',
-    parts: readable.map(kind => ({ authorship: 'media_note' as const, text: kind!.kind === 'image' ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${kind!.filename}", attached.]` })),
+    parts: iMessageMediaNotes(files),
     attachments: readable.map((kind, index) => ({ ...kind!, data_base64: toBase64(fetched.bytes[index]!) })),
   };
 };
