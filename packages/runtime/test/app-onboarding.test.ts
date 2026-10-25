@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { APP_FINDING_UNCONFIRMED_DAYS_V1, appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema, appSetupAnswersResultV1Schema } from '../../contracts/src/app/onboarding';
+import { APP_FINDING_UNCONFIRMED_DAYS_V1, appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appConsentListV1Schema, appDiagnosticRecordingChangeV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appProactiveSurfaceV1Schema, appSetupAnswersResultV1Schema } from '../../contracts/src/app/onboarding';
 import { PROACTIVE_SURFACES } from '../src/channels/proactive-surface';
 import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
@@ -10,12 +10,13 @@ import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
 import { recordSignupName } from '../src/onboarding/first-run';
 import { episodeIndex } from '../src/channels/episodes';
+import { DIAGNOSTIC_RECORDING_WORDING } from '../src/identity/diagnostic-recording';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently' | 'diagnostics'>>;
 const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
-const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
+const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string, headers?: Record<string, string>): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
     const calls: Calls = { acts: [], admitted: [], rpc: 0, hidden: [] };
     let clock = 1_000;
@@ -26,9 +27,10 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
+      diagnostics: fakes.diagnostics ?? null,
     };
-    const send = (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') =>
-      appOnboardingRequest(new Request(`https://telegram-owner${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }) }), ownerOnboardingHost(deps));
+    const send = (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', headers: Record<string, string> = {}) =>
+      appOnboardingRequest(new Request(`https://telegram-owner${path}`, { method, headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), ownerOnboardingHost(deps));
     let request = 0;
     const act = (body: Record<string, unknown>) => send('/app/v1/onboarding/actions', { request_id: `onboarding-${request++}`, ...body });
     return fn({ storage: state.storage, calls, send, act });
@@ -547,6 +549,110 @@ describe('consent and findings routes', () => {
     expect(claimStore(storage.sql).claims()).toHaveLength(0);
     expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json()).total).toBe(0);
   }));
+});
+
+describe('diagnostic recording on the app consent routes', () => {
+  const REVISION_2 = { 'x-waldo-app-contract': 'consents=2' };
+  type Recording = NonNullable<OwnerOnboardingDeps['diagnostics']>;
+  // The owner directory, faked: what it holds now, whether it answers, and every change asked of it.
+  const directory = (held: 'on' | 'off' | 'unknown' = 'off', recordedHere = true) => {
+    const world = { held, changes: [] as boolean[], answer: 'done' as Awaited<ReturnType<Recording['change']>> };
+    const diagnostics: Recording = { recordedHere, state: async () => world.held,
+      change: async agreed => { world.changes.push(agreed); if (world.answer === 'done') world.held = agreed ? 'on' : 'off'; return world.answer; } };
+    return { world, diagnostics };
+  };
+  const list = async (response: Response) => appConsentListV1Schema.parse(await response.json());
+  const grant = (request_id: string, version: string = DIAGNOSTIC_RECORDING_WORDING.version) => ({ request_id, purpose: 'diagnostic_recording', version });
+
+  it('starts not agreed, shows the current wording, and is listed only for a build that names consents revision 2', async () => {
+    const { diagnostics } = directory();
+    await owner(async ({ send }) => {
+      expect((await list(await send('/app/v1/consents'))).diagnostic_recording).toBeUndefined();
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', { 'x-waldo-app-contract': 'consents=1' }))).diagnostic_recording).toBeUndefined();
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording).toEqual({ state: 'off', recorded_here: true, ...DIAGNOSTIC_RECORDING_WORDING });
+    }, { diagnostics });
+  });
+
+  it('records a yes for the current wording through the directory, and a withdrawal the same way', async () => {
+    const { world, diagnostics } = directory();
+    await owner(async ({ send }) => {
+      const on = appDiagnosticRecordingChangeV1Schema.parse(await (await send('/app/v1/consents', grant('diagnostic-grant-1'))).json());
+      expect(on).toEqual({ diagnostic_recording: { state: 'on', recorded_here: true, ...DIAGNOSTIC_RECORDING_WORDING }, replayed: false });
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording?.state).toBe('on');
+      const off = appDiagnosticRecordingChangeV1Schema.parse(await (await send('/app/v1/consents/withdraw', { request_id: 'diagnostic-withdraw-1', purpose: 'diagnostic_recording' })).json());
+      expect(off.diagnostic_recording.state).toBe('off');
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording?.state).toBe('off');
+      expect(world.changes).toEqual([true, false]);
+    }, { diagnostics });
+  });
+
+  it('answers a repeated request from its first answer, and refuses the same id with another body', async () => {
+    const { world, diagnostics } = directory();
+    await owner(async ({ send }) => {
+      await send('/app/v1/consents', grant('diagnostic-grant-2'));
+      expect(await (await send('/app/v1/consents', grant('diagnostic-grant-2'))).json()).toMatchObject({ diagnostic_recording: { state: 'on' }, replayed: true });
+      expect((await send('/app/v1/consents/withdraw', { request_id: 'diagnostic-grant-2', purpose: 'diagnostic_recording' })).status).toBe(409);
+      expect(world.changes).toEqual([true]);
+    }, { diagnostics });
+  });
+
+  it('refuses a yes to older wording and records nothing', async () => {
+    const { world, diagnostics } = directory();
+    await owner(async ({ send }) => {
+      const stale = await send('/app/v1/consents', grant('diagnostic-grant-3', 'beta-2026-10-22'));
+      expect([stale.status, await stale.json()]).toEqual([409, { error: 'stale_version' }]);
+      expect(world.changes).toEqual([]);
+    }, { diagnostics });
+  });
+
+  it('shows unknown, never off, when the directory cannot say', async () => {
+    const { diagnostics } = directory('unknown');
+    await owner(async ({ send }) => {
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording?.state).toBe('unknown');
+    }, { diagnostics });
+    await owner(async ({ send }) => {
+      expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording?.state).toBe('unknown');
+    }, { diagnostics: { ...diagnostics, state: async () => { throw new Error('directory down'); } } });
+  });
+
+  it('answers unavailable when the directory refuses or cannot confirm a change, and lets the same request try again', async () => {
+    const { world, diagnostics } = directory();
+    await owner(async ({ send }) => {
+      world.answer = 'unconfirmed';
+      const down = await send('/app/v1/consents/withdraw', { request_id: 'diagnostic-withdraw-2', purpose: 'diagnostic_recording' });
+      expect([down.status, await down.json()]).toEqual([503, { error: 'unavailable' }]);
+      world.answer = 'refused';
+      expect((await send('/app/v1/consents', grant('diagnostic-grant-4'))).status).toBe(503);
+      world.answer = 'done';
+      expect(await (await send('/app/v1/consents/withdraw', { request_id: 'diagnostic-withdraw-2', purpose: 'diagnostic_recording' })).json()).toMatchObject({ diagnostic_recording: { state: 'off' }, replayed: false });
+      expect(world.changes).toEqual([false, true, false]);
+    }, { diagnostics });
+  });
+
+  it('refuses a malformed purpose or a request that names another owner, and records nothing', async () => {
+    const { world, diagnostics } = directory();
+    await owner(async ({ send }) => {
+      for (const body of [{ request_id: 'diagnostic-bad-1', purpose: 'diagnostic', version: DIAGNOSTIC_RECORDING_WORDING.version },
+        { request_id: 'diagnostic-bad-2', purpose: 'diagnostic_recording', version: 1 }, { request_id: 'diagnostic-bad-3', purpose: 'diagnostic_recording' },
+        { ...grant('diagnostic-bad-4'), do_name: 'other-owner' }, { ...grant('diagnostic-bad-5'), source: 'console' }, { ...grant('diagnostic-bad-6'), age_attested_18_plus: true }])
+        expect((await send('/app/v1/consents', body)).status).toBe(400);
+      expect((await send('/app/v1/consents/withdraw', { request_id: 'diagnostic-bad-7', purpose: 'diagnostic_recording', do_name: 'other-owner' })).status).toBe(400);
+      expect(world.changes).toEqual([]);
+    }, { diagnostics });
+  });
+
+  it('is not offered where no directory holds the agreement', () => owner(async ({ send }) => {
+    expect((await list(await send('/app/v1/consents', undefined, 'GET', REVISION_2))).diagnostic_recording).toBeUndefined();
+    const refused = await send('/app/v1/consents', grant('diagnostic-grant-5'));
+    expect([refused.status, await refused.json()]).toEqual([409, { error: 'not_offered' }]);
+  }));
+
+  it('says where this server records no chat text, whatever the owner chooses', async () => {
+    const { diagnostics } = directory('off', false);
+    await owner(async ({ send }) => {
+      expect(await (await send('/app/v1/consents', grant('diagnostic-grant-6'))).json()).toMatchObject({ diagnostic_recording: { state: 'on', recorded_here: false } });
+    }, { diagnostics });
+  });
 });
 
 describe('the first run reads every proactive surface the console can set', () => {

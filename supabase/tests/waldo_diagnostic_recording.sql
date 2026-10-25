@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(27);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -37,6 +37,9 @@ select is(pg_temp.set('do-c', false, 'beta-2026-10-22', 'console'), true, 'a sus
 select is((select count(*)::int from waldo.diagnostic_recording_agreements where owner_id = '40000000-0000-0000-0000-00000000000c' and withdrawn_at is null), 0, 'and the withdrawal closes their agreement');
 select is(has_table_privilege('anon', 'waldo.diagnostic_recording_agreements', 'select') or has_table_privilege('authenticated', 'waldo.diagnostic_recording_agreements', 'select'), false, 'callers cannot read the table directly');
 select is(has_table_privilege('anon', 'waldo.diagnostic_recording_agreements', 'insert') or has_table_privilege('authenticated', 'waldo.diagnostic_recording_agreements', 'update'), false, 'or write it directly');
+select is(pg_temp.set('do-b', true, 'beta-2026-10-25', 'app'), true, 'an agreement given in the app is recorded');
+select is((select source from waldo.diagnostic_recording_agreements where owner_id = '40000000-0000-0000-0000-00000000000b' and withdrawn_at is null), 'app', 'with the app as where it was given');
+select is(pg_temp.set('do-b', false, 'beta-2026-10-25', 'phone'), false, 'a change from an unknown source is refused');
 delete from waldo.owners where id = '40000000-0000-0000-0000-00000000000a';
 select is((select count(*)::int from waldo.diagnostic_recording_agreements where owner_id = '40000000-0000-0000-0000-00000000000a'), 0, 'deleting the owner deletes their agreement history');
 select * from finish();

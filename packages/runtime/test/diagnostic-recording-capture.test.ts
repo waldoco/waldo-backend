@@ -37,6 +37,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const langfuse = { LANGFUSE_PUBLIC_KEY: 'pk-fixture', LANGFUSE_SECRET_KEY: 'sk-fixture', LANGFUSE_BASE_URL: 'https://langfuse.fixture.invalid', LANGFUSE_CAPTURE_TEXT: 'true' };
 const agreed = { agreed: true, version: DIAGNOSTIC_RECORDING_WORDING.version, agreed_at: '2026-10-22T09:00:00.000Z' };
 const declined = { agreed: false, version: null, agreed_at: null };
+const APP_SESSION = 'a'.repeat(64);
 
 beforeEach(() => {
   world.otlp = []; world.reads = 0; world.agreement = declined; world.hang = false; world.writes = []; world.write = 'ok'; world.slow = false; world.release = undefined;
@@ -60,6 +61,8 @@ beforeEach(() => {
       return Response.json(true);
     }
     if (fn === 'console_session_list') return Response.json([]);
+    // An app session the directory knows, and any other hash it does not.
+    if (fn === 'app_session_authority') return asked.p_session_hash === APP_SESSION ? Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 }) : Response.json(null);
     if (fn === 'common_owner_authority') return Response.json({ admission_revision: '5', auth_user_id: OWNER_ID, do_name: asked.p_do_name, owner_id: OWNER_ID, presence_id: '0d6b1f22-9c4e-4a7b-8e21-5f3a9c7d1b44', provider: asked.p_provider, state_version: 1, subject: asked.p_subject });
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (fn === 'health_context_read') return Response.json(null);
@@ -69,7 +72,8 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 type Control = Readonly<{ state: string; recorded_here: boolean; version: string; label: string; detail: string }>;
-type Owner = Readonly<{ turn(update: number): Promise<void>; capture(): boolean; job(): Promise<boolean>; traces(): string; control(): Promise<Control | undefined>; choose(value: string, request: string): Promise<{ status: number; receipt?: { state: string; message: string } }> }>;
+type AppAnswer = Readonly<{ status: number; body: Record<string, unknown> }>;
+type Owner = Readonly<{ app(path: string, body?: unknown, as?: Readonly<{ name?: string; session?: string }>): Promise<AppAnswer>; turn(update: number): Promise<void>; capture(): boolean; job(): Promise<boolean>; traces(): string; control(): Promise<Control | undefined>; choose(value: string, request: string): Promise<{ status: number; receipt?: { state: string; message: string } }> }>;
 const telegramOwner = (name: string, environment: string, run: (owner: Owner) => Promise<void>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
@@ -81,6 +85,14 @@ const telegramOwner = (name: string, environment: string, run: (owner: Owner) =>
   const read = async () => (await (await owner.fetch(new Request(`https://telegram-owner${CONTROLS_PATH}?view=day`, { headers: { cookie: `waldo_console=${token}` } }))).json()) as { csrf: string; revision: string; data: { diagnostic_recording?: Control } };
   try {
     await run({
+      // The app's own consent routes, as the Worker forwards them: the DO name and session hash it authenticated, and a build that
+      // names consents revision 2.
+      app: async (path, body, as = {}) => {
+        const response = await owner.fetch(new Request(`https://telegram-owner${path}`, { method: body === undefined ? 'GET' : 'POST',
+          headers: { 'x-waldo-do-name': as.name ?? name, 'x-waldo-app-session-hash': as.session ?? APP_SESSION, 'x-waldo-app-contract': 'consents=2', 'content-type': 'application/json' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+        return { status: response.status, body: await response.json() as Record<string, unknown> };
+      },
       control: async () => (await read()).data.diagnostic_recording,
       capture: () => (owner as unknown as { captureText: boolean }).captureText,
       // A scheduled job, answering whether its own traces would carry text.
@@ -272,6 +284,70 @@ describe('the console control for diagnostic recording', () => {
       expect(on).toMatchObject({ status: 200, receipt: { state: 'recorded' } });
       expect(on.receipt?.message).toContain('records no chat text');
       expect(on.receipt?.message).not.toMatch(/recording is on/i);
+    });
+  });
+});
+
+describe('the app consent route for diagnostic recording', () => {
+  const grant = (request_id: string) => ({ request_id, purpose: 'diagnostic_recording', version: DIAGNOSTIC_RECORDING_WORDING.version });
+  const withdraw = (request_id: string) => ({ request_id, purpose: 'diagnostic_recording' });
+  const recordingOf = (answer: AppAnswer) => answer.body.diagnostic_recording as Control | undefined;
+
+  it('starts not agreed for an existing owner, records a yes from the app through the same signed function, and withdraws it the same way', async () => {
+    await telegramOwner('diagnostic-app', 'staging', async owner => {
+      expect(recordingOf(await owner.app('/app/v1/consents'))).toEqual({ state: 'off', recorded_here: true, ...DIAGNOSTIC_RECORDING_WORDING });
+      const on = await owner.app('/app/v1/consents', grant('diagnostic-app-01'));
+      expect([on.status, recordingOf(on)?.state]).toEqual([200, 'on']);
+      expect(world.writes).toEqual([expect.objectContaining({ p_do_name: 'diagnostic-app', p_agreed: true, p_version: DIAGNOSTIC_RECORDING_WORDING.version, p_source: 'app' })]);
+      await owner.turn(960101);
+      expect(carriesText(960101)).toBe(true);
+      const off = await owner.app('/app/v1/consents/withdraw', withdraw('diagnostic-app-02'));
+      expect([off.status, recordingOf(off)?.state]).toEqual([200, 'off']);
+      expect(world.writes.at(-1)).toMatchObject({ p_agreed: false, p_source: 'app' });
+      // The withdrawal stops recording in this object at once, before the next turn reads the directory.
+      expect(owner.capture()).toBe(false);
+      await owner.turn(960102);
+      expect(carriesText(960102)).toBe(false);
+      expect(exportedMessage(960102)).toBe(false);
+    });
+  });
+
+  it('shows unknown, not off, when the directory cannot be read', async () => {
+    world.agreement = 'outage';
+    await telegramOwner('diagnostic-app-unknown', 'staging', async owner => {
+      expect(recordingOf(await owner.app('/app/v1/consents'))?.state).toBe('unknown');
+    });
+  });
+
+  it('does not let a read that was already under way undo a withdrawal from the app', async () => {
+    world.agreement = agreed;
+    await telegramOwner('diagnostic-app-race', 'staging', async owner => {
+      world.slow = true;
+      const job = owner.job();
+      await vi.waitFor(() => expect(world.release).toBeDefined());
+      world.slow = false;
+      expect((await owner.app('/app/v1/consents/withdraw', withdraw('diagnostic-app-11'))).status).toBe(200);
+      world.release!();
+      expect(await job).toBe(false);
+      expect(owner.capture()).toBe(false);
+    });
+  });
+
+  it('refuses a forged session or another owner\'s name, and records nothing', async () => {
+    await telegramOwner('diagnostic-app-forged', 'staging', async owner => {
+      expect((await owner.app('/app/v1/consents', grant('diagnostic-app-21'), { session: 'f'.repeat(64) })).status).toBe(403);
+      expect((await owner.app('/app/v1/consents', grant('diagnostic-app-22'), { name: 'diagnostic-app-someone-else' })).status).toBe(403);
+      expect((await owner.app('/app/v1/consents/withdraw', withdraw('diagnostic-app-23'), { session: 'not-a-hash' })).status).toBe(403);
+      expect(world.writes).toEqual([]);
+    });
+  });
+
+  it('never claims recording where this server records no text', async () => {
+    await telegramOwner('diagnostic-app-production', 'production', async owner => {
+      const on = await owner.app('/app/v1/consents', grant('diagnostic-app-31'));
+      expect(recordingOf(on)).toMatchObject({ state: 'on', recorded_here: false });
+      await owner.turn(960111);
+      expect(carriesText(960111)).toBe(false);
     });
   });
 });
