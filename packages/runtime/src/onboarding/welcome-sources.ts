@@ -3,7 +3,7 @@ import type { HealthReadSignal } from '@waldo/contracts';
 import { GoogleError, type CalendarItem, type GoogleClient, type MailItem, type TaskItem } from '../connectors/google';
 import { parseSeries, type Reading } from '../health/producer';
 import { shiftDay } from '../health/scores/time';
-import { foldDay, localDayOf, SIGNALS, type HealthReadBook } from '../tools/live/health';
+import { chooseGroup, foldDay, localDayOf, SIGNALS, type HealthReadBook } from '../tools/live/health';
 import type { GoogleAccess } from '../tools/live/google';
 import type { FindingStore } from './findings';
 import type { ClaimStore } from '../memory/claims';
@@ -37,17 +37,18 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   if (parsed.kind === 'no_consent') return settled('skipped');
   if (parsed.kind === 'failed') return settled('unavailable');
   const lines: string[] = [], sources: AppNodeSourceV1[] = [], pointers: string[] = [];
-  for (const source of parsed.series.sources) {
-    const tag = HEALTH_SOURCES[source.source];
-    if (!tag || !consent.sources.has(source.source)) continue;
-    for (const signal of signals) {
-      const byDay = new Map<string, Reading[]>();
-      for (const reading of source.readings) if (reading.signal === SIGNALS[signal].stored) byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]);
-      const days = [...byDay.keys()].sort().map((day) => `${day} ${foldDay(SIGNALS[signal].fold, byDay.get(day)!, zone)}`);
-      if (!days.length) continue;
-      lines.push(`${signal} (${tag}, ${SIGNALS[signal].unit}): ${days.join('; ')}`);
-      sources.push(tag); pointers.push(signal);
-    }
+  // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
+  // method per signal, so methods never blend.
+  const live = parsed.series.sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
+  for (const signal of signals) {
+    const group = chooseGroup(signal, live);
+    if (!group) continue;
+    const tag = HEALTH_SOURCES[group.source]!;
+    const byDay = new Map<string, Reading[]>();
+    for (const reading of group.readings) byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]);
+    const days = [...byDay.keys()].sort().map((day) => `${day} ${foldDay(SIGNALS[signal].fold, byDay.get(day)!, zone)}`);
+    lines.push(`${signal} (${tag}, ${SIGNALS[signal].unit}${group.method ? `, ${group.method}` : ''}): ${days.join('; ')}`);
+    sources.push(tag); pointers.push(signal);
   }
   return input(lines, sources, pointers);
 };

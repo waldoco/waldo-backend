@@ -142,4 +142,76 @@ describe('get_health', () => {
     const result = await fake({ series: old }).handler.handle({ signals: ['resting_hr'], from: '2026-10-05', to: '2026-10-05', aggregation: 'daily' }, ctx);
     expect(result.ok && result.data.state === 'available' && result.data.freshness).toBe('expired');
   });
+
+  // A read at its row cap returns the newest rows, so the oldest day of that source may hold only part of its windows.
+  it('never reports the possibly partial oldest day of a truncated read as a whole day', async () => {
+    const step = (day: string, hour: number, value: number) => reading('steps_window', day, value, { start_at: `${day}T${String(hour).padStart(2, '0')}:00:00Z`, end_at: `${day}T${String(hour + 1).padStart(2, '0')}:00:00Z` });
+    const capped = { ...series, sources: [
+      { source: 'apple', consent_epoch: 3, truncated: true, samples: [step('2026-10-10', 15, 40), step('2026-10-11', 3, 100), step('2026-10-11', 4, 200), step('2026-10-12', 3, 300)] },
+    ] };
+    const ask = (aggregation: 'daily' | 'summary') => fake({ series: capped }).handler.handle({ signals: ['steps'], from: '2026-10-10', to: '2026-10-12', aggregation }, ctx);
+    const daily = await ask('daily');
+    expect(daily.ok && daily.data.state === 'available' && daily.data.signals[0]?.days).toEqual([{ day: '2026-10-10', value: null }, { day: '2026-10-11', value: 300 }, { day: '2026-10-12', value: 300 }]);
+    const summary = await ask('summary');
+    expect(summary.ok && summary.data.state === 'available' && summary.data.signals[0]?.summary).toEqual({ mean: 300, min: 300, max: 300, days_with_value: 2 });
+
+    const whole = { ...capped, sources: capped.sources.map(source => ({ ...source, truncated: false })) };
+    const full = await fake({ series: whole }).handler.handle({ signals: ['steps'], from: '2026-10-10', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(full.ok && full.data.state === 'available' && full.data.signals[0]?.days?.[0]).toEqual({ day: '2026-10-10', value: 40 });
+  });
+
+  describe('Watch signals', () => {
+    const night = (day: string, value: number, stages: Record<string, number> | null, start: string, end: string) =>
+      reading('sleep_duration', day, value, { method: 'asleep_duration', start_at: start, end_at: end, ...(stages ? { stages } : {}) });
+    const watch = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      night('2026-10-12', 430, { light: 200, deep: 70, rem: 90, unspecified: 70, awake: 22 }, '2026-10-11T17:30:00Z', '2026-10-12T00:50:00Z'),
+      reading('sleep_efficiency', '2026-10-12', 0.91, { start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:50:00Z' }),
+      reading('respiratory_rate', '2026-10-12', 14, { start_at: '2026-10-11T20:00:00Z', end_at: '2026-10-11T20:00:00Z' }),
+      reading('respiratory_rate', '2026-10-12', 15, { start_at: '2026-10-11T22:00:00Z', end_at: '2026-10-11T22:00:00Z' }),
+      reading('spo2', '2026-10-12', 96, { start_at: '2026-10-11T21:00:00Z', end_at: '2026-10-11T21:00:00Z' }),
+      reading('wrist_temperature', '2026-10-12', 34.3, { method: 'absolute', start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:50:00Z' }),
+      reading('wrist_temperature', '2026-10-11', 34.1, { method: 'absolute', start_at: '2026-10-10T17:30:00Z', end_at: '2026-10-11T00:50:00Z' }),
+      reading('wrist_temperature', '2026-10-12', -0.2, { method: 'baseline_delta', start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:50:00Z' }),
+      reading('walking_heart_rate_average', '2026-10-12', 101, { start_at: '2026-10-12T00:00:00Z', end_at: '2026-10-12T12:00:00Z' }),
+      reading('heart_rate_recovery', '2026-10-12', 20, { start_at: '2026-10-12T03:00:00Z', end_at: '2026-10-12T03:01:00Z' }),
+      reading('heart_rate_recovery', '2026-10-12', 26, { start_at: '2026-10-12T09:00:00Z', end_at: '2026-10-12T09:01:00Z' }),
+      reading('vo2_max', '2026-10-12', 41.5, { start_at: '2026-10-12T03:00:00Z', end_at: '2026-10-12T03:30:00Z' }),
+      reading('steps_window', '2026-10-12', 1200, { start_at: '2026-10-12T03:30:00Z', end_at: '2026-10-12T04:30:00Z' }),
+      reading('steps_window', '2026-10-12', 800, { start_at: '2026-10-12T04:30:00Z', end_at: '2026-10-12T05:30:00Z' }),
+      reading('active_energy_window', '2026-10-12', 40.5, { start_at: '2026-10-12T03:30:00Z', end_at: '2026-10-12T04:30:00Z' }),
+      reading('active_energy_window', '2026-10-12', 60, { start_at: '2026-10-12T04:30:00Z', end_at: '2026-10-12T05:30:00Z' }),
+      reading('mindful_duration', '2026-10-12', 10, { start_at: '2026-10-12T02:00:00Z', end_at: '2026-10-12T02:10:00Z' }),
+      reading('mindful_duration', '2026-10-12', 5, { start_at: '2026-10-12T14:00:00Z', end_at: '2026-10-12T14:05:00Z' }),
+    ] }] };
+    const one = async (signals: string[]) => {
+      const { calls, handler } = fake({ series: watch });
+      const result = await handler.handle({ signals: signals as never, from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+      return { calls, signals: result.ok && result.data.state === 'available' ? getHealthResultSchema.parse(result.data).state === 'available' && result.data.signals : null };
+    };
+    const value = (entry: { days?: readonly { value: number | null }[] }) => entry.days?.[0]?.value;
+
+    it('reads the night\'s stage minutes from its time-asleep reading, and asks the plane for that reading', async () => {
+      const { calls, signals } = await one(['sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake']);
+      expect(signals && signals.map(entry => [entry.signal, entry.unit, entry.method, value(entry)])).toEqual([
+        ['sleep_light', 'minutes', null, 200], ['sleep_deep', 'minutes', null, 70], ['sleep_rem', 'minutes', null, 90], ['sleep_awake', 'minutes', null, 22],
+      ]);
+      expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['sleep_duration']);
+    });
+    it('gives the night\'s means, a day\'s sums and the day\'s newest single readings in their own units', async () => {
+      const { signals } = await one(['sleep_efficiency', 'respiratory_rate', 'spo2', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful']);
+      expect(signals && signals.map(entry => [entry.signal, entry.unit, value(entry)])).toEqual([
+        ['sleep_efficiency', 'ratio', 0.91], ['respiratory_rate', 'breaths_per_minute', 14.5], ['spo2', 'percent', 96], ['walking_hr', 'bpm', 101], ['hr_recovery', 'bpm', 23],
+        ['vo2_max', 'ml_per_kg_min', 41.5], ['steps', 'count', 2000], ['active_energy', 'kcal', 101], ['mindful', 'minutes', 15],
+      ]);
+    });
+    it('gives wrist temperature from one method, labelled, never blending an absolute night with a delta', async () => {
+      const { signals } = await one(['wrist_temperature']);
+      expect(signals && signals.map(entry => [entry.unit, entry.method, value(entry)])).toEqual([['celsius', 'absolute', 34.3]]);
+    });
+    it('takes every signal in one call', async () => {
+      const every = ['sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts', 'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful'];
+      const { signals } = await one(every);
+      expect(signals && signals.length).toBeGreaterThan(10);
+    });
+  });
 });

@@ -42,8 +42,13 @@ const history = <T,>(prior: readonly DayRecord[], read: (day: DayRecord) => T | 
 // another zone is cut at 15:00 there. Null minutes is the whole day.
 const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
   (minute === null ? day : { ...day, hourly: day.hourly.filter(bucket => wallMinute(Date.parse(bucket.startAt), day.timezone) < minute) });
+// Form reads the hours that hold one of its own signals. An hour holding only active energy is Weight's, so it never counts
+// toward Form's hours, its data horizon or the hour still filling.
+const formHours = (day: DayRecord): DayRecord =>
+  ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrv !== null || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
 
-export const formScore = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null): FormResult => {
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null): FormResult => {
+  const target = formHours(record), prior = earlier.map(formHours);
   const recovery = recoveryBasis(target, prior, sleepNeedMinutes);
   if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
   if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
