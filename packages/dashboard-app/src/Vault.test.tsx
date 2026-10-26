@@ -23,7 +23,7 @@ const vault = (over: Record<string, unknown> = {}) => ({
   },
   access_log: { window_days: 30, kept_steps: 500,
     tools: { rows: [{ at: '2026-10-26T09:00:00.000Z', tool: 'search_communication', category: 'core', kind: 'read', ok: true }, { at: '2026-10-26T08:00:00.000Z', tool: 'other', category: 'other', kind: 'unknown', ok: false }], next_before: 41, oldest_at: '2026-10-10T00:00:00.000Z' },
-    approvals: { rows: [{ at: '2026-10-25T09:00:00.000Z', kind: 'email_send', decision: 'skipped', decided_at: '2026-10-25T09:05:00.000Z' }], next_before: null } },
+    approvals: { rows: [{ at: '2026-10-25T09:00:00.000Z', kind: 'email_send', decision: 'skipped', decided_at: '2026-10-25T09:05:00.000Z' }], next_before: '1793008800000.p00a' } },
   ...over,
 });
 const connections = { version: 1, view: 'connections', state: 'available', csrf: 'c'.repeat(64), revision, data: {
@@ -107,6 +107,17 @@ describe('the Vault page', () => {
     expect({ view: body.get('view'), action: body.get('action'), id: body.get('id'), csrf: body.get('csrf'), revision: body.get('revision') })
       .toEqual({ view: 'connections', action: 'google.disconnect', id: 'conn-1', csrf: 'c'.repeat(64), revision });
     expect(host.textContent).toContain('Google disconnected.');
+    await act(async () => root.unmount());
+  });
+
+  it('asks for older approvals with the cursor the read gave, and refuses a cursor out of shape', async () => {
+    const { host, root, calls } = await mount(async () => Response.json(vault()));
+    const older = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Older approvals')!;
+    await act(async () => older.click());
+    await flush();
+    expect(calls.at(-1)!.url).toBe('/console/dashboard/api/v1/vault?approvals_before=1793008800000.p00a');
+    const bad = vault(); (bad.access_log as { approvals: { next_before: unknown } }).approvals.next_before = '12; drop';
+    expect(() => readVault(bad)).toThrow('unsupported data shape');
     await act(async () => root.unmount());
   });
 

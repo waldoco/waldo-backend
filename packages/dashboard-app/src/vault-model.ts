@@ -20,9 +20,9 @@ export type VaultRecord = {
     channels: { channel: 'telegram' | 'imessage' | 'whatsapp'; state: 'linked' | 'unlinked'; revoke: RevokeTarget | null }[];
     health: { state: 'unavailable' } | { state: 'available'; manage: 'app'; rows: HealthRow[] };
   };
-  access_log: { window_days: number; kept_steps: number; tools: { rows: ToolStep[]; next_before: number | null; oldest_at: string | null }; approvals: { rows: ApprovalStep[]; next_before: number | null } };
+  access_log: { window_days: number; kept_steps: number; tools: { rows: ToolStep[]; next_before: number | null; oldest_at: string | null }; approvals: { rows: ApprovalStep[]; next_before: string | null } };
 };
-export type VaultCursors = { tools_before?: number; approvals_before?: number };
+export type VaultCursors = { tools_before?: number; approvals_before?: string };
 
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -31,6 +31,8 @@ const maybeInstant = (v: unknown): v is string | null => v === null || instant(v
 const maybeDay = (v: unknown): v is string | null => v === null || (str(v) && /^\d{4}-\d{2}-\d{2}$/.test(v));
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const cursor = (v: unknown): v is number | null => v === null || (Number.isSafeInteger(v) && (v as number) > 0);
+// The server's approvals cursor: "<created_at>.<ledger id>".
+const approvalCursor = (v: unknown): v is string | null => v === null || (str(v) && /^[1-9][0-9]{0,15}\.[A-Za-z0-9_-]{1,128}$/.test(v));
 const among = <T extends string>(options: readonly T[], v: unknown): v is T => str(v) && (options as readonly string[]).includes(v);
 const list = <T>(v: unknown, row: (r: Record<string, unknown>) => T): T[] => { if (!Array.isArray(v) || !v.every(obj)) throw unsupported(); return v.map(row); };
 const unsupported = () => new Error('The Vault received an unsupported data shape. Nothing was assumed.');
@@ -48,7 +50,7 @@ export function readVault(value: unknown): VaultRecord {
   const health = connections.health as Record<string, unknown>;
   check(obj(health) && (health.state === 'unavailable' || (health.state === 'available' && health.manage === 'app')));
   const tools = log.tools as Record<string, unknown>, approvals = log.approvals as Record<string, unknown>;
-  check(cursor(tools.next_before) && maybeInstant(tools.oldest_at) && cursor(approvals.next_before));
+  check(cursor(tools.next_before) && maybeInstant(tools.oldest_at) && approvalCursor(approvals.next_before));
   return {
     as_of: (value as Record<string, unknown>).as_of as string,
     memory: { state: memory.state as VaultRecord['memory']['state'], groups: list(memory.groups, group => {
@@ -80,7 +82,7 @@ export function readVault(value: unknown): VaultRecord {
         check(instant(row.at) && str(row.tool) && str(row.category) && among(['read', 'acted', 'unknown'] as const, row.kind) && typeof row.ok === 'boolean');
         return { at: row.at as string, tool: row.tool as string, category: row.category as string, kind: row.kind as ToolStep['kind'], ok: row.ok as boolean };
       }) },
-      approvals: { next_before: approvals.next_before as number | null, rows: list(approvals.rows, row => {
+      approvals: { next_before: approvals.next_before as string | null, rows: list(approvals.rows, row => {
         check(instant(row.at) && str(row.kind) && str(row.decision) && maybeInstant(row.decided_at));
         return { at: row.at as string, kind: row.kind as string, decision: row.decision as string, decided_at: row.decided_at as string | null };
       }) },

@@ -11,6 +11,7 @@ export const DASHBOARD_ADMIN_HEALTH_PATH = '/console/dashboard/api/v1/admin/heal
 export const HEALTH_READ_LIMIT = 30;
 export const ADMIN_HEALTH_READ_LIMIT = 10;
 const WINDOW_MS = 60_000;
+const HEALTH_READ_KEY = 'console:health-rate';
 
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
@@ -80,9 +81,10 @@ const ownerRead = async ({ rpc, doName, now }: ConsoleHealthInput): Promise<Resp
 };
 
 // The Vault's health rows: what the owner shares, by source and purpose, and each source's newest upload. Scores are never
-// read here. null when the health plane did not answer or answered out of shape.
-export const healthSharing = async ({ rpc, doName }: Pick<ConsoleHealthInput, 'rpc' | 'doName'>) => {
-  if (!rpc || !doName) return null;
+// read here. Each read spends the console health read budget. null when the budget is spent, or the health plane did not
+// answer or answered out of shape.
+export const healthSharing = async ({ rpc, doName, kv, now }: Pick<ConsoleHealthInput, 'rpc' | 'doName' | 'kv' | 'now'>) => {
+  if (!rpc || !doName || !admitted(kv, HEALTH_READ_KEY, HEALTH_READ_LIMIT, now)) return null;
   const [listed, fresh] = await Promise.all([invokeHealth(rpc, doName, 'consent_list', '{}'), invokeHealth(rpc, doName, 'freshness_read', '{}')]);
   const consents = healthConsentView(listed, HEALTH_PROVIDER_REVISION_V1);
   const rows = 'body' in consents ? list((consents.body as { consents: unknown[] }).consents, consentRow) : null;
@@ -110,7 +112,7 @@ export const consoleHealth = async (input: ConsoleHealthInput): Promise<Response
   const admin = url.pathname === DASHBOARD_ADMIN_HEALTH_PATH;
   if (input.request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405);
   if (url.search) return reply({ error: 'invalid_query' }, 400);
-  if (!admitted(input.kv, admin ? 'console:admin-health-rate' : 'console:health-rate', admin ? ADMIN_HEALTH_READ_LIMIT : HEALTH_READ_LIMIT, input.now)) {
+  if (!admitted(input.kv, admin ? 'console:admin-health-rate' : HEALTH_READ_KEY, admin ? ADMIN_HEALTH_READ_LIMIT : HEALTH_READ_LIMIT, input.now)) {
     return reply({ error: 'rate_limited' }, 429, { 'retry-after': '60' });
   }
   return admin ? adminRead(input) : ownerRead(input);

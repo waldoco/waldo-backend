@@ -1,6 +1,8 @@
 import { TOOL_RECORDS } from '../tools/records';
 import { META_TOOLS } from '../tools/loader';
+import { approvalKindV1Schema } from '../../../contracts/src/app/parts';
 import { APP_APPROVAL_STATE } from './approvals';
+import { TRACE_KEPT } from './harness';
 import { SOURCE_LABEL } from './dashboard-memory';
 import type { projectMemoryGraph } from './memory-graph';
 
@@ -10,20 +12,30 @@ import type { projectMemoryGraph } from './memory-graph';
 // csrf. Changes go through the existing action paths that `revoke` names; the memory actions through memory-controls.
 export const DASHBOARD_VAULT_PATH = '/console/dashboard/api/v1/vault';
 export const VAULT_LOG_WINDOW_DAYS = 30;
-// trace_log keeps the newest 500 steps of every kind (harness traceBook), so the log can run out before 30 days do.
-export const VAULT_TRACE_KEPT = 500;
 const PAGE = 50, MEMORY_PER_GROUP = 50, DAY_MS = 86_400_000;
 export const VAULT_TOKEN_NOTE = 'Tokens are stored encrypted (Supabase Vault). Waldo\'s model never sees them.';
 
-export type VaultQuery = Readonly<{ toolsBefore?: number; approvalsBefore?: number }>;
-// Paging cursors only: neither selects an owner, a table or a filter.
+type ApprovalCursor = Readonly<{ at: number; id: string }>;
+export type VaultQuery = Readonly<{ toolsBefore?: number; approvalsBefore?: ApprovalCursor }>;
+const POSITIVE = /^[1-9][0-9]{0,15}$/;
+const position = (raw: string) => POSITIVE.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : null;
+// Paging cursors only: neither selects an owner, a table or a filter. tools_before is a trace row id; approvals_before is
+// "<created_at>.<ledger id>", the last approval of the previous page.
 export function readVaultQuery(params: URLSearchParams): VaultQuery | null {
-  const query: { toolsBefore?: number; approvalsBefore?: number } = {};
+  const query: { toolsBefore?: number; approvalsBefore?: ApprovalCursor } = {};
   for (const key of new Set(params.keys())) {
-    const field = key === 'tools_before' ? 'toolsBefore' : key === 'approvals_before' ? 'approvalsBefore' : null;
     const raw = params.getAll(key);
-    if (!field || raw.length !== 1 || !/^[1-9][0-9]{0,15}$/.test(raw[0]!) || !Number.isSafeInteger(Number(raw[0]))) return null;
-    query[field] = Number(raw[0]);
+    if (raw.length !== 1) return null;
+    if (key === 'tools_before') {
+      const at = position(raw[0]!);
+      if (at === null) return null;
+      query.toolsBefore = at;
+    } else if (key === 'approvals_before') {
+      const [at, id, ...rest] = raw[0]!.split('.');
+      const time = position(at ?? '');
+      if (time === null || rest.length || !id || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+      query.approvalsBefore = { at: time, id };
+    } else return null;
   }
   return query;
 }
@@ -43,7 +55,9 @@ const toolRow = (hop: string) => {
   if (META_TOOLS.has(name)) return { tool: name, category: 'catalog', kind: 'read' as const };
   return { tool: 'other', category: 'other', kind: 'unknown' as const };
 };
-const APPROVAL_KINDS = new Set(['calendar_change', 'email_send', 'message_send', 'mcp_call', 'tainted_action', 'browser_submit', 'google_task_change']);
+// The ledger also holds rows Waldo records as done without asking (desk.record, such as a Gmail draft): only the kinds an
+// owner decides are read.
+const APPROVAL_KINDS = approvalKindV1Schema.options;
 
 export function readVaultAccessLog(sql: Sql, now: number, query: VaultQuery) {
   const since = now - VAULT_LOG_WINDOW_DAYS * DAY_MS, present = tables(sql);
@@ -51,11 +65,14 @@ export function readVaultAccessLog(sql: Sql, now: number, query: VaultQuery) {
     "SELECT id, at, hop, ok FROM trace_log WHERE hop LIKE 'tool\\_%' ESCAPE '\\' AND hop <> 'tool_eligibility' AND at >= ? AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT ?3",
     since, query.toolsBefore ?? null, PAGE + 1).toArray() : [];
   const oldest = present.has('trace_log') ? sql.exec<{ at: number | null }>('SELECT MIN(at) AS at FROM trace_log').toArray()[0]?.at ?? null : null;
-  const approvals = present.has('ledger') ? sql.exec<{ row: number; kind: string; status: string; created_at: number; decided_at: number | null }>(
-    'SELECT rowid AS row, kind, status, created_at, decided_at FROM ledger WHERE created_at >= ? AND (?2 IS NULL OR rowid < ?2) ORDER BY rowid DESC LIMIT ?3',
-    since, query.approvalsBefore ?? null, PAGE + 1).toArray() : [];
+  const before = query.approvalsBefore;
+  const approvals = present.has('ledger') ? sql.exec<{ id: string; kind: string; status: string; created_at: number; decided_at: number | null }>(
+    `SELECT id, kind, status, created_at, decided_at FROM ledger WHERE kind IN (${APPROVAL_KINDS.map(() => '?').join(', ')}) AND created_at >= ?
+     AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?`,
+    ...APPROVAL_KINDS, since, before?.at ?? null, before?.at ?? null, before?.at ?? null, before?.id ?? null, PAGE + 1).toArray() : [];
   return {
-    window_days: VAULT_LOG_WINDOW_DAYS, kept_steps: VAULT_TRACE_KEPT,
+    // trace_log keeps only its newest steps, so the tool list can run out before 30 days do.
+    window_days: VAULT_LOG_WINDOW_DAYS, kept_steps: TRACE_KEPT,
     tools: {
       rows: tools.slice(0, PAGE).map(row => ({ at: iso(row.at), ...toolRow(row.hop), ok: row.ok === 1 })),
       next_before: tools.length > PAGE ? tools[PAGE - 1]!.id : null,
@@ -63,11 +80,11 @@ export function readVaultAccessLog(sql: Sql, now: number, query: VaultQuery) {
     },
     approvals: {
       rows: approvals.slice(0, PAGE).map(row => ({
-        at: iso(row.created_at), kind: APPROVAL_KINDS.has(row.kind) ? row.kind : 'other',
+        at: iso(row.created_at), kind: row.kind,
         decision: Object.hasOwn(APP_APPROVAL_STATE, row.status) ? APP_APPROVAL_STATE[row.status as keyof typeof APP_APPROVAL_STATE] : 'other',
         decided_at: typeof row.decided_at === 'number' ? iso(row.decided_at) : null,
       })),
-      next_before: approvals.length > PAGE ? approvals[PAGE - 1]!.row : null,
+      next_before: approvals.length > PAGE ? `${approvals[PAGE - 1]!.created_at}.${approvals[PAGE - 1]!.id}` : null,
     },
   };
 }
@@ -84,8 +101,9 @@ export type VaultHealth = Readonly<{
 const memorySection = (memory: Memory) => {
   const groups = new Map<string, { id: string; text: string; source_label: string; origin: string; recorded_at: string | null }[]>();
   const add = (kind: string, item: { id: string; text: string; source_label: string; origin: string; recorded_at: string | null }) => groups.set(kind, [...groups.get(kind) ?? [], item]);
-  for (const claim of memory.claims) add(claim.kind || 'other', { id: claim.id, text: claim.text, source_label: SOURCE_LABEL[claim.source] ?? 'Source unverified', origin: claim.origin, recorded_at: claim.recorded_at ? claim.recorded_at.slice(0, 10) : null });
-  for (const node of memory.nodes) add('interpretation', { id: node.id, text: node.label, source_label: 'Waldo\'s pattern from your Spots', origin: 'agent', recorded_at: node.recorded_active_at ? node.recorded_active_at.slice(0, 10) : null });
+  // Newest first, as the Memory page lists them.
+  for (const claim of [...memory.claims].sort((a, b) => b.local_id - a.local_id)) add(claim.kind || 'other', { id: claim.id, text: claim.text, source_label: SOURCE_LABEL[claim.source] ?? 'Source unverified', origin: claim.origin, recorded_at: claim.recorded_at ? claim.recorded_at.slice(0, 10) : null });
+  for (const node of [...memory.nodes].sort((a, b) => b.local_id - a.local_id)) add('interpretation', { id: node.id, text: node.label, source_label: 'Waldo\'s pattern from your Spots', origin: 'agent', recorded_at: node.recorded_active_at ? node.recorded_active_at.slice(0, 10) : null });
   return {
     state: memory.state,
     groups: [...groups].map(([kind, items]) => ({ kind, total: items.length, items: items.slice(0, MEMORY_PER_GROUP) })),

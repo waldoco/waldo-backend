@@ -1334,8 +1334,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
   }
-  // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
-  // app's contract does not carry.
   // The step-up gate already refused a session without a recent email code, before this reads anything.
   private async consoleVault(request: Request, url: URL): Promise<Response> {
     const reply = (body: object, status = 200, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
@@ -1345,9 +1343,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const limited = this.consoleRateLimited('read');
     if (limited) return limited;
     const access = consoleAccess(this.ctx.storage);
+    const failed = (code: string) => console.error(JSON.stringify({ hop: 'console_vault', ok: false, code }));
     try {
-      const doName = this.ctx.storage.kv.get<string>('do_name');
-      const health = healthSharing({ rpc: signedRpc(this.env), doName }).catch(() => null);
       const held = await this.serial(async () => {
         const session = await access.session(sessionCookie(request), !fromAnotherSite(request));
         if (!session) return null;
@@ -1358,13 +1355,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
       if (!held) return reply({ error: 'sign_in_required' }, 401);
       const { now, view, mcp, memory, accessLog } = held;
+      // Health is asked only for a session that is still signed in, and only within the console health read budget.
+      const health = await healthSharing({ rpc: signedRpc(this.env), doName: this.ctx.storage.kv.get<string>('do_name'), kv: this.ctx.storage.kv, now })
+        .catch(() => { failed('health_sharing_failed'); return null; });
       return reply(projectVault({ now, memory, google: view.google.accounts, mcp, telegram: view.telegram,
-        ...(view.imessage ? { imessage: view.imessage } : {}), ...(view.whatsapp ? { whatsapp: view.whatsapp } : {}), health: await health, accessLog }));
+        ...(view.imessage ? { imessage: view.imessage } : {}), ...(view.whatsapp ? { whatsapp: view.whatsapp } : {}), health, accessLog }));
     } catch {
+      failed('vault_read_failed');
       return reply({ error: 'vault_unavailable' }, 503);
     }
   }
 
+  // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
+  // app's contract does not carry.
   private async consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
     if (view === 'connections') {

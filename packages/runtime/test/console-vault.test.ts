@@ -7,7 +7,10 @@ import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { MEMORY_CONTROL_PATH } from '../src/channels/dashboard-memory-actions';
 import { DASHBOARD_VAULT_PATH, projectVault, readVaultQuery } from '../src/channels/dashboard-vault';
 import { STEP_UP_ROUTES } from '../src/channels/console-step-up';
-import { healthSharing } from '../src/channels/dashboard-health';
+import { HEALTH_READ_LIMIT, healthSharing } from '../src/channels/dashboard-health';
+import { TRACE_KEPT } from '../src/channels/harness';
+
+const memoryKv = () => { const map = new Map<string, unknown>(); return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); } }; };
 
 // The Vault shows what Waldo keeps, what it can reach and what it did, behind a fresh email code. Without one, the read
 // answers step_up_required before any of it is read. It never carries a token, a secret reference, a mail subject, a
@@ -30,7 +33,7 @@ type Vault = {
     channels: { channel: string; state: string; revoke: { view: string; action: string } | null }[];
     health: { state: string };
   };
-  access_log: { window_days: number; kept_steps: number; tools: { rows: { at: string; tool: string; category: string; kind: string; ok: boolean }[]; next_before: number | null; oldest_at: string | null }; approvals: { rows: { at: string; kind: string; decision: string; decided_at: string | null }[]; next_before: number | null } };
+  access_log: { window_days: number; kept_steps: number; tools: { rows: { at: string; tool: string; category: string; kind: string; ok: boolean }[]; next_before: number | null; oldest_at: string | null }; approvals: { rows: { at: string; kind: string; decision: string; decided_at: string | null }[]; next_before: string | null } };
 };
 
 const owner = async (name: string) => {
@@ -141,7 +144,7 @@ describe('the Vault with a fresh email code', () => {
     expect(vault.connections.channels.find(row => row.channel === 'telegram')).toBeDefined();
     // No health plane is configured in this fixture, so the section says so instead of guessing.
     expect(vault.connections.health).toEqual({ state: 'unavailable' });
-    expect(vault.access_log).toMatchObject({ window_days: 30, kept_steps: 500 });
+    expect(vault.access_log).toMatchObject({ window_days: 30, kept_steps: TRACE_KEPT });
     expect(vault.access_log.tools.rows.map(row => [row.tool, row.category, row.kind, row.ok])).toEqual([['send_email', 'mail', 'acted', false], ['get_health', 'core', 'read', true]]);
     expect(vault.access_log.approvals.rows).toEqual([{ at: new Date(now - 3 * HOUR).toISOString(), kind: 'email_send', decision: 'done', decided_at: new Date(now - 3 * HOUR + 60_000).toISOString() }]);
   });
@@ -167,13 +170,14 @@ describe('the Vault with a fresh email code', () => {
       { at: now - HOUR, hop: 'tool_search_communication', note: MAIL_SUBJECT },
     ]);
     await o.seedApproval('appr-hostile', 'email_send', 'open', now - HOUR, MAIL_SUBJECT, { subject: MAIL_SUBJECT, body: HEALTH_NOTE, hrv: 173.5 });
-    await o.seedApproval('appr-unknown', `kind ${MAIL_SUBJECT}`, `status ${HEALTH_NOTE}`, now - HOUR, 'x', {});
+    await o.seedApproval('appr-unknown', 'email_send', `status ${HEALTH_NOTE}`, now - HOUR, 'x', {});
+    await o.seedApproval('appr-kind', `kind ${MAIL_SUBJECT}`, 'done', now - HOUR, 'x', {});
     const response = await o.vault();
     const body = await response.text();
     for (const leak of ['biopsy', 'Okafor', 'HRV', '173.5', '9.81', 'glucose']) expect(body).not.toContain(leak);
     const vault = JSON.parse(body) as Vault;
     expect(vault.access_log.tools.rows.map(row => row.tool).sort()).toEqual(['get_health', 'other', 'search_communication']);
-    expect(vault.access_log.approvals.rows.map(row => [row.kind, row.decision]).sort()).toEqual([['email_send', 'open'], ['other', 'other']]);
+    expect(vault.access_log.approvals.rows.map(row => [row.kind, row.decision]).sort()).toEqual([['email_send', 'open'], ['email_send', 'other']]);
   });
 
   it('pages the access log and keeps it to the last 30 days', async () => {
@@ -190,10 +194,50 @@ describe('the Vault with a fresh email code', () => {
     expect([...first.access_log.tools.rows, ...second.access_log.tools.rows].some(row => row.tool === 'web_search')).toBe(false);
   });
 
+  it('lists only approvals: a draft Waldo recorded as done without asking is not shown as approved', async () => {
+    const o = await owner('vault-record-owner');
+    await o.codeAge(60_000);
+    const now = Date.now();
+    await o.seedApproval('pdraftlike', 'calendar_change', 'done', now - 2 * HOUR, 'Moved standup', {});
+    // desk.record writes a done row with no approval, as draft_email does.
+    await runInDurableObject(o.stub, (_instance, state) => {
+      state.storage.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES ('lrecorded', 'email_draft', 'done', 'Drafted', '{}', NULL, ?, ?)", now - HOUR, now - HOUR);
+    });
+    const vault = await (await o.vault()).json() as Vault;
+    expect(vault.access_log.approvals.rows.map(row => [row.kind, row.decision])).toEqual([['calendar_change', 'done']]);
+  });
+
+  it('pages approvals by time and id, ties included, and keeps them to the last 30 days', async () => {
+    const o = await owner('vault-approval-page-owner');
+    await o.codeAge(60_000);
+    const now = Date.now(), tie = now - HOUR;
+    await o.seedApproval('pold', 'email_send', 'done', now - 40 * DAY, 'old', {});
+    for (let n = 0; n < 60; n++) await o.seedApproval(`p${String(n).padStart(3, '0')}`, 'message_send', 'skipped', n < 30 ? tie : tie - n * 60_000, 's', {});
+    const first = await (await o.vault()).json() as Vault;
+    expect(first.access_log.approvals.rows).toHaveLength(50);
+    expect(first.access_log.approvals.next_before).toEqual(expect.stringMatching(/^[0-9]+\.p[0-9]{3}$/));
+    const second = await (await o.vault(`?approvals_before=${encodeURIComponent(first.access_log.approvals.next_before!)}`)).json() as Vault;
+    expect(second.access_log.approvals.rows).toHaveLength(10);
+    expect(second.access_log.approvals.next_before).toBeNull();
+    const times = [...first.access_log.approvals.rows, ...second.access_log.approvals.rows].map(row => Date.parse(row.at));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+    expect(times.filter(at => at === tie)).toHaveLength(30);
+    expect(times.some(at => at < now - 30 * DAY)).toBe(false);
+  });
+
+  it('lists each memory group newest first', async () => {
+    const o = await owner('vault-memory-order-owner');
+    await o.codeAge(60_000);
+    const older = await o.seedClaim('Older vault fact');
+    const newer = await o.seedClaim('Newer vault fact');
+    const vault = await (await o.vault()).json() as Vault;
+    expect(vault.memory.groups.find(group => group.kind === 'fact')!.items.map(item => item.id)).toEqual([newer, older]);
+  });
+
   it('refuses a query it does not name, another method and a spent read budget, with generic errors', async () => {
     const o = await owner('vault-invalid-owner');
     await o.codeAge(60_000);
-    for (const query of ['?owner=other', '?tools_before=abc', '?tools_before=0', '?tools_before=1&tools_before=2', `?approvals_before=${'9'.repeat(30)}`]) {
+    for (const query of ['?owner=other', '?tools_before=abc', '?tools_before=0', '?tools_before=1&tools_before=2', `?approvals_before=${'9'.repeat(30)}`, '?approvals_before=12', '?approvals_before=12.', '?approvals_before=.p1', `?approvals_before=12.${'a'.repeat(129)}`, '?approvals_before=12.p%20x', '?approvals_before=01.p1']) {
       const response = await o.vault(query);
       expect([query, response.status, await response.json()]).toEqual([query, 400, { error: 'invalid_query' }]);
     }
@@ -286,7 +330,8 @@ describe('the Vault projection', () => {
       return { freshness: { sources: [{ source: 'apple', newest_upload_at: '2026-10-26T07:00:00.000Z', uploads_7d: 173, rejected_readings_7d: [{ reason: 'invalid_sample', count: 9 }] }],
         refusals_7d: [], newest_derived: { day: '2026-10-26', compiled_at: '2026-10-26T07:30:00.000Z' } } };
     };
-    const shared = await healthSharing({ rpc, doName: 'vault-health-owner' });
+    const kv = memoryKv(), now = Date.parse('2026-10-26T10:00:00Z');
+    const shared = await healthSharing({ rpc, doName: 'vault-health-owner', kv, now });
     expect(asked.sort()).toEqual(['health_consent_list', 'health_freshness_read']);
     expect(shared).toEqual({ consents: [{ source: 'apple', purpose: 'storage_compute', status: 'granted', granted_at: '2026-10-01T08:00:00.000Z', withdrawn_at: null }],
       sources: [{ source: 'apple', newest_upload_at: '2026-10-26T07:00:00.000Z' }] });
@@ -294,14 +339,26 @@ describe('the Vault projection', () => {
     for (const value of ['173', 'invalid_sample', 'epoch', 'deletion_state', 'compiled_at', 'consent_class']) expect(body).not.toContain(value);
     // The consent contract is strict: a row carrying any field it does not name fails the whole section closed.
     planted = true;
-    expect(await healthSharing({ rpc, doName: 'vault-health-owner' })).toBeNull();
-    expect(await healthSharing({ rpc: async () => { throw new Error('down'); }, doName: 'vault-health-owner' })).toBeNull();
-    expect(await healthSharing({ rpc: null, doName: 'vault-health-owner' })).toBeNull();
+    expect(await healthSharing({ rpc, doName: 'vault-health-owner', kv: memoryKv(), now })).toBeNull();
+    expect(await healthSharing({ rpc: async () => { throw new Error('down'); }, doName: 'vault-health-owner', kv: memoryKv(), now })).toBeNull();
+    expect(await healthSharing({ rpc: null, doName: 'vault-health-owner', kv: memoryKv(), now })).toBeNull();
+  });
+
+  it('spends the console health read budget, and leaves health unavailable without calling once it is spent', async () => {
+    const asked: string[] = [];
+    const rpc = async (fn: string) => { asked.push(fn); return { consents: [] }; };
+    const now = Date.parse('2026-10-26T10:00:00Z'), kv = memoryKv();
+    await healthSharing({ rpc, doName: 'vault-health-owner', kv, now });
+    expect(kv.get<{ count: number }>('console:health-rate')).toEqual({ start: now, count: 1 });
+    kv.put('console:health-rate', { start: now, count: HEALTH_READ_LIMIT });
+    asked.length = 0;
+    expect(await healthSharing({ rpc, doName: 'vault-health-owner', kv, now: now + 1_000 })).toBeNull();
+    expect(asked).toEqual([]);
   });
 
   it('reads only the paging keys it names', () => {
     expect(readVaultQuery(new URLSearchParams())).toEqual({});
-    expect(readVaultQuery(new URLSearchParams('tools_before=12&approvals_before=3'))).toEqual({ toolsBefore: 12, approvalsBefore: 3 });
+    expect(readVaultQuery(new URLSearchParams('tools_before=12&approvals_before=1793008800000.p00a'))).toEqual({ toolsBefore: 12, approvalsBefore: { at: 1793008800000, id: 'p00a' } });
     for (const bad of ['view=x', 'tools_before=-1', 'tools_before=1.5', 'approvals_before=', 'tools_before=1&tools_before=1']) expect(readVaultQuery(new URLSearchParams(bad)), bad).toBeNull();
   });
 });
