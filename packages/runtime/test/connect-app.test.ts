@@ -233,6 +233,16 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
     expect(appTiles([], false).every((tile) => !tile.connectAvailable && tile.connection === null)).toBe(true);
   });
 
+  it('tells a device code\'s whole lifetime though the clock moved on since the sign-in began', async () => {
+    const clock = { at: 1_000 };
+    const { connects } = book({ now: () => clock.at, begin: vi.fn(async (): Promise<BeginResult> => {
+      const expires = clock.at + 900_000;
+      clock.at += 3;
+      return { kind: 'device', nonce: NONCE, user_code: 'WDJB-MJHT', verification_uri: 'https://mcp.notion.com/activate', expires };
+    }) });
+    expect(await connects.issue(NOTION, 'app', undefined, 'code')).toMatchObject({ kind: 'code', minutes: 15 });
+  });
+
   it('says how a sign-in that did not link ended', () => {
     const lines = (['denied', 'expired', 'invalid'] as const).map((kind) => {
       const { connects, kv } = book();
