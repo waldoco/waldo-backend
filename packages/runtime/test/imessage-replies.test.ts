@@ -6,18 +6,20 @@ import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
 import { buildTextReply, iMessageBridgeName, type IMessageTurnHandoff } from '../src/channels/imessage/bridge-do';
-import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
+import { IMessageOwnerInbox, type IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import { iMessageTurnParts } from '../src/channels/imessage/owner-runtime';
 import { receivedView, renderForModel } from '../src/channels/owner-inbound-turn';
 import { OwnerDO } from '../src/channels/owner-do';
 import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
-import { SimulatedHost } from './helpers/imessage-sim-host';
+import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 
-const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.' }));
+// before: work run at the start of the next owner model calls, in order.
+const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', before: [] as (() => Promise<unknown>)[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
-  if (!format) proof.turns.push(JSON.stringify(input.input ?? ''));
+  if (!format) { await proof.before.shift()?.(); proof.turns.push(JSON.stringify(input.input ?? '')); }
   if (format === 'progress_note') return { id: 'scripted', output: [], output_text: JSON.stringify({ note: null }), usage: { input_tokens: 1, output_tokens: 1 } };
   return { id: 'scripted', output: [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
@@ -27,7 +29,7 @@ const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const REPLYING = '[Replying to your message: "Scripted owner reply."]';
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.before = []; });
 
 async function world() {
   const ownerName = `imsg-replies-${crypto.randomUUID()}`;
@@ -175,4 +177,90 @@ it('the quote withholds a health reading before the 80-character cut, in what th
   const said = ownerInput(proof.turns.at(-1)!);
   expect(said).toContain('[Replying to your message: "a a a');
   expect(said).not.toMatch(/HRV was 52/);
+});
+
+// Outbound: the turn's reply threads onto the owner's message it answers, only where the bridge's host verified replies.
+const REPLIES = { receive: true, send: true, exactTarget: true, verified: true };
+// The owner writes; the reply command the host then pulls, and the owner's message it answers.
+const ask = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
+  const asked = w.host.message(text);
+  expect((await w.host.send(asked)).status).toBe(200);
+  await w.pump();
+  const delivery = (await w.host.pull()).delivery!;
+  return { asked, delivery, command: JSON.parse(delivery.body) };
+};
+const sent = async (w: Awaited<ReturnType<typeof world>>, delivery: Delivery) => {
+  expect((await w.host.postResult(delivery, await w.host.execute(delivery))).status).toBe(200);
+  await w.pump(2);
+};
+const replyRecords = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) => new IMessageFinalOutbox(state.storage).records().filter(row => row.replyRef.startsWith('reply:')));
+
+it('with replies sent, verified and exact on the host, the turn\'s reply threads onto the owner\'s message it answers', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
+  const { asked, delivery, command } = await ask(w, 'Booked the dentist for Friday!');
+  expect(command).toMatchObject({ operation: 'send', text: proof.reply, replyTo: { messageGuid: asked.messageGuid, partIndex: 0 }, target: { chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(command.target).not.toHaveProperty('messageGuid');
+  await sent(w, delivery);
+  expect(w.host.nativeSends).toEqual([{ commandId: command.commandId, text: proof.reply, replyTo: { messageGuid: asked.messageGuid, partIndex: 0 } }]);
+  expect(await replyRecords(w)).toMatchObject([{ state: 'settled', commandId: command.commandId, result: { state: 'local_recorded' } }]);
+});
+
+it('without replies sent, verified and exact on the host, the reply goes out plain, exactly as before', async () => {
+  const w = await world();
+  await w.activate();
+  for (const flag of [false, { ...REPLIES, verified: false }, { ...REPLIES, exactTarget: false }, { ...REPLIES, send: false }]) {
+    expect((await w.host.capabilities(true, false, flag)).status).toBe(200);
+    const { delivery, command } = await ask(w, 'Hi');
+    expect(command).toMatchObject({ operation: 'send', text: proof.reply });
+    expect(command).not.toHaveProperty('replyTo');
+    await sent(w, delivery);
+  }
+  expect(w.host.nativeSends.map(send => Object.keys(send))).toEqual(Array(4).fill(['commandId', 'text']));
+  expect((await replyRecords(w)).map(row => row.result?.state)).toEqual(Array(4).fill('local_recorded'));
+});
+
+it('a host that stops verifying replies while the turn runs still gets the reply, plain: never refused, never held', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
+  proof.before.push(async () => expect((await w.host.capabilities(true, false, { ...REPLIES, verified: false })).status).toBe(200));
+  const { delivery, command } = await ask(w, 'Running late.');
+  expect(command).toMatchObject({ operation: 'send', text: proof.reply });
+  expect(command).not.toHaveProperty('replyTo');
+  await sent(w, delivery);
+  expect(await replyRecords(w)).toMatchObject([{ state: 'settled', result: { state: 'local_recorded' } }]);
+});
+
+it('the bridge refuses a reply whose thread target is outside the bound chat, and threads one inside it', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
+  const first = await ask(w, 'Hello');
+  await sent(w, first.delivery);
+  const record = await w.firstRecord();
+  const handoff = { replyRef: `reply:${record.id}-probe`, text: 'Probe reply.', ownerDoName: record.ownerDoName, revision: record.revision, bindingDigest: record.bindingDigest, subject: SUBJECT };
+  expect(await w.bridgeStub().enqueueReply({ ...handoff, commandId: 'wrc_probe_outside', replyTo: { chatGuid: 'iMessage;-;other@example.invalid', messageGuid: 'sim-guid-elsewhere', partIndex: 0 } }))
+    .toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'target_not_in_chat' } });
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(await w.bridgeStub().enqueueReply({ ...handoff, commandId: 'wrc_probe_inside', replyTo: { chatGuid: CHAT, messageGuid: 'sim-guid-inside', partIndex: 1 } })).toEqual({ kind: 'queued' });
+  expect(JSON.parse((await w.host.pull()).delivery!.body)).toMatchObject({ commandId: 'wrc_probe_inside', replyTo: { messageGuid: 'sim-guid-inside', partIndex: 1 } });
+});
+
+// No model argument picks a thread target: only the turn's own reply carries the owner's message it answers.
+it('only the turn\'s reply is frozen with the owner\'s message as its thread target; notices, notes, links and copies are not', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`imsg-thread-${crypto.randomUUID()}`)), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage);
+    const binding = { ownerId: 'o', presenceId: 'p', subject: SUBJECT, bridgeId: 'b', accountId: 'a', chatGuid: CHAT, verified: true as const, conversationKind: 'direct' as const, service: 'iMessage' as const };
+    const record = (id: string, messageRef?: { messageGuid: string; partIndex: number }): IMessageInboxRecord => ({ id, updateId: 1, dedupKey: id, digest: 'x', text: 'hi', conversationRef: 'c', binding,
+      bindingDigest: 'd', revision: 'r', environment: 'test', bridgeDoName: 'bridge', ownerDoName: 'owner', commandId: `wrc_${id}`, occurredAt: 1, admittedAt: 1, state: 'running', ...(messageRef ? { messageRef } : {}) });
+    const answered = record('imsg-1', { messageGuid: 'owner-message', partIndex: 2 });
+    expect(outbox.freeze(answered, 'Reply.').replyTo).toEqual({ chatGuid: CHAT, messageGuid: 'owner-message', partIndex: 2 });
+    expect(outbox.freeze(answered, 'Console link.', 'console').replyTo).toBeUndefined();
+    expect(outbox.freezeFailure(answered, 'Notice.').replyTo).toBeUndefined();
+    expect(outbox.freezeProgress(answered, 1, 'Still on it.').replyTo).toBeUndefined();
+    expect(outbox.freezeProactive('job-1', 'wpc_job-1', targetOf(answered), 'A copy.').replyTo).toBeUndefined();
+    expect(outbox.freeze(record('imsg-2'), 'Reply.').replyTo).toBeUndefined();
+  });
 });
