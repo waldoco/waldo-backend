@@ -6,14 +6,21 @@ and a leak means account takeover. The custody decision is drafted in
 [`ADR_DRAFT_SITE_SIGN_INS_2026-10-26.md`](ADR_DRAFT_SITE_SIGN_INS_2026-10-26.md). Nothing here is built yet. Read at
 `waldoco/beta-mvp` `51b0c2fd` and `waldoco/feat/vault-rescope` `bbd7e607`.
 
-**In one paragraph.** The owner saves a sign-in (site, username, password, label) in the console Vault. The password is
-encrypted by the Worker under a key only the Worker holds, and the ciphertext is stored as one Supabase Vault secret.
-The model only learns that a sign-in exists for the page it is on (label, origin, username). It asks to sign in by id.
-The harness then does the whole sign-in as one host operation over CDP: fill the username, fill the password, submit,
-wait for navigation. That runs only when the page's top-level origin, the form's frame origin and the stored origin are
-exactly equal. The first use on a site needs an approval card. The owner may grant "allow on this site", which is
-revocable and rechecked by the database on every fill. Every release of a value is logged beside the sign-in and shown
-in the Vault. From the moment of the fill, every outbound sink is scanned for the value and fails closed.
+**In one paragraph.** The owner saves a sign-in (site, username, password, label) in the console Vault.
+- **Storage.** The password is encrypted by the Worker under a key only it holds, and the ciphertext is stored as one
+  Supabase Vault secret.
+- **What the model sees.** It only learns that a sign-in exists for the page it is on (label, origin, username), and it
+  asks to sign in by id.
+- **The fill.** The harness does the whole sign-in as one fenced host operation over CDP: fill the username, fill the
+  password, submit, wait for navigation. That runs only when the page's top-level origin, the form's frame origin and
+  the stored origin are exactly equal, and only while the frame, the loader and the focused node are the ones checked.
+- **Authority.** The first use on a site needs an approval card, recorded as a single-use row that the database
+  consumes at release. In owner turns that read nothing from outside that site, the owner may grant "allow on this
+  site", which the database rechecks on every release.
+- **Logging and caps.** Every release is logged beside the sign-in and counted against daily caps.
+- **After the fill.** The value lives in memory for at most 10 minutes. While a filled field is on the page, no
+  screenshot leaves the host, and every outbound sink is scanned for the value and fails closed.
+- **Open choice.** Whether the key and the fill move into a dedicated custodian Worker is owner decision D7.
 
 ## 1. What exists today (observed at source)
 
@@ -67,6 +74,14 @@ in the Vault. From the moment of the fill, every outbound sink is scanned for th
   - Egress is allowed by exact `URL.origin` against the grant (`common-browser-host.ts:92`).
   - Observation walks only the top document and open shadow roots, never iframes, so an iframe has no refs
     (`general-browser-observation.ts:19-23`).
+- **Requests cross the Worker.**
+  - The route guard re-issues every request in the context through `route.fetch` (`general-browser-redirects.ts:23`), so a
+    login POST's body passes through the Worker's route handler.
+  - A 307/308 that would replay a POST body is refused (`:44-45`).
+  - Page console messages are not captured by any browser module.
+- **Turn taint is a category.** `SourceTaint` has no source origins (`hooks/registry.ts:151`).
+  `taintedCallNeedsOwnerApproval` (`:452-468`) cards any claimed call in an external-tainted turn unless the tool's
+  record is exempt.
 - **Owner login handoff.** The owner takes control in a Cloudflare live view (`channels/native-browser-handoff.ts`,
   `channels/browser-login-handoff.ts`, the `owner_login` command). Automation and reads pause while the owner types.
 - **Stored per-site browser state.** `browserStateCustody`, `siteScopedCustody` and `scopeBrowserState` exist and key by
@@ -124,8 +139,8 @@ in the Vault. From the moment of the fill, every outbound sink is scanned for th
 
 ## 2. Storage
 
-One aggregate, the **sign-in**, lives in Supabase with one writer: the router-signed functions below, which the Worker
-calls only from authenticated console routes and from the host's fill path.
+One aggregate, the **sign-in**, lives in Supabase with one writer: the router-signed functions below. The Worker calls
+them only from authenticated console routes, the desk's approval path and the host's fill path.
 
 ```sql
 create table waldo.site_sign_ins (
@@ -145,19 +160,32 @@ create table waldo.site_sign_ins (
 );
 create unique index site_sign_ins_one_per_account on waldo.site_sign_ins (owner_id, origin, lower(username));
 
+-- A one-time approval, written when the owner approves a sign_in_use card and consumed by exactly one release.
+create table waldo.site_sign_in_approvals (
+  approval_ref text primary key,   -- the desk proposal id
+  owner_id uuid not null references waldo.owners (id) on delete cascade,
+  sign_in_id uuid not null references waldo.site_sign_ins (id) on delete cascade,
+  session_ref text not null,       -- the browser session the approval is bound to
+  approved_at timestamptz not null default now(),
+  expires_at timestamptz not null check (expires_at <= approved_at + interval '10 minutes'),
+  consumed_at timestamptz
+);
+
 create table waldo.site_sign_in_uses (
   id bigint generated always as identity primary key,
+  request_id uuid not null unique, -- one per release attempt; a repeated id is refused
   sign_in_id uuid references waldo.site_sign_ins (id) on delete set null,  -- the row outlives its sign-in, content-free
   owner_id uuid not null references waldo.owners (id) on delete cascade,
+  session_ref text,                -- browser session, for fill and scan_restore
   used_at timestamptz not null default now(),
-  authority text not null check (authority in ('approval', 'site_allowed')),
-  approval_ref text,               -- desk proposal id when authority = 'approval'
+  authority text not null check (authority in ('approval', 'site_allowed', 'console', 'fill_session')),
+  approval_ref text,
   purpose text not null check (purpose in ('fill', 'scan_restore', 'rewrap'))
 );
 ```
 
-- **RLS.** Both tables run `enable` and `force row level security` with no policies, as `waldo.connections` does. Nothing
-  reads them except the security-definer functions. The console reads through the Worker.
+- **RLS.** All three tables run `enable` and `force row level security` with no policies, as `waldo.connections` does.
+  Nothing reads them except the security-definer functions. The console reads through the Worker.
 - **The value.** The ADR's envelope rule sets how the value is held:
   - The Worker encrypts it with AES-256-GCM under `WALDO_SIGN_IN_KEY`, a Worker secret, as
     `v1.<key_id>.<iv>.<ciphertext>`.
@@ -168,33 +196,68 @@ create table waldo.site_sign_in_uses (
 - **Functions.** Each is `security definer`, `search_path = ''`, revoked from public, granted to `anon`, and requires
   `waldo.router_signed`. The signed message covers every argument; for the store and replace functions that means the
   sha256 of the envelope.
+- **Owner presence for writes.** Every write a console or approval action makes also takes the hash of the owner's
+  live console or app session, and the function checks it against that owner's live session rows. [proposed; PR 2
+  confirms the column names] This covers store, edit, replace, allow, ask, delete, approve and rewrap.
 
 | Function | Does | Returns |
 |---|---|---|
 | `sign_in_list(do_name)` | Lists the owner's sign-ins | id, origin, username, label, created, updated, last used, uses, allowed_until; never `secret_id` or the envelope |
-| `sign_in_store(do_name, origin, username, label, envelope, key_id)` | Inserts the row and its secret | id |
-| `sign_in_edit(do_name, id, username?, label?, envelope?)` | Changes username or label. A username change carries the re-wrapped envelope (see below) | boolean |
-| `sign_in_replace(do_name, id, envelope, key_id)` | `vault.update_secret`, bumps `generation` | boolean |
-| `sign_in_allow(do_name, id, until)` / `sign_in_ask(do_name, id)` | Sets or clears the standing grant | boolean |
-| `sign_in_delete(do_name, id)` | Deletes the row; a `before delete` trigger deletes its `vault.secrets` row in the same transaction | boolean |
-| `sign_in_release(do_name, id, origin, authority, approval_ref, purpose)` | See below | envelope, key_id, generation, username, or null |
+| `sign_in_store(do_name, session, origin, username, label, envelope, key_id)` | Inserts the row and its secret | id |
+| `sign_in_edit(do_name, session, id, username?, label?, envelope?, request_id?)` | Changes username or label. A username change carries the re-wrapped envelope and the `request_id` of its `rewrap` release | boolean |
+| `sign_in_replace(do_name, session, id, envelope, key_id)` | `vault.update_secret`, bumps `generation` | boolean |
+| `sign_in_allow(do_name, session, id, until)` / `sign_in_ask(do_name, session, id)` | Sets or clears the standing grant. `until` is at most 90 days ahead | boolean |
+| `sign_in_delete(do_name, session, id)` | Deletes the row. A `before delete` trigger deletes its `vault.secrets` row in the same transaction; its approvals cascade | boolean |
+| `sign_in_approve(do_name, session, approval_ref, sign_in_id, session_ref)` | Writes the one-time approval (see section 4) | boolean |
+| `sign_in_release(do_name, id, origin, purpose, request_id, session_ref, approval_ref?, console_session?)` | See below | envelope, key_id, generation, username, or null |
 | `sign_in_uses(do_name, id, before)` | Pages the use log | rows |
 
-- **`sign_in_release` is the narrow path.** In one statement it:
-  - checks that the row belongs to the owner and that `origin` matches it exactly;
-  - when `authority = 'site_allowed'`, checks `allowed_until > now()`;
-  - counts today's releases against the per-owner and global caps (ADR rule 7);
-  - inserts the use row;
-  - for `purpose = 'fill'`, bumps `use_count` and `last_used_at`;
-  - returns the envelope.
+- **`sign_in_release` is the narrow path.** In one transaction it:
+  1. checks that the row belongs to the owner and that `origin` matches it exactly;
+  2. refuses a `request_id` already in `site_sign_in_uses` (replay);
+  3. resolves authority by purpose:
+     - **`fill` with an `approval_ref`.** It consumes the matching approval row atomically:
+       `update ... set consumed_at = now() where approval_ref = $ and owner_id = $ and sign_in_id = $ and session_ref = $ and consumed_at is null and expires_at > now()`.
+       A second use of the same approval finds no row.
+     - **`fill` without one.** It needs `allowed_until > now()`.
+     - **`scan_restore`.** It needs a `fill` use for this sign-in and `session_ref` within the last 10 minutes.
+     - **`rewrap`.** It needs a live console session of the owner.
+  4. counts the release against that purpose's per-owner budget, the per-owner total and the server total for the UTC
+     day (below);
+  5. inserts the use row;
+  6. for `fill`, bumps `use_count` and `last_used_at`;
+  7. returns the envelope.
 
-  A deleted row, a revoked grant or a mismatched origin returns null, and the host refuses.
-- **Editing the username.** The username is in the authenticated data, so the edit route re-wraps the value: it
-  releases the envelope with `purpose = 'rewrap'`, decrypts and re-encrypts it in memory, and stores the new envelope in
-  the same call as the new username. A rewrap is logged, but it is not counted as a use and is never shown as one.
-  [proposed]
+  A deleted row, a revoked or expired grant, a consumed or expired approval, a repeated `request_id`, a mismatched
+  origin or a spent budget returns null, and the host refuses with a fixed code.
+- **Caps (every purpose counts).** The values are SQL constants, which are hard ceilings. The Worker may pass lower
+  values from env, with committed defaults, as `PHONE_SMS_DAILY_LIMIT` does.
+
+  | Budget per UTC day | Ceiling |
+  |---|---|
+  | `fill` per owner | 100 |
+  | `scan_restore` per owner | 20 |
+  | `rewrap` per owner | 20 |
+  | All purposes per owner | 140 |
+  | All purposes across the server | 1000 |
+
+  One owner can use at most 140 of the server's 1000, or 14%, so a noisy or compromised owner path cannot starve other
+  owners alone. Reaching a cap returns `cap_reached`, and the model hands off to the owner's own sign-in.
+- **Key rotation is out of band.** Rotation never goes through `sign_in_release` and is never reachable from an owner
+  turn, a console route or the model. It is a one-off job:
+  - The owner authorises it per run.
+  - It runs with `WALDO_SIGN_IN_KEY_NEXT` set and a rotation HMAC that the database holds only for the run, under a
+    Vault name separate from `waldo_router_hmac`.
+  - `sign_in_rotate_batch` re-wraps a bounded batch per call. It logs each row as a rotation in its own run record, not
+    in the owner use log, and its budget is the count of sign-ins at the start of the run.
+  - The run ends by deleting the rotation HMAC and retiring the old key id. Envelopes still on the old key id refuse to
+    decrypt.
+- **Editing the username.** The username is in the authenticated data. The edit route releases with
+  `purpose = 'rewrap'` and a fresh `request_id`, decrypts and re-encrypts in memory, and stores the new envelope in the
+  same call as the new username. A rewrap counts against its budget but is never shown as a use.
 - **Deletion.**
-  - `sign_in_delete` and the row trigger remove the secret with the row. Its use rows stay, with `sign_in_id` nulled.
+  - `sign_in_delete` and the row trigger remove the secret with the row. Its approvals cascade. Its use rows stay,
+    with `sign_in_id` nulled.
   - Account deletion is covered by a `before delete on waldo.owners` trigger, `site_sign_in_owner_delete`, in the style
     of `app_push_owner_delete`. It deletes every owner sign-in's `vault.secrets` row; the rows then cascade.
   - `delete_owner` is not redefined a sixth time. Its pgTAP test gains a sign-in fixture and asserts that the Vault row
@@ -204,12 +267,15 @@ create table waldo.site_sign_in_uses (
 
 ### What the model sees
 
-- When an observation's top-level origin exactly equals the origin of one or more of the owner's sign-ins, the
-  observation carries `saved_sign_ins: [{ id, label, username }]`.
+- When an observation's top-level origin exactly equals the origin of one or more of the owner's sign-ins, the live
+  tool result carries `saved_sign_ins: [{ id, label, username }]`.
 - The model sees nothing for any other origin, so a lookalike page gets no hint.
+- `saved_sign_ins` is never persisted. It is stripped before the `common-browser:*` checkpoint, the tool-output ledger,
+  the offload store, receipts and the OTLP export, so a deleted sign-in's label and username do not outlive it in
+  Waldo's records. The next observation re-adds it while the sign-in exists.
 - There is no tool that lists sign-ins for other sites in v1. [proposed]
 
-### The command
+### The command and its record
 
 A new `browse_act` command:
 
@@ -221,92 +287,161 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
 - The model never names the password target. The harness picks it.
 - `username_ref` is optional. The harness uses it only when it is not a secret field and sits in the same form as the
   password field.
+- **Record.** `browse_act` keeps `ownerTurnOnly: false` and its `commits_on_card` taint exemption for its other steps.
+  The `sign_in` command carries its own claim, `sign_in_filled`, and the turn rules in section 4: a standing grant
+  counts only in an owner turn whose outside reads all came from the sign-in's exact origin. Every other turn gets a
+  card.
 
 ### One atomic host operation
 
-1. **Admission.** The command must name a sign-in listed in the current observation's `saved_sign_ins`. The observation
-   revision must be current, which is the same stale-observation rule as every action.
-2. **Authority.** The sign-in's `allowed_until` must be in the future, or the desk must hold an approved, unconsumed
-   `sign_in_use` approval for this sign-in, origin and browser session. Otherwise the harness proposes a card (section
-   4) and returns `approval_required`. Nothing is released.
+1. **Admission.** The command must name a sign-in listed in the current observation's `saved_sign_ins`, and the
+   observation revision must be current. Only the Cloudflare CDP engine admits it.
+2. **Authority.** The turn rule (section 4) decides between a standing grant and a card. If a card is needed, the
+   harness proposes it and returns `approval_required`, and nothing is released. The approved effect re-enters at step
+   3 with its `approval_ref`.
 3. **Target.**
    - The password field must be the only visible, enabled, writable `input[type=password]` in its form, and must be in
      the top frame.
    - Two password fields (a sign-up or change-password form) are refused.
    - A form whose `method` is `get` is refused, because the password would land in the URL.
    - So is a form whose `action` resolves to a different origin.
-   - A page with a username field and no password field (a two-step login) gets the username only, then implicit
-     submission. The password step is a second `sign_in` call on the next page, which repeats every check.
-4. **Origin, re-read immediately before the value leaves the host.** The checks run over CDP: `Target.getTargetInfo` for
-   the top-level URL, and the frame tree for the field's frame. Top-level origin, frame origin and stored origin must be
-   equal as `URL.origin` strings. They must be `https:`, with no userinfo. There is no subdomain, eTLD+1 or `www`
-   folding.
-5. **Release.** `sign_in_release(..., origin = the origin read in step 4)` is called, the Worker decrypts the envelope
-   in memory, and the field's `backendNodeId` and the value are put in the session's **filled registry**.
-6. **Fill.**
-   - `DOM.focus` on the resolved node, then `Input.insertText`, which is raw CDP. The value never passes through
-     `page.evaluate` arguments, Playwright locators, or a Playwright call log.
-   - The origin check from step 4 is repeated after the insert. If the origin moved, the harness ends the browser
-     session, so the document holding the value is gone, and returns `origin_changed`.
-7. **Submit.** Implicit submission: CDP Enter on the password node. Then the harness waits for navigation or settle. No
-   observation is built or published between steps 5 and 7.
-8. **Publish.** The next observation is built through the filled-registry rules below, then returned as the command's
-   result.
+   - A page with a username field and no password field (a two-step login) gets the username only, then submission. The
+     password step is a second `sign_in` call on the next page, which repeats every step.
+   - The harness captures the main frame's `frameId` and `loaderId` and the target node's `backendNodeId`.
+4. **Fence on.** Every document request is checked against the stored origin from here through the end of the fill
+   (step 10):
+   - The check runs in the context's existing route guard (`guardGeneralBrowserRoute`, which is Playwright's CDP
+     `Fetch` interception).
+   - It covers top-level navigations, frame navigations and popups; any to another origin is aborted.
+   - While fenced, `goto`, `back`, `open_tab`, `switch_tab` and `download` are refused.
+   - A 307/308 that would replay a POST body is already refused (`general-browser-redirects.ts:44-45`).
+5. **Intent, then release.**
+   - The host writes the intent to the checkpoint before any I/O: sign-in id, `request_id` and session ref.
+   - It then calls `sign_in_release` with the origin read over CDP.
+   - The Worker decrypts in memory and puts the value and the target `backendNodeId` in the session's **filled
+     registry**.
+   - A lost answer is never retried with the same `request_id`. A retry is a new attempt and counts against the cap.
+6. **Pre-insert checks**, all over CDP and immediately before each insert:
+   - The main frame's `frameId` and `loaderId` are unchanged.
+   - The top-level origin and the field's frame origin equal the stored origin.
+   - The form's `method` and `action` still pass step 3.
+   - `DOM.focus` is called on the resolved `backendNodeId`.
+   - `Runtime.evaluate('document.activeElement')` is resolved through `DOM.describeNode` to the same `backendNodeId`. A
+     page that moves focus on the focus event fails here.
+7. **Insert.** The username, then the password, each with `Input.insertText`, which is raw CDP. The value never
+   passes through `page.evaluate` arguments, Playwright locators or a Playwright call log. The step 6 checks repeat after
+   each insert. Any mismatch ends the browser session, so the document holding the value is gone, and returns
+   `origin_changed`.
+8. **Submit.**
+   - The checks of step 6 run once more, including form `method` and `action` and focus on the password node.
+   - Then `Input.dispatchKeyEvent` sends Enter.
+   - The submission request crosses the route guard in the Worker carrying the value in its body. The route guard
+     never reads, logs or keeps `postData`, and its errors map to fixed codes.
+9. **Wait** for the main frame's `loaderId` to change or the page to settle. No observation is built or published
+   between steps 5 and 9.
+10. **Fence off, publish.** The fence lifts once the filled nodes are detached from the document. The next observation
+    is built through the filled-registry rules below.
 
-Every failure maps to a fixed code: `not_saved_here`, `approval_required`, `origin_mismatch`, `no_password_field`,
-`ambiguous_form`, `get_form`, `cross_origin_form`, `frame_refused`, `origin_changed`, `unavailable`. No message
-interpolates a value, an envelope, a URL or a database error.
+Every failure maps to a fixed code. No message interpolates a value, an envelope, a URL, a database error or a CDP or
+Playwright error string. The codes are `not_saved_here`, `approval_required`, `origin_mismatch`, `no_password_field`,
+`ambiguous_form`, `get_form`, `cross_origin_form`, `frame_refused`, `focus_moved`, `origin_changed`, `cap_reached`,
+`fenced` and `unavailable`.
 
-### Filled registry: masking and scanning for the rest of the session
+### Filled registry: after the fill
 
-- **Masking by node id.**
-  - The filled nodes' `backendNodeId`s join the secret set in the accessibility snapshot and in `field_values`, whatever
-    their type becomes.
-  - The screenshot mask adds the host selector for those nodes.
-- **Exact-value scan at every outbound sink.** Each sink checks the value in raw form and percent-encoded form. A hit
-  fails closed: the whole observation is withheld, image included, and replaced with `credential_exposed_on_page`. The
-  image cannot be scanned, so a text hit drops it too. The sinks are:
-  - the observation (text, accessibility snapshot, `field_values`, element names, title, URL, tabs);
+- **Moving the value is refused.** While a filled node is attached, any `type`, `fill`, `press`, `select` or
+  `set_checked` aimed at a filled node is refused with `fenced`. The command schema has no select-all, copy, cut, paste,
+  drag or clipboard operation, and adding one reopens this ADR.
+- **Chrome's own credential features are off.** The harness calls CDP `Autofill.disable` and launches without the
+  password manager's save service (`credentials_enable_service` off) where Browser Rendering accepts it. [inference: PR 2
+  probes both on real Browser Rendering and records UNAVAILABLE for any it cannot confirm]. Profiles are ephemeral,
+  since no `storageState` is kept (`cloudflare-general-browser.ts:192`), and the session ends at the plaintext bound
+  below.
+- **Masking by node id.** The filled nodes' `backendNodeId`s join the secret set in the accessibility snapshot and in
+  `field_values`, whatever their type becomes.
+- **Screenshots are withheld** while any filled node is attached to the document. That applies to the observation image,
+  the `screenshot` command and R2 writes. A canvas or CSS echo cannot be masked or text-scanned, so withholding is the
+  only safe rule. The observation says `image_withheld: 'sign_in_on_page'` and still carries scanned text.
+- **Exact-value scan at every outbound sink.** The value is checked raw and percent-encoded. A hit fails closed: the
+  whole observation is withheld, image included, and replaced with `credential_exposed_on_page`. The sinks are:
+  - the observation: text, accessibility snapshot, `field_values`, element names, title, URL and tabs;
   - the `common-browser:*` checkpoint;
-  - the tool-output ledger;
+  - the tool-output ledger and offload store;
   - the tool result returned to the loop;
   - error strings;
   - the OTLP export;
-  - the R2 screenshot write.
+  - R2 writes.
 - **Model-request sanitiser.** The value is registered as an ephemeral canary, so the existing fail-closed canary check
   covers anything the other scans miss.
-- **Lifetime.** The registry lives in Worker memory for the life of the browser session. The checkpoint records only the
-  filled sign-in ids and generations.
-  - A host that resumes the session without the in-memory registry first restores it with
-    `sign_in_release(purpose = 'scan_restore')`. That is logged but not counted as a use.
-  - If the restore fails, the host ends the browser session before reading the page again.
+- **Sinks that must not exist.**
+  - Page console messages are not captured today. No `page.on('console')`, `Runtime.consoleAPICalled` or
+    `Log.entryAdded` is wired in the browser modules, and a guard keeps it that way.
+  - Request logs carry no URL or body. The route guard never touches `postData`.
+  - Playwright and CDP protocol debug logging (`DEBUG=pw:*`) stays off. A guard fails if a Wrangler config, env
+    default or code path enables it.
+- **The plaintext lifetime is bounded.** The value lives only in the owner object's memory. It is dropped at the
+  earlier of two points: the filled document is gone (main-frame `loaderId` changed and the filled nodes are detached),
+  or 10 minutes after release.
+  - If filled nodes are still attached at 10 minutes, the browser session ends.
+  - Once the value is dropped, scanning for it ends. A later page on the same exact origin that echoes it from the
+    server is a stated residual.
+  - The checkpoint records only filled sign-in ids, generations and release times.
+  - A host that resumes within the 10 minutes without the in-memory value restores it with
+    `sign_in_release(purpose = 'scan_restore')`, which the database allows only within 10 minutes of that session's
+    fill. If the restore fails, the host ends the browser session before reading the page again.
 - **Engine scope.** Only `cloudflareGeneralBrowser` can sign in. Browser Use, Browserbase/Stagehand and the errand
   engine never receive a sign-in. The launch guard asserts `recording:false` before the first release.
+- **Key isolation.** A conformance guard fails if any module other than the envelope module reads `WALDO_SIGN_IN_KEY`.
+  It also fails if `env` (or `this.env`) is passed to `JSON.stringify`, structured logging, an error constructor or a
+  trace. The envelope module imports the key once as a non-extractable `CryptoKey`. Owner decision D7 weighs moving the
+  key and the fill into a dedicated custodian Worker.
 
 ## 4. Approval and standing permission
 
-- **New approval kind `sign_in_use`** on the desk. The card shows:
-  - the sign-in's label, origin and username;
-  - the task the model is on;
-  - "Allow once", "Allow on this site" and "Don't allow".
-
-  The card's payload holds the sign-in id, label, origin, username, browser session id and task ref. It never holds a
-  value or envelope.
-  - **Allow once** records a single-use approval bound to (sign-in id, origin, browser session id) for 10 minutes. The
-    approved effect resumes the task's retained browser session and runs the atomic sign-in. The approval is consumed
-    at release. An expired or ended session ends the effect `not_applied`, and the model asks again.
-  - **Allow on this site** does the same and also calls `sign_in_allow`. ADR rule 5 sets the grant's time scope; the
-    console shows and renews it.
+- **New approval kind `sign_in_use`** on the desk.
+  - The card offers "Allow once", "Allow on this site" and "Don't allow".
+  - **Ledger contents.** The card's payload holds only the sign-in id, browser session ref, task ref and `request_id`.
+    The ledger `summary` is fixed text ("Sign in with a saved sign-in?").
+  - The label, origin and username are looked up from `sign_in_list` when the card is rendered. A deleted sign-in
+    renders as "a sign-in you deleted". With nothing else in the ledger, there is nothing to scrub on delete.
+  - It never holds a value or an envelope.
+- **Allow once.**
+  - The desk's approve path runs only from an authenticated owner approval route, in the console or the app.
+  - It calls `sign_in_approve` with the owner's live session hash. That writes a single-use row bound to the sign-in,
+    `session_ref` and approval ref, valid for 10 minutes.
+  - The approved effect resumes the task's retained browser session and runs the atomic sign-in with that
+    `approval_ref`. `sign_in_release` consumes the row in the same transaction that returns the envelope.
+  - An expired or ended session ends the effect `not_applied`, and the model asks again.
+- **What the database check does and does not stop.** It stops a model-path bug, a replayed request, and a stolen
+  router HMAC used without a live owner session from releasing a value without an approval. It does not stop a
+  compromised runtime Worker that holds a live owner session token: the Worker signs both calls.
+- **Allow on this site.**
+  - It does what Allow once does and also calls `sign_in_allow` with `until` at most 90 days ahead.
+  - It is step-up gated like `mcp.runs`.
+  - The console shows the end date and renews it.
+- **Turn rules.** Whether a standing grant counts is decided by the turn:
+  - **Owner turns only.** Inbound mail, proactive, scheduled, subagent and every other machine turn always get a card,
+    whatever the grant.
+  - **Taint by source.** In an owner turn, the grant counts only when every outside read in the turn's context came
+    from pages of the sign-in's own exact origin. Any other outside content gets a card: mail, other sites, search
+    results, files, MCP results, or tainted history from earlier turns.
+  - **Observed gap.** Today's taint is a category with no source origins: `SourceTaint` (`hooks/registry.ts:151`).
+    `taintedCallNeedsOwnerApproval` (`:452-468`) cards any claimed call in an external-tainted turn unless the record
+    is exempt, and `commits_on_card` exempts only typed browser steps.
+    - PR 2 adds a `sign_in_filled` case. It reads the turn's outside-read origins from the turn's tool events and
+      browser observations, and passes only when all of them equal the sign-in's origin.
+    - Without that, any taint means a card, and a standing grant would rarely apply, because reading the login page
+      taints the turn.
 - **Contract.**
   - `sign_in_use` is added to `approvalKindV1Schema` only at a new `x-waldo-app-contract` revision.
   - An app that names an older revision is not sent these cards. The console shows them.
   - The app lane is told before the enum grows, by the additive-only rule.
-- **Per-use records.** The use log is the Supabase table, not a desk ledger row. The desk records the proposal as a
+- **Per-use records.** The use log is the Supabase table, not a desk ledger row. The desk records the proposal as the
   `RecordedLedgerKind` `sign_in_use_proposed`, so the type test that keeps recorded kinds out of approval kinds still
   holds.
-- **Rechecks.** The grant is rechecked inside `sign_in_release` on every fill, in the same statement that returns the
-  envelope. Revoking or deleting takes effect on the next fill. A fill already holding the value finishes within its
-  bounded CDP call.
+- **Rechecks.** `sign_in_release` rechecks the grant, or consumes the approval, on every fill, in the same statement
+  that returns the envelope. Revoking or deleting takes effect on the next fill. A fill already holding the value
+  finishes within its bounded CDP calls.
 
 ## 5. Threat model
 
@@ -314,23 +449,31 @@ interpolates a value, an envelope, a URL or a database error.
 |---|---|---|
 | Prompt injection steers the model to a lookalike (`examp1e.com`, `example.com.evil.io`, `login-example.com`) | No `saved_sign_ins` there; the command needs a listed id; host and SQL both compare exact `URL.origin` | None for the value |
 | Subdomain or `www` variant of a real site | Exact origin only; the owner saves another sign-in for that origin | Owner may need two entries for one account |
-| Redirect chain ends on another origin | The origin is read at the moment of release and re-read after insert; each redirect hop is already authorised by the route guard | None |
-| Navigation races the fill | Re-read after insert; on change the session is ended | None |
-| Page script reads the field and echoes it into the DOM | Exact-value scan withholds the observation and image; the model-request canary backs it up | A transformed echo (reversed, base64) is not caught. The exact-origin site is trusted with its own password, as a browser password manager trusts it |
-| Show-password toggle flips the field to text | Masking by node id in the accessibility snapshot, `field_values` and the screenshot | None |
+| Redirect chain ends on another origin | The origin is read at release and before every insert; each redirect hop is already authorised by the route guard | None |
+| Navigation races the fill | The fence aborts every document request to another origin from release through submit; `frameId` and `loaderId` are checked before each insert; any change ends the session | None |
+| Page moves focus to another field during the fill | `activeElement` must resolve to the target `backendNodeId` before each insert and before Enter | None |
+| Page swaps the form's `method` or `action` after the checks | Re-checked before each insert and before Enter | Same-origin script can still send the value anywhere the egress grant allows; the exact-origin site is trusted with its own password |
+| Page script reads the field and echoes it into the DOM | Exact-value scan withholds the observation; screenshots are withheld while the field is on the page; the model-request canary backs it up | A transformed echo (reversed, base64) is not caught, and neither is a server echo after the value is dropped. The exact-origin site is trusted with its own password, as a browser password manager trusts it |
+| Show-password toggle, canvas or CSS rendering of the value | Masking by node id in the accessibility snapshot and `field_values`; no screenshot while a filled node is attached | None for the model |
 | Model asks to "type the password", or a page tells it to | The model never holds the value; `type` and `fill` into password fields are refused; `sign_in` has no value argument and picks its own target | None |
+| Model or page moves the value (select-all, copy, paste, drag, or typing into the filled field) | Commands aimed at filled nodes are refused; no clipboard or drag command exists | None |
+| Chrome saves or autofills the password | `Autofill.disable`; no password-manager save service; ephemeral profile; session bound | [inference] until PR 2 probes it on real Browser Rendering |
 | Password lands in a URL (GET form) | GET and cross-origin `action` forms are refused; the scan covers URL and percent-encoded forms | None |
+| Submission body in the Worker's route guard | `postData` is never read, logged or kept; route errors are fixed codes; a POST-replaying 307/308 is refused | The value transits the Worker, which holds it anyway |
 | Cross-origin login iframe (embedded identity provider) | Top frame only; frame origin must equal top origin; iframes have no refs | Those logins hand off to the owner (`owner_login`) |
 | One-time codes, passkeys, CAPTCHAs | Not stored; the observation's `password_field` and `verification_challenge` signals lead to `owner_login` | Owner presence needed for second factors |
-| Value in Langfuse, logs, ledger, checkpoint, errors or event payloads | Command args hold only ids; every sink is scanned; fixed error codes; the control-action receipt leaves the add and replace bodies out (`unfingerprinted`) | None, by the canary test |
+| A standing grant used in a turn steered by outside content | Grants count only in owner turns whose outside reads all come from the sign-in's own origin; otherwise a card | See the PR 2 evidence note in section 4 |
+| Replay of a signed release, or a reused approval | `request_id` is unique and signed; the approval row is consumed atomically | None |
+| Value in Langfuse, logs, console messages, protocol debug logs, ledger, checkpoint, errors or event payloads | Command args hold only ids; every sink is scanned; fixed error codes; no console capture; debug logging off by guard; the add and replace bodies are left out of control-action receipts (`unfingerprinted`) | None, by the canary test |
+| A deleted sign-in's label, origin or username outlives it | The ledger holds only the id; `saved_sign_ins` is never persisted; use rows lose the reference | What the model said in chat stays in the transcript like any reply; forget reaches it |
 | Database dump, including the Vault key | Envelope under the Worker key; authenticated data binds the row | Metadata exposed: origins, usernames, labels, use times |
 | Database row re-pointed to an attacker's origin | Origin is in the authenticated data, so decrypt fails | None |
-| Router HMAC leaks without the Worker key | `sign_in_release` returns only envelopes | None for values |
-| **Worker compromise** (holds both the router HMAC and the Worker key) | Per-owner and global daily caps, plus the use log the owner sees | **Every stored value of every owner.** Accepted by the owner 26 Oct as the custody trade-off |
-| Console session hijacked | Values are write-only: never displayed, returned or exported; "Allow on this site" is step-up gated (ADR rule 5) | Attacker can delete or replace sign-ins (a denial of service, not a leak) |
-| Account deletion or sign-in deletion | Owner-delete trigger; per-row delete trigger; use rows lose their sign-in reference (sign-in delete) or cascade (account delete) | Cloudflare Browser Rendering saw the typed value in transit |
+| Router HMAC leaks without the Worker key | `sign_in_release` returns only envelopes; one-time approvals and console writes need a live owner session | None for values |
+| **Any code-execution or supply-chain compromise of the runtime Worker** (it holds the router HMAC, the Worker key, live session tokens in transit and every filled value) | Daily caps, every purpose counted; the use log the owner sees; the key guard. A custodian Worker (D7) would take the key and the plaintext out of the runtime | **Every stored value of every owner,** at up to 1000 releases a day. Accepted by the owner 26 Oct as the custody trade-off |
+| Console session hijacked | Values are write-only: never displayed, returned or exported; "Allow on this site" is step-up gated | Attacker can delete or replace sign-ins (a denial of service, not a leak) |
+| Account deletion or sign-in deletion | Owner-delete trigger; per-row delete trigger; approvals cascade; use rows lose their sign-in reference (sign-in delete) or cascade (account delete) | Cloudflare Browser Rendering saw the typed value in transit |
 | Database backup or point-in-time restore holds a deleted envelope | The envelope needs the Worker key; rotating the key and retiring the old key id makes backed-up copies undecryptable | Until rotation, someone holding both a backup and the current key can recover a deleted value |
-| Cloudflare Browser Rendering (sub-processor) | `recording:false`; the session ends with the task | Cloudflare processes the value when it is typed |
+| Cloudflare Browser Rendering (sub-processor) | `recording:false`; the session ends at the plaintext bound or with the task | Cloudflare processes the value when it is typed |
 
 ## 6. Privacy
 
@@ -357,7 +500,7 @@ before any owner can save a sign-in.
 |---|---|
 | Value and metadata | The owner deletes the sign-in, or the account is deleted. Encrypted copies stay in Supabase backups and point-in-time restore for that plan's window; rotating `WALDO_SIGN_IN_KEY` and retiring the old key id ends their decryptability early |
 | Use log | 365 days from each use, then a sweep deletes it. Deleting a sign-in nulls `sign_in_id`, so the remaining rows hold only owner, time, authority and purpose (no origin, username or label). Account deletion cascades them at once |
-| In-memory value | The end of the browser session |
+| In-memory value | The earlier of the filled document being gone and 10 minutes after release; the browser session ends if a filled field is still on the page at 10 minutes |
 
 [inference, verify with counsel] Account deletion erasing the use log follows the erasure duty. If counsel reads the
 DPDP log-retention rule as overriding erasure for security logs, the owner-delete trigger keeps content-free rows
@@ -415,54 +558,81 @@ This builds on `feat/vault-rescope`'s Passwords panel once it merges. Page reads
 
 ## 8. PR 2: implementation plan (TDD)
 
-1. **Migration.** The two tables, their functions and the two triggers.
+PR 2 starts only after the gate approves this design and the owner rules on D7.
+
+1. **Migration.** The three tables, their functions and the two triggers.
    - pgTAP:
      - RLS forced, with no policies;
      - anon or authenticated selects return nothing;
      - unsigned calls refused;
-     - owner isolation: owner B's signature cannot list, release or delete owner A's rows;
+     - owner isolation: owner B's signature or session cannot list, approve, release or delete owner A's rows;
      - exact-origin release;
-     - grant expiry;
-     - the caps;
+     - grant expiry and the 90-day ceiling;
+     - one-time approval consumed once, and refused after expiry or for another session ref;
+     - a repeated `request_id` refused;
+     - `scan_restore` refused outside the 10 minutes after a fill;
+     - every purpose's budget, the per-owner total and the server total;
+     - writes refused without a live owner session;
      - delete trigger and owner-delete trigger leave `vault.secrets` at baseline;
      - `sign_in_list` never returns `secret_id` or the envelope.
    - Locally: PGlite with bundled pgTAP. CI's migrate-from-zero job is the arbiter.
 2. **Contracts.**
    - The `sign_in` command, with valid and invalid Zod pairs: extra `password` key, missing id, non-uuid id.
-   - The `saved_sign_ins` observation field.
+   - The `saved_sign_ins` field and `image_withheld`.
    - The `sign_in_use` approval kind, behind a revision bump.
    - The console Vault DTOs, whose schema cannot hold a value.
 3. **Runtime.**
    - Envelope module: encrypt and decrypt, authenticated data, key id. Tests for tampered origin, owner, username and
-     generation, and for a wrong key.
-   - The release client.
-   - The atomic `sign_in` host operation in `cloudflareGeneralBrowser` and `commonBrowserHost`.
-   - The filled registry and the sink scans.
+     generation, a wrong key and a retired key id.
+   - The release and approve clients.
+   - The atomic `sign_in` host operation: fence, frame and loader checks, focus check, raw CDP insert, re-checked Enter.
+   - The filled registry: node masks, screenshot withholding, refusals of commands aimed at filled nodes, sink scans,
+     the 10-minute bound and `scan_restore`.
    - The ephemeral sanitiser canary.
-   - The desk card and effect.
-4. **Console.** Vault Passwords UI and the routes. The add and replace actions go in `unfingerprinted`.
-5. **Adversarial tests, one per threat row.** These run on real workerd through the full composition, with Langfuse text
+   - The desk card (id-only payload) and effect.
+   - The `sign_in_filled` taint case.
+4. **Guards.**
+   - Key isolation: only the envelope module reads `WALDO_SIGN_IN_KEY`, and `env` is never serialised.
+   - Browser modules capture no console or log events.
+   - No `DEBUG=pw:*`.
+   - The route guard never reads `postData`.
+5. **Console.** Vault Passwords UI and the routes. The add and replace actions go in `unfingerprinted`.
+6. **Adversarial tests, one per threat row.** These run on real workerd through the full composition, with Langfuse text
    capture on. The fixture site serves:
    - a normal form;
    - a two-step login;
    - a show-password toggle;
    - an echoing div;
+   - a canvas echo;
+   - a focus-stealing field;
+   - a form whose `action` changes after load;
+   - a navigation started during the fill;
    - a GET form;
    - a cross-origin `action`;
    - a cross-origin iframe login;
    - a redirect to a lookalike;
-   - a lookalike origin.
+   - a lookalike origin;
+   - a 307 to another origin after submit;
+   - a page that logs the field to its console.
 
    The canary is a synthetic password. The test asserts its absence, raw and percent-encoded, from:
    - provider request bodies;
    - tool results;
-   - DO KV (checkpoint, ledger);
+   - DO KV (checkpoint, ledger, offload store);
    - R2 writes;
    - OTLP export bodies;
-   - console output;
+   - Worker console output;
    - receipts and event payloads;
    - the desk ledger;
-   - thrown errors.
+   - thrown errors;
+   - route-guard logs.
+
+   Turn-rule tests:
+   - a standing grant cards in an inbound-mail turn, a proactive turn, and an owner turn that read another site;
+   - it runs without a card in an owner turn that read only the sign-in's origin.
+7. **Live probes on real Browser Rendering** (staging, synthetic site and synthetic credentials only, under the
+   staging authority of the day): `Autofill.disable`, the password-manager launch preference, and the fence on a
+   cross-origin navigation. Whatever cannot be confirmed is recorded UNAVAILABLE in PR 2.
 
 The gate commands are `-r typecheck`, `verify:guards` and `git diff --check`, with pgTAP UNAVAILABLE on macOS (PGlite as
 the local substitute) and the full `verify`.
@@ -471,11 +641,12 @@ the local substitute) and the full `verify`.
 
 | Area | Change |
 |---|---|
-| Contracts | `browserTaskCommandSchema`: additive command. Observation: additive field. `approvalKindV1Schema`: additive behind a revision. New console DTOs |
-| Persistence | Two Supabase tables, router-signed functions, two triggers. Nothing new in DO SQLite beyond the checkpoint's filled sign-in ids |
-| Secrets | New Worker secret `WALDO_SIGN_IN_KEY`, plus a key id. The owner sets it; no session does |
+| Contracts | `browserTaskCommandSchema`: additive command. Observation: additive fields. `approvalKindV1Schema`: additive behind a revision. New console DTOs |
+| Persistence | Three Supabase tables, router-signed functions, two triggers. Nothing new in DO SQLite beyond the checkpoint's filled sign-in ids and release times |
+| Secrets | New Worker secret `WALDO_SIGN_IN_KEY` plus a key id. A rotation HMAC exists only for a rotation run. The owner sets them; no session does. Under D7 option B they live on the custodian Worker instead |
 | Privacy | New notice version; sub-processor wording for Cloudflare |
-| Agent tools | `browse_act` gains `sign_in` |
+| Agent tools | `browse_act` gains `sign_in`; the taint rule gains `sign_in_filled` |
+| Guards | Key isolation, no console capture, no protocol debug logging, no `postData` access |
 | Downstream repos | waldo-app (later revision); waldo-brain (launch contract and ADR registry, drafted in the ADR file) |
 | Rollback | `WALDO_SIGN_INS=0`, committed off until the owner turns it on, hides `saved_sign_ins` and refuses `sign_in`. Dropping the tables is a forward migration that first deletes their Vault rows |
 
@@ -483,9 +654,51 @@ the local substitute) and the full `verify`.
 
 | | Decision | Recommendation |
 |---|---|---|
-| D1 | Envelope under a Worker key (ADR rule 2), or Vault-only plaintext read by a service-role Edge Function | **Envelope.** A database-only breach yields nothing usable, a re-pointed row cannot decrypt, and no Worker-callable function returns plaintext. The Edge Function route would hand plaintext to the Worker anyway, because the Worker types it |
+| D1 | Envelope under a Worker key (ADR rule 2), or Vault-only plaintext read by a service-role Edge Function | **Envelope** (accepted by the gate). A database-only breach yields nothing usable, a re-pointed row cannot decrypt, and no Worker-callable function returns plaintext. The Edge Function route would hand plaintext to the Worker anyway, because the Worker types it |
 | D2 | Time scope of "Allow on this site" | **90 days, renewable in one tap.** CLAUDE.md requires grants to be time-scoped; the console shows the end date |
 | D3 | Step-up on "Allow on this site" | **Yes**, matching `mcp.runs`. Page reads stay unlocked |
-| D4 | Daily release caps | **100 per owner and 1000 across the server**, as env values with committed defaults like `PHONE_SMS_DAILY_LIMIT`. Hitting a cap returns `unavailable` with a "try tomorrow or sign in yourself" handoff |
+| D4 | Daily release caps | **100 fill, 20 scan_restore and 20 rewrap per owner (140 in all), and 1000 across the server**, as SQL ceilings with lower env defaults. One owner can use at most 14% of the server's day |
 | D5 | Use-log retention | **365 days from each use, content-free after the sign-in is deleted, erased with the account** (DPDP Rules log retention as read from secondary sources, subject to counsel) |
 | D6 | When the app gets the `sign_in_use` card | **At the app lane's next contract revision.** The console carries the card until then |
+| D7 | Where the key and the fill live | See below. **Recommended: B, if its spike passes; otherwise A** |
+
+### D7: where the key and the fill live
+
+**A. In the runtime Worker** (this design as written).
+
+- The envelope module, release, decrypt and fill all run in the owner object, behind the key-isolation guard.
+- *For:* no new deployable, no cross-Worker browser hand-over, and the scan runs where the observation is built.
+- *Against:* any code-execution or supply-chain compromise of the runtime (the model tooling, every dependency, every
+  route) reaches the key, the router HMAC and every value. The guard stops accidental reads only, not hostile code.
+
+**B. A dedicated custodian Worker.**
+
+- A small, separately deployed Worker holds `WALDO_SIGN_IN_KEY`, its own Browser Rendering binding and a release HMAC
+  separate from the runtime's router HMAC. The release functions then accept only that HMAC.
+- It exposes one service-binding RPC, `signIn(ownerDoName, signInId, browserSessionId, approvalRef?, requestId)`.
+  1. It attaches to the task's Browser Rendering session by id: the runtime detaches, and the custodian connects with
+     the same SDK `connect(binding, { sessionId })` the runtime already uses (`cloudflare-general-browser.ts:164-167`).
+  2. It runs steps 3 to 9 of the atomic operation and detaches.
+  3. It returns a fixed code and the filled `backendNodeId`s, never the value.
+- The runtime keeps masking by node id and withholding screenshots. The exact-value scan becomes a scan oracle: the
+  runtime sends each outbound text to the custodian's `scan(browserSessionId, texts)` and gets back a yes or no. The
+  custodian holds the value for the 10-minute bound. The oracle answers only for sessions it filled, and is
+  rate-bounded.
+- *For:* a compromise of the runtime no longer yields any password. It can still drive fills to the exact origins
+  under approvals or grants (the runtime writes approvals) and act inside the signed-in session. That is account use,
+  not password theft, and it stays capped and visible in the use log. The custodian's dependency surface is the
+  browser SDK and Web Crypto, and it carries no model code.
+- *Against:*
+  - a second Worker to deploy, version, configure and gate;
+  - a detach and reattach of the browser session for every sign-in, which costs latency, and Browser Rendering's
+    single-connection behaviour must allow the hand-over [inference: needs a spike on real Browser Rendering];
+  - a scan round trip on every observation in the 10 minutes after a fill;
+  - a second HMAC secret and a second set of release grants.
+- *Spike before PR 2:* on staging, with a synthetic site and synthetic credentials, a runtime-held session is detached,
+  the custodian attaches, fills and detaches, and the runtime reattaches with its state intact. If that fails, B is not
+  buildable on Browser Rendering today, and A ships with the guard.
+
+**Recommendation: B, if the spike passes.** The owner accepted custody risk for "a leak means account takeover", and B
+shrinks that from every value to capped account use for any runtime compromise. That is the largest remaining lever.
+The cost is one Worker and one spike, before any tester saves a real password. If the spike fails, A ships, and B stays
+the first hardening step once a second-client hand-over works.
