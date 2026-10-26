@@ -4,7 +4,7 @@ import type {ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
 type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
-export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean}>;
+export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean;revocation?:'revoked'|'unsupported'|'failed'}>;
 // A code or challenge the owner must copy goes back in that one response: the receipt book keeps
 // the receipt without it, so a replayed request never shows the value again.
 export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string;to?:string}>;
@@ -25,7 +25,7 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code']};
@@ -61,13 +61,19 @@ const MCP_CONNECT_FAILURES:Readonly<Record<string,string>>={
 };
 // Granola from the app: the receipt carries only this deployment's /c/<ticket> link with its handoff code, which binds the
 // browser the app opens it in. Nothing has been granted until the owner finishes Granola's own sign-in.
-const GRANOLA_START=new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`);
-export const granolaConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
- if(!link)return {state:'rejected',message:'Granola could not be connected right now. Try again later.'};
+const HANDED_START=new RegExp(`^/c/[A-Za-z0-9_-]{22}\\?${HANDOFF_PARAM}=[A-Za-z0-9_-]{22}$`);
+const handedConnectReceipt=(label:string,link:string|null,origin:string|undefined):ControlReceipt=>{
+ if(!link)return {state:'rejected',message:`${label} could not be connected right now. Try again later.`};
  const destination=link&&origin?new URL(link,origin):null;
- if(!destination||destination.origin!==origin||destination.hash||!GRANOLA_START.test(destination.pathname+destination.search))return {state:'rejected',message:'Granola connect returned an unavailable destination. Try again later.'};
- return {state:'recorded',message:'Granola connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname+destination.search};
+ if(!destination||destination.origin!==origin||destination.hash||!HANDED_START.test(destination.pathname+destination.search))return {state:'rejected',message:`${label} connect returned an unavailable destination. Try again later.`};
+ return {state:'recorded',message:`${label} connect is ready to begin. Access has not been granted or tested.`,navigation:destination.pathname+destination.search};
 };
+export const granolaConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>handedConnectReceipt('Granola',link,origin);
+// A catalogue app from the app's tile: the same handed-off link, or already connected. The sign-in it opens returns to the app.
+export const appConnectReceipt=(label:string,issued:Readonly<{kind:string;url?:string;reason?:string}>,origin:string|undefined):ControlReceipt=>
+ issued.kind==='already'?{state:'recorded',message:`${label} is already connected.`}
+ :issued.kind==='refused'&&issued.reason==='unavailable'?{state:'rejected',message:MCP_CONNECT_FAILURES.oauth_unavailable!}
+ :handedConnectReceipt(label,issued.kind==='link'?issued.url??null:null,origin);
 export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:string;reason?:string}>):ControlReceipt=>{
  if(result.kind==='connected')return {state:'recorded',message:`Connected ${result.name}. It needed no sign-in. Its tools ask you first until you choose otherwise.`};
  if(result.kind==='already')return {state:'recorded',message:`${result.name} is already connected.`};
@@ -88,6 +94,11 @@ export const mcpRunsReceipt=async(id:string,value:string,setRuns:(id:string,tool
 export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
  ?{state:'rejected',message:result.provider==='not_needed'?'That server is no longer connected. Refresh the records.':'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
  :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='unsupported'?'Disconnected and forgotten by Waldo. This service gives Waldo no way to revoke its access, so remove Waldo in that service\'s settings too (in Slack: Settings, then Manage apps).':result.provider==='failed'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};
+// The app's tile also reads whether the app revoked Waldo's access, so it never claims a revoke it did not get.
+export const appDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>{
+ const receipt=mcpDisconnectReceipt(result);
+ return result.ok&&(result.provider==='revoked'||result.provider==='unsupported'||result.provider==='failed')?{...receipt,revocation:result.provider}:receipt;
+};
 export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
  ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
  :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
@@ -101,6 +112,8 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
  if(action.action==='granola.connect')return view.granola?.connectAvailable===true&&view.granola.connection?.status!=='active';
  if(action.action==='granola.disconnect')return !!view.granola?.connection;
+ if(action.action==='app.connect')return view.apps?.some(tile=>tile.id===action.id&&tile.connectAvailable)===true;
+ if(action.action==='app.disconnect')return view.apps?.some(tile=>tile.id===action.id&&tile.connection!==null)===true;
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
  if(action.action==='whatsapp.unlink')return view.whatsapp?.linked===true;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);

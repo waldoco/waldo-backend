@@ -88,6 +88,7 @@ const expectedMigrations = [
   '20261026120000_waldo_owner_phone_set.sql',
   '20261026130000_waldo_oauth_client_endpoints.sql',
   '20261026140000_waldo_text_first_link_phone_proof.sql',
+  '20261026150000_waldo_connect_session_chat_apps.sql',
   '20261027090000_waldo_app_push_session_lifecycle.sql',
 ];
 

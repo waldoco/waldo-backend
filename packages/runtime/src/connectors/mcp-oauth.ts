@@ -66,6 +66,8 @@ export type AuthorizationServer = Readonly<{
   token_endpoint: string;
   registration_endpoint?: string;
   revocation_endpoint?: string;
+  // RFC 8628: only where the provider advertises it is a device code ever offered.
+  device_authorization_endpoint?: string;
   scopes_supported?: readonly string[];
   token_endpoint_auth_methods_supported?: readonly string[];
   client_id_metadata_document_supported: boolean;
@@ -97,11 +99,11 @@ export const discoverAuthorizationServer = async (fetcher: typeof fetch, issuer:
     const methods = strings(doc.code_challenge_methods_supported);
     // PKCE support is read from metadata only; absent or without S256 means the flow must not proceed.
     if (!methods?.includes('S256')) throw new McpOAuthError('pkce_unsupported');
-    const registration = endpoint('registration_endpoint', false), revocation = endpoint('revocation_endpoint', false);
+    const registration = endpoint('registration_endpoint', false), revocation = endpoint('revocation_endpoint', false), device = endpoint('device_authorization_endpoint', false);
     const scopes = strings(doc.scopes_supported), auth = strings(doc.token_endpoint_auth_methods_supported);
     return {
       issuer, authorization_endpoint: endpoint('authorization_endpoint', true)!, token_endpoint: endpoint('token_endpoint', true)!,
-      ...(registration ? { registration_endpoint: registration } : {}), ...(revocation ? { revocation_endpoint: revocation } : {}),
+      ...(registration ? { registration_endpoint: registration } : {}), ...(revocation ? { revocation_endpoint: revocation } : {}), ...(device ? { device_authorization_endpoint: device } : {}),
       ...(scopes ? { scopes_supported: scopes } : {}), ...(auth ? { token_endpoint_auth_methods_supported: auth } : {}),
       client_id_metadata_document_supported: doc.client_id_metadata_document_supported === true,
       iss_parameter_supported: doc.authorization_response_iss_parameter_supported === true,
@@ -209,7 +211,8 @@ export type McpPins = ClientPins & Readonly<{ server_url: string; resource: stri
 // workspace: the account the provider names in its token answer (ok_envelope's team), shown to the owner as metadata.
 export type TokenSet = Readonly<{ access_token: string; refresh_token?: string; expires_at?: number; scope?: string; workspace?: string }>;
 export class TokenEndpointError extends Error {
-  constructor(public readonly kind: 'auth' | 'transient' | 'configuration' | 'protocol', public readonly status?: number, public readonly retryAfterSeconds?: number) { super(`token_${kind}`); this.name = 'TokenEndpointError'; }
+  // error: the provider's own OAuth error code, kept for a caller that acts on it (a device-code poll).
+  constructor(public readonly kind: 'auth' | 'transient' | 'configuration' | 'protocol', public readonly status?: number, public readonly retryAfterSeconds?: number, public readonly error?: string) { super(`token_${kind}`); this.name = 'TokenEndpointError'; }
 }
 
 const ENVELOPE_ERRORS: Readonly<Record<string, TokenEndpointError['kind']>> = {
@@ -257,7 +260,7 @@ const tokenCall = async (fetcher: typeof fetch, pins: ClientPins, body: Record<s
     if (out.status === 429 || out.status >= 500 || code === 'temporarily_unavailable' || code === 'server_error') throw new TokenEndpointError('transient', out.status, Number.isFinite(wait) ? wait : undefined);
     if (code === 'invalid_grant') throw new TokenEndpointError('auth', out.status);
     if (code === 'invalid_client' || code === 'unauthorized_client') throw new TokenEndpointError('configuration', out.status);
-    throw new TokenEndpointError('protocol', out.status);
+    throw new TokenEndpointError('protocol', out.status, undefined, typeof code === 'string' ? code.slice(0, 64) : undefined);
   }
   if (typeof json.access_token !== 'string' || !json.access_token || (typeof json.token_type === 'string' && json.token_type.toLowerCase() !== 'bearer')) throw new TokenEndpointError('protocol', out.status);
   const expiresIn = typeof json.expires_in === 'number' && Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : undefined;
@@ -275,6 +278,51 @@ export const exchangeCode = (fetcher: typeof fetch, pins: ClientPins, input: Rea
 
 export const refreshTokens = (fetcher: typeof fetch, pins: ClientPins, refreshToken: string, secret: string | undefined, now: number) =>
   tokenCall(fetcher, pins, { grant_type: 'refresh_token', refresh_token: refreshToken, ...(pins.refresh_scope ? { scope: pins.refresh_scope } : {}) }, secret, now);
+
+// RFC 8628, for a public client only: the device authorization request, and the token poll that follows it. Both run only at
+// the edge. What the owner is shown (the user code and where to enter it) is checked to be what the RFC allows, so a
+// provider's answer cannot put arbitrary text or a non-https address in front of the owner.
+export const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+export type DeviceCode = Readonly<{ device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number }>;
+export type DevicePoll = 'pending' | 'slow_down' | 'expired' | 'denied' | 'transient' | 'failed' | 'unsupported';
+export class DeviceFlowError extends Error {
+  constructor(public readonly kind: DevicePoll) { super(`device_${kind}`); this.name = 'DeviceFlowError'; }
+}
+const USER_CODE = /^[A-Za-z0-9-]{4,24}$/;
+// A server that checks the grant types a client registered refuses the device request outright (RFC 8628 §3.2, RFC 6749 §5.2).
+const CLIENT_REFUSED = new Set(['unauthorized_client', 'unsupported_grant_type', 'invalid_client']);
+export const requestDeviceCode = async (fetcher: typeof fetch, pins: ClientPins, endpoint: string, scope: string | undefined): Promise<DeviceCode> => {
+  if (pins.client_auth !== 'none') throw new DeviceFlowError('failed');
+  const form = new URLSearchParams({ client_id: pins.client_id, ...(scope ? { scope } : {}), ...(pins.resource ? { resource: pins.resource } : {}) });
+  let out;
+  try {
+    out = await guardedFetch(fetcher, endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: form.toString() }, { pinned: [new URL(endpoint).origin], ...TOKEN });
+  } catch {
+    throw new DeviceFlowError('transient');
+  }
+  let json: Record<string, unknown> = {};
+  try { json = JSON.parse(out.text) as Record<string, unknown>; } catch { /* refused below */ }
+  if (out.status < 200 || out.status >= 300) throw new DeviceFlowError(out.status === 429 || out.status >= 500 ? 'transient' : CLIENT_REFUSED.has(json.error as string) ? 'unsupported' : 'failed');
+  const { device_code: code, user_code: user, verification_uri: uri, expires_in: expires, interval } = json;
+  let verification: string;
+  try { verification = typeof uri === 'string' && uri.length <= 512 ? egressTarget(uri).toString() : ''; } catch { verification = ''; }
+  if (typeof code !== 'string' || !code || code.length > 4096 || typeof user !== 'string' || !USER_CODE.test(user) || !verification
+    || typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0 || (interval !== undefined && (typeof interval !== 'number' || !Number.isFinite(interval) || interval <= 0))) throw new DeviceFlowError('failed');
+  // RFC 8628 §3.2: five seconds when the provider names no interval.
+  return { device_code: code, user_code: user, verification_uri: verification, expires_in: Math.floor(expires), interval: Math.ceil((interval as number | undefined) ?? 5) };
+};
+// RFC 8628 §3.5: authorization_pending and slow_down mean ask again later (slow_down five seconds slower), expired_token and
+// access_denied end the attempt.
+export const pollDeviceToken = async (fetcher: typeof fetch, pins: ClientPins, deviceCode: string, now: number): Promise<TokenSet> => {
+  if (pins.client_auth !== 'none') throw new DeviceFlowError('failed');
+  try {
+    return await tokenCall(fetcher, pins, { grant_type: DEVICE_GRANT, device_code: deviceCode }, undefined, now);
+  } catch (error) {
+    if (!(error instanceof TokenEndpointError)) throw new DeviceFlowError('failed');
+    if (error.kind === 'transient') throw new DeviceFlowError('transient');
+    throw new DeviceFlowError(error.error === 'authorization_pending' ? 'pending' : error.error === 'slow_down' ? 'slow_down' : error.error === 'expired_token' ? 'expired' : error.error === 'access_denied' ? 'denied' : 'failed');
+  }
+};
 
 // RFC 7009. 200 means the token is gone or was never valid; anything else is not a confirmed revoke.
 export const revokeToken = async (fetcher: typeof fetch, pins: ClientPins, token: string, hint: 'refresh_token' | 'access_token', secret: string | undefined): Promise<boolean> => {

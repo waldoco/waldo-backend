@@ -114,6 +114,8 @@ export const toolNameSchema = z.enum([
   'list_owner_findings',
   // react_to_message: a standard tapback on the owner's message the turn answers, where the surface's host verified tapbacks.
   'react_to_message',
+  // connect_app: the host sends the owner a one-time connect link or device code for one catalogue app, on the turn's own surface.
+  'connect_app',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -213,6 +215,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'query_calendar',
     'connect_service',
     'send_console_link',
+    'connect_app',
     'send_progress_note',
     'attach_file',
     'react_to_message',
@@ -317,7 +320,8 @@ export const LAZY_DISCOVERY_TRIGGERS: readonly TriggerType[] = ['user_message', 
 // there is this list ∩ the ACL — loading never widens permission.
 // connect_service joined the always-on set (owner direction 2026-09-24): connect intent must be
 // prompt-visible without discovery - the model cannot search_tools for a tool it does not know exists.
-// send_console_link joined for the same reason: the owner asks for their console in words, never a slash command.
+// send_console_link joined for the same reason: the owner asks for their console in words, never a slash command. So did
+// connect_app: an owner asks in chat to connect an app, and the model cannot search for a tool it does not know exists.
 export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'read_memory',
   'remember',
@@ -327,6 +331,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'search_tools',
   'connect_service',
   'send_console_link',
+  'connect_app',
   'skills_list',
   'use_mac',
 ];

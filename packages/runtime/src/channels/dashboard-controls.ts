@@ -47,6 +47,7 @@ const projections = {
       accounts: view.google.accounts.map((account) => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.error ? 'needs_reconnect' as const : 'access_granted' as const })),
     },
     ...(view.granola ? { granola: { connectAvailable: view.granola.connectAvailable, connection: view.granola.connection && { status: view.granola.connection.status, connected_at: view.granola.connection.connected_at } } } : {}),
+    ...(view.apps ? { apps: view.apps.map((tile) => ({ id: tile.id, label: tile.label, about: tile.about, consent: tile.consent, connectAvailable: tile.connectAvailable, connection: tile.connection && { status: tile.connection.status, connected_at: tile.connection.connected_at } })) } : {}),
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
     // Link state per channel, only when the directory answered. This view holds no part of the number, so a linked
