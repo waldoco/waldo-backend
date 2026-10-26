@@ -9,7 +9,7 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, wantsReplyDraft, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
-import { iMessageApprovalCaller } from './imessage/approval-cards';
+import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
@@ -839,11 +839,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try { new IMessageFinalOutbox(this.ctx.storage).freezeFailure(record, `${RUN_DID_NOT_FINISH}\n\n${this.requestReceived(record.admittedAt)}`); }
     catch { console.error('imessage failure notice unavailable'); }
   };
-  // A message that is exactly 1 or 2 answers the latest numbered approval card while it waits, and the decision is the reply.
-  // It is read before the cards that waited for this message go out, so a number never answers a card the owner had not seen.
+  // A message that is exactly 1 or 2 answers the latest numbered approval card while it waits and is still Waldo's latest
+  // message in this chat, and the decision is the reply. It is read before the cards that waited for this message go out,
+  // so a number never answers a card the owner had not seen.
   private async iMessageNumberedReply(desk: ApprovalDesk, scope: RunEffectScope, log: (entry: TurnLogEntry) => void): Promise<boolean> {
     const record = this.activeIMessage!, trace = ownerTurnTrace('imessage', record.updateId);
-    const answered = await desk.numberedReply(record.text, trace);
+    const answered = await desk.numberedReply(record.text, trace, iMessageCardIsLatest(this.ctx.storage, record));
     try { await desk.ownerWrote(); } catch { console.error('imessage waiting approval cards unavailable'); }
     if (!answered) return false;
     scope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, answered.message); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });

@@ -166,8 +166,9 @@ export type ApprovalDesk = Readonly<{
   reraise(id: string): Promise<ReraiseOutcome>;
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
-  // An iMessage message that is exactly 1 or 2 decides the latest numbered card there while it waits; anything else is a turn (null).
-  numberedReply(text: string, trace: string): Promise<ApprovalDecision | null>;
+  // A message that is exactly 1 or 2 decides the latest numbered card on this surface while its request is open and `latest` says
+  // that card (by its message ref) is still Waldo's latest message in the chat the reply came from; anything else is a turn (null).
+  numberedReply(text: string, trace: string, latest: (messageRef: string) => boolean): Promise<ApprovalDecision | null>;
   placement(id: string): CardPlacement;
   // Whether this decision on this approval needs the recent email check; an approval it cannot read needs it.
   stepUp(id: string, action: ApprovalActionV1): boolean;
@@ -1131,11 +1132,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         return { outcome: 'unshown' };
       } finally { raising.delete(id); }
     },
-    async numberedReply(text, trace) {
+    async numberedReply(text, trace, latest) {
       const number = NUMBERED_REPLY.exec(text)?.[1];
-      const latest = NUMBERED.has(surface) && number ? latestNumbered() : undefined;
-      if (!latest || latest.retired_at !== null) return null;
-      return decideOnce(latest.approval_id, number === '1' ? 'a' : 's', trace, { surface, messageRef: latest.message_ref });
+      const card = NUMBERED.has(surface) && number ? latestNumbered() : undefined;
+      if (!card || card.retired_at !== null) return null;
+      // The ledger decides whether the card still waits: one past its expiry, closed or not, takes no number.
+      expireDue(card.approval_id);
+      if (row(card.approval_id)?.status !== 'open' || !latest(card.message_ref)) return null;
+      return decideOnce(card.approval_id, number === '1' ? 'a' : 's', trace, { surface, messageRef: card.message_ref });
     },
     // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.

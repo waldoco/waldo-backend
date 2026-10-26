@@ -8,6 +8,8 @@ import type { IMessageInboxRecord } from './owner-inbox';
 // but not its text: the reply bytes are no longer needed once the bridge reported a terminal outcome.
 
 export const IMESSAGE_OUTBOX_DUE_KEY = 'imessage_final_outbox_due_v1';
+// The order records were frozen in. frozenAt cannot order them: the Workers clock stands still between I/O.
+const SEQ_KEY = 'imessage_final_outbox_seq_v1';
 const PREFIX = 'imessage:outbox-record:';
 const RETRY_MS = 5_000;
 /** A reply the bridge could not take because its one mailbox slot was busy tries again this soon. */
@@ -28,12 +30,18 @@ export type IMessageOutboxRecord = {
   subject?: string;
   frozenAt: number; state: 'frozen' | 'queued' | 'settled'; nextAttemptAt: number; attempts: number;
   result?: IMessageResult; conflicts?: number;
+  /** Its place in the order this owner's records were frozen. Absent on records frozen before the order was kept. */
+  seq?: number;
 };
 
 // Where a message goes: the bridge, the owner object, the sender and the exact binding the bridge must still hold.
 export type IMessageProactiveTarget = Readonly<{ bridgeDoName: string; ownerDoName: string; subject: string; revision: string; bindingDigest: string }>;
 export const targetOf = (record: IMessageInboxRecord): IMessageProactiveTarget =>
   ({ bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject, revision: record.revision, bindingDigest: record.bindingDigest });
+
+/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console link or a progress note. */
+export const sentByTurn = (replyRef: string, turnId: string) =>
+  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef.startsWith(`${PROGRESS}${turnId}:`);
 
 export class IMessageFinalOutbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
@@ -104,8 +112,10 @@ export class IMessageFinalOutbox {
       if (!evict) throw new Error('imessage_outbox_capacity');
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
+    const seq = (this.storage.kv.get<number>(SEQ_KEY) ?? 0) + 1;
+    this.storage.kv.put(SEQ_KEY, seq);
     const row: IMessageOutboxRecord = { replyRef, commandId: target.commandId, text, bridgeDoName: target.bridgeDoName, ownerDoName: target.ownerDoName, subject: target.subject,
-      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
+      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, seq };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;

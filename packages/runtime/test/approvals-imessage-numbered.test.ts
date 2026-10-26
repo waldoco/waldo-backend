@@ -286,13 +286,14 @@ describe('on the iMessage outbox, the card must still be Waldo\'s latest message
     });
   }
 
-  it('a message to another chat does not write past the card, and a "1" from that other chat answers nothing', async () => {
+  it('a "1" from another chat answers nothing, and a message to that chat does not write past the card', async () => {
     await owner('imsg-latest-other-chat', async state => {
       const f = thread(state);
       let id = '';
-      await f.turn(inbound(), async () => { id = await f.desk.propose(hold('Focus')); });
       await f.turn(inbound(OTHER_CHAT));
+      await f.turn(inbound(), async () => { id = await f.desk.propose(hold('Focus')); });
       expect(await f.number(inbound(OTHER_CHAT), '1')).toBeNull();
+      await f.turn(inbound(OTHER_CHAT));
       expect(f.status(id)).toBe('open');
       expect(await f.number(inbound(), '1')).toMatchObject({ toast: 'Done' });
       expect(f.applied).toEqual(['add Focus']);
