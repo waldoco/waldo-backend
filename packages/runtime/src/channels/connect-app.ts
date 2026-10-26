@@ -13,9 +13,12 @@
 // the edge on its scheduler, and the same line goes back when it settles. A code someone else enters connects their account,
 // as a forwarded link would; it lives only as long as the provider allows (at most 30 minutes) and is sent only to the owner's
 // own turn. Where no device code is advertised, none is offered.
+//
+// The app's Connections tile starts the same sign-in with a link that carries the app's one-time handoff code. That sign-in
+// tells no chat when it settles: its callback sends the app's sign-in sheet back to the app, which reads the tile again.
 import type { ConnectAppResult } from '@waldo/contracts';
 import { catalogueTiles, MCP_CATALOGUE, type McpCatalogueEntry } from '../connectors/mcp-catalogue';
-import { MCP_ATTEMPT_TTL_MS, MCP_START_PATH, type BeginResult, type ConnectOutcome, type DevicePollResult } from '../connectors/mcp-connections';
+import { MCP_ATTEMPT_TTL_MS, MCP_START_PATH, type BeginResult, type ConnectOutcome, type DevicePollResult, type McpStatus } from '../connectors/mcp-connections';
 import type { ConnectAppSend, ConnectAppTurn } from '../tools/live/connect-app';
 import type { AppLinkBook, ConsoleLinkRoute } from './console-link';
 import type { TurnLogEntry } from './owner-turn-types';
@@ -34,7 +37,8 @@ export const connectAppCodeText = (label: string, where: string, code: string, m
   `Connect ${label}: open ${where} and enter the code ${code}. It works for ${minutes} minutes.`;
 
 export type ConnectAppChannel = 'telegram' | 'app' | 'imessage' | 'whatsapp';
-type Pending = Readonly<{ nonce: string; connector: string; channel: ConnectAppChannel; thread?: string; at: number }>;
+// tile: started from the app's Connections tile, so it returns to the app instead of telling a chat.
+type Pending = Readonly<{ nonce: string; connector: string; channel: ConnectAppChannel; thread?: string; tile?: true; at: number }>;
 const RECORD = 'connect_app:';
 // The key the MCP callback reads to close a ticket once its sign-in settles (owner-do completeConnectTicket).
 const BY_NONCE = 'connect_mcp_ticket:';
@@ -57,7 +61,7 @@ export const appConnects = (deps: Readonly<{
   schedulePoll(id: string, nonce: string, at: number): Promise<void>;
   attemptTarget(nonce: string): Readonly<{ origin: string; expires: number }> | null;
   start(nonce: string): Promise<string | null>;
-  issueTicket(provider: string, channel: ConnectAppChannel): Promise<Readonly<{ url: string; hash: string }> | null>;
+  issueTicket(provider: string, channel: ConnectAppChannel, handoff: boolean): Promise<Readonly<{ url: string; hash: string }> | null>;
   now(): number;
 }>) => {
   const { kv } = deps;
@@ -73,7 +77,7 @@ export const appConnects = (deps: Readonly<{
   return {
     // Starts the app's sign-in and issues its link, or with code its device code. Nothing is kept for a sign-in that could not
     // start.
-    async issue(entry: McpCatalogueEntry, channel: ConnectAppChannel, thread?: string, method: 'link' | 'code' = 'link'): Promise<Issued> {
+    async issue(entry: McpCatalogueEntry, channel: ConnectAppChannel, thread?: string, method: 'link' | 'code' = 'link', from: 'chat' | 'tile' = 'chat'): Promise<Issued> {
       const begun = await deps.begin(entry, method === 'code' ? 'device' : 'browser');
       if (begun.kind === 'already' || begun.kind === 'connected') return { kind: 'already' };
       if (begun.kind === 'failed') return { kind: 'refused', reason: begun.reason === 'device_unsupported' ? 'code_unavailable' : UNAVAILABLE.has(begun.reason) ? 'unavailable' : 'sign_in_failed' };
@@ -84,11 +88,11 @@ export const appConnects = (deps: Readonly<{
         return { kind: 'code', userCode: begun.user_code, verificationUri: begun.verification_uri, minutes: Math.max(1, Math.floor((begun.expires - at) / 60_000)) };
       }
       const nonce = begun.path.slice(MCP_START_PATH.length);
-      const ticket = await deps.issueTicket(appConnectProvider(entry), channel);
+      const ticket = await deps.issueTicket(appConnectProvider(entry), channel, from === 'tile');
       if (!ticket) return { kind: 'refused', reason: 'unavailable' };
       sweep();
       const at = deps.now();
-      kv.put(`${RECORD}${ticket.hash}`, { nonce, connector: entry.id, channel, ...(thread ? { thread } : {}), at } satisfies Pending);
+      kv.put(`${RECORD}${ticket.hash}`, { nonce, connector: entry.id, channel, ...(thread ? { thread } : {}), ...(from === 'tile' ? { tile: true as const } : {}), at } satisfies Pending);
       kv.put(`${BY_NONCE}${nonce}`, { ticket: ticket.hash, at });
       return { kind: 'link', url: ticket.url };
     },
@@ -115,16 +119,33 @@ export const appConnects = (deps: Readonly<{
       kv.delete(`${DEVICE}${nonce}`);
       return { channel: record.channel, ...(record.thread ? { thread: record.thread } : {}), text: settledText(entry.label, out.outcome) };
     },
-    // The line the conversation that asked gets once the sign-in settles, and where it goes. Taken once.
-    settled(hash: string, outcome: ConnectOutcome): Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }> | null {
+    // The line the conversation that asked gets once the sign-in settles, and where it goes; for a tile, only that the
+    // callback returns to the app. Taken once.
+    settled(hash: string, outcome: ConnectOutcome): Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }> | Readonly<{ tile: true }> | null {
       const record = pending(hash), entry = MCP_CATALOGUE.find((candidate) => candidate.id === record?.connector);
       if (!record || !entry) return null;
       kv.delete(`${RECORD}${hash}`);
+      if (record.tile) return { tile: true };
       return { channel: record.channel, ...(record.thread ? { thread: record.thread } : {}), text: settledText(entry.label, outcome) };
     },
   };
 };
 export type AppConnects = ReturnType<typeof appConnects>;
+
+// The connected server at a catalogue app's address, whatever its sign-in: the tile's connection, and what its disconnect removes.
+type Connected = Readonly<{ id: string; server_url: string; status: McpStatus; connected_at: number }>;
+const sameAddress = (a: string, b: string) => { try { return new URL(a).toString() === new URL(b).toString(); } catch { return false; } };
+export const tileServer = <Row extends Connected>(entry: McpCatalogueEntry, servers: readonly Row[]): Row | undefined =>
+  servers.find((server) => sameAddress(server.server_url, entry.url));
+// Every catalogue app as the app's Connections tiles show it: about is the app's own line, consent what connecting allows.
+export type AppTile = Readonly<{ id: string; label: string; about: string; consent: string | null; connectAvailable: boolean; connection: Readonly<{ status: McpStatus; connected_at: number }> | null }>;
+export const appTiles = (servers: readonly Connected[], connectAvailable: boolean): readonly AppTile[] => {
+  const consent = new Map(catalogueTiles(servers).map((tile) => [tile.id, tile.consent]));
+  return MCP_CATALOGUE.map((entry) => {
+    const server = tileServer(entry, servers);
+    return { id: entry.id, label: entry.label, about: entry.about, consent: consent.get(entry.id) ?? null, connectAvailable, connection: server ? { status: server.status, connected_at: server.connected_at } : null };
+  });
+};
 
 const settledText = (label: string, outcome: ConnectOutcome): string => {
   switch (outcome.kind) {

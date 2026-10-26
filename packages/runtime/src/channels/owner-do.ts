@@ -45,7 +45,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,granolaConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,appConnectReceipt,appDisconnectReceipt,googleConnectReceipt,granolaConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,mcpRunsReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt,type ControlReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
@@ -170,7 +170,7 @@ import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
 import { oauthStateSecret } from '../connectors/oauth-state-secret';
 import { BEGIN_SESSION_PATH, DESCRIBE_SESSION_PATH, newTicket, ticketHash } from './connect-link';
-import { appConnectEntry, appConnects, CONNECT_APP_LINKS, connectAppSender, type AppConnects, type ConnectAppChannel } from './connect-app';
+import { appConnectEntry, appConnects, appTiles, CONNECT_APP_LINKS, connectAppSender, tileServer, type AppConnects, type AppTile, type ConnectAppChannel } from './connect-app';
 import { connectAppHandler } from '../tools/live/connect-app';
 import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
@@ -203,7 +203,7 @@ import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, f
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
-import { catalogueTiles } from '../connectors/mcp-catalogue';
+import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { approvalJobReplay, approvalReplayContext, proposeActionHandler, replayHost, taintedActionReplay } from '../tools/live/propose-action';
@@ -294,6 +294,7 @@ type OwnerRuntime = Readonly<{
   googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
   googleConsoleStart(): Promise<string | null>;
   connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
+  issueTicket(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null>;
   calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
@@ -429,8 +430,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Granola as the app shows it. Connecting needs the OAuth edge, the state secret and this deployment's origin.
   private granolaState(): NonNullable<ConsoleView['granola']> {
     const connection = this.granolaConnection();
-    const configured = !!oauthProxy(this.env) && !!oauthStateSecret(this.env) && !!signedRpc(this.env) && !!this.ctx.storage.kv.get<string>('origin');
-    return { connectAvailable: configured, connection: connection ? { status: connection.status, connected_at: connection.connected_at } : null };
+    return { connectAvailable: this.mcpSignInConfigured(), connection: connection ? { status: connection.status, connected_at: connection.connected_at } : null };
+  }
+  private mcpSignInConfigured(): boolean {
+    return !!oauthProxy(this.env) && !!oauthStateSecret(this.env) && !!signedRpc(this.env) && !!this.ctx.storage.kv.get<string>('origin');
+  }
+  // Every catalogue app as the app's Connections tiles show it.
+  private appTileStates(): readonly AppTile[] {
+    return appTiles(this.mcp().list(), this.mcpSignInConfigured());
+  }
+  // A catalogue app from its tile: the sign-in starts now and its link carries the app's handoff code; when it settles, the
+  // callback returns the app's sign-in sheet to the app.
+  private async appTileConnect(runtime: OwnerRuntime, id: string): Promise<ControlReceipt> {
+    const entry = MCP_CATALOGUE.find((candidate) => candidate.id === id)!;
+    const issued = await this.appConnects((provider, channel, handoff) => runtime.issueTicket(provider as ConnectProvider, channel, { handoff })).issue(entry, 'app', undefined, 'link', 'tile');
+    return appConnectReceipt(entry.label, issued, this.ctx.storage.kv.get<string>('origin'));
+  }
+  private async appTileDisconnect(id: string): Promise<ControlReceipt> {
+    const entry = MCP_CATALOGUE.find((candidate) => candidate.id === id)!, server = tileServer(entry, this.mcp().list());
+    return appDisconnectReceipt(server ? await this.mcp().disconnect(server.id) : { ok: false, provider: 'not_needed' });
   }
   // Granola from the app: a first-party /c/<ticket> link. Granola's discovery and the sign-in attempt start when the owner
   // presses Continue there (beginGranola), so the attempt's 15 minutes run from that press.
@@ -467,20 +485,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // A sign-in that began on a connect ticket closes that ticket once it links. Bookkeeping only: the ticket was spent at
   // Continue, so a failed close changes nothing the owner can reach. A ticket sent to a chat by connect_app also tells that
   // conversation how the sign-in ended.
-  private async completeConnectTicket(nonce: string, outcome: ConnectOutcome): Promise<void> {
+  // Returns whether the sign-in started from an app tile, whose callback goes back to the app.
+  private async completeConnectTicket(nonce: string, outcome: ConnectOutcome): Promise<boolean> {
     const ticket = (await this.ctx.storage.get<Readonly<{ ticket: string; at: number }>>(`connect_mcp_ticket:${nonce}`))?.ticket;
-    if (ticket === undefined) return;
+    if (ticket === undefined) return false;
     await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
     const told = this.appConnects().settled(ticket, outcome);
-    if (told) await this.tellConnectOutcome(nonce, told);
+    const tile = told !== null && 'tile' in told;
+    if (told && !('tile' in told)) await this.tellConnectOutcome(nonce, told);
     const call = signedRpc(this.env);
-    if (outcome.kind !== 'linked' || !call) return;
+    if (outcome.kind !== 'linked' || !call) return tile;
     const done = await call('connect_session_complete', `connsess.complete.${ticket}`, { p_ticket_hash: ticket }).catch(() => null);
-    console.log(JSON.stringify({ trace: `connect:${ticket.slice(0, 8)}`, hop: 'connect_completed', ok: done === true, detail: told ? 'chat' : 'granola' }));
+    console.log(JSON.stringify({ trace: `connect:${ticket.slice(0, 8)}`, hop: 'connect_completed', ok: done === true, detail: tile ? 'tile' : told ? 'chat' : 'granola' }));
+    return tile;
   }
   // Catalogue apps connected from chat (channels/connect-app.ts). Only a channel's runtime issues tickets; the hop, its
   // Continue and the callback need none.
-  private appConnects(issueTicket: (provider: string, channel: ConnectAppChannel) => Promise<Readonly<{ url: string; hash: string }> | null> = async () => null): AppConnects {
+  private appConnects(issueTicket: (provider: string, channel: ConnectAppChannel, handoff: boolean) => Promise<Readonly<{ url: string; hash: string }> | null> = async () => null): AppConnects {
     return appConnects({
       kv: this.ctx.storage.kv,
       begin: (entry, how) => {
@@ -1618,13 +1639,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},phone:this.env,whatsappUnlinked:this.whatsappUnlinked,
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,granola:this.granolaState(),apps:this.appTileStates(),sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.signed_in_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
             welcome:()=>{this.continueWelcome(runtime);return runtime.welcome.build().view();},
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app',{handoff:true}):null,this.ctx.storage.kv.get<string>('origin'))
               :action.action==='granola.connect'?this.granolaConnect(runtime)
               :action.action==='granola.disconnect'?this.granolaDisconnect()
+              :action.action==='app.connect'?this.appTileConnect(runtime,action.id)
+              :action.action==='app.disconnect'?this.appTileDisconnect(action.id)
               :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
               :runtime.act(action,current),
           };
@@ -1736,8 +1759,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === MCP_FINISH_PATH && request.method === 'POST') {
       const { nonce, query } = JSON.parse(body) as { nonce: string; query: string };
       const outcome = await this.serial(() => this.mcp().finish(nonce, new URLSearchParams(query)));
-      await this.completeConnectTicket(nonce, outcome);
-      return Response.json(outcome);
+      // app: the attempt came from an app tile, so the callback answers with the app's return address.
+      return Response.json({ ...outcome, ...(await this.completeConnectTicket(nonce, outcome) ? { app: true } : {}) });
     }
     if (new URL(request.url).pathname === DESCRIBE_SESSION_PATH && request.method === 'POST') {
       const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
@@ -3383,7 +3406,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       imessage: iMessageConsoleRoute(storage, () => this.activeIMessage, 'connect'), app: appConsoleRoute(storage.kv, Date.now, CONNECT_APP_LINKS) };
     const connectAppTool = connectAppHandler(connectAppSender({
       route: connectAppRoutes[channel], available: () => probeCapture.current === null, log,
-      issue: (entry, method, turn) => this.appConnects((provider, surface) => issueTicket(provider as ConnectProvider, surface)).issue(entry, channel, turnThread(turn.runScope), method),
+      issue: (entry, method, turn) => this.appConnects((provider, surface, handoff) => issueTicket(provider as ConnectProvider, surface, { handoff })).issue(entry, channel, turnThread(turn.runScope), method),
     }));
     // The model's progress-note tool goes only where a send can leave while the turn runs. A Telegram turn runs inside alarm(),
     // so its note goes straight out on the reply caller, not through the final outbox that alarm drains. iMessage times its
@@ -5072,6 +5095,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       googleConnectUrl: (feature, channel, opts) => google.connectUrl(feature, channel, opts),
       googleConsoleStart: () => google.consoleStart(),
       connectLink,
+      issueTicket,
       calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
         accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
         client: (email) => google.client('availability', undefined, undefined, email) }).read(range),

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildSessionState, connectAppResultSchema, handlerAllowlistMatchesAcl, TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, type ConnectAppResult, type ToolHandler } from '@waldo/contracts';
 import { connectAppHandler, type ConnectAppSend, type ConnectAppTurn } from '../src/tools/live/connect-app';
-import { appConnectEntry, appConnectProvider, appConnects, connectAppLinkText, connectAppSender, type Issued } from '../src/channels/connect-app';
+import { appConnectEntry, appConnectProvider, appConnects, appTiles, connectAppLinkText, connectAppSender, type Issued } from '../src/channels/connect-app';
 import type { ConsoleLinkRoute } from '../src/channels/console-link';
 import { MCP_CATALOGUE, type McpCatalogueEntry } from '../src/connectors/mcp-catalogue';
 import type { BeginResult, DevicePollResult } from '../src/connectors/mcp-connections';
@@ -184,7 +184,7 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
   const NONCE = 'N'.repeat(43);
   const book = (over: Partial<Parameters<typeof appConnects>[0]> = {}) => {
     const kv = kvOf(), now = { at: 1_000 };
-    const issued: [string, string][] = [];
+    const issued: [string, string, boolean][] = [];
     const deps = {
       kv, now: () => now.at,
       begin: vi.fn(async (_entry: McpCatalogueEntry, _how: 'browser' | 'device'): Promise<BeginResult> => ({ kind: 'redirect' as const, path: `/console/mcp/start/${NONCE}` })),
@@ -192,7 +192,7 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
       schedulePoll: vi.fn(async (_id: string, _nonce: string, _at: number) => undefined),
       attemptTarget: vi.fn((nonce: string) => nonce === NONCE ? { origin: 'https://mcp.notion.com', expires: 9_999 } : null),
       start: vi.fn(async (nonce: string) => nonce === NONCE ? 'https://mcp.notion.com/authorize?state=s' : null),
-      issueTicket: vi.fn(async (provider: string, channel: string) => { issued.push([provider, channel]); return { url: LINK, hash: 'h'.repeat(64) }; }),
+      issueTicket: vi.fn(async (provider: string, channel: string, handoff: boolean) => { issued.push([provider, channel, handoff]); return { url: LINK, hash: 'h'.repeat(64) }; }),
       ...over,
     };
     return { connects: appConnects(deps), deps, kv, issued, now };
@@ -208,7 +208,7 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
     const { connects, deps, kv, issued } = book();
     expect(await connects.issue(NOTION, 'app', 'th_one')).toEqual({ kind: 'link', url: LINK });
     expect(deps.begin).toHaveBeenCalledWith(NOTION, 'browser');
-    expect(issued).toEqual([['mcp:notion', 'app']]);
+    expect(issued).toEqual([['mcp:notion', 'app', false]]);
     expect(kv.get(`connect_mcp_ticket:${NONCE}`)).toMatchObject({ ticket: 'h'.repeat(64) });
     expect(connects.describe('h'.repeat(64))).toMatchObject({ entry: NOTION, origin: 'https://mcp.notion.com', consent: expect.stringContaining('read-only') });
     expect(await connects.start('h'.repeat(64))).toEqual({ url: 'https://mcp.notion.com/authorize?state=s', nonce: NONCE });
@@ -216,11 +216,29 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
     expect(connects.settled('h'.repeat(64), { kind: 'linked', id: 'c', name: 'notion' })).toBeNull();
   });
 
+  it('gives a tile\'s link the app\'s handoff code and settles it without a line for any chat', async () => {
+    const { connects, issued } = book();
+    expect(await connects.issue(NOTION, 'app', undefined, 'link', 'tile')).toEqual({ kind: 'link', url: LINK });
+    expect(issued).toEqual([['mcp:notion', 'app', true]]);
+    expect(connects.settled('h'.repeat(64), { kind: 'denied' })).toEqual({ tile: true });
+    expect(connects.settled('h'.repeat(64), { kind: 'denied' })).toBeNull();
+  });
+
+  it('shows every catalogue app as a tile, connected by its address whatever the sign-in', () => {
+    const at = 1_761_469_200_000;
+    const tiles = appTiles([{ id: 'c1', server_url: 'https://mcp.notion.com/mcp', status: 'reauth_needed', connected_at: at }, { id: 'c2', server_url: 'https://mcp.notion.com/other', status: 'active', connected_at: at }], true);
+    expect(tiles.map((tile) => tile.id)).toEqual(MCP_CATALOGUE.map((entry) => entry.id));
+    expect(tiles.find((tile) => tile.id === 'notion')).toEqual({ id: 'notion', label: 'Notion', about: NOTION.about, consent: expect.stringContaining('read-only'), connectAvailable: true, connection: { status: 'reauth_needed', connected_at: at } });
+    expect(tiles.find((tile) => tile.id === 'granola')).toMatchObject({ consent: null, connection: null });
+    expect(appTiles([], false).every((tile) => !tile.connectAvailable && tile.connection === null)).toBe(true);
+  });
+
   it('says how a sign-in that did not link ended', () => {
     const lines = (['denied', 'expired', 'invalid'] as const).map((kind) => {
       const { connects, kv } = book();
       kv.put(`connect_app:${kind}`, { nonce: NONCE, connector: 'notion', channel: 'imessage', at: 1 });
-      return connects.settled(kind, { kind })?.text;
+      const told = connects.settled(kind, { kind });
+      return told && 'text' in told ? told.text : null;
     });
     expect(lines).toEqual([
       'Notion was not connected: access was not granted.',
