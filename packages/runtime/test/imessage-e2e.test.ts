@@ -196,29 +196,36 @@ it('a signed direct message runs one genuine owner turn and its frozen reply rea
   expect(forbiddenEgress).toEqual([]);
 });
 
+// An owner turn that proposes moving the 3pm: the numbered card goes out on iMessage ahead of the turn's reply, and both
+// are delivered. Runs under a faked Date the caller set to t0.
+const cardTurn = async (w: Awaited<ReturnType<typeof world>>, t0: number) => {
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', 'https://imessage.fixture.invalid'); await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]); });
+  proof.outputs.push([{ type: 'function_call', call_id: 'move-3pm', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z', end: '2030-01-02T17:00:00Z', reason: 'Owner asked to move it to 4' }) }], []);
+  await replyFor(w, 'Move my 3pm to 4');
+  // The card is its own message, ahead of the reply on the bridge's one slot. The reply polls the busy slot for a few
+  // seconds, then leaves itself to its retry.
+  await vi.waitFor(async () => expect((await outbox(w.ownerStub)).find(row => row.replyRef.startsWith('reply:'))?.attempts).toBeGreaterThan(0), { timeout: 10_000, interval: 250 });
+  const first = (await w.host.pull()).delivery!;
+  const card = JSON.parse(first.body);
+  expect(card.text).toContain('Move "Design review"');
+  expect(card.text).toMatch(/\n\nReply 1 to move it, or 2 to skip\.$/);
+  expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
+  await moveClock(w, t0 + 6_000);
+  await w.pump(3);
+  const second = (await w.host.pull()).delivery!;
+  expect(JSON.parse(second.body).text.startsWith(proof.reply)).toBe(true);
+  expect((await w.host.postResult(second, await w.host.execute(second))).status).toBe(200);
+  await w.pump(2);
+  return card as { commandId: string; text: string };
+};
+
 it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead of the reply, numbered; a tapback leaves it, and "1" moves the event once', async () => {
   const w = await world();
   await w.pairAndActivate();
-  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', 'https://imessage.fixture.invalid'); await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]); });
-  proof.outputs.push([{ type: 'function_call', call_id: 'move-3pm', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z', end: '2030-01-02T17:00:00Z', reason: 'Owner asked to move it to 4' }) }], []);
   const t0 = Date.now();
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
-    await replyFor(w, 'Move my 3pm to 4');
-    // The card is its own message, ahead of the reply on the bridge's one slot. The reply polls the busy slot for a few
-    // seconds, then leaves itself to its retry.
-    await vi.waitFor(async () => expect((await outbox(w.ownerStub)).find(row => row.replyRef.startsWith('reply:'))?.attempts).toBeGreaterThan(0), { timeout: 10_000, interval: 250 });
-    const first = (await w.host.pull()).delivery!;
-    const card = JSON.parse(first.body);
-    expect(card.text).toContain('Move "Design review"');
-    expect(card.text).toMatch(/\n\nReply 1 to move it, or 2 to skip\.$/);
-    expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
-    await moveClock(w, t0 + 6_000);
-    await w.pump(3);
-    const second = (await w.host.pull()).delivery!;
-    expect(JSON.parse(second.body).text.startsWith(proof.reply)).toBe(true);
-    expect((await w.host.postResult(second, await w.host.execute(second))).status).toBe(200);
-    await w.pump(2);
+    const card = await cardTurn(w, t0);
     await runInDurableObject(w.ownerStub, async (_i, state) => {
       expect(state.storage.sql.exec<{ surface: string; approvable: number }>("SELECT surface, approvable FROM approval_presentations WHERE surface = 'imessage'").toArray()).toEqual([{ surface: 'imessage', approvable: 1 }]);
     });
@@ -247,6 +254,31 @@ it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead o
     await replyFor(w, '1');
     expect(proof.turns).toHaveLength(modelCalls + 1);
     expect(proof.moved).toEqual(['ev-3pm']);
+    expect(forbiddenEgress).toEqual([]);
+  } finally { vi.useRealTimers(); }
+}, 20_000);
+
+it('once Waldo has replied to another message after the card, "1" is an ordinary turn for the model and the card stays open', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    await cardTurn(w, t0);
+    await replyFor(w, 'Thanks. What else is on today?');
+    const reply = (await w.host.pull()).delivery!;
+    expect(JSON.parse(reply.body).text.startsWith(proof.reply)).toBe(true);
+    expect((await w.host.postResult(reply, await w.host.execute(reply))).status).toBe(200);
+    await w.pump(2);
+    const modelCalls = proof.turns.length;
+    await replyFor(w, '1');
+    expect(proof.turns).toHaveLength(modelCalls + 1);
+    expect(proof.moved).toEqual([]);
+    const answer = (await w.host.pull()).delivery!;
+    expect(JSON.parse(answer.body).text.startsWith(proof.reply)).toBe(true);
+    await runInDurableObject(w.ownerStub, async (_i, state) => {
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
+    });
     expect(forbiddenEgress).toEqual([]);
   } finally { vi.useRealTimers(); }
 }, 20_000);
