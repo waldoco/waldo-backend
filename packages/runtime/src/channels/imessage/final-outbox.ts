@@ -24,14 +24,17 @@ const mayHaveSent = (commandId: string, reason: string): IMessageResult => ({ ve
 /** Telegram's final-outbox bound: only settled records are evicted, oldest first; live replies are never dropped. */
 export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
-// A tapback's exact target: the owner's message in the bound chat. The bridge refuses one whose chat is not the binding's.
-export type IMessageTapback = Readonly<{ chatGuid: string; messageGuid: string; partIndex: number; type: IMessageStandardReaction }>;
+// An exact message in the bound chat, for a tapback or a reply threaded onto it. The bridge refuses one whose chat is not the binding's.
+export type IMessageMessageTarget = Readonly<{ chatGuid: string; messageGuid: string; partIndex: number }>;
+export type IMessageTapback = IMessageMessageTarget & Readonly<{ type: IMessageStandardReaction }>;
 export type IMessageOutboxRecord = {
   replyRef: string; commandId: string; text: string; bridgeDoName: string; ownerDoName: string; revision: string; bindingDigest: string;
   /** The sender this reply answers; selects that sender's own authority on a shared bridge. Absent on older records. */
   subject?: string;
   /** Set on a tapback, whose text is empty. */
   reaction?: IMessageTapback;
+  /** Set on a turn's reply: the owner's message it answers, which the bridge threads it onto where the host verified replies. */
+  replyTo?: IMessageMessageTarget;
   frozenAt: number; state: 'frozen' | 'queued' | 'settled'; nextAttemptAt: number; attempts: number;
   result?: IMessageResult; conflicts?: number;
   /** Its place in the order this owner's records were frozen. Absent on records frozen before the order was kept. */
@@ -55,10 +58,13 @@ export class IMessageFinalOutbox {
 
   /**
    * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console link sent
-   * for the same inbound message is its own record, under its own commandId, so the reply still sends after it.
+   * for the same inbound message is its own record, under its own commandId, so the reply still sends after it. The reply
+   * carries the owner's message it answers as its thread target; nothing the model chose names it.
    */
   freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' = 'reply'): IMessageOutboxRecord {
-    return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text);
+    const ref = kind === 'reply' ? record.messageRef : undefined;
+    return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text,
+      ref ? { replyTo: { chatGuid: record.binding.chatGuid, messageGuid: ref.messageGuid, partIndex: ref.partIndex } } : {});
   }
 
   /**
@@ -91,7 +97,7 @@ export class IMessageFinalOutbox {
   freezeReaction(record: IMessageInboxRecord, type: IMessageStandardReaction): IMessageOutboxRecord {
     if (!record.messageRef) throw new Error('imessage_reaction_untargeted');
     return this.put(`react:${record.id}`, { ...targetOf(record), commandId: `wrx_${type}_${record.commandId}` }, '',
-      { chatGuid: record.binding.chatGuid, messageGuid: record.messageRef.messageGuid, partIndex: record.messageRef.partIndex, type });
+      { reaction: { chatGuid: record.binding.chatGuid, messageGuid: record.messageRef.messageGuid, partIndex: record.messageRef.partIndex, type } });
   }
   /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   messageWaiting(bridgeDoName: string): boolean {
@@ -113,7 +119,8 @@ export class IMessageFinalOutbox {
     }
   }
 
-  private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string, reaction?: IMessageTapback): IMessageOutboxRecord {
+  private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string,
+    { reaction, replyTo }: Readonly<{ reaction?: IMessageTapback; replyTo?: IMessageMessageTarget }> = {}): IMessageOutboxRecord {
     const prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
@@ -129,7 +136,7 @@ export class IMessageFinalOutbox {
     const seq = (this.storage.kv.get<number>(SEQ_KEY) ?? 0) + 1;
     this.storage.kv.put(SEQ_KEY, seq);
     const row: IMessageOutboxRecord = { replyRef, commandId: target.commandId, text, bridgeDoName: target.bridgeDoName, ownerDoName: target.ownerDoName, subject: target.subject,
-      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, seq, ...(reaction ? { reaction } : {}) };
+      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, seq, ...(reaction ? { reaction } : {}), ...(replyTo ? { replyTo } : {}) };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;

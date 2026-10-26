@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -430,5 +430,28 @@ describe('the phone view', () => {
     for (const bad of [{ ...data, phone: '98000 00001' }, { ...data, extra: true }, { ...data, actions: ['phone.sms_resend'] },
       { ...data, challenge: { ...data.challenge, state: 'sent' } }, { ...data, challenge: { ...data.challenge, checks_left: 6 } }, { ...data, challenge: { ...data.challenge, retry_at: undefined } }])
       expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: bad }).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  const set = { view: 'phone', action: 'phone.set', value: '+919800000001', revision, request_id: 'phone-0005' };
+  it('sets the number on file with phone.set, which carries the E.164 number in value and nothing else', () => {
+    expect(appControlActionV1Schema.safeParse(set).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: ['phone.set'] } }).success).toBe(true);
+  });
+
+  it('refuses a phone.set without a number, with a malformed one, with anything else, or elsewhere', () => {
+    for (const bad of [
+      { ...set, value: undefined }, { ...set, value: '' }, { ...set, value: '9800000001' }, { ...set, value: '+91 98000 00001' }, { ...set, value: '+0919800000001' },
+      { ...set, value: '+9198' }, { ...set, value: `+91${'9'.repeat(14)}` }, { ...set, value: ' +919800000001' },
+      { ...set, code: '424242' }, { ...set, id: 'phone' }, { ...set, confirmation: 'DELETE' }, { ...set, view: 'account' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('names one receipt per phone.set outcome, none of which repeats the number', () => {
+    const receipts = Object.values(APP_PHONE_SET_RECEIPTS_V1);
+    for (const receipt of receipts) expect(appControlReceiptV1Schema.parse(receipt)).toEqual(receipt);
+    expect(new Set(receipts.map(receipt => receipt.message)).size).toBe(receipts.length);
+    expect(APP_PHONE_SET_RECEIPTS_V1.set.state).toBe('recorded');
+    expect(APP_PHONE_SET_RECEIPTS_V1.taken.state).toBe('rejected');
+    expect(receipts.map(receipt => receipt.message).join(' ')).not.toMatch(/\d/);
   });
 });

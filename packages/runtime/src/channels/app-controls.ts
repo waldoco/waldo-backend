@@ -24,6 +24,8 @@ export type AppControlsHost = Readonly<{
   welcome?():AppWelcomeBuildV1;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
   phone:PhoneSmsEnv;
+  // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
+  whatsappUnlinked():Promise<void>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -145,7 +147,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   const response=await controlAction(form,phone
     ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
       projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf):null,
-      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields);}}
+      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
       act:async action=>{await host.assertCurrent();return host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);

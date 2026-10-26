@@ -32,6 +32,8 @@ export type IMessageInboxRecord = {
   media?: IMessageMedia;
   /** Tapback lines taken for this turn when it started; cleared with its text. */
   reactions?: string[];
+  /** The line naming the message of Waldo's this one replies to, its health readings withheld; cleared with its text. */
+  replyNote?: string;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
@@ -43,7 +45,7 @@ export type IMessageReactionNote = Readonly<{ key: string; conversationRef: stri
 const finished = (r: IMessageInboxRecord) => r.state === 'completed' || r.state === 'interrupted' || r.state === 'revoked';
 const open = (r: IMessageInboxRecord) => r.state === 'admitted' || r.state === 'running';
 const due = (rows: readonly IMessageInboxRecord[], now: number) => (rows.some((r) => r.state === 'admitted') ? now + 250 : null);
-const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; delete r.reactions; };
+const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; delete r.reactions; delete r.replyNote; };
 
 export class IMessageOwnerInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
@@ -150,15 +152,16 @@ export class IMessageOwnerInbox {
   /**
    * Literal owner forget: admitted (not yet started) turns are redacted before they run. A running turn is
    * left alone (it is usually the forget request itself) and its text is cleared when it closes; finished
-   * rows hold no text. A waiting tapback line that quotes a forgotten literal is dropped. Returns the rows rewritten and
+   * rows hold no text. A waiting tapback or reply line that quotes a forgotten literal is dropped. Returns the rows rewritten and
    * the not-running rows still holding a forgotten literal.
    */
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
-    const held = (r: IMessageInboxRecord) => (!!r.text && holds(r.text)) || !!r.media?.files.some((file) => holds(file.name));
+    const held = (r: IMessageInboxRecord) => (!!r.text && holds(r.text)) || (!!r.replyNote && holds(r.replyNote)) || !!r.media?.files.some((file) => holds(file.name));
     let rewritten = 0;
     for (const r of this.records()) {
       if (r.state !== 'admitted' || !held(r)) continue;
       r.text = redact(r.text);
+      if (r.replyNote && holds(r.replyNote)) delete r.replyNote;
       if (r.media) r.media = { ...r.media, files: r.media.files.map((file) => ({ ...file, name: redact(file.name) })) };
       this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }

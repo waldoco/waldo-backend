@@ -25,6 +25,8 @@ export type ChannelControlsDeps = Readonly<{
   owner: string; csrf: string; expires: number; store: Store;
   sessions(): Promise<readonly { csrf: string; expires: number }[]>;
   onIMessageRevoked(bridgeDoName: string): void;
+  // Clears the WhatsApp chat the owner DO holds, after the directory unlinked it.
+  onWhatsAppUnlinked(): Promise<void>;
 }>;
 
 // One entry per view. fresh() pairs the hashed read with an executor bound to that same read.
@@ -46,7 +48,7 @@ const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
   },
   phone: {
     status: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), status: {} }),
-    fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields) }),
+    fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields, deps.onWhatsAppUnlinked) }),
   },
 };
 
