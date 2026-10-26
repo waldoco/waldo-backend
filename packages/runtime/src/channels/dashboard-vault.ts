@@ -85,7 +85,7 @@ const memorySection = (memory: Memory) => {
   const groups = new Map<string, { id: string; text: string; source_label: string; origin: string; recorded_at: string | null }[]>();
   const add = (kind: string, item: { id: string; text: string; source_label: string; origin: string; recorded_at: string | null }) => groups.set(kind, [...groups.get(kind) ?? [], item]);
   for (const claim of memory.claims) add(claim.kind || 'other', { id: claim.id, text: claim.text, source_label: SOURCE_LABEL[claim.source] ?? 'Source unverified', origin: claim.origin, recorded_at: claim.recorded_at ? claim.recorded_at.slice(0, 10) : null });
-  for (const node of memory.nodes) add('pattern', { id: node.id, text: node.label, source_label: 'Waldo\'s pattern from your Spots', origin: 'agent', recorded_at: node.recorded_active_at ? node.recorded_active_at.slice(0, 10) : null });
+  for (const node of memory.nodes) add('interpretation', { id: node.id, text: node.label, source_label: 'Waldo\'s pattern from your Spots', origin: 'agent', recorded_at: node.recorded_active_at ? node.recorded_active_at.slice(0, 10) : null });
   return {
     state: memory.state,
     groups: [...groups].map(([kind, items]) => ({ kind, total: items.length, items: items.slice(0, MEMORY_PER_GROUP) })),
