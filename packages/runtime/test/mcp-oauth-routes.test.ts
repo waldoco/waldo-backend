@@ -105,6 +105,16 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     expect(other).toContain('asks you first');
   });
 
+  it('names an official server from the catalogue, and never echoes an id it does not know', async () => {
+    const nonce = 'F'.repeat(43), query = `code=c&state=${encodeURIComponent(await mcpState(SECRET, OWNER, nonce))}`;
+    const notion = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c3', name: 'notion', official: 'notion' }).env)).text();
+    expect(notion).toContain('Notion connected');
+    expect(notion).toContain('labels read-only run without asking');
+    const forged = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c4', name: 'x', official: '<script>alert(1)</script>' }).env)).text();
+    expect(forged).not.toContain('<script>alert(1)');
+    expect(forged).toContain('Server connected');
+  });
+
   it('sets the binding on the console start link, leaves the attempt to that browser, and refuses a replay once it is spent', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(OWNER));
     const nonce = 'B'.repeat(43);

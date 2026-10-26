@@ -65,6 +65,9 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   assertTaskSourceCurrent?: () => Promise<void>;
   ownerInitiated?: boolean;
+  // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
+  // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
+  taintOrigins?: readonly string[];
   turnId?: string;
   toolCallId?: string;
   runScope?: RunEffectScope;
