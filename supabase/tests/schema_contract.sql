@@ -38,7 +38,7 @@ select is(
      and privilege_type = 'SELECT'),
   array[
     'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_context_daily', 'health_daily', 'patrol_entries', 'spots', 'subscriptions',
+    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
     'user_baselines', 'user_consents', 'user_devices', 'users'
   ]::text[],
   'authenticated SELECT grants match client-readable tables'
@@ -49,7 +49,7 @@ select is(
    from pg_policies where schemaname = 'public'),
   array[
     'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_context_daily', 'health_daily', 'patrol_entries', 'spots', 'subscriptions',
+    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
     'user_baselines', 'user_consents', 'user_devices', 'users'
   ]::text[],
   'only client-readable tables have policies'
