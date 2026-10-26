@@ -28,10 +28,17 @@ const findArgsSchema = z.strictObject({
 }).refine(({ groups, names }) => (groups?.length ?? 0) + (names?.length ?? 0) > 0);
 const useArgsSchema = z.strictObject({ name: z.string().min(1).max(80), arguments: z.record(z.string(), z.unknown()).optional() });
 
+const parse = (raw: string): unknown => { try { return JSON.parse(raw || '{}'); } catch { return undefined; } };
 const refused = (error: ToolError, code: string): LoopToolResult =>
   ({ ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, code, reason: code });
+// The tool a recorded call ran: the one a use_tool call names, else the call's own name. The history keeps the model's
+// use_tool call, so whatever reads a tool turn by its tool (taint, the outside-data label, the forget barrier) reads this.
+export const toolOfCall = (call: Pick<LLMToolCall, 'name' | 'arguments'>): string => {
+  if (call.name !== USE_TOOL) return call.name;
+  const args = useArgsSchema.safeParse(parse(call.arguments));
+  return args.success && !META_TOOLS.has(args.data.name) ? args.data.name : call.name;
+};
 const placement = (name: string): 'core' | BrainNamespace => (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
-const parse = (raw: string): unknown => { try { return JSON.parse(raw || '{}'); } catch { return undefined; } };
 
 const deferredGroups = (names: readonly string[]): Map<BrainNamespace, string[]> => {
   const groups = new Map<BrainNamespace, string[]>();

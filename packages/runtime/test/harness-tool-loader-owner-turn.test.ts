@@ -171,6 +171,24 @@ describe('the harness tool loader on the owner turn', () => {
     expect(volume).not.toBe('low');
   });
 
+  // A health read through use_tool reaches the next round exactly as the same read called directly: the scribe and the
+  // labels read the turn by the tool it ran.
+  it('a health read through use_tool crosses the scribe as the direct call does', async () => {
+    const outputs: string[] = [];
+    for (const routed of [true, false]) {
+      model.respond = (request) => {
+        if (!isReply(request)) return undefined;
+        if (request.tool_turns?.length) { outputs.push(request.tool_turns[0]!.output); return { text: 'Nothing logged.' }; }
+        const call = routed ? { call_id: 'h1', name: USE_TOOL, arguments: JSON.stringify({ name: 'list_health_logs', arguments: {} }) } : { call_id: 'h1', name: 'list_health_logs', arguments: '{}' };
+        return { text: '', tool_calls: [call] };
+      };
+      await ownerTurns(`harness-health-${routed}`, { WALDO_TOOL_LOADER: 'harness' }, [ASKED]);
+    }
+    expect(outputs).toHaveLength(2);
+    expect(JSON.parse(outputs[0]!.split('\n[')[0]!)).toMatchObject({ ok: true });
+    expect(outputs[0]).toBe(outputs[1]);
+  });
+
   it('measures the tools per round: under 4k tokens on both wires, the catalogue counted', async () => {
     const off = (await ownerTurns('harness-measure-off', { WALDO_TOOL_SEARCH: 'off' }, ['what is on today?']))[0]![0];
     const on = (await ownerTurns('harness-measure-on', { WALDO_TOOL_LOADER: 'harness' }, ['what is on today?']))[0]![0];

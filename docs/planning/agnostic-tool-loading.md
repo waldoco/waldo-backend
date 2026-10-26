@@ -53,7 +53,7 @@ Neither provider's client-side search is provider-agnostic: Anthropic's returns 
 - `onTool` and `onToolStart`;
 - `dispatchTool`: ACL, held tools (spend ceiling), the approval token, the PreToolUse taint law, `proposal_only`, and schema parse.
 
-The provider history keeps the outer `use_tool` call, so it matches the tools array. Only admitted handlers are catalogued and callable. The admitted set is what is left after eligibility, the owner-only, probe-strip and background filters (`EGRESS_READ_TOOLS` and outside-text jobs included). A name outside the set gets `handler_unavailable`. `use_tool` cannot name a meta tool. `find_tools` events produce no receipt and no earlier-result row.
+The provider history keeps the outer `use_tool` call, so it matches the tools array. Whatever reads a recorded turn by its tool resolves the call through `toolOfCall` (`tools/loader.ts`): the provider's external-origin taint and the `[external data from …]` label (`llm/provider.ts`), and the forget barrier's origin and `forget_memory` exemption (`context-composer/forget-barrier.ts`). `LLMToolTurn` is unchanged. Only admitted handlers are catalogued and callable. The admitted set is what is left after eligibility, the owner-only, probe-strip and background filters (`EGRESS_READ_TOOLS` and outside-text jobs included). A name outside the set gets `handler_unavailable`. `use_tool` cannot name a meta tool. `find_tools` events produce no receipt and no earlier-result row.
 
 Tests that prove it:
 
@@ -77,6 +77,10 @@ From `test/harness-tool-loader-owner-turn.test.ts` (`HARNESS_TOOL_SURFACE`), for
 | Catalogue and line added to the system prompt (cached, once per turn) | ~690 |
 
 The net cut is about 10,200 tokens per round, and the 400-and-resend request disappears. A `find_tools` result costs its definitions once, in the turn that asks for them.
+
+Trade-off: a turn that needs a deferred tool pays one `find_tools` round (about 3–8 s on staging), unless the model gets the arguments right from the catalogue and calls `use_tool` straight away. Loaded definitions do not carry into the next turn. The staging probe called `get_communication`, which is deferred (`mail`), so that exact question gets about one round longer under `harness` unless it moves into core. That costs its definition against the 4,000-token cap. Which tools are core is a gate decision.
+
+Under `harness` the behaviour text gains the catalogue without a `VOICE_VERSION` bump, so cache-share comparisons by voice version mix the two modes. Compare by the flag.
 
 ## Round-1 cache miss: what the code shows
 

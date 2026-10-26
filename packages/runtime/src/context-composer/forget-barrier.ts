@@ -1,6 +1,7 @@
 import { literalTextRedactor, type ConversationModelMessage, type LLMToolTurn } from '@waldo/contracts';
 import type { Claim, ClaimStore } from '../memory/claims';
 import { carriesTopic, holdsIn } from '../memory/forget-guard';
+import { toolOfCall } from '../tools/loader';
 
 // The one place the model's view is cut for topics the owner asked to forget whose purge has not finished. A forget is a
 // privacy boundary, so the cut is deterministic; its cost lands on the forgotten words, not on the reads around them.
@@ -120,7 +121,7 @@ export const forgetBarrier = (held: readonly string[], mode: ForgetBarrierMode =
 
   // The model's own calls keep their results in place: dropping a turn would leave its function call unanswered.
   const turns = (list: readonly LLMToolTurn[]): LLMToolTurn[] =>
-    list.map((turn) => (turn.call.name === 'forget_memory' ? turn : { ...turn, output: output(turn.output, resultOrigin(turn.call.name)) }));
+    list.map((turn) => (toolOfCall(turn.call) === 'forget_memory' ? turn : { ...turn, output: output(turn.output, resultOrigin(toolOfCall(turn.call))) }));
 
   // A list of outside texts (earlier tool results): the words go from each. The flag-off rule dropped any that held.
   const texts = <T,>(list: readonly T[], textOf: (item: T) => string, withText: (item: T, text: string) => T): T[] =>
