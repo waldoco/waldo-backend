@@ -64,7 +64,8 @@ describe('MCP OAuth routes', () => {
     expect(mcpConnectReceipt({ kind: 'redirect', path: `/console/mcp/start/${'A'.repeat(43)}` })).toMatchObject({ state: 'recorded', navigation: `/console/mcp/start/${'A'.repeat(43)}` });
     expect(mcpConnectReceipt({ kind: 'redirect', path: 'https://evil.example/authorize' })).toMatchObject({ state: 'rejected' });
     expect(mcpConnectReceipt({ kind: 'failed', reason: 'egress_host' })).toEqual({ state: 'rejected', message: 'That address points at a private or internal network, which Waldo does not reach.' });
-    expect(mcpDisconnectReceipt({ ok: true, provider: 'unsupported' }).message).toContain('did not confirm it revoked access');
+    expect(mcpDisconnectReceipt({ ok: true, provider: 'unsupported' }).message).toContain('gives Waldo no way to revoke its access, so remove Waldo in that service\'s settings too');
+    expect(mcpDisconnectReceipt({ ok: true, provider: 'failed' }).message).toContain('did not confirm it revoked access');
     expect(mcpDisconnectReceipt({ ok: false, provider: 'failed' }).state).toBe('rejected');
     expect(mcpDisconnectReceipt({ ok: false, provider: 'not_needed' })).toEqual({ state: 'rejected', message: 'That server is no longer connected. Refresh the records.' });
   });

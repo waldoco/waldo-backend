@@ -158,7 +158,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
       const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; error?: unknown } | null;
       if (out?.error === 'account_linked') return refuse('account_linked');
       if (typeof out?.id !== 'string') return refuse('connection_unavailable');
-      return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), version: await version(stored) };
+      return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
     }
     case 'refresh': {
       const current = await grant(body.do_name, body.connection);

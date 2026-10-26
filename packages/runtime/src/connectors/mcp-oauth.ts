@@ -206,7 +206,8 @@ export type ClientPins = Readonly<{
 }>;
 export type McpPins = ClientPins & Readonly<{ server_url: string; resource: string }>;
 
-export type TokenSet = Readonly<{ access_token: string; refresh_token?: string; expires_at?: number; scope?: string }>;
+// workspace: the account the provider names in its token answer (ok_envelope's team), shown to the owner as metadata.
+export type TokenSet = Readonly<{ access_token: string; refresh_token?: string; expires_at?: number; scope?: string; workspace?: string }>;
 export class TokenEndpointError extends Error {
   constructor(public readonly kind: 'auth' | 'transient' | 'configuration' | 'protocol', public readonly status?: number, public readonly retryAfterSeconds?: number) { super(`token_${kind}`); this.name = 'TokenEndpointError'; }
 }
@@ -221,6 +222,10 @@ const envelopeTokens = (status: number, json: Record<string, unknown>, now: numb
   if (json.ok !== true) throw new TokenEndpointError(ENVELOPE_ERRORS[String(json.error)] ?? 'protocol', status);
   if (typeof json.access_token !== 'string' || !json.access_token) throw new TokenEndpointError('protocol', status);
   const user = json.authed_user as Record<string, unknown> | undefined;
+  const team = json.team as Record<string, unknown> | undefined;
+  const teamId = typeof team?.id === 'string' && /^[A-Za-z0-9]{1,32}$/.test(team.id) ? team.id : undefined;
+  const teamName = typeof team?.name === 'string' ? team.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) : '';
+  const workspace = teamId ? (teamName ? `${teamName} (${teamId})` : teamId) : undefined;
   const scope = typeof json.scope === 'string' ? json.scope : typeof user?.scope === 'string' ? user.scope : undefined;
   const expiresIn = typeof json.expires_in === 'number' && Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : undefined;
   return {
@@ -228,6 +233,7 @@ const envelopeTokens = (status: number, json: Record<string, unknown>, now: numb
     ...(typeof json.refresh_token === 'string' && json.refresh_token ? { refresh_token: json.refresh_token } : {}),
     ...(expiresIn === undefined ? {} : { expires_at: now + expiresIn * 1000 }),
     ...(scope ? { scope: scope.split(/[\s,]+/).filter(Boolean).join(' ') } : {}),
+    ...(workspace ? { workspace } : {}),
   };
 };
 
