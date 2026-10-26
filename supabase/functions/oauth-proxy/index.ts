@@ -64,12 +64,12 @@ const grant = async (doName: string, connection: string): Promise<Grant> => {
   if (typeof bundle.access_token !== 'string') return refuse('connection_unavailable');
   return { provider: row.provider, secret: row.secret, bundle, scopes: Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [], pins: row.pins as ClientPins };
 };
-const clientSecret = async (pins: ClientPins): Promise<string | undefined> => {
+// A confidential client's secret, read for the one endpoint it is about to be sent to. A pre-registered client's
+// row pins its token and revocation endpoints, so pins naming any other endpoint get no secret and send nothing.
+const clientSecret = async (pins: ClientPins, endpoint: string): Promise<string | undefined> => {
   if (pins.client_auth === 'none') return undefined;
-  const rows = await db('oauth_client_get', { p_issuer: pins.issuer, p_redirect_uri: pins.redirect_uri }) as { client_id?: unknown; client_secret?: unknown }[];
-  const row = Array.isArray(rows) ? rows[0] : undefined;
-  if (!row || row.client_id !== pins.client_id || typeof row.client_secret !== 'string') return refuse('token_failed');
-  return row.client_secret;
+  const secret = await db('oauth_client_secret', { p_issuer: pins.issuer, p_redirect_uri: pins.redirect_uri, p_client_id: pins.client_id, p_endpoint: endpoint });
+  return typeof secret === 'string' && secret ? secret : refuse('token_failed');
 };
 const health = (doName: string, connection: string, error: string) => db('proxy_health', { p_do_name: doName, p_connection: connection, p_error: error }).catch(() => undefined);
 const bundleOf = (tokens: TokenSet, pins: ClientPins, previous?: Bundle): Bundle => {
@@ -143,8 +143,13 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
       await db('oauth_client_put', { p_issuer: body.issuer, p_redirect_uri: body.redirect_uri, p_client_id: registration.client_id, p_client_auth: registration.client_auth, p_secret: registration.client_secret ?? null });
       return (await read()) ?? refuse('registration_refused');
     }
+    case 'client': {
+      const rows = await db('oauth_client_registered', { p_issuer: body.issuer, p_redirect_uri: body.redirect_uri }) as { client_id?: unknown; client_auth?: unknown }[];
+      const row = Array.isArray(rows) ? rows[0] : undefined;
+      return row && typeof row.client_id === 'string' ? { client_id: row.client_id, client_auth: row.client_auth } : refuse('registration_refused');
+    }
     case 'exchange': {
-      const secret = await clientSecret(body.pins);
+      const secret = await clientSecret(body.pins, body.pins.token_endpoint);
       const tokens = await exchangeCode(fetch, body.pins, { code: body.code, ...(body.verifier ? { verifier: body.verifier } : {}), redirectUri: body.pins.redirect_uri }, secret, Date.now()).catch(tokenRefusal);
       const account = await accountOf(body.pins, tokens.access_token);
       const stored = JSON.stringify(bundleOf(tokens, body.pins));
@@ -153,7 +158,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
       const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; error?: unknown } | null;
       if (out?.error === 'account_linked') return refuse('account_linked');
       if (typeof out?.id !== 'string') return refuse('connection_unavailable');
-      return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), version: await version(stored) };
+      return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
     }
     case 'refresh': {
       const current = await grant(body.do_name, body.connection);
@@ -163,7 +168,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
       if (!current.bundle.refresh_token) { await health(body.do_name, body.connection, 'oauth_reauth_needed'); return refuse('reauth_needed'); }
       let tokens: TokenSet;
       try {
-        tokens = await refreshTokens(fetch, current.pins, current.bundle.refresh_token, await clientSecret(current.pins), Date.now());
+        tokens = await refreshTokens(fetch, current.pins, current.bundle.refresh_token, await clientSecret(current.pins, current.pins.token_endpoint), Date.now());
       } catch (error) {
         // A single-use refresh token refused as invalid may just have been spent by a refresh that won the
         // race and has since written its tokens: the winner is the answer, not a reconnect.
@@ -218,10 +223,12 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
     }
     case 'revoke': {
       const current = await grant(body.do_name, body.connection);
-      const secret = await clientSecret(current.pins).catch(() => undefined);
-      const provider = !current.pins.revocation_endpoint ? 'unsupported'
+      const endpoint = current.pins.revocation_endpoint;
+      // A confidential client whose secret is refused for this endpoint sends nothing there, not even the token.
+      const secret = endpoint ? await clientSecret(current.pins, endpoint).catch(() => null) : null;
+      const provider = !endpoint ? 'unsupported' : secret === null ? 'failed'
         : (await revokeToken(fetch, current.pins, current.bundle.refresh_token ?? current.bundle.access_token, current.bundle.refresh_token ? 'refresh_token' : 'access_token', secret)) ? 'revoked' : 'failed';
-      if (current.bundle.refresh_token && provider === 'revoked') await revokeToken(fetch, current.pins, current.bundle.access_token, 'access_token', secret);
+      if (current.bundle.refresh_token && provider === 'revoked') await revokeToken(fetch, current.pins, current.bundle.access_token, 'access_token', secret ?? undefined);
       if (await db('oauth_revoke', { p_do_name: body.do_name, p_connection: body.connection }) !== true) return refuse('connection_unavailable');
       return { provider };
     }
@@ -229,7 +236,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
 };
 
 const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-const LOGGED_OPS = new Set(['register', 'exchange', 'call', 'fetch', 'refresh', 'revoke']);
+const LOGGED_OPS = new Set(['register', 'client', 'exchange', 'call', 'fetch', 'refresh', 'revoke']);
 
 Deno.serve(async (request) => {
   const started = Date.now();

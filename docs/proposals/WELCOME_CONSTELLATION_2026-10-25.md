@@ -10,8 +10,9 @@ notice is published, and the owner-profile ADR (#1534) is a yes.
 
 ## The experience, and what "done" means
 
-When app setup ends, Waldo builds a small constellation while the tester takes the 2–3 minute tour: 8–15 nodes across health,
-work, people, routines and interests. It is presented as a welcome gift and fills in as each source finishes. Each node:
+When app setup ends, Waldo builds a small constellation while the tester takes the 2–3 minute tour. By owner ruling (26 Oct)
+it is "a small constellation of your past 30 days of health data": health leads, and other sources add nodes around it only
+when connected. That makes 8–15 nodes across health, work, people, routines and interests. It is presented as a welcome gift and fills in as each source finishes. Each node:
 
 - is a short phrase with no digits;
 - carries the source it came from: Apple Health, Health Connect, calendar, Gmail or the public web;
@@ -61,24 +62,33 @@ send does. **This is the first red test:** a fresh app-only owner, with no chat 
 version. Forgotten nodes stay barred through the barrier (section 3), so a rerun cannot bring them back. Deleting the account
 erases the row with the DO.
 
-## 2. Sources, read in parallel, each bounded
+## 2. Sources, health first, each bounded
 
-The job runs four stages concurrently. Each has a time budget (60 s) and a read budget, and records its own state:
-`pending | reading | done | empty | unavailable | revoked | skipped`. A stage that fails leaves the others alone. The build is
-done when every stage has settled. Each stage's model call returns structured nodes (section 2.5). Code admits them, so the
+Health runs first and sets the centre. Calendar and tasks, mail and web then run side by side. Each of them is given the health
+nodes already written (their words, never readings) and is asked to build around them. If no health node was written, they
+get a line saying the owner shares no health and that the model must say nothing of body, sleep, energy, fitness or
+readiness. This is context and instruction only: there is no cap or fixed rule on the other sources. With nothing connected,
+every stage settles `skipped` and no model call is made.
+
+Each stage has a 90 s time budget (it includes the wait in the owner's serial queue) and a read budget, and records its own
+state: `pending | reading | done | empty | unavailable | revoked | skipped`. Because health runs before the rest, the worst
+case is two budgets, 180 s. A stage that fails leaves the others alone. The build is done when every stage has settled. Each stage's model call returns structured nodes (section 2.5). Code admits them, so the
 constellation fills in stage by stage.
 
 ### 2.1 Health (Apple Health, Health Connect)
 
-- **Read:** `HealthReadBook.consent()`, then `series()` over the last 90 local days for the eight `get_health` signals. This is
+- **Read:** `HealthReadBook.consent()`, then `series()` over the last 30 local days (today and the 29 before it) for the eight `get_health` signals. This is
   the same signed read `get_health` uses, cut to the sources whose `storage_compute` and `model_processing` consent is live.
-  The app's 90-day backfill (#1472 accepted) lands through ingest. This stage only reads what is there.
+  The app's 90-day backfill (#1472 accepted) lands through ingest. This stage only reads what is there. An owner who keeps
+  health out of memory (`health_memory.set` off) gets a `skipped` health stage: no consent read, no series read, no health node.
 - **To the model:** daily values per signal, in the health stage's own call only, under live `model_processing` consent.
   The model returns **patterns, not values** ("a late sleeper on weekends", "steady evening walks"). Three constraints, each
   verified in source:
   - **The call must be untainted.** The sanitiser lets owner health values through to the model only at `internal_context`
     with `source_taint === null` (`scribe/sanitiser.ts:1300-1306`). Any other case is denied as `health_value_leak`. So the
     health call never shares a request with mail, calendar or web text, which is one reason each stage gets its own call.
+    The reverse direction carries no readings: the later calls get the written health nodes, digit-free phrases already in
+    the owner's memory, which every chat turn already reads in `<owner_constellation>`.
   - **Its text must not reach traces.** `complete()` logs a call's input and output text into the Langfuse span whenever
     capture is on, unless the purpose is metadata-only (`owner-turn.ts:303`: `memory*`, `task_source*`, `compaction`).
     Staging has capture on and #1398 is unmerged. Every welcome call therefore uses a `memory_welcome_<stage>` purpose, and
@@ -239,7 +249,7 @@ gift appears. The contract above is all it needs.
 Additions to the privacy notice copy (the notice is still unpublished, P0-3):
 
 - **Welcome build.** When you finish setup, Waldo reads your connected sources once to build a starting picture of you:
-  - the last 90 days of health readings, as patterns and never numbers;
+  - the last 30 days of health readings, as patterns and never numbers;
   - calendar and task titles across your connected Google accounts;
   - who you have emailed with in the last 90 days, and the subject lines, never message contents;
   - with your separate yes, public web pages about you.

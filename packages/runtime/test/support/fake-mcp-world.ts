@@ -32,6 +32,13 @@ export type FakeOptions = {
   challengeScope: string;
   resourceScopes: string[];
   serverScopes: string[];
+  // A pre-registered confidential client: the token endpoint requires this secret (client_secret_post).
+  clientSecret?: string;
+  // The token endpoint answers inside an ok envelope: HTTP 200, ok:false errors, a "user" token type and comma-separated
+  // scopes under authed_user.
+  envelope?: boolean;
+  // false: the authorization server does not list offline_access.
+  offlineAccess?: boolean;
 };
 
 export const defaultTools: FakeTool[] = [
@@ -73,8 +80,10 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const token = `at_${counter}`, rt = `rt_${counter}`;
     access.set(token, { expires: now + options.accessTtlSeconds * 1000, scope });
     refresh.set(rt, { scope, family });
+    if (options.envelope) return { ok: true, access_token: token, token_type: 'user', expires_in: options.accessTtlSeconds, refresh_token: rt, authed_user: { id: 'U0FIXTURE', scope: scope.split(' ').join(',') }, team: { id: 'T0FIXTURE', name: 'Fixture Co' } };
     return { access_token: token, token_type: 'Bearer', expires_in: options.accessTtlSeconds, refresh_token: rt, scope };
   };
+  const tokenError = (error: string, status = 400) => options.envelope ? json({ ok: false, error }) : json({ error }, status);
   const challenge = async (verifier: string) => {
     const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
     let binary = '';
@@ -137,7 +146,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,
-          scopes_supported: options.serverScopes,
+          scopes_supported: options.serverScopes.filter((scope) => options.offlineAccess !== false || scope !== 'offline_access'),
         });
       }
       if (url.pathname === '/register') {
@@ -148,10 +157,11 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
       }
       if (url.pathname === '/token') {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
-        if (form.get('resource') !== mcpUrl) return json({ error: 'invalid_target' }, 400);
+        if (form.get('resource') !== mcpUrl) return tokenError('invalid_target');
+        if (options.clientSecret !== undefined && form.get('client_secret') !== options.clientSecret) return tokenError('invalid_client', 401);
         if (form.get('grant_type') === 'authorization_code') {
           const code = codes.get(form.get('code') ?? '');
-          if (!code || code.client_id !== form.get('client_id') || code.redirect_uri !== form.get('redirect_uri') || code.verifier_challenge !== await challenge(form.get('code_verifier') ?? '')) return json({ error: 'invalid_grant' }, 400);
+          if (!code || code.client_id !== form.get('client_id') || code.redirect_uri !== form.get('redirect_uri') || code.verifier_challenge !== await challenge(form.get('code_verifier') ?? '')) return tokenError('invalid_grant');
           codes.delete(form.get('code') ?? '');
           counter += 1;
           return json(issue(options.grantedScope ?? code.scope, `fam_${counter}`));
@@ -161,13 +171,13 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
           const row = refresh.get(token);
           // OAuth 2.1 §4.3.1 reuse detection: a spent rotated refresh token revokes the whole family.
           const spent = spentRefresh.get(token);
-          if (spent) { revokedFamilies.add(spent); for (const [key, value] of refresh) if (value.family === spent) refresh.delete(key); return json({ error: 'invalid_grant' }, 400); }
-          if (!row || revokedFamilies.has(row.family)) return json({ error: 'invalid_grant' }, 400);
+          if (spent) { revokedFamilies.add(spent); for (const [key, value] of refresh) if (value.family === spent) refresh.delete(key); return tokenError('invalid_grant'); }
+          if (!row || revokedFamilies.has(row.family)) return tokenError('invalid_grant');
           refresh.delete(token);
           spentRefresh.set(token, row.family);
           return json(issue(row.scope, row.family));
         }
-        return json({ error: 'unsupported_grant_type' }, 400);
+        return tokenError('unsupported_grant_type');
       }
       if (url.pathname === '/revoke') {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);

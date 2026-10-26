@@ -22,6 +22,8 @@ export const MCP_ATTEMPT_TTL_MS = 15 * 60_000;
 // sooner; its retry then simply asks again.
 const QUESTION_TTL_MS = 24 * 60 * 60_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
+// The newest sends kept for Patrol; the access log shows only the last 30 days of them.
+const MCP_SENDS_KEPT = 500;
 // tools/list freshness when the server gives no ttlMs (spec: CacheableResult). A refresh also follows any
 // call that names a tool the cache does not have.
 const DEFAULT_TOOLS_TTL_MS = 60 * 60_000;
@@ -106,6 +108,7 @@ type Attempt = Readonly<{
   scope?: string;
   // The catalogue id of the console tile the owner connected from: their consent to its labelled reads.
   official?: string;
+  token_dialect?: ClientPins['token_dialect'];
 }>;
 // reviewed: a server Waldo reviewed (Granola), whose reads run without asking; its sign-in page says so.
 // official: the catalogue id of an official server whose labelled reads were just allowed (mcp-catalogue).
@@ -145,7 +148,7 @@ export type McpConnectionsDeps = Readonly<{
   log?: (entry: Readonly<{ hop: string; ok: boolean; code?: string; ms: number }>) => void;
 }>;
 
-type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; tools_capped: number; connected_at: number };
+type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; tools_capped: number; connected_at: number; workspace: string | null };
 
 const b64url = (bytes: Uint8Array) => {
   let binary = '';
@@ -219,6 +222,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     issuer TEXT, scopes TEXT NOT NULL DEFAULT '', step_up TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, era TEXT, version TEXT, expires_at INTEGER, tools_fetched_at INTEGER, tools_ttl_ms INTEGER,
     hidden_tools INTEGER NOT NULL DEFAULT 0, connected_at INTEGER NOT NULL)`);
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'tools_capped')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN tools_capped INTEGER NOT NULL DEFAULT 0');
+  // The account the provider named when the owner signed in (a Slack team), shown with each send.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'workspace')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN workspace TEXT');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tools (connection TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, def TEXT NOT NULL, PRIMARY KEY (connection, name))');
   // A permission is for one tool definition: a changed definition no longer matches and asks again. source says who allowed
   // it: the owner in Connections ('owner'), or connecting an official server from its tile ('catalogue'), which allows
@@ -226,6 +231,10 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tool_reads (connection TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL, granted_at INTEGER NOT NULL, PRIMARY KEY (connection, name))');
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_tool_reads)').toArray().some((column) => column.name === 'source')) sql.exec("ALTER TABLE mcp_tool_reads ADD COLUMN source TEXT NOT NULL DEFAULT 'owner'");
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_attempts (nonce TEXT PRIMARY KEY, record TEXT NOT NULL, expires INTEGER NOT NULL, started INTEGER NOT NULL DEFAULT 0, settled TEXT, settled_at INTEGER)');
+  // Sends on a server whose writes speak as the owner (mcp-catalogue sends_as_owner): when, which tool, the workspace and
+  // channel it went to, how it was allowed and whether it ran, once per intent. Never what it said, nor its result.
+  // Patrol's access log reads it.
+  sql.exec('CREATE TABLE IF NOT EXISTS mcp_sends (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, server TEXT NOT NULL, tool TEXT NOT NULL, workspace TEXT, channel TEXT, via TEXT NOT NULL, ok INTEGER NOT NULL, intent TEXT NOT NULL UNIQUE)');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, args_digest TEXT NOT NULL, questions TEXT NOT NULL, request_state TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL)');
   const refreshing = REFRESHING.get(sql) ?? new Map<string, Promise<void>>();
   REFRESHING.set(sql, refreshing);
@@ -236,12 +245,44 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const byName = (name: string) => sql.exec<Row>('SELECT * FROM mcp_connections WHERE name = ?', name).toArray()[0];
   const toolRows = (connection: string) => sql.exec<{ name: string; digest: string; def: string }>('SELECT name, digest, def FROM mcp_tools WHERE connection = ? ORDER BY position', connection).toArray();
   const reads = (connection: string) => new Map(sql.exec<{ name: string; digest: string; source: string }>('SELECT name, digest, source FROM mcp_tool_reads WHERE connection = ?', connection).toArray().map((r) => [r.name, { digest: r.digest, source: r.source as GrantSource }]));
-  // The reviewed server's reads run without a card; on any other server only a grant for this exact definition does, and a
-  // grant made by connecting from a tile only in the owner's own untainted turn (ownerTurn).
-  const runsWithoutAsking = (r: Row, name: string, digest: string, granted: ReadonlyMap<string, Grant>, ownerTurn: boolean) => {
-    if (isReviewedGranola(r.server_url, r.issuer) && isGranolaRead(name)) return true;
-    const grant = granted.get(name);
-    return grant?.digest === digest && (grant.source === 'owner' || ownerTurn);
+  // The reviewed server's reads run without a card; on any other server only a grant for this exact definition does. A grant
+  // made by connecting from a tile, or the owner's grant for a write that speaks as them, applies only in the owner's own
+  // untainted turn (ownerTurn).
+  // On a server whose writes speak as the owner, a read is a tool its catalogue entry names, never one the server labels;
+  // everywhere else the server's own read-only label decides which tools connecting from a tile allows.
+  const isRead = (r: Row, def: McpToolDef) => {
+    const entry = catalogueEntry(r.server_url, r.issuer);
+    return entry?.sends_as_owner ? (entry.reads ?? []).includes(def.name) : marksReadOnly(def);
+  };
+  const sendsAsOwner = (r: Row, def: McpToolDef) => catalogueEntry(r.server_url, r.issuer)?.sends_as_owner === true && !isRead(r, def);
+  // sendTurn: the owner's own request with no outside content but this server's tool definitions, the only turn in which a
+  // send the owner allowed runs without a card.
+  const runsWithoutAsking = (r: Row, def: McpToolDef, digest: string, granted: ReadonlyMap<string, Grant>, ownerTurn: boolean, sendTurn = ownerTurn) => {
+    if (isReviewedGranola(r.server_url, r.issuer) && isGranolaRead(def.name)) return true;
+    const grant = granted.get(def.name);
+    if (grant?.digest !== digest) return false;
+    if (sendsAsOwner(r, def)) return grant.source === 'owner' && sendTurn;
+    return ownerTurn || grant.source === 'owner';
+  };
+  // Whether a write that speaks as the owner may run now without a card: the owner allowed this exact definition in
+  // Connections. The caller adds the turn: only the owner's own request, untainted by any outside content.
+  const sendsNow = (server: string, tool: string): boolean => {
+    const r = live(server), found = r ? toolOf(r, tool) : undefined;
+    const grant = r && found ? reads(r.id).get(tool) : undefined;
+    return !!r && !!found && r.status === 'active' && sendsAsOwner(r, found.def) && grant?.source === 'owner' && grant.digest === found.digest;
+  };
+  // A replayed intent returns the edge's stored result without sending again, so it adds no row.
+  // Where a send went: the first argument the catalogue names as its target, as the owner's own id or name for it.
+  const sendTarget = (r: Row, args: Readonly<Record<string, unknown>>): string | null => {
+    for (const key of catalogueEntry(r.server_url, r.issuer)?.send_target ?? []) {
+      const value = args[key];
+      if (typeof value === 'string' && value.trim()) return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
+    }
+    return null;
+  };
+  const keepSend = (r: Row, tool: string, args: Readonly<Record<string, unknown>>, via: 'without_asking' | 'approved', ok: boolean, intent: string) => {
+    sql.exec('INSERT OR IGNORE INTO mcp_sends (at, server, tool, workspace, channel, via, ok, intent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', deps.now(), r.name, tool, r.workspace, sendTarget(r, args), via, ok ? 1 : 0, intent);
+    sql.exec('DELETE FROM mcp_sends WHERE id <= (SELECT MAX(id) FROM mcp_sends) - ?', MCP_SENDS_KEPT);
   };
   const update = (id: string, fields: Partial<Row>) => {
     const keys = Object.keys(fields);
@@ -254,7 +295,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     return {
       id: r.id, name: r.name, host: new URL(r.server_url).hostname, server_url: r.server_url, auth: r.auth as 'oauth' | 'none', registration: r.registration as RegistrationMode | 'none',
       risk: isReviewedGranola(r.server_url, r.issuer) ? 'reviewed' : 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
-      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.name, t.digest, granted, true)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
+      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.def, t.digest, granted, true)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
       tools_changed: [...granted].some(([name, grant]) => !tools.some((t) => t.name === name && t.digest === grant.digest)), connected_at: r.connected_at,
     };
   };
@@ -385,7 +426,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const settle = (nonce: string, outcome: ConnectOutcome) => sql.exec("UPDATE mcp_attempts SET settled = ?, settled_at = ?, record = '{}' WHERE nonce = ?", JSON.stringify(outcome), deps.now(), nonce);
   const sweep = () => sql.exec('DELETE FROM mcp_attempts WHERE (settled IS NULL AND expires < ?) OR (settled_at IS NOT NULL AND settled_at < ?)', deps.now() - KEEP_SETTLED_MS, deps.now() - KEEP_SETTLED_MS);
 
-  const store = (input: Readonly<{ id: string; server_url: string; auth: 'oauth' | 'none'; registration: RegistrationMode | 'none'; issuer: string | null; scopes: readonly string[]; expires_at?: number; version?: string; era?: McpEra }>): Row => {
+  const store = (input: Readonly<{ id: string; server_url: string; auth: 'oauth' | 'none'; registration: RegistrationMode | 'none'; issuer: string | null; scopes: readonly string[]; expires_at?: number; version?: string; era?: McpEra; workspace?: string }>): Row => {
     const existing = row(input.id) ?? rows().find((r) => r.server_url === input.server_url);
     if (existing && existing.id !== input.id) deps.transaction(() => {
       // Reconnecting the same server under a new grant keeps its name and the owner's choices.
@@ -394,9 +435,9 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       sql.exec('UPDATE mcp_connections SET id = ? WHERE id = ?', input.id, existing.id);
     });
     const name = existing?.name ?? nameFor(new URL(input.server_url).hostname, new Set([...rows().map((r) => r.name), ...(deps.reserved?.() ?? [])]));
-    sql.exec(`INSERT INTO mcp_connections (id, name, server_url, auth, registration, issuer, scopes, status, era, version, expires_at, connected_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-      ON CONFLICT (id) DO UPDATE SET server_url = excluded.server_url, auth = excluded.auth, registration = excluded.registration, issuer = excluded.issuer, scopes = excluded.scopes, step_up = '', status = 'active', version = excluded.version, expires_at = excluded.expires_at`,
-    input.id, name, input.server_url, input.auth, input.registration, input.issuer, input.scopes.join(' '), input.era ?? null, input.version ?? null, input.expires_at ?? null, existing?.connected_at ?? deps.now());
+    sql.exec(`INSERT INTO mcp_connections (id, name, server_url, auth, registration, issuer, scopes, status, era, version, expires_at, connected_at, workspace) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET server_url = excluded.server_url, auth = excluded.auth, registration = excluded.registration, issuer = excluded.issuer, scopes = excluded.scopes, step_up = '', status = 'active', version = excluded.version, expires_at = excluded.expires_at, workspace = excluded.workspace`,
+    input.id, name, input.server_url, input.auth, input.registration, input.issuer, input.scopes.join(' '), input.era ?? null, input.version ?? null, input.expires_at ?? null, existing?.connected_at ?? deps.now(), input.workspace ?? null);
     return row(input.id)!;
   };
 
@@ -459,7 +500,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // The reviewed server's permissions are Waldo's review, not a per-tool choice.
     if (!r || isReviewedGranola(r.server_url, r.issuer)) return false;
     const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
-    const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
+    const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => isRead(r, t.def)) : tools.filter((t) => t.name === tool);
     if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;
     if (withoutAsking && seen !== undefined && seen !== (tool === EVERY_READ_ONLY_HINT ? await readOnlyDigest(targets) : targets[0]!.digest)) return 'changed';
     deps.transaction(() => {
@@ -512,16 +553,21 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const resource = await discoverProtectedResource(deps.fetcher, serverUrl, challenge.resourceMetadata);
         const issuer = resource.authorization_servers[0]!;
         const server = await discoverAuthorizationServer(deps.fetcher, issuer);
-        const mode = registrationMode(server, false);
+        // An official server that signs in only with a client registered by hand uses the one seeded into the edge for this
+        // exact issuer, and asks for exactly the scopes that client was registered with.
+        const entry = catalogueEntry(serverUrl, issuer);
+        const mode = registrationMode(server, entry?.pre_registered === true);
         const client = mode === 'cimd' ? { client_id: clientMetadataUrl(origin), client_auth: 'none' as const }
+          : mode === 'pre_registered' ? await deps.proxy.client({ issuer, redirectUri: callbackUrl(origin) })
           : await deps.proxy.register({ issuer, registrationEndpoint: server.registration_endpoint!, redirectUri: callbackUrl(origin), origin });
         const previous = rows().find((r) => r.server_url === serverUrl);
-        const scope = requestedScope(challenge.scope, resource, server, previous ? [...previous.scopes.split(' '), ...previous.step_up.split(' ')].filter(Boolean) : []);
+        const scope = requestedScope(entry?.scopes?.join(' ') ?? challenge.scope, resource, server, previous ? [...previous.scopes.split(' '), ...previous.step_up.split(' ')].filter(Boolean) : []);
         const nonce = b64url(crypto.getRandomValues(new Uint8Array(32)));
         const attempt: Attempt = {
           origin, server_url: serverUrl, verifier: pkceVerifier(), resource: resource.resource, issuer, iss_supported: server.iss_parameter_supported,
           authorization_endpoint: server.authorization_endpoint, token_endpoint: server.token_endpoint, ...(server.revocation_endpoint ? { revocation_endpoint: server.revocation_endpoint } : {}),
           client_id: client.client_id, client_auth: client.client_auth, registration: mode, ...(scope ? { scope } : {}), ...(official === undefined ? {} : { official }),
+          ...(entry?.token_dialect ? { token_dialect: entry.token_dialect } : {}),
         };
         sweep();
         sql.exec('INSERT INTO mcp_attempts (nonce, record, expires) VALUES (?, ?, ?)', nonce, JSON.stringify(attempt), deps.now() + MCP_ATTEMPT_TTL_MS);
@@ -561,10 +607,10 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       // Settled before the exchange: the code is single-use, so a second callback must never redeem it.
       settle(nonce, { kind: 'failed', reason: 'exchange_unconfirmed' });
       const previous = rows().find((r) => r.server_url === attempt.server_url);
-      const pins: McpPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin) };
+      const pins: McpPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin), ...(attempt.token_dialect ? { token_dialect: attempt.token_dialect } : {}) };
       try {
         const exchanged = await deps.proxy.exchange(doName, 'mcp', pins, callback.code, { verifier: attempt.verifier, ...(attempt.scope ? { scope: attempt.scope } : {}) });
-        const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }) });
+        const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }), ...(exchanged.workspace ? { workspace: exchanged.workspace } : {}) });
         // The edge stored this grant under a new id (the server's sign-in identity moved), and store() moved the server
         // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
         if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
@@ -614,15 +660,15 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const granted = reads(r.id);
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       return {
-        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted, true) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest,
+        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.def, t.digest, granted, true) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest,
           ...(granted.get(t.name)?.source === 'catalogue' && granted.get(t.name)?.digest === t.digest ? { allowed_on_connect: true as const } : {}) })),
-        read_only_digest: await readOnlyDigest(tools.filter((t) => marksReadOnly(t.def))),
+        read_only_digest: await readOnlyDigest(tools.filter((t) => isRead(r, t.def))),
       };
     },
 
     // The model's search over the owner's tools: words, or one server's full list, a page at a time. ownerTurn: whether this
     // turn lets that server's reads allowed on connect run without asking (the owner's own, untainted by anything else).
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: (server: string) => boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: (server: string) => boolean; sendTurn?: (server: string) => boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -633,7 +679,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const page = pool.slice(offset, offset + SEARCH_PAGE);
       const asked = waiting().filter((q) => !input.server || q.server === input.server);
       return {
-        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted, input.ownerTurn?.(item.r.name) === true))),
+        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def, item.digest, item.granted, input.ownerTurn?.(item.r.name) === true, input.sendTurn?.(item.r.name) === true))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
         servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
@@ -650,25 +696,32 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       let found = toolOf(r, tool);
       if (!found) { await refreshTools(r).catch(() => undefined); found = toolOf(r, tool); }
       if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`, true);
-      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, tool, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first' };
+      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, found.def, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first' };
     },
 
+    sendsNow,
+
     // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed; one allowed by
-    // connecting from a tile only when ownerTurn says this is the owner's own untainted turn.
+    // connecting from a tile only when ownerTurn says this is the owner's own untainted turn. A write that speaks as the
+    // owner never runs as a read.
+    // standing: such a write the owner allowed (sendsNow), once per host-derived intent.
     // approved: a card the owner approved, at the definition the card froze, once per intent.
     // A server that needs the owner's answer first returns input_required: its questions are kept under a
     // handle, and the retry carries the owner's answers only from an approved card (answers).
-    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read'; ownerTurn?: boolean } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
+    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read'; ownerTurn?: boolean } | { server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'standing'; intentId: string } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
       const started = deps.now();
-      const r = input.mode === 'read' ? live(input.server) : row(input.connection);
+      const r = input.mode === 'approved' ? row(input.connection) : live(input.server);
       if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
       if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
       if (isGranolaHost(r.server_url) && !isGranolaRead(input.tool)) throw notGranolaRead(r.name, input.tool);
+      let speaking: Readonly<{ via: 'without_asking' | 'approved'; intent: string }> | undefined;
       try {
         let found = toolOf(r, input.tool);
         if (!found && input.mode === 'read') { await refreshTools(r).catch(() => undefined); found = toolOf(r, input.tool); }
         if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`, true);
-        if (input.mode === 'read' && !runsWithoutAsking(r, input.tool, found.digest, reads(r.id), input.ownerTurn === true)) {
+        if (input.mode === 'read' && sendsAsOwner(r, found.def)) throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} sends as the owner, so it never runs as a read. Call call_mcp_tool with the same server, tool and args: it runs at once when the owner allowed it and asked for it themselves, and otherwise shows them a card.`, true);
+        if (input.mode === 'standing' && !sendsNow(r.name, input.tool)) throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first. Call call_mcp_tool; the owner gets a card.`, true);
+        if (input.mode === 'read' && !runsWithoutAsking(r, found.def, found.digest, reads(r.id), input.ownerTurn === true)) {
           const grant = reads(r.id).get(input.tool);
           const why = !grant ? '' : grant.digest !== found.digest ? ' (its definition changed since the owner allowed it)'
             : ' (it was allowed when the owner connected the server, which covers only their own requests, not turns that read content from anywhere but this server or that they did not start)';
@@ -678,14 +731,18 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const problem = checkArgs(found.def, input.args);
         if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`, true);
         const answered = input.mode === 'approved' && input.answers ? (await answerParams(r, input.tool, input.args, input.answers)).params : {};
-        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
+        if (input.mode !== 'read' && sendsAsOwner(r, found.def)) speaking = { via: input.mode === 'approved' ? 'approved' : 'without_asking', intent: input.intentId };
+        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'read' ? {} : { intentId: input.intentId }) });
         if (input.mode === 'approved' && input.answers) sql.exec('DELETE FROM mcp_questions WHERE handle = ?', input.answers.handle);
         if (isRecord(result) && result.isError === true) throw new McpToolFailed(`${r.name}'s ${input.tool} ran and reported an error. ${serverSaid(r.name, toolErrorText(result))}`);
         const asked = await questionsOf(r, input.tool, input.args, result);
+        if (speaking && !asked) keepSend(r, input.tool, input.args, speaking.via, true, speaking.intent);
         log('mcp_call', started, asked ? 'input_required' : undefined);
         return asked ? { server: r.name, input_required: asked } : { server: r.name, result };
       } catch (error) {
         const refusal = directCause(error, r.name);
+        // A write that may have left is kept as not confirmed; one the server provably never ran is not a send.
+        if (speaking && !refusal.notApplied) keepSend(r, input.tool, input.args, speaking.via, false, speaking.intent);
         log('mcp_call', started, refusal.code);
         throw refusal;
       }

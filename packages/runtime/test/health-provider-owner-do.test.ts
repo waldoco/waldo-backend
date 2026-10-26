@@ -119,7 +119,7 @@ describe('WHOOP on the owner object', () => {
       expect([linked.status, await linked.json()]).toEqual([200, { outcome: 'linked' }]);
       expect(row(WHOOP_SYNC_ID)).toMatchObject({ kind: 'provider_sync' });
       // The code was traded and the tokens saved by the edge, never by the object.
-      expect([plane.vault.rpcs, plane.vault.rows.map(connection => [connection.provider, connection.account])]).toEqual([['oauth_client_get', 'oauth_store'], [['whoop', '70001']]]);
+      expect([plane.vault.rpcs, plane.vault.rows.map(connection => [connection.provider, connection.account])]).toEqual([['oauth_client_secret', 'oauth_store'], [['whoop', '70001']]]);
       expect(row(WHOOP_SYNC_ID)!.due_at).toBeLessThanOrEqual(Date.now());
       const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); await owner.alarm(); };
       await pass();
