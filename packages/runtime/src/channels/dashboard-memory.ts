@@ -8,7 +8,7 @@ import { awaitsOwnerConfirm, type Claim } from '../memory/claims';
 
 export const DASHBOARD_MEMORY_PATH = '/console/dashboard/api/v1/memory';
 
-const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', waldo_confirmed: 'Waldo confirmed', inferred: "Waldo's inference" };
+export const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', waldo_confirmed: 'Waldo confirmed', inferred: "Waldo's inference" };
 const day = (iso: string) => iso.slice(0, 10);
 type Action = 'spot.confirm' | 'spot.dismiss' | 'spot.forget';
 

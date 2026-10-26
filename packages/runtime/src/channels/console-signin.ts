@@ -11,6 +11,7 @@ import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, 
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
+import { DASHBOARD_VAULT_PATH } from './dashboard-vault';
 import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
 import { fenceSession, ownerSessionHash } from './session-fence';
 import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -29,7 +30,7 @@ export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 // The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
 const dashboardJson = (url: URL, request: Request) =>
-  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH].includes(url.pathname)
+  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_VAULT_PATH].includes(url.pathname)
   ||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json');
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;

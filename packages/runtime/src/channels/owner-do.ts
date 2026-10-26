@@ -133,7 +133,8 @@ import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, t
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
-import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
+import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH, healthSharing } from './dashboard-health';
+import { DASHBOARD_VAULT_PATH, projectVault, readVaultAccessLog, readVaultQuery } from './dashboard-vault';
 import { reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { UPDATE_CARD_FRESH_MS, updateSweepApplier, updateSweepCheck, updateSweepTools, type SweepGate } from './update-sweep';
@@ -1335,6 +1336,35 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
   // app's contract does not carry.
+  // The step-up gate already refused a session without a recent email code, before this reads anything.
+  private async consoleVault(request: Request, url: URL): Promise<Response> {
+    const reply = (body: object, status = 200, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
+    if (request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405, { allow: 'GET' });
+    const query = readVaultQuery(url.searchParams);
+    if (!query) return reply({ error: 'invalid_query' }, 400);
+    const limited = this.consoleRateLimited('read');
+    if (limited) return limited;
+    const access = consoleAccess(this.ctx.storage);
+    try {
+      const doName = this.ctx.storage.kv.get<string>('do_name');
+      const health = healthSharing({ rpc: signedRpc(this.env), doName }).catch(() => null);
+      const held = await this.serial(async () => {
+        const session = await access.session(sessionCookie(request), !fromAnotherSite(request));
+        if (!session) return null;
+        const runtime = this.setup(); await runtime.ready;
+        const view = await runtime.view(session, null);
+        const now = Date.now();
+        return { now, view, mcp: this.mcp().list(), memory: readMemoryGraph(this.ctx.storage.sql, this.ctx.id.toString()), accessLog: readVaultAccessLog(this.ctx.storage.sql, now, query) };
+      });
+      if (!held) return reply({ error: 'sign_in_required' }, 401);
+      const { now, view, mcp, memory, accessLog } = held;
+      return reply(projectVault({ now, memory, google: view.google.accounts, mcp, telegram: view.telegram,
+        ...(view.imessage ? { imessage: view.imessage } : {}), ...(view.whatsapp ? { whatsapp: view.whatsapp } : {}), health: await health, accessLog }));
+    } catch {
+      return reply({ error: 'vault_unavailable' }, 503);
+    }
+  }
+
   private async consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
     if (view === 'connections') {
@@ -2180,6 +2210,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (classic) return classic;
     const stepUp = await consoleStepUpRefusal(request, session, Date.now());
     if (stepUp) return stepUp;
+    if (url.pathname === DASHBOARD_VAULT_PATH) return this.consoleVault(request, url);
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request), renews);if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';

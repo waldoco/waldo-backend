@@ -79,6 +79,18 @@ const ownerRead = async ({ rpc, doName, now }: ConsoleHealthInput): Promise<Resp
   });
 };
 
+// The Vault's health rows: what the owner shares, by source and purpose, and each source's newest upload. Scores are never
+// read here. null when the health plane did not answer or answered out of shape.
+export const healthSharing = async ({ rpc, doName }: Pick<ConsoleHealthInput, 'rpc' | 'doName'>) => {
+  if (!rpc || !doName) return null;
+  const [listed, fresh] = await Promise.all([invokeHealth(rpc, doName, 'consent_list', '{}'), invokeHealth(rpc, doName, 'freshness_read', '{}')]);
+  const consents = healthConsentView(listed, HEALTH_PROVIDER_REVISION_V1);
+  const rows = 'body' in consents ? list((consents.body as { consents: unknown[] }).consents, consentRow) : null;
+  if (!rows) return null;
+  const freshness = obj(fresh) && 'freshness' in fresh ? freshnessView(fresh.freshness) : null;
+  return { consents: rows, sources: freshness?.sources.map(row => ({ source: row.source, newest_upload_at: row.newest_upload_at })) ?? [] };
+};
+
 const adminRead = async ({ rpc, doName, now }: ConsoleHealthInput): Promise<Response> => {
   if (!rpc || !doName) return reply({ error: 'not_found' }, 404);
   let answer: unknown;
