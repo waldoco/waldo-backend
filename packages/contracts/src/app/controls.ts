@@ -23,6 +23,7 @@ const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edi
 // stored as what the owner said, so it is kept short like a node.
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
 const nodeId = /^memory:node:[1-9][0-9]{0,15}$/;
+const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
 // id for detail and pattern, max_nodes and max_links for pattern. Ids and cursors are opaque.
@@ -37,11 +38,12 @@ export const appControlQueryV1Schema = z.strictObject({
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
-  // The six digits Twilio texted, for phone.sms_check only. Never the number: the backend texts the number on file.
+  // The six digits Twilio texted, for phone.sms_check only. The send and the check name no number: the backend texts the
+  // number on file, which only phone.set changes.
   code: z.string().regex(/^\d{6}$/).optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
@@ -79,10 +81,12 @@ export const appControlActionV1Schema = z.strictObject({
   const corrected = action.value?.trim() ?? '';
   if (action.action === 'node.correct' && (corrected.length === 0 || corrected.length > APP_NODE_CORRECTION_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `node.correct carries the owner's words, 1 to ${APP_NODE_CORRECTION_MAX_V1} characters` });
   if ((action.action === 'node.confirm' || action.action === 'node.forget') && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: `${action.action} carries no value` });
-  const phone = action.action === 'phone.sms_send' || action.action === 'phone.sms_check';
+  const phone = action.action === 'phone.sms_send' || action.action === 'phone.sms_check' || action.action === 'phone.set';
   if (phone !== (action.view === 'phone')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The phone actions alone use the phone view' });
   if ((action.code !== undefined) !== (action.action === 'phone.sms_check')) ctx.addIssue({ code: 'custom', path: ['code'], message: 'phone.sms_check alone carries the code, and always does' });
-  if (phone && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code' });
+  // phone.set stores the number unverified; the owner proves it with phone.sms_send and phone.sms_check.
+  if (action.action === 'phone.set' && !APP_PHONE_E164.test(action.value ?? '')) ctx.addIssue({ code: 'custom', path: ['value'], message: 'phone.set carries the number in value, E.164 (+ and 7 to 15 digits)' });
+  if (phone && (action.id ?? (action.action === 'phone.set' ? undefined : action.value) ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'The phone actions carry only the code, or for phone.set the number' });
 });
 
 // The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
@@ -208,15 +212,30 @@ export const appControlConstellationDataV1Schema = z.union([
   }),
 ]);
 // The owner's number on file and how to prove it: texting a code is listed only while it is offered and would be
-// accepted now, checking only while a code waits with checks left. Times are epoch seconds; retry_at null means now.
+// accepted now, checking only while a code waits with checks left, and setting the number while texting is offered.
+// Times are epoch seconds; retry_at null means now.
 export const appControlPhoneDataV1Schema = z.strictObject({
-  phone: z.string().regex(/^\+[1-9]\d{6,14}$/).nullable(), verified: z.boolean(), sms: z.boolean(),
+  phone: z.string().regex(APP_PHONE_E164).nullable(), verified: z.boolean(), sms: z.boolean(),
   challenge: z.strictObject({
     state: z.enum(['sending', 'pending', 'checking', 'approved', 'expired', 'unknown']), expires_at: z.int().positive(),
     retry_at: z.int().positive().nullable(), checks_left: z.int().min(0).max(5),
   }).nullable(),
-  actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check'])),
+  actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check', 'phone.set'])),
 });
+// The receipt for each phone.set outcome. The app tells taken and the other refusals apart by these exact messages, so
+// they are contract, and none of them repeats the number. unavailable covers a server that does not offer texting.
+export const APP_PHONE_SET_RECEIPTS_V1 = {
+  set: { state: 'recorded', message: 'Number saved. It is not verified yet: ask for a code to prove it is yours.' },
+  // A set that also unlinked the WhatsApp or iMessage chat linked from the old number.
+  set_unlinked: { state: 'recorded', message: 'Number saved, not verified yet. Messages from your old number no longer reach Waldo; link your chat again from the new one.' },
+  unchanged: { state: 'recorded', message: 'That is already the number on file.' },
+  taken: { state: 'rejected', message: 'That number is already verified on another account, so it cannot be used here.' },
+  invalid: { state: 'rejected', message: 'That is not a full number. Start with + and the country code.' },
+  unsupported: { state: 'rejected', message: 'Waldo cannot text numbers in this country yet.' },
+  throttled: { state: 'rejected', message: 'That is the limit on number changes for today. Try again tomorrow.' },
+  unavailable: { state: 'rejected', message: 'The number could not be saved right now. Try again later.' },
+  unknown: { state: 'unconfirmed', message: 'Saving the number was not confirmed. Refresh to see the number on file.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected' | 'unconfirmed'; message: string }>>>;
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),

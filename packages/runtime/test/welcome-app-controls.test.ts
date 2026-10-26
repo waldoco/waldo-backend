@@ -19,7 +19,7 @@ const host = (storage: DurableObjectStorage, acted: ConsoleAction[], signedInAt 
   csrf: 'csrf-welcome-controls', expires: Date.now() + 60_000, signedInAt, storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: 'csrf-welcome-controls', expires: Date.now() + 60_000 }],
   view: async () => ({}) as never, act: async (action) => { acted.push(action); return true; },
   welcome: () => { reads.push('welcome'); return building; },
-  account: { owner: 'owner-welcome', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused }, phone: {},
+  account: { owner: 'owner-welcome', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused }, phone: {}, whatsappUnlinked: unused,
 });
 const read = async (h: AppControlsHost, query: string) => {
   const response = await appControlsRequest(new Request(`https://app.fixture.invalid/app/v1/controls?${query}`), h);
