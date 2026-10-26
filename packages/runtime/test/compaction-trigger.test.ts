@@ -72,11 +72,11 @@ describe('the deploy switch', () => {
     expect(COMPACTION.enabled).toBe(false);
   });
 
-  // Production stays off until the live eval meets its bar; staging runs it so long test threads exercise it, and off is the rollback.
-  it('is off in production and on in staging', () => {
+  // Off in both hosted configs until the eval meets its bar; turning staging on is a one-line change, and off is the rollback.
+  it('is off in production and in staging', () => {
     const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
     expect(parsed.vars.WALDO_COMPACTION).toBe('off');
-    expect(parsed.env.staging.vars.WALDO_COMPACTION).toBe('on');
+    expect(parsed.env.staging.vars.WALDO_COMPACTION).toBe('off');
   });
 });
 
