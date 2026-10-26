@@ -55,7 +55,8 @@ describe('the tool loop says which tool starts', () => {
         return { text: 'Done.' };
       },
     });
-    expect(timeline).toEqual([['search_communication'], 'run:search_communication', ['read_thread'], 'run:read_thread']);
+    // The two mail reads run as one batch: both are announced, then both run.
+    expect(timeline).toEqual([['search_communication'], ['read_thread'], 'run:search_communication', 'run:read_thread']);
     expect(JSON.stringify(timeline)).not.toContain('alice@example.com');
   });
 

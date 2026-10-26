@@ -205,7 +205,7 @@ describe('parallel read calls on an owner turn', () => {
 
 // The real Google handlers and client against a fake Google whose every request takes DATA_MS. Each grant is a refresh
 // token; its behaviour is 'ok', 'invalid_grant' (the token refresh fails) or 429 (every data request is rate limited).
-const DATA_MS = 150;
+const DATA_MS = 250;
 const fakeGoogle = (grants: Readonly<Record<string, 'ok' | 'invalid_grant' | 429>>) => {
   const inFlight = { now: 0, max: 0 };
   const health: [string, string][] = [];
