@@ -1,13 +1,16 @@
-import { iMessageBindingSchema } from '@waldo/contracts';
+import { iMessageBindingSchema, opaqueIMessageIdSchema, type IMessageStandardReaction } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
-import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageTurnHandoff } from './bridge-do';
+import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeAuthority } from './directory';
 import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord } from './final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
+import { ownerWords, type InboundPart } from '../owner-inbound-turn';
+import type { TapbackPort } from '../../tools/live/react-to-message';
+import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -44,11 +47,47 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
   if (known === undefined) host.storage.kv.put('do_name', input.ownerDoName);
   const commandId = `wrc_${(await sha256Hex(input.dedupKey)).slice(0, 40)}`;
+  const ref = input.envelope.messageRef;
+  const messageRef = ref && ref.conversationRef === input.envelope.conversationRef && opaqueIMessageIdSchema.safeParse(ref.id).success && Number.isInteger(ref.partIndex) && ref.partIndex! >= 0
+    ? { messageGuid: ref.id, partIndex: ref.partIndex! } : undefined;
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
-    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}),
+    bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
   });
   return result.kind;
+};
+
+const TAPBACK: Readonly<Record<IMessageStandardReaction, string>> = { love: '❤️', like: '👍', dislike: '👎', laugh: '😂', emphasis: '‼️', question: '❓' };
+
+/**
+ * Bridge -> owner: the owner's tapback on a message Waldo sent them, kept as one line for their next turn on that chat. Fresh
+ * authority and the exact binding precede the write, as for a turn; nothing runs, and no approval or card is read or changed.
+ */
+export const noteIMessageReactionHandoff = async (host: OwnerHost, input: IMessageReactionHandoff): Promise<'noted' | 'refused'> => {
+  const c = iMessageComposition(host.env);
+  if (!c || !host.ownerNamespace || host.ownerNamespace.idFromName(input.ownerDoName).toString() !== host.id.toString()
+    || host.storage.kv.get<string>('do_name') !== input.ownerDoName) return 'refused';
+  const binding = iMessageBindingSchema.safeParse(input.binding);
+  if (!binding.success || binding.data.conversationKind !== 'direct' || !Object.hasOwn(TAPBACK, input.type) || !opaqueIMessageIdSchema.safeParse(input.target.messageGuid).success
+    || !Number.isInteger(input.target.partIndex) || typeof input.quoted !== 'string') return 'refused';
+  const record = { environment: input.environment, binding: binding.data, revision: input.revision, ownerDoName: input.ownerDoName, bindingDigest: await bindingDigest(binding.data) };
+  try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
+  const conversationRef = JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid]);
+  const key = await sha256Hex(JSON.stringify([conversationRef, input.target.messageGuid, input.target.partIndex, input.type]));
+  new IMessageOwnerInbox(host.storage).noteReaction({ key, conversationRef, bindingDigest: record.bindingDigest,
+    line: `[Owner reacted ${TAPBACK[input.type]} to your message: ${JSON.stringify(redactNumericHealth(input.quoted, HEALTH_SPAN_MARKER))}]` }, input.action);
+  return 'noted';
+};
+
+/**
+ * What an iMessage turn's model reads beside its text when there is more than the text: the owner's words, the tapbacks they
+ * left since their last turn, then the files opened for it. Null for a turn that is its text alone.
+ */
+export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' | 'text' | 'reactions'>, opened: OpenedIMessageTurnMedia | null)
+  : Readonly<{ updateId: number; parts: readonly InboundPart[]; attachments: OpenedIMessageTurnMedia['attachments'] }> | null => {
+  const tapbacks = (record.reactions ?? []).map((text): InboundPart => ({ authorship: 'media_note', text }));
+  if (!opened && !tapbacks.length) return null;
+  return { updateId: record.updateId, parts: [...ownerWords(record.text), ...tapbacks, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
 };
 
 /** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */
@@ -84,12 +123,31 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
   return { kind: 'answered' };
 };
 
+const bridges = (host: OwnerHost) => host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
 const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
-  const ns = host.env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO> | undefined;
+  const ns = bridges(host);
   if (!ns) return Promise.resolve({ kind: 'retry' } as const);
   return ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
-    ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
+    ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}),
+    ...(row.reaction ? { reaction: row.reaction } : {}) });
 };
+
+/**
+ * Tapbacks for the running iMessage turn, on the owner's message it answers. Ready asks that turn's bridge each time; a
+ * frozen tapback goes to the bridge with the turn's other messages at the next drain, the one retry owner.
+ */
+export const iMessageTapbacks = (host: OwnerHost, running: () => IMessageInboxRecord | null): TapbackPort => ({
+  ready: async () => {
+    const record = running(), ns = bridges(host);
+    return !!record?.messageRef && !!ns && await ns.get(ns.idFromName(record.bridgeDoName)).tapbacksReady();
+  },
+  freeze: (reaction: IMessageStandardReaction, scope: RunEffectScope) => {
+    const record = running();
+    if (!record || record.id !== scope.runId || record.attempt !== scope.attempt) throw new ClosedRunError();
+    try { scope.commit(() => new IMessageFinalOutbox(host.storage).freezeReaction(record, reaction)); return 'queued'; }
+    catch (error) { if (error instanceof Error && error.message === 'imessage_reply_conflict') return 'conflict'; throw error; }
+  },
+});
 
 // The bridge's one slot frees within a host pull and a send, so a drain polls it for about 4 s before leaving the reply to
 // its retry. A retry runs in the owner's serial queue, where it would wait behind the next turn. The polls are counted

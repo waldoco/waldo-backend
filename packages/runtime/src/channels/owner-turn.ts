@@ -524,7 +524,8 @@ export const createOwnerResponder = (
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
-        ...(access.toolSearch ? { stableMenu: true } : {}),
+        // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
+        stableMenu: true,
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,

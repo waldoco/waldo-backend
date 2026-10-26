@@ -182,11 +182,15 @@ describe('openIMessageMedia', () => {
     expect(lines.join('\n')).not.toMatch(/att-photo|IMG_0001|msg-1|owner@/);
   });
 
-  it('the console says what happens to a photo or file, by the flag, and that reactions are still not supported', () => {
+  it('the console says what happens to a photo or file, by the flag, and claims tapbacks only for a host that verified them', () => {
     const off = renderIMessage([], 'csrf', {}), on = renderIMessage([], 'csrf', { media: true });
-    expect(off).toContain('Direct iMessage text only. Photos and files get a reply asking you to send them in the app. Groups, SMS, voice notes and reactions are not supported.');
-    expect(on).toContain('Direct iMessages: text, and photos and documents sent to your Waldo number. Groups, SMS, voice notes and reactions are not supported.');
-    for (const page of [off, on]) expect(page).not.toContain('files and reactions are not supported');
+    const TAPBACKS = 'Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.';
+    expect(off).toContain(`Direct iMessage text only. Photos and files get a reply asking you to send them in the app. ${TAPBACKS}`);
+    expect(on).toContain(`Direct iMessages: text, and photos and documents sent to your Waldo number. ${TAPBACKS}`);
+    for (const page of [off, on]) expect(page).not.toContain('reactions are not supported');
+    const row = { bridge_id: 'imb_' + '0'.repeat(32), account_id: 'ima_' + '0'.repeat(32), state: 'active', kind: 'owner', subject: 'owner@example.invalid', chat_guid: 'iMessage;-;owner@example.invalid', host_version: 'h1', online: true, textReady: true } as never;
+    expect(renderIMessage([{ ...(row as object), tapbacksReady: true } as never], 'csrf')).toContain('online · text verified · tapbacks verified');
+    expect(renderIMessage([{ ...(row as object), tapbacksReady: false } as never], 'csrf')).toContain('online · text verified · tapbacks not verified');
   });
 
   it('a closed turn stops before and after the fetch', async () => {
