@@ -35,8 +35,9 @@ additive.
 
 ## Seeding a client, or rotating its secret
 
-Run this with the service role from a local `psql` session, not the dashboard SQL editor, which keeps query
-history. Seeding again replaces the client id, endpoints and Vault secret in place, so it also rotates a
+Run this from a local `psql` session connected to the project's database as `postgres`, the role that owns the
+function. Don't use the dashboard SQL editor, which keeps query history. Only `service_role` and the owner can
+execute the function. Seeding again replaces the client id, endpoints and Vault secret in place, so it also rotates a
 regenerated secret.
 
 ```sql

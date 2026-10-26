@@ -14,6 +14,7 @@ alter table waldo.oauth_clients
 create function waldo.oauth_client_seed(p_issuer text, p_redirect_uri text, p_client_id text, p_client_auth text, p_secret text, p_token_endpoint text, p_revocation_endpoint text)
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare
+  v_old uuid;
   v_secret uuid;
 begin
   if coalesce(p_issuer, '') not like 'https://%' or coalesce(p_redirect_uri, '') not like 'https://%' or coalesce(p_token_endpoint, '') not like 'https://%'
@@ -23,20 +24,21 @@ begin
     return false;
   end if;
   perform pg_advisory_xact_lock(hashtextextended(p_issuer || ' ' || p_redirect_uri, 0));
-  select secret_id into v_secret from waldo.oauth_clients where issuer = p_issuer and redirect_uri = p_redirect_uri for update;
-  if v_secret is not null and p_client_auth = 'none' then
-    update waldo.oauth_clients set secret_id = null where issuer = p_issuer and redirect_uri = p_redirect_uri;
-    delete from vault.secrets where id = v_secret;
+  select secret_id into v_old from waldo.oauth_clients where issuer = p_issuer and redirect_uri = p_redirect_uri for update;
+  if p_client_auth = 'none' then
     v_secret := null;
-  elsif v_secret is not null then
-    perform vault.update_secret(v_secret, p_secret);
-  elsif p_client_auth <> 'none' then
+  elsif v_old is not null then
+    perform vault.update_secret(v_old, p_secret);
+    v_secret := v_old;
+  else
     v_secret := vault.create_secret(p_secret);
   end if;
   insert into waldo.oauth_clients (issuer, redirect_uri, client_id, client_auth, secret_id, token_endpoint, revocation_endpoint)
     values (p_issuer, p_redirect_uri, p_client_id, p_client_auth, v_secret, p_token_endpoint, p_revocation_endpoint)
     on conflict (issuer, redirect_uri) do update set client_id = excluded.client_id, client_auth = excluded.client_auth, secret_id = excluded.secret_id,
       token_endpoint = excluded.token_endpoint, revocation_endpoint = excluded.revocation_endpoint;
+  -- A client seeded again as public no longer has a secret; its old one leaves Vault.
+  if v_old is not null and v_secret is null then delete from vault.secrets where id = v_old; end if;
   return true;
 end $$;
 

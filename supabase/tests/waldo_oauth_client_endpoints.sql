@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(25);
+select plan(28);
 
 select is(has_function_privilege('anon', 'waldo.oauth_client_seed(text, text, text, text, text, text, text)', 'execute'), false, 'the runtime key cannot seed a client');
 select is(has_function_privilege('authenticated', 'waldo.oauth_client_seed(text, text, text, text, text, text, text)', 'execute'), false, 'a signed-in user cannot seed a client');
@@ -27,7 +27,7 @@ select is(waldo.oauth_client_seed('https://mcp.chat.example', 'https://w.example
 select is((select count(*)::int from waldo.oauth_clients where issuer = 'https://mcp.chat.example'), 1, 'and keeps one row');
 select is(waldo.oauth_client_secret('https://mcp.chat.example', 'https://w.example/oauth/mcp/callback', 'chat-client', 'https://chat.example/api/token'), 'chat-secret-2', 'with the rotated secret');
 select is(waldo.oauth_client_secret('https://mcp.chat.example', 'https://w.example/oauth/mcp/callback', 'chat-client', 'https://chat.example/api/revoke'), 'chat-secret-2', 'readable for its pinned revocation endpoint too');
-select is((select count(*)::int from vault.secrets s where s.id not in (select secret_id from waldo.oauth_clients where secret_id is not null) and s.secret like '%chat-secret%'), 0, 'and no stale secret left in Vault');
+select is((select count(*)::int from vault.decrypted_secrets where decrypted_secret like 'chat-secret%'), 1, 'and no stale secret left in Vault');
 
 -- Refusals at seeding.
 select is(waldo.oauth_client_seed('https://mcp.chat.example', 'https://w.example/cb2', 'chat-client', 'client_secret_post', null, 'https://chat.example/api/token', null), false, 'a confidential client without a secret is refused');
@@ -38,6 +38,12 @@ select is(waldo.oauth_client_seed('https://mcp.chat.example', 'https://w.example
 select is(waldo.oauth_client_put('https://auth.example.com', 'https://w.example/oauth/mcp/callback', 'dcr-client', 'client_secret_basic', 'dcr-secret'), true, 'a dynamic registration is stored');
 select is((select count(*)::int from waldo.oauth_client_registered('https://auth.example.com', 'https://w.example/oauth/mcp/callback')), 0, 'and is never answered as pre-registered');
 select is(waldo.oauth_client_secret('https://auth.example.com', 'https://w.example/oauth/mcp/callback', 'dcr-client', 'https://auth.example.com/token'), 'dcr-secret', 'its secret is read without a pinned endpoint, as before');
+
+-- A confidential client seeded again as a public one keeps one row and leaves no secret in Vault.
+select is(waldo.oauth_client_seed('https://mcp.chat.example', 'https://w.example/oauth/mcp/callback', 'chat-client', 'none', null, 'https://chat.example/api/token', null), true, 'a client seeded again as public is accepted');
+select results_eq($$ select client_id, client_auth from waldo.oauth_client_registered('https://mcp.chat.example', 'https://w.example/oauth/mcp/callback') $$,
+  $$ values ('chat-client', 'none') $$, 'and is looked up as public');
+select is((select count(*)::int from vault.decrypted_secrets where decrypted_secret like 'chat-secret%'), 0, 'and its old secret is gone from Vault');
 
 select * from finish();
 rollback;
