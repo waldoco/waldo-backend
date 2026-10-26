@@ -8,6 +8,7 @@ import { routerSignature } from '../src/identity/owner-directory';
 import { buildTextReply, iMessageBridgeName, type OwnerIMessagePort } from '../src/channels/imessage/bridge-do';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 
@@ -314,6 +315,44 @@ it('the owner DO refuses a tapback under a stale or revoked authority and keeps 
   expect((await w.action('imessage.revoke', { id: w.host.bridgeId })).status).toBe(303);
   expect(await note(record.revision)).toBe('refused');
   expect(await notes()).toEqual([]);
+});
+
+// A reading in Waldo's earlier message never reaches the owner DO's storage through the quote, whole or cut by the 80-character limit.
+it('a tapback on a message that carried a health reading stores the quote with the reading withheld', async () => {
+  const w = await world();
+  await w.activate();
+  await w.exchange('Hello');
+  const record = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
+  const notes = () => runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).notes().map(note => note.line));
+  const port = w.ownerStub as unknown as OwnerIMessagePort;
+  expect(await port.noteIMessageReaction({ binding: record.binding, revision: record.revision, environment: record.environment, bridgeDoName: record.bridgeDoName,
+    ownerDoName: record.ownerDoName, action: 'add', type: 'love', target: { messageGuid: 'sim-sent-reading', partIndex: 0 }, quoted: 'Your HRV was 52 ms last night.' })).toBe('noted');
+  const [line] = await notes();
+  expect(line).toContain('Owner reacted');
+  expect(line).not.toMatch(/52/);
+  expect(line).toContain(HEALTH_SPAN_MARKER);
+});
+
+it('a reading the 80-character quote limit would cut in half is withheld before the cut', async () => {
+  const w = await world();
+  await w.activate();
+  await w.exchange('Hello');
+  const record = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
+  const text = `${'a '.repeat(30)}ab Your HRV was 52 ms last night, a little lower than usual.`;
+  expect([...text].slice(0, 80).join('')).toMatch(/52 m$/);
+  await runInDurableObject(w.bridgeStub(), async (_i, state) => {
+    const commandId = 'seeded-reading', command = buildTextReply(record.binding, commandId, text);
+    const result = { version: 1, commandId, target: command.target, state: 'local_recorded', messageGuid: 'sent-with-reading', evidence: { kind: 'local_database', reference: 'seeded' } };
+    state.storage.sql.exec("INSERT INTO deliveries(delivery_id,command_id,command_digest,body,headers,commitment,state,attempt,result,created_at,owner_do,reply_ref,reported) VALUES(?,?,?,?,?,?,'resulted',1,?,?,?,?,1)",
+      'delivery-reading', commandId, 'seeded-digest', JSON.stringify(command), '{}', '{}', JSON.stringify(result), Date.now(), record.ownerDoName, 'reply:seeded-reading');
+    state.storage.sql.exec("INSERT INTO sent_messages(message_guid,command_id,state) VALUES(?,?,'local_recorded')", 'sent-with-reading', commandId);
+  });
+  await w.react(w.host.reaction('sent-with-reading', 'love'));
+  expect(await w.settled()).toEqual(['reaction_noted']);
+  const lines = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).notes().map(note => note.line));
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).not.toMatch(/52|5 ?m|HRV was 5/);
+  expect(lines[0]).toContain(HEALTH_SPAN_MARKER.slice(0, 7));
 });
 
 // The bridge quotes only a message Waldo sent this owner, in this chat. Each check holds alone: a send recorded for another

@@ -10,6 +10,7 @@ import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
 import type { TapbackPort } from '../../tools/live/react-to-message';
+import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 
 // Small adapters the physical owner DO composes; the brain (responder, memory, tools, effect
 // scopes) is the existing owner runtime, never a second agent.
@@ -74,7 +75,7 @@ export const noteIMessageReactionHandoff = async (host: OwnerHost, input: IMessa
   const conversationRef = JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid]);
   const key = await sha256Hex(JSON.stringify([conversationRef, input.target.messageGuid, input.target.partIndex, input.type]));
   new IMessageOwnerInbox(host.storage).noteReaction({ key, conversationRef, bindingDigest: record.bindingDigest,
-    line: `[Owner reacted ${TAPBACK[input.type]} to your message: ${JSON.stringify(input.quoted)}]` }, input.action);
+    line: `[Owner reacted ${TAPBACK[input.type]} to your message: ${JSON.stringify(redactNumericHealth(input.quoted, HEALTH_SPAN_MARKER))}]` }, input.action);
   return 'noted';
 };
 

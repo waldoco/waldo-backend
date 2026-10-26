@@ -11,6 +11,7 @@ import { BridgeStore, BridgeStoreError, parseStoredEvent, type DeliveryRow } fro
 import { mintHostKey, sha256Hex, signCommitment, signS2, unwrapCredential, verifyS2, type S2Headers } from './crypto';
 import { iMessageDirectory, IMessageDirectoryUnavailable, type BridgeAuthority, type SenderAuthority } from './directory';
 import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './policy';
+import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFinish, type PhotonStatus } from './photon';
 import { iMessageMediaOf, type IMessageMedia, type PhotonMediaEnv } from './photon-media';
 import type { IMessageTapback } from './final-outbox';
@@ -505,11 +506,11 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const commandId = store.sentCommandFor(event.target.messageGuid!), sent = commandId ? store.delivery({ commandId }) : null;
     const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
     if (!sent || command?.operation !== 'send' || sent.ownerDoName !== owner.doName || command.target.chatGuid !== event.chatGuid) return 'reaction_untracked';
-    const words = [...command.text];
+    const words = [...redactNumericHealth(command.text, HEALTH_SPAN_MARKER)];
     try {
       const noted = await this.owner(owner.doName).noteIMessageReaction({ binding, revision: owner.revision, environment, bridgeDoName: iMessageBridgeName(environment, bridgeId, accountId),
         ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 },
-        quoted: words.length > REACTION_QUOTE_CHARS ? `${words.slice(0, REACTION_QUOTE_CHARS).join('')}…` : command.text });
+        quoted: words.length > REACTION_QUOTE_CHARS ? `${words.slice(0, REACTION_QUOTE_CHARS).join('')}…` : words.join('') });
       return noted === 'noted' ? 'reaction_noted' : 'reaction_refused';
     } catch { return 'retry'; }
   }
