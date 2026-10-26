@@ -3,23 +3,38 @@ import type { ControlReceipt } from './dashboard-control-actions';
 import { APP_PHONE_SET_RECEIPTS_V1 } from '../../../contracts/src/app/controls';
 import { phoneSms, type OwnerPhoneState, type PhoneSetOutcome, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
 
+type IMessageFrom = 'none' | 'number' | 'email' | 'other_number';
 export type PhoneControls = Readonly<{ version: 1; view: 'phone'; state: 'available'; csrf: string;
-  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set')[] }> }>;
+  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set')[]; proof: readonly ('sms' | 'imessage')[]; imessage_from?: IMessageFrom }> }>;
+
+// The other way to prove a number: the owner sends their iMessage link code from it, and redeeming it proves the number on
+// file when the handle is that number. offered: whether this server issues that code to this owner (it rejects when the
+// directory cannot say); hint: the last characters of the handle their iMessage is linked from, null when not linked.
+export type IMessageProof = Readonly<{ offered(): Promise<boolean>; hint(): Promise<string | null> }>;
+const NO_IMESSAGE: IMessageProof = { offered: async () => false, hint: async () => null };
+// Linking the directory cannot confirm counts as not offered, so the view still answers.
+const linkable = (imessage: IMessageProof) => imessage.offered().catch(() => false);
+// An Apple ID email ends in letters; a number's hint is its last digits.
+const imessageFrom = (hint: string | null, phone: string | null): IMessageFrom =>
+  hint === null ? 'none' : !/^\d+$/.test(hint) ? 'email' : phone?.endsWith(hint) ? 'number' : 'other_number';
 
 // The number on file and how to prove it. Texting a code is listed only while it is offered, the number is unproven,
 // nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left; setting
-// the number while texting is offered to an active owner. The ledger re-checks each when the owner acts, and also
-// applies the daily caps, which this read does not show.
-export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, now = Date.now()): Promise<PhoneControls> {
+// the number to an active owner while it can be proven, by a texted code or an iMessage link code. The ledger re-checks
+// each when the owner acts, and also applies the daily caps, which this read does not show.
+export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, imessage: IMessageProof = NO_IMESSAGE, now = Date.now()): Promise<PhoneControls> {
   if (!owner) throw new Error('owner_unbound');
   const sms = phoneSms(env);
-  const read = await sms.state(owner), state = read ?? { phone: null, verified: false, sms: sms.offered, challenge: null };
+  const [read, byLink] = await Promise.all([sms.state(owner), linkable(imessage)]);
+  const state = read ?? { phone: null, verified: false, sms: sms.offered, challenge: null };
   const open = state.sms && state.phone !== null && !state.verified, challenge = state.challenge;
   const sendable = !challenge || (challenge.state !== 'sending' && challenge.state !== 'checking' && (challenge.retry_at === null || challenge.retry_at * 1000 <= now));
   const actions = [...(open && sendable ? ['phone.sms_send' as const] : []),
     ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : []),
-    ...(sms.offered && read !== null ? ['phone.set' as const] : [])];
-  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions } };
+    ...((sms.offered || byLink) && read !== null ? ['phone.set' as const] : [])];
+  const proof = [...(sms.offered ? ['sms' as const] : []), ...(byLink ? ['imessage' as const] : [])];
+  const hint = byLink ? await imessage.hint().catch(() => undefined) : undefined;
+  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions, proof, ...(hint !== undefined ? { imessage_from: imessageFrom(hint, state.phone) } : {}) } };
 }
 
 const rejected = (message: string): ControlReceipt => ({ state: 'rejected', message });
@@ -64,10 +79,10 @@ const SET: Readonly<Record<PhoneSetOutcome['kind'], ControlReceipt>> = {
 // old one; what the owner DO holds for a WhatsApp chat (the bound sender, its held and outbox messages) is cleared through
 // whatsappUnlinked, as the WhatsApp unlink action does. An iMessage unlink is the directory's alone, as in that action.
 export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>,
-  whatsappUnlinked: () => Promise<void>): Promise<ControlReceipt> {
+  whatsappUnlinked: () => Promise<void>, imessage: IMessageProof = NO_IMESSAGE): Promise<ControlReceipt> {
   const sms = phoneSms(env);
   if (action.action === 'phone.set') {
-    const outcome = await sms.set(owner, action.value);
+    const outcome = await sms.set(owner, action.value, !sms.offered && await linkable(imessage));
     if (outcome.unlinked?.includes('whatsapp')) await whatsappUnlinked();
     return outcome.unlinked?.length ? APP_PHONE_SET_RECEIPTS_V1.set_unlinked : SET[outcome.kind];
   }

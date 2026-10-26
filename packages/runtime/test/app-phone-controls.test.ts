@@ -4,6 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { APP_PHONE_SET_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appControlsRequest, type AppControlsHost } from '../src/channels/app-controls';
+import { phoneControlAct, type IMessageProof } from '../src/channels/dashboard-phone';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-app', CODE = '424242', PHONE = '+919800000001';
 // Synthetic numbers: NEW is free, TAKEN is verified on another owner in the fake ledger.
@@ -56,12 +57,12 @@ function world() {
   });
   return { ledger, twilio, sets, failSets: () => { failSet = true; } };
 }
-const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString()) =>
+const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString(), imessageProof?: IMessageProof) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-phone-${crypto.randomUUID()}`)), async (_i, state) => {
     const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt, storage: state.storage, assertCurrent: async () => {},
       sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 60_000 }], view: unused, act: unused,
       account: { owner: 'owner-app-phone', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
-      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; } };
+      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; }, ...(imessageProof ? { imessageProof } : {}) };
     const call = async (request: Request) => { const response = await appControlsRequest(request, host); return { status: response.status, body: await response.json() as Record<string, unknown> }; };
     await run({
       read: () => call(new Request('https://app.fixture.invalid/app/v1/controls?view=phone')),
@@ -221,4 +222,67 @@ it('an iMessage-only unlink is the directory\'s alone, and a change with no link
       .toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
     expect(whatsappUnlinks).toBe(0);
   });
+});
+
+// iMessage proves a number when the owner sends their link code from it: whether this server can issue that code, and the
+// last characters of the handle the owner's iMessage is linked from (an Apple ID email ends in letters).
+const imessage = (offered: boolean | 'unknown', hint: string | null = null): IMessageProof => ({
+  offered: async () => { if (offered === 'unknown') throw new Error('directory unreadable'); return offered; },
+  hint: async () => hint,
+});
+
+it.each([
+  ['0', false, [], []],
+  ['1', false, ['phone.sms_send', 'phone.set'], ['sms']],
+  ['0', true, ['phone.set'], ['imessage']],
+  ['1', true, ['phone.sms_send', 'phone.set'], ['sms', 'imessage']],
+] as const)('with texting %s and iMessage linking %s the number can be set where it can be proven, and only texting sends a code', async (on, linkable, actions, proof) => {
+  world();
+  await app(on, async ({ read }) => {
+    expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { phone: PHONE, verified: false, actions, proof } });
+  }, undefined, imessage(linkable));
+});
+
+it('with texting off and iMessage linking on, a new number is saved and no code is texted', async () => {
+  const w = world();
+  await app('0', async ({ read, act }) => {
+    const projection = appControlProjectionV1Schema.parse((await read()).body);
+    const set = appControlResultV1Schema.parse((await act({ view: 'phone', action: 'phone.set', value: NEW, revision: projection.revision, request_id: 'phone-request-30' })).body);
+    expect(set.receipt).toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
+    expect(w.ledger.phone).toBe(NEW);
+    const after = appControlProjectionV1Schema.parse((await read()).body);
+    expect(after).toMatchObject({ data: { phone: NEW, sms: false, actions: ['phone.set'] } });
+    expect((await act({ view: 'phone', action: 'phone.sms_send', revision: after.revision, request_id: 'phone-request-31' })).body).toMatchObject({ error: 'no_longer_eligible' });
+    expect(w.twilio).toEqual([]);
+  }, undefined, imessage(true));
+});
+
+it('reads iMessage linking it cannot confirm as off, and still answers the phone view', async () => {
+  world();
+  await app('0', async ({ read }) => {
+    const response = await read();
+    expect(response.status).toBe(200);
+    expect(appControlProjectionV1Schema.parse(response.body)).toMatchObject({ data: { actions: [], proof: [] } });
+  }, undefined, imessage('unknown'));
+});
+
+it.each([
+  [null, 'none'], ['.com', 'email'], ['d.me', 'email'], ['0001', 'number'], ['9999', 'other_number'],
+] as const)('says how the linked iMessage relates to the number on file (hint %s: %s), never the handle itself', async (hint, from) => {
+  world();
+  await app('0', async ({ read }) => {
+    const response = await read();
+    expect(appControlProjectionV1Schema.parse(response.body)).toMatchObject({ data: { imessage_from: from } });
+    if (hint && !PHONE.endsWith(hint)) expect(JSON.stringify(response.body)).not.toContain(hint);
+  }, undefined, imessage(true, hint));
+});
+
+it('re-checks at act time that the number can be proven, so neither texting nor iMessage means no number is set', async () => {
+  const w = world();
+  const act: Parameters<typeof phoneControlAct>[2] = { action: 'phone.set', id: '', value: NEW };
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage(false))).toEqual(APP_PHONE_SET_RECEIPTS_V1.unavailable);
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage('unknown'))).toEqual(APP_PHONE_SET_RECEIPTS_V1.unavailable);
+  expect(w.sets).toEqual([]);
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage(true))).toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
+  expect(w.sets).toHaveLength(1);
 });

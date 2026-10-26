@@ -32,6 +32,7 @@ function world(phone: string | null, twilioStatus = 200, linked: string[] = []) 
     }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1], args = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
     if (fn === 'owner_phone_state') return Response.json(ledger);
+    if (fn === 'presence_hint') return Response.json(args.p_provider === 'imessage' ? imessageHint : null);
     if (fn === 'owner_phone_set') {
       sets.push(JSON.parse(args.p_payload!) as Record<string, unknown>);
       Object.assign(ledger, { phone: sets.at(-1)!.phone, verified: false, challenge: null });
@@ -55,7 +56,9 @@ function world(phone: string | null, twilioStatus = 200, linked: string[] = []) 
   });
   return { ledger, twilio, sets };
 }
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// The last characters of the handle the owner's iMessage is linked from, as the directory's presence hint gives them.
+let imessageHint: string | null = null;
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; });
 
 let n = 0;
 const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; state: DurableObjectState }) => Promise<void>) => {
@@ -86,7 +89,7 @@ describe('the console phone view', () => {
   it('texts a code to the number on file and proves it with the right code, keeping neither the code nor the token', async () => {
     const w = world('+919800000001');
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act, state }) => {
-      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: true, challenge: null, actions: ['phone.sms_send', 'phone.set'] });
+      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: true, challenge: null, actions: ['phone.sms_send', 'phone.set'], proof: ['sms'] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 200, body: { receipt: { state: 'recorded', message: expect.stringContaining('within 10 minutes') } } });
       expect(w.twilio.map((form) => Object.fromEntries(form))).toEqual([{ To: '+919800000001', Channel: 'sms' }]);
       expect((await read()).data.actions).toEqual(['phone.sms_send', 'phone.sms_check', 'phone.set']);
@@ -149,7 +152,7 @@ describe('the console phone view', () => {
   it('with the switch off it shows the number and offers nothing, and a send is refused before anything is called', async () => {
     const w = world('+919800000001');
     await owner({ PHONE_SMS_VERIFY: '0' }, async ({ read, act }) => {
-      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: false, challenge: null, actions: [] });
+      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: false, challenge: null, actions: [], proof: [] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { error: 'no_longer_eligible' } });
       expect(w.twilio).toEqual([]);
       expect(w.ledger.challenge).toBeNull();
@@ -190,7 +193,7 @@ describe('the console phone view', () => {
   it('offers no text to a number outside the listed country codes', async () => {
     const w = world('+447700900001');
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act }) => {
-      expect((await read()).data).toEqual({ phone: '+447700900001', verified: false, sms: false, challenge: null, actions: ['phone.set'] });
+      expect((await read()).data).toEqual({ phone: '+447700900001', verified: false, sms: false, challenge: null, actions: ['phone.set'], proof: ['sms'] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { error: 'no_longer_eligible' } });
       expect(w.twilio).toEqual([]);
     });
@@ -202,6 +205,29 @@ describe('the console phone view', () => {
       await act('phone.sms_send');
       expect(await act('phone.sms_check', { code: '4242' })).toMatchObject({ status: 409, body: { receipt: { message: 'Enter the six digits from the text.' } } });
       expect(w.twilio).toHaveLength(1);
+    });
+  });
+
+  describe('proving the number by iMessage', () => {
+    const imessageOn = { PHONE_SMS_VERIFY: '0', IMESSAGE_WALDO_ADDRESS: 'woof@fixture.invalid', PHOTON_PROJECT_ID: undefined };
+    it('with texting off and the iMessage link code offered, the number can be set and nothing can be texted', async () => {
+      const w = world('+919800000001');
+      await owner(imessageOn, async ({ read, act }) => {
+        expect((await read()).data).toMatchObject({ phone: '+919800000001', sms: false, actions: ['phone.set'], proof: ['imessage'], imessage_from: 'none' });
+        expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set } });
+        expect(w.ledger.phone).toBe('+919800000002');
+        expect(await act('phone.sms_send')).toMatchObject({ status: 409 });
+        expect(w.twilio).toEqual([]);
+      });
+    });
+    it('says an iMessage linked from an Apple ID email proves no number, without showing it', async () => {
+      world('+919800000001');
+      imessageHint = '.com';
+      await owner(imessageOn, async ({ read }) => {
+        const data = (await read()).data;
+        expect(data).toMatchObject({ verified: false, imessage_from: 'email' });
+        expect(JSON.stringify(data)).not.toContain('.com');
+      });
     });
   });
 });

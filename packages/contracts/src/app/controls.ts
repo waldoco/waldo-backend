@@ -212,7 +212,10 @@ export const appControlConstellationDataV1Schema = z.union([
   }),
 ]);
 // The owner's number on file and how to prove it: texting a code is listed only while it is offered and would be
-// accepted now, checking only while a code waits with checks left, and setting the number while texting is offered.
+// accepted now, checking only while a code waits with checks left, and setting the number while it can be proven, by a
+// texted code or by the owner sending their iMessage link code from it. proof names those ways. imessage_from says how
+// the owner's linked iMessage relates to the number on file, never the handle: none (not linked), number (its last
+// digits match), email (an Apple ID email, which proves no number) or other_number. Both are absent from older servers.
 // Times are epoch seconds; retry_at null means now.
 export const appControlPhoneDataV1Schema = z.strictObject({
   phone: z.string().regex(APP_PHONE_E164).nullable(), verified: z.boolean(), sms: z.boolean(),
@@ -221,6 +224,8 @@ export const appControlPhoneDataV1Schema = z.strictObject({
     retry_at: z.int().positive().nullable(), checks_left: z.int().min(0).max(5),
   }).nullable(),
   actions: z.array(z.enum(['phone.sms_send', 'phone.sms_check', 'phone.set'])),
+  proof: z.array(z.enum(['sms', 'imessage'])).optional(),
+  imessage_from: z.enum(['none', 'number', 'email', 'other_number']).optional(),
 });
 // The receipt for each phone.set outcome. The app tells taken and the other refusals apart by these exact messages, so
 // they are contract, and none of them repeats the number. unavailable covers a server that does not offer texting.

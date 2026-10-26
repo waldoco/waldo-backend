@@ -32,7 +32,8 @@ export type PhoneSms = Readonly<{
   send(doName: string): Promise<PhoneSmsOutcome>;
   check(doName: string, code: string): Promise<PhoneSmsOutcome>;
   // Stores the owner's number unverified, or answers why not; a number another active owner has verified is taken.
-  set(doName: string, phone: string): Promise<PhoneSetOutcome>;
+  // byLink: the caller found the owner can prove a number by sending a link code from it, so texting need not be on.
+  set(doName: string, phone: string, byLink?: boolean): Promise<PhoneSetOutcome>;
 }>;
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -57,7 +58,8 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
   const countries = (env.PHONE_SMS_COUNTRIES ?? '').split(',').map((code) => code.trim());
   const dailyLimit = /^[1-9]\d{0,5}$/.test(env.PHONE_SMS_DAILY_LIMIT ?? '') ? Number(env.PHONE_SMS_DAILY_LIMIT) : null;
   const keyed = env.TWILIO_API_KEY_SID !== undefined && env.TWILIO_API_KEY_SID !== '';
-  const provider = env.PHONE_SMS_VERIFY === '1' && countries.every((code) => /^\+[1-9]\d{0,2}$/.test(code)) && dailyLimit !== null
+  const countriesValid = countries.every((code) => /^\+[1-9]\d{0,2}$/.test(code));
+  const provider = env.PHONE_SMS_VERIFY === '1' && countriesValid && dailyLimit !== null
     ? twilioPhoneVerification({ user: (keyed ? env.TWILIO_API_KEY_SID : env.TWILIO_ACCOUNT_SID) ?? '',
       secret: (keyed ? env.TWILIO_API_KEY_SECRET : env.TWILIO_AUTH_TOKEN) ?? '', service: env.TWILIO_VERIFY_SERVICE_SID ?? '' }, fetcher) : null;
   const offered = rpc !== null && provider !== null;
@@ -103,10 +105,10 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     },
     send: (doName) => run(doName, 'send'),
     check: (doName, code) => run(doName, 'check', code),
-    // Offered with texting, so a number is set only where it can then be proven. The ledger applies the same country
-    // codes and counts the attempts; a lost answer may have saved the number, so it reads as unknown.
-    async set(doName, phone) {
-      if (!offered) return { kind: 'disabled' };
+    // Offered with texting or a link code, so a number is set only where it can then be proven. The ledger applies the
+    // same country codes either way and counts the attempts; a lost answer may have saved the number, so it reads as unknown.
+    async set(doName, phone, byLink = false) {
+      if (!rpc || !countriesValid || !(offered || byLink)) return { kind: 'disabled' };
       if (!E164.test(phone)) return { kind: 'invalid' };
       const payload = JSON.stringify({ do_name: doName, phone, countries });
       let result: unknown;

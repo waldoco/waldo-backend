@@ -5,7 +5,7 @@ import type { IMessageEnv } from './imessage/bridge-do';
 import { iMessageControlAct, iMessageControls, iMessageControlsStatus, type IMessageControls } from './imessage/dashboard';
 import type { DeviceBridgeDO } from '../devices/device-bridge-do';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
-import { phoneControlAct, phoneControls, type PhoneControls } from './dashboard-phone';
+import { phoneControlAct, phoneControls, type IMessageProof, type PhoneControls } from './dashboard-phone';
 import { deviceControlAct, devicesControls, devicesControlsStatus, type DashboardDeviceDirectory, type DevicesControls } from '../devices/dashboard-devices';
 
 // iMessage, device and phone setup read the owner directory and bridge objects, not the console view,
@@ -27,6 +27,8 @@ export type ChannelControlsDeps = Readonly<{
   onIMessageRevoked(bridgeDoName: string): void;
   // Clears the WhatsApp chat the owner DO holds, after the directory unlinked it.
   onWhatsAppUnlinked(): Promise<void>;
+  // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
+  imessageProof?: IMessageProof;
 }>;
 
 // One entry per view. fresh() pairs the hashed read with an executor bound to that same read.
@@ -47,8 +49,8 @@ const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
     fresh: async (deps) => ({ controls: await devicesControls(deps.devices, deps.owner, deps.csrf), act: (action, fields) => deviceControlAct(deps.devices, deps.deviceBridges, deps.owner, action, fields) }),
   },
   phone: {
-    status: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), status: {} }),
-    fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields, deps.onWhatsAppUnlinked) }),
+    status: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf, deps.imessageProof), status: {} }),
+    fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf, deps.imessageProof), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields, deps.onWhatsAppUnlinked, deps.imessageProof) }),
   },
 };
 

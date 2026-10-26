@@ -438,6 +438,15 @@ describe('the phone view', () => {
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: ['phone.set'] } }).success).toBe(true);
   });
 
+  it('names the ways this server proves a number, and how the linked iMessage relates to it, without the handle', () => {
+    const phone = (extra: Record<string, unknown>) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, ...extra } }).success;
+    for (const proof of [[], ['sms'], ['imessage'], ['sms', 'imessage']]) expect(phone({ proof })).toBe(true);
+    for (const from of ['none', 'number', 'email', 'other_number']) expect(phone({ proof: ['imessage'], imessage_from: from })).toBe(true);
+    for (const bad of [{ proof: ['whatsapp'] }, { proof: 'sms' }, { proof: [null] }, { imessage_from: 'woof@heywaldo.in' }, { imessage_from: '0001' }, { imessage_from: null }]) {
+      expect(phone(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('refuses a phone.set without a number, with a malformed one, with anything else, or elsewhere', () => {
     for (const bad of [
       { ...set, value: undefined }, { ...set, value: '' }, { ...set, value: '9800000001' }, { ...set, value: '+91 98000 00001' }, { ...set, value: '+0919800000001' },
