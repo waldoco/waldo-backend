@@ -26,8 +26,8 @@ describe('the Vault page', () => {
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     await act(async () => root.render(<VaultPanel/>));
     const text = host.textContent ?? '';
-    for (const shown of ['Passwords', 'Sign-ins Waldo can use for you', 'Coming soon', 'Nothing is stored here yet.', 'Payments', 'Coming later']) expect(text, shown).toContain(shown);
-    for (const gone of ['email code', 'locked', 'Memories', 'Logins and connections', 'Access log', 'Supabase Vault']) expect(text, gone).not.toContain(gone);
+    for (const shown of ['Passwords', 'Sign-ins Waldo can use for you', 'Coming soon', 'Nothing is stored here yet.', 'each sign-in you save is encrypted, used only on its own website, and never shown to Waldo’s model.', 'Payments', 'Coming later']) expect(text, shown).toContain(shown);
+    for (const gone of ['email code', 'locked', 'Memories', 'Logins and connections', 'Access log', 'Supabase Vault', '1Password', 'never see or store']) expect(text, gone).not.toContain(gone);
     expect(host.querySelector('a[href^="/console/signin"]')).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
     await act(async () => root.unmount());

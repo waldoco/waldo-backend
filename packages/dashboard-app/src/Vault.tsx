@@ -6,7 +6,7 @@ export function VaultPanel() {
     <section className="panel" aria-labelledby="vault-passwords-title">
       <div className="vault-head"><h2 id="vault-passwords-title">Passwords</h2><span className="access-label">Coming soon</span></div>
       <h3>Sign-ins Waldo can use for you</h3>
-      <p>Nothing is stored here yet. When this arrives, it will work through 1Password, and Waldo will never see or store your passwords.</p>
+      <p>Nothing is stored here yet. When this arrives, each sign-in you save is encrypted, used only on its own website, and never shown to Waldo’s model.</p>
     </section>
     <section className="panel" aria-labelledby="vault-payments-title">
       <div className="vault-head"><h2 id="vault-payments-title">Payments</h2><span className="access-label">Coming later</span></div>
