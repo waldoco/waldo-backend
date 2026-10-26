@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
+import { approvalDesk, PROPOSAL_TTL_MS, proposalStatus } from '../src/channels/approvals';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from '../src/channels/imessage/approval-cards';
 import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
@@ -72,6 +72,17 @@ describe('a one-tap card on iMessage is answered by number', () => {
       expect(await f.desk.numberedReply('2', 'trace', stillLatest)).toMatchObject({ toast: 'Not now' });
       expect(f.status(id)).toBe('skipped');
       expect(f.applied).toEqual([]);
+    });
+  });
+
+  it('tells the proposing model the card is answered by number, not buttons, so its reply offers no numbered choices', async () => {
+    await owner('imsg-numbered-status', async state => {
+      const f = harness(state);
+      const id = await f.desk.propose(hold('Focus'));
+      const status = proposalStatus(f.desk.placement(id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.');
+      expect(status).toMatch(/reply 1 to approve or 2 to skip/);
+      expect(status).toMatch(/do not offer numbered choices/i);
+      expect(status).not.toMatch(/buttons/);
     });
   });
 

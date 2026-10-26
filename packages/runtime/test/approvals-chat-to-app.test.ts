@@ -142,7 +142,7 @@ describe('a low-risk change to the owner\'s own things stays one tap in chat', (
         else expect(f.cards.at(-1)!.buttons).toEqual(['Do it', 'Modify', 'Not now', "Don't do this"]);
         expect(f.cards.at(-1)!.text).not.toContain('Waldo app');
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 1 }]);
-        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, ...(surface === 'imessage' ? { numbered: true } : {}) });
         await f.reply(`a:${id}`);
         await f.reply(`a:${id}`);
         expect(f.created).toHaveLength(1);
