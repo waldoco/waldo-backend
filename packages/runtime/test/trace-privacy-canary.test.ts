@@ -148,6 +148,32 @@ describe('trace privacy canary', () => {
     expect(bodies).not.toContain(MARKER);
   });
 
+  it('a guard carrying the denial stage label survives capture-off in every sink', async () => {
+    for (const guard of ['size_cap:invalid_payload:decode:nesting:base64:3', 'size_cap:invalid_payload:health', 'size_cap:invalid_payload:pii']) {
+      const gated = gateTraceEntry({ trace: 't6', hop: 'tool_get_tasks', ms: 4, ok: false, code: 'forbidden:sanitise_denied', error: `${guard} ${MARKER}`, guard }, false);
+      expect(gated.guard).toBe(guard);
+      const sink = noteSink();
+      traceBook(sink.sql).record(gated, Date.now());
+      expect(sink.notes[0]).toBe(guard);
+      const bodies = await exportBodies([gated, { trace: 't6', hop: 'turn', ms: 10, ok: true }], false);
+      expect(bodies).toContain(guard);
+      expect(bodies).not.toContain(MARKER);
+    }
+  });
+
+  it('a stage label outside the enums, out of order or with trailing text is dropped at the gate', () => {
+    for (const guard of [
+      `size_cap:invalid_payload:decode:${MARKER}`,
+      'size_cap:invalid_payload:decode:nesting:base64:9',
+      'size_cap:invalid_payload:decode:nesting:base64',
+      'size_cap:invalid_payload:nesting:decode:base64:3',
+      'size_cap:invalid_payload:health:extra',
+      `size_cap:invalid_payload:pii ${MARKER}`,
+    ]) {
+      expect(gateTraceEntry({ trace: 't7', hop: 'tool_get_tasks', ms: 4, ok: false, guard }, false).guard).toBeUndefined();
+    }
+  });
+
   it('a non-string guard (object with toString yielding a valid enum pair) is dropped at the gate - no sink serializes it', async () => {
     // Structural malformed-caller boundary: the gate must require a real string, never a
     // coercible object carrying private fields.

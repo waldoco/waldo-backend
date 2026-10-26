@@ -24,6 +24,7 @@ import {
   type HookEvent,
   type SessionState,
   type SanitiseCheck,
+  type SanitiseDenialDiagnostic,
   type SanitiseFailureReason,
   type SourceTaint,
   type ToolHandler,
@@ -39,7 +40,7 @@ import {
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
-import { guardForOffload } from '../scribe/sanitiser';
+import { guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { ToolOutputStore } from '../conversation/tool-output-store';
 
@@ -110,7 +111,11 @@ export type DispatchToolResult = (
   trusted_effect?: TrustedToolEffect;
 };
 
-export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason }>;
+export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason; diagnostic?: SanitiseDenialDiagnostic }>;
+
+// 'size_cap:invalid_payload:decode:nesting:base64:3': the check, the reason, then the denial stage when the guard named one.
+export const guardLabel = ({ check, reason, diagnostic }: GuardDiagnostic): string =>
+  [check, reason, ...(diagnostic ? [sanitiseDenialLabel(diagnostic)] : [])].join(':');
 
 export type ToolDispatchErrorReason =
   | 'unknown_tool'
@@ -915,6 +920,7 @@ const offloadResult = (
     source_taint: 'external',
   });
   if (!guarded.ok) {
+    const guard: GuardDiagnostic = { check: guarded.check, reason: guarded.reason, ...(guarded.diagnostic ? { diagnostic: guarded.diagnostic } : {}) };
     return {
       ok: false,
       result: failDispatch(
@@ -922,12 +928,12 @@ const offloadResult = (
         tool,
         // Typed enums only - the denied stage/reason stay provable from the trace without any
         // provider content (live QA could not name the exact check before this).
-        toolError('sanitise_denied', `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`),
+        toolError('sanitise_denied', `tool result failed the offload guard: ${guardLabel(guard)}`),
         guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
         'sanitise_denied',
         undefined,
         undefined,
-        { check: guarded.check, reason: guarded.reason },
+        guard,
       ),
     };
   }

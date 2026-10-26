@@ -327,6 +327,10 @@ function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResu
   return { ok: false, check, reason };
 }
 
+// 'decode:nesting:percent:3' or 'health': the diagnostic's enums and integer joined, nothing from the payload.
+export const sanitiseDenialLabel = ({ stage, decode }: SanitiseDenialDiagnostic): string =>
+  decode === undefined ? stage : `${stage}:${decode.cause}:${decode.kind}:${decode.depth}`;
+
 // Every structural denial names the stage that produced it, so a trace says which check fired without any content.
 function denyInvalid(diagnostic: SanitiseDenialDiagnostic): SanitiseResult {
   return { ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic };

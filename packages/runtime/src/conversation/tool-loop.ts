@@ -1,6 +1,6 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
-import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
+import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
@@ -519,8 +519,8 @@ export async function dispatchLoopTool(
     ...(result.blocked ? { blocked: result.blocked } : {}),
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
-    // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.
-    ...(result.guard ? { guard: `${result.guard.check}:${result.guard.reason}` } : {}),
+    // Enum-only check:reason, then the denial stage when the guard named one - the trace-visible diagnostic when capture is off.
+    ...(result.guard ? { guard: guardLabel(result.guard) } : {}),
     ...(result.source_taint ? { source_taint: result.source_taint } : {}),
     ...(result.connect ? { connect: result.connect } : {}),
   };
