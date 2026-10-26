@@ -169,7 +169,9 @@ import { HANDOFF_PARAM, newHandoff } from './connect-confirm';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { mcpStartRedirect } from './mcp-oauth-routes';
 import { oauthStateSecret } from '../connectors/oauth-state-secret';
-import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
+import { BEGIN_SESSION_PATH, DESCRIBE_SESSION_PATH, newTicket, ticketHash } from './connect-link';
+import { appConnectEntry, appConnects, CONNECT_APP_LINKS, connectAppSender, type AppConnects, type ConnectAppChannel } from './connect-app';
+import { connectAppHandler } from '../tools/live/connect-app';
 import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors/granola-mcp';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
@@ -200,7 +202,7 @@ import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, cla
 import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
-import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
+import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
 import { catalogueTiles } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -241,8 +243,8 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 // The surface that issued a connect ticket; it decides where the consent page sends the owner back.
-type ConnectChannel = 'telegram' | 'console' | 'app';
-type ConnectProvider = 'google' | 'granola';
+type ConnectChannel = 'telegram' | 'console' | 'app' | 'imessage' | 'whatsapp';
+type ConnectProvider = 'google' | 'granola' | `mcp:${string}`;
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
 type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null; profile?: GoogleProfile }>;
@@ -463,15 +465,45 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return mcpDisconnectReceipt(connection ? await this.mcp().disconnect(connection.id) : { ok: false, provider: 'not_needed' });
   }
   // A sign-in that began on a connect ticket closes that ticket once it links. Bookkeeping only: the ticket was spent at
-  // Continue, so a failed close changes nothing the owner can reach.
-  private async completeConnectTicket(nonce: string, linked: boolean): Promise<void> {
+  // Continue, so a failed close changes nothing the owner can reach. A ticket sent to a chat by connect_app also tells that
+  // conversation how the sign-in ended.
+  private async completeConnectTicket(nonce: string, outcome: ConnectOutcome): Promise<void> {
     const ticket = (await this.ctx.storage.get<Readonly<{ ticket: string; at: number }>>(`connect_mcp_ticket:${nonce}`))?.ticket;
     if (ticket === undefined) return;
     await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
+    const told = this.appConnects().settled(ticket, outcome);
+    if (told) await this.tellConnectOutcome(nonce, told);
     const call = signedRpc(this.env);
-    if (!linked || !call) return;
+    if (outcome.kind !== 'linked' || !call) return;
     const done = await call('connect_session_complete', `connsess.complete.${ticket}`, { p_ticket_hash: ticket }).catch(() => null);
-    console.log(JSON.stringify({ trace: `connect:${ticket.slice(0, 8)}`, hop: 'connect_completed', ok: done === true, detail: 'granola' }));
+    console.log(JSON.stringify({ trace: `connect:${ticket.slice(0, 8)}`, hop: 'connect_completed', ok: done === true, detail: told ? 'chat' : 'granola' }));
+  }
+  // Catalogue apps connected from chat (channels/connect-app.ts). Only a channel's runtime issues tickets; the hop, its
+  // Continue and the callback need none.
+  private appConnects(issueTicket: (provider: string, channel: ConnectAppChannel) => Promise<Readonly<{ url: string; hash: string }> | null> = async () => null): AppConnects {
+    return appConnects({
+      kv: this.ctx.storage.kv,
+      begin: (entry) => {
+        const origin = this.ctx.storage.kv.get<string>('origin');
+        return origin ? this.mcp().begin(entry.url, origin, entry.id) : Promise.resolve({ kind: 'failed', reason: 'origin_unknown' });
+      },
+      attemptTarget: (nonce) => this.mcp().attemptTarget(nonce),
+      start: (nonce) => this.mcp().start(nonce),
+      issueTicket, now: () => Date.now(),
+    });
+  }
+  // The settled line goes to the conversation the link was sent to, through that surface's delivery outbox, once per attempt.
+  private async tellConnectOutcome(nonce: string, told: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
+    const trace = `connect-app:${nonce.slice(0, 12)}`;
+    try {
+      const runtime = this.setup(told.channel);
+      if (runtime.owner === 0) throw new Error('owner_unbound');
+      await runtime.finalOutbox.enqueue({ id: trace, trace, payload: { chat_id: runtime.owner, text: told.text }, ownerSubject: String(runtime.owner),
+        doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: Date.now() + 86_400_000, ...(told.thread ? { appThread: told.thread } : {}) });
+      console.log(JSON.stringify({ trace, hop: 'connect_app_settled', ok: true, detail: told.channel }));
+    } catch (error) {
+      console.log(JSON.stringify({ trace, hop: 'connect_app_settled', ok: false, error: error instanceof Error ? error.message : String(error) }));
+    }
   }
   // Model provider health for every channel and turn of this owner, so provider misses add up across turns.
   private readonly providerHealth = new InMemoryCircuitBreaker();
@@ -1613,7 +1645,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context,undefined,thread).readForDisplay();
       for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
       at.step='transcript';
-      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),appConsoleLinks(this.ctx.storage.kv));
+      const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
+      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null);
     }finally{abort.abort();}
   }
   // The text the chat shows for each of a thread's messages that has any, from rows whose witness matches.
@@ -1696,11 +1729,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === MCP_FINISH_PATH && request.method === 'POST') {
       const { nonce, query } = JSON.parse(body) as { nonce: string; query: string };
       const outcome = await this.serial(() => this.mcp().finish(nonce, new URLSearchParams(query)));
-      await this.completeConnectTicket(nonce, outcome.kind === 'linked');
+      await this.completeConnectTicket(nonce, outcome);
       return Response.json(outcome);
+    }
+    if (new URL(request.url).pathname === DESCRIBE_SESSION_PATH && request.method === 'POST') {
+      const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
+      const described = this.appConnects().describe(ticket_hash);
+      return Response.json(described ? { origin: described.origin, consent: described.consent } : {});
     }
     if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
       const { ticket_hash, provider } = JSON.parse(body) as { ticket_hash: string; provider?: string };
+      // A catalogue app's ticket was sent with its sign-in already started; Continue only takes it to the provider, once.
+      if (appConnectEntry(provider)) {
+        const begun = await this.serial(() => this.appConnects().start(ticket_hash));
+        console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begun !== null, detail: provider }));
+        return Response.json(begun ?? { url: null, nonce: null });
+      }
       // The ticket names its provider; Continue on a Granola ticket starts Granola's sign-in once (the ticket is already spent).
       if (provider === 'granola') {
         const begun = await this.beginGranola(ticket_hash);
@@ -3322,6 +3366,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const consoleLinkTool = consoleLinkHandler(consoleLinkSender({
       surface: channel, route: consoleLinkRoutes[channel], available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,
     }));
+    // A connect link rides the same surfaces under its own record, so a console link and a connect link in one turn both go.
+    // Its settled line goes back to the conversation that asked: the app thread the running turn is in, else the chat itself.
+    const turnThread = (scope: RunEffectScope | undefined): string | undefined => {
+      const record = this.activeApp;
+      return record && scope?.runId === record.id && scope.attempt === record.attempt ? threadOfChain(record.conversationRef) ?? undefined : undefined;
+    };
+    const connectAppRoutes: Record<ChannelKind, ConsoleLinkRoute> = { ...consoleLinkRoutes,
+      imessage: iMessageConsoleRoute(storage, () => this.activeIMessage, 'connect'), app: appConsoleRoute(storage.kv, Date.now, CONNECT_APP_LINKS) };
+    const connectAppTool = connectAppHandler(connectAppSender({
+      route: connectAppRoutes[channel], available: () => probeCapture.current === null, log,
+      issue: async (entry, method, turn) => method === 'code' ? { kind: 'refused', reason: 'code_unavailable' }
+        : this.appConnects((provider, surface) => issueTicket(provider as ConnectProvider, surface)).issue(entry, channel, turnThread(turn.runScope)),
+    }));
     // The model's progress-note tool goes only where a send can leave while the turn runs. A Telegram turn runs inside alarm(),
     // so its note goes straight out on the reply caller, not through the final outbox that alarm drains. iMessage times its
     // notes in the harness instead (startIMessageProgress), so it is not offered the tool: one mechanism, one cap. The app
@@ -3448,7 +3505,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Connect links are short and first-party: /c/<ticket>, for Google or Granola. The provider URL is minted at click time
     // (BEGIN_SESSION_PATH) and never passes through model-visible text. A link for a surface that holds the owner's session
     // also carries a one-time handoff code, so only the browser that surface opens it in can take the hop.
-    const connectLink = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null> => {
+    const issueTicket = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null> => {
       const origin = await storage.get<string>('origin');
       const callRpc = signedRpc(env);
       const doName = vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
@@ -3467,8 +3524,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The channel that issued the link decides where the completion page routes back to.
       await storage.put(`connect_channel:${hash}`, channel);
       log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
-      return handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`;
+      return { url: handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`, hash };
     };
+    const connectLink = async (provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null> => (await issueTicket(provider, channel, opts))?.url ?? null;
     // Tokens saved before multi-account and Vault move into the account list once.
     const migrateLegacyGoogle = async (): Promise<void> => {
       const linked = await storage.get<{ id: string; email: string | null; scopes: readonly string[] }>('google:connection');
@@ -4008,7 +4066,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), ...memoryHandlers({
+      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget

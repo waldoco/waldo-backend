@@ -191,7 +191,7 @@ describe('the rules that pulled against each other are gone', () => {
   it('gives every surface the shared rules and leaves the surface-specific lines to its presentation facts', () => {
     const direct = messagingSystemPrompt([]);
     expect(direct).toContain('Do it / Modify / Not now buttons');
-    expect(direct).toContain('go through connect_service or the service tool itself');
+    expect(direct).toContain('go through connect_service, connect_app or the service tool itself');
     for (const surface of SURFACES) {
       const prompt = messagingSystemPrompt([], surface);
       expect(prompt).toContain('Commands: none.');

@@ -188,7 +188,7 @@ const proxyCause = (failure: OAuthProxyFailure, server: string): McpRefusal => {
 };
 const refusalFor = (failure: OAuthProxyFailure, server: string): McpRefusal => {
   switch (failure.code) {
-    case 'reauth_needed': case 'token_failed': return new McpRefusal('auth_failed', `The sign-in for ${server} is no longer valid. Ask the owner to reconnect ${server} in Connections on their Waldo console (send_console_link sends it).`);
+    case 'reauth_needed': case 'token_failed': return new McpRefusal('auth_failed', `The sign-in for ${server} is no longer valid. Ask the owner to reconnect ${server} in Connections on their Waldo console (send_console_link sends it), or use connect_app for an app it lists.`);
     case 'scope_missing': return new McpRefusal('auth_failed', `${server} needs more access for this tool${failure.scope ? ` (${failure.scope})` : ''}. Ask the owner to reconnect ${server} in Connections on their Waldo console and grant it.`);
     case 'connection_unavailable': return new McpRefusal('not_found', `${server} is no longer connected.`);
     case 'not_found': return new McpRefusal('not_found', `${server} did not answer at its address: the server may have moved or shut down. The owner can reconnect it in Connections.`);
@@ -417,7 +417,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const r = byName(name);
     if (!r) {
       const names = rows().map((x) => x.name);
-      throw new McpRefusal('not_found', names.length ? `No connected MCP server is named "${name}". Connected: ${names.join(', ')}.` : 'The owner has no MCP servers connected. They connect one in Connections on their Waldo console (send_console_link sends it).', true);
+      throw new McpRefusal('not_found', names.length ? `No connected MCP server is named "${name}". Connected: ${names.join(', ')}.` : 'The owner has no MCP servers connected. connect_app sends a link for an app it lists; any other server they add in Connections on their Waldo console (send_console_link sends it).', true);
     }
     if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
     return r;
@@ -590,6 +590,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const attempt = JSON.parse(found.record) as Attempt, origin = attempt.origin;
       const server = { issuer: attempt.issuer, authorization_endpoint: attempt.authorization_endpoint, token_endpoint: attempt.token_endpoint, client_id_metadata_document_supported: attempt.registration === 'cimd', iss_parameter_supported: attempt.iss_supported };
       return authorizationUrl(server, { clientId: attempt.client_id, redirectUri: callbackUrl(origin), state: await mcpState(deps.stateSecret, doName, nonce), challenge: await pkceChallenge(attempt.verifier), resource: attempt.resource, ...(attempt.scope ? { scope: attempt.scope } : {}) });
+    },
+
+    // Where a sign-in attempt not yet started will send the browser, and until when: a first-party hop shows the owner where
+    // its Continue goes before the browser leaves Waldo, and refuses any other place.
+    attemptTarget(nonce: string): Readonly<{ origin: string; expires: number }> | null {
+      const found = sql.exec<{ record: string; expires: number; started: number; settled: string | null }>('SELECT record, expires, started, settled FROM mcp_attempts WHERE nonce = ?', nonce).toArray()[0];
+      if (!found || found.started || found.settled || found.expires < deps.now()) return null;
+      return { origin: new URL((JSON.parse(found.record) as Attempt).authorization_endpoint).origin, expires: found.expires };
     },
 
     // The provider's redirect back. Settles the attempt once; a reload replays the recorded outcome.
