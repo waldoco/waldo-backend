@@ -13,6 +13,7 @@ export class OAuthProxyError extends Error {
 
 export type OAuthProxy = Readonly<{
   register(input: Readonly<{ issuer: string; registrationEndpoint: string; redirectUri: string; origin: string }>): Promise<RegisterData>;
+  client(input: Readonly<{ issuer: string; redirectUri: string }>): Promise<RegisterData>;
   exchange(doName: string, provider: string, pins: ClientPins, code: string, options?: Readonly<{ verifier?: string; scope?: string }>): Promise<ExchangeData>;
   call(doName: string, connection: string, method: McpMethod, params: Readonly<Record<string, unknown>>, options?: Readonly<{ era?: McpEra; headers?: Readonly<Record<string, string>>; intentId?: string }>): Promise<CallData>;
   fetch(doName: string, connection: string, method: FetchMethod, path: string, query?: Readonly<Record<string, string>>): Promise<FetchData>;
@@ -45,6 +46,7 @@ export const oauthProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
   };
   return {
     register: (input) => send({ op: 'register', issuer: input.issuer, registration_endpoint: input.registrationEndpoint, redirect_uri: input.redirectUri, origin: input.origin }),
+    client: (input) => send({ op: 'client', issuer: input.issuer, redirect_uri: input.redirectUri }),
     exchange: (doName, provider, pins, code, options = {}) => send({ op: 'exchange', do_name: doName, provider, pins, code, ...(options.verifier ? { verifier: options.verifier } : {}), ...(options.scope ? { scope: options.scope } : {}) }),
     call: (doName, connection, method, params, options = {}) => send({ op: 'call', do_name: doName, connection, method, params, ...(options.era ? { era: options.era } : {}), ...(options.headers && Object.keys(options.headers).length ? { headers: options.headers } : {}), ...(options.intentId ? { intent_id: options.intentId } : {}) }),
     fetch: (doName, connection, method, path, query) => send({ op: 'fetch', do_name: doName, connection, method, path, ...(query && Object.keys(query).length ? { query } : {}) }),

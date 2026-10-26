@@ -199,6 +199,10 @@ export type ClientPins = Readonly<{
   rotation?: 'single_use';
   // Sent as the scope of a refresh request, for a provider that requires one.
   refresh_scope?: string;
+  // ok_envelope: the token endpoint answers HTTP 200 with an ok flag. ok:false carries the error, the token type
+  // names the account kind rather than "bearer" (the token is still sent as a bearer), and the granted scopes are
+  // comma-separated, under authed_user when not at the top level.
+  token_dialect?: 'ok_envelope';
 }>;
 export type McpPins = ClientPins & Readonly<{ server_url: string; resource: string }>;
 
@@ -206,6 +210,26 @@ export type TokenSet = Readonly<{ access_token: string; refresh_token?: string; 
 export class TokenEndpointError extends Error {
   constructor(public readonly kind: 'auth' | 'transient' | 'configuration' | 'protocol', public readonly status?: number, public readonly retryAfterSeconds?: number) { super(`token_${kind}`); this.name = 'TokenEndpointError'; }
 }
+
+const ENVELOPE_ERRORS: Readonly<Record<string, TokenEndpointError['kind']>> = {
+  invalid_code: 'auth', invalid_refresh_token: 'auth', invalid_grant: 'auth',
+  invalid_client_id: 'configuration', bad_client_secret: 'configuration', bad_redirect_uri: 'configuration', invalid_client: 'configuration',
+  ratelimited: 'transient',
+};
+const envelopeTokens = (status: number, json: Record<string, unknown>, now: number): TokenSet => {
+  if (status === 429 || status >= 500) throw new TokenEndpointError('transient', status);
+  if (json.ok !== true) throw new TokenEndpointError(ENVELOPE_ERRORS[String(json.error)] ?? 'protocol', status);
+  if (typeof json.access_token !== 'string' || !json.access_token) throw new TokenEndpointError('protocol', status);
+  const user = json.authed_user as Record<string, unknown> | undefined;
+  const scope = typeof json.scope === 'string' ? json.scope : typeof user?.scope === 'string' ? user.scope : undefined;
+  const expiresIn = typeof json.expires_in === 'number' && Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : undefined;
+  return {
+    access_token: json.access_token,
+    ...(typeof json.refresh_token === 'string' && json.refresh_token ? { refresh_token: json.refresh_token } : {}),
+    ...(expiresIn === undefined ? {} : { expires_at: now + expiresIn * 1000 }),
+    ...(scope ? { scope: scope.split(/[\s,]+/).filter(Boolean).join(' ') } : {}),
+  };
+};
 
 const tokenCall = async (fetcher: typeof fetch, pins: ClientPins, body: Record<string, string>, secret: string | undefined, now: number): Promise<TokenSet> => {
   const form = new URLSearchParams({ ...body, ...(pins.resource ? { resource: pins.resource } : {}) });
@@ -220,6 +244,7 @@ const tokenCall = async (fetcher: typeof fetch, pins: ClientPins, body: Record<s
   }
   let json: Record<string, unknown> = {};
   try { json = JSON.parse(out.text) as Record<string, unknown>; } catch { /* classified by status below */ }
+  if (pins.token_dialect === 'ok_envelope') return envelopeTokens(out.status, json, now);
   if (out.status < 200 || out.status >= 300) {
     const code = json.error;
     const wait = Number(out.headers.get('retry-after'));

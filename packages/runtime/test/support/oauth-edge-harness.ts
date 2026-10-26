@@ -13,7 +13,8 @@ const sha256 = async (text: string) => [...new Uint8Array(await crypto.subtle.di
 export const vaultFake = (owners: readonly string[] = ['owner-a', 'owner-b'], options: Readonly<{ custody?: Readonly<Record<string, string>>; uniqueAccounts?: readonly string[] }> = {}) => {
   const custody: Readonly<Record<string, string>> = options.custody ?? { google: 'connector-proxy', mcp: 'oauth-proxy' };
   const rows: Row[] = [];
-  const clients = new Map<string, { client_id: string; client_auth: string; client_secret: string | null }>();
+  // A seeded (pre-registered) client pins the endpoints its secret may reach; a dynamic registration pins none.
+  const clients = new Map<string, { client_id: string; client_auth: string; client_secret: string | null; token_endpoint?: string; revocation_endpoint?: string }>();
   const intents = new Map<string, { digest: string; status: 'pending' | 'done'; result?: unknown }>();
   const rpcs: string[] = [];
   // Set to fail the next n oauth_rotate calls with a database error.
@@ -43,6 +44,12 @@ export const vaultFake = (owners: readonly string[] = ['owner-a', 'owner-b'], op
     },
     oauth_revoke: (a) => { const r = live(a.p_do_name, a.p_connection); if (!r) return false; r.status = 'revoked'; r.secret = ''; return true; },
     oauth_client_get: (a) => { const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`); return c ? [c] : []; },
+    oauth_client_registered: (a) => { const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`); return c?.token_endpoint ? [{ client_id: c.client_id, client_auth: c.client_auth }] : []; },
+    oauth_client_secret: (a) => {
+      const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`);
+      if (!c || c.client_id !== a.p_client_id || c.client_secret === null) return null;
+      return !c.token_endpoint || a.p_endpoint === c.token_endpoint || a.p_endpoint === c.revocation_endpoint ? c.client_secret : null;
+    },
     oauth_client_put: (a) => { const key = `${a.p_issuer} ${a.p_redirect_uri}`; if (clients.has(key)) return false; clients.set(key, { client_id: a.p_client_id, client_auth: a.p_client_auth, client_secret: a.p_secret ?? null }); return true; },
     proxy_health: (a) => { const r = rows.find((x) => x.id === a.p_connection && x.owner === a.p_do_name && x.status !== 'revoked'); if (!r) return false; r.status = a.p_error ? 'failing' : 'active'; r.last_error = a.p_error || null; return true; },
     proxy_idem_claim: (a) => {
