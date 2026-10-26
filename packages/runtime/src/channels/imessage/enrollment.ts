@@ -1,5 +1,6 @@
 import { iMessageComposition, type IMessageBridgeDO, type IMessageEnv } from './bridge-do';
 import { iMessageDirectory, type EnrollmentContext } from './directory';
+import { consoleAuth } from '../../identity/console-auth';
 import { photonConfig, photonDoName, photonEnroll, photonPersonName, photonRemove } from './photon';
 
 // Enrolling an owner's iPhone number with Photon, so the shared Waldo number's pool lets it text Waldo. Enrollment
@@ -47,6 +48,17 @@ export async function enrollOwner(env: IMessageEnv, owner: string, rawPhone: unk
     if (recorded.release) await photonRemove(config, token, recorded.release);
     return { kind: 'enrolled', number: user.assignedNumber };
   } catch { return { kind: 'unknown' }; }
+}
+
+/**
+ * The owner's own tap that enrolls a number, from the console or the app: at most five an hour per owner, shared by both, then
+ * enrollOwner, which finds or creates the Photon user, so a repeat is safe.
+ */
+export async function enrollAtTap(env: IMessageEnv, owner: string, rawPhone: unknown): Promise<EnrollOutcome | { kind: 'throttled' }> {
+  const auth = consoleAuth(env);
+  if (!auth) return { kind: 'disabled' };
+  if (!(await auth.throttle(`imessage.enroll.${owner}`, 5, 3600))) return { kind: 'throttled' };
+  return enrollOwner(env, owner, rawPhone);
 }
 
 /**
