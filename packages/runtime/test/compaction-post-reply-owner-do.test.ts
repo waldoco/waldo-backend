@@ -7,6 +7,7 @@ import { canonicalOwnerConversationStore } from '../src/conversation/canonical-o
 import { COMPACTION_INSTRUCTION } from '../src/conversation/compaction';
 import { CONVERSATION_INPUT_BUDGET_TOKENS } from '../src/conversation/window';
 import { claimStore } from '../src/memory/claims';
+import { forgetPurge } from '../src/memory/forget-purge';
 import { ensureSchema } from '../src/tracer/schema';
 
 // A long app chat, then one real app turn through an OwnerDO built with the deploy's WALDO_COMPACTION value. After the
@@ -91,6 +92,11 @@ const seed = async (state: DurableObjectState) => {
   return rows;
 };
 
+// Each owner object is cleared afterwards, alarm included, so no wake it armed runs into a later test's model counts.
+const inOwner = <T,>(name: string, work: (state: DurableObjectState) => Promise<T>) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    try { return await work(state); } finally { await state.storage.deleteAlarm(); await state.storage.deleteAll(); }
+  });
 const ownerFor = async (name: string, state: DurableObjectState, compaction: string | undefined) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
@@ -123,7 +129,7 @@ const replyTo = (text: string): Request[] => model.requests.filter(request => re
 it('with the switch on, one reply past the trigger compacts the chain once; the next turn reads [summary] + tail and the transcript keeps every row', async () => {
   directory();
   const name = 'compaction-post-reply-on';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     const seeded = await seed(state);
     await turn(owner, state, name, 'What is on today?');
@@ -150,7 +156,7 @@ it('with the switch on, one reply past the trigger compacts the chain once; the 
 
 it('with the switch off, no compaction or flush call is made, no attempt is noted, and the turn sends the model what it sent before', async () => {
   directory();
-  const sentWith = async (name: string, compaction: string | undefined) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  const sentWith = async (name: string, compaction: string | undefined) => inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, compaction);
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
@@ -172,7 +178,7 @@ it('with the switch off, no compaction or flush call is made, no attempt is note
 it('a topic the owner forgets in the turn never reaches the summary call or the stored summary', async () => {
   directory();
   const name = 'compaction-post-reply-forget';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     await seed(state);
     // The fake summary repeats the topic whenever its input carries it.
@@ -185,10 +191,33 @@ it('a topic the owner forgets in the turn never reaches the summary call or the 
   });
 });
 
+it('a topic still pending from an earlier forget is cleaned from the chain before the summary reads it', async () => {
+  directory();
+  const name = 'compaction-post-reply-held';
+  await inOwner(name, async (state) => {
+    const owner = await ownerFor(name, state, 'on');
+    await seed(state);
+    // A console forget whose first purge pass left the conversation uncleaned: the topic is pending, its rows still carry it.
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    memory.barrier('Lotus Hall', new Date().toISOString());
+    await forgetPurge({ sql: state.storage.sql, store: memory, now: Date.now, arm: async () => undefined, stores: [{ name: 'conversation', run: async () => 1 }] }).track(['Lotus Hall'], 'history');
+    expect(memory.pendingTopics()).toEqual(['Lotus Hall']);
+    expect(JSON.stringify(stored(state))).toContain('Lotus Hall');
+    model.summary = input => input.includes('Lotus Hall') ? `Decisions:\n- The party is at the Lotus Hall.` : SUMMARY;
+    await turn(owner, state, name, 'What is on today?');
+    expect(compactions()).toHaveLength(1);
+    expect(JSON.stringify(compactions()[0]!.messages)).not.toContain('Lotus Hall');
+    expect(summaries(state).map(entry => entry.modelPayload)).toEqual([SUMMARY]);
+    // The turn's cleaning pass finished the purge before the compaction ran, so it read redacted rows.
+    expect(memory.pendingTopics()).toEqual([]);
+    expect(JSON.stringify(stored(state))).not.toContain('Lotus Hall');
+  });
+});
+
 it('a summary that carries a health number is not stored, and the attempt still counts', async () => {
   directory();
   const name = 'compaction-post-reply-health';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     await seed(state);
     model.summary = () => 'Facts:\n- The owner slept 5 hours and prefers harbour walks.';
@@ -203,7 +232,7 @@ it('a summary that carries a health number is not stored, and the attempt still 
 it('an owner message sent while the summary is being written is kept, answered after it, and in order', async () => {
   directory();
   const name = 'compaction-post-reply-mid';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     await seed(state);
     let late = '';
