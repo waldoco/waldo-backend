@@ -74,7 +74,13 @@ The function returns `false` and changes nothing when any of these holds:
 
 ## Slack: owner actions
 
-None of this has been done. The Worker side that offers Slack in Connections follows in a separate change.
+None of this has been done. Once these steps are done, the Slack tile in Connections (catalogue entry `slack`)
+connects with the seeded client, and Waldo then behaves as follows:
+
+- **Reads.** The reads Slack labels read-only run without asking, in the owner's own requests only.
+- **Sends.** A send asks first, unless the owner allows it in Connections. Even then, it never runs without a card in a
+  turn that read outside content or that the owner did not start.
+- **Patrol.** Every send is listed under "Sent as you", with the tool's name only.
 
 1. **Choose how Waldo is distributed.**
    - **Internal app.** It installs only in the workspace that owns it, and needs no review. This fits the
