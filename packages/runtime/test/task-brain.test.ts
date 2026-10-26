@@ -76,6 +76,7 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
       providerHealth: health,
       admitted: async () => { if (admission.waiting) await admission.waiting; if (admission.now === 'throws') throw new Error('directory unreachable'); return admission.now; },
       heldTopics: () => topics,
+      replayApproval: async () => { throw new Error('no approval replays in this harness'); },
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });

@@ -19,7 +19,8 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
-import { jobBook } from '../src/tasks/jobs';
+import { jobBook, replayKey } from '../src/tasks/jobs';
+import { argumentDigest } from '../src/tools/dispatcher';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { reportMachineJobs } from './helpers/heartbeat-job';
@@ -124,6 +125,11 @@ type Steps = Readonly<{
   // A browser card that task's errand raised, waiting for the owner; returns its ledger id.
   taskCard(): Promise<string>;
   cardStatus(id: string): string;
+  // A card the owner approved whose browser call waits on the jobs lane as a replay job; its frozen call carries the text.
+  // Answers the card's ledger id.
+  replayCard(text: string): Promise<string>;
+  // When the object's alarm is set for, if at all.
+  alarmAt(): Promise<number | null>;
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -239,6 +245,17 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
           currentRunRef: () => 'task:job_c0ffee000001', browserSubmit: async () => { throw new Error('a withdrawn card never submits'); } })
           .proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
         cardStatus: id => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status,
+        alarmAt: () => state.storage.getAlarm(),
+        replayCard: async text => {
+          const args = { url: 'https://fixture.invalid/book', task: `Book the table the ${text} mail offered.` };
+          const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'replay-card-1', now: Date.now, timezone: 'UTC', log: () => {} });
+          const id = await desk.proposeTaintedAction({ tool: 'browse_act', args, args_digest: (await argumentDigest(args))!, reasoning: 'The mail offered a table.', source: 'external' });
+          state.storage.sql.exec("UPDATE ledger SET status = 'running', decided_at = ? WHERE id = ?", Date.now(), id);
+          jobBook(state.storage.sql, { now: Date.now, newId: () => 'c0ffee000002', newToken: () => 'token' }).create({
+            kind: 'approval_replay', profile: null, idempotencyKey: replayKey(id), origin: replayKey(id), surface: 'whatsapp',
+            brief: { approval_id: id, tool: 'browse_act', args, args_digest: (await argumentDigest(args))!, approved_at: Date.now() }, dueAt: Date.now() + HOUR, deadlineAt: Date.now() + 2 * HOUR, taint: 'external' });
+          return id;
+        },
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -477,6 +494,20 @@ describe('owner forget reaches an open background task', { timeout: 30_000 }, ()
       expect(cardStatus(card)).not.toBe('skipped');
       expect(await forget('spot', SECRET)).toBe(true);
       expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(cardStatus(card)).toBe('skipped');
+    });
+  });
+
+  it('a forget that stops an approved action\'s replay wakes the jobs lane, which closes its card without running it', async () => {
+    await owned('wa-forget-replay-card', async ({ replayCard, tasks, cardStatus, forget, alarms, alarmAt }) => {
+      const card = await replayCard(SECRET);
+      await alarms(1);
+      expect(await alarmAt()).toBeNull();
+      expect(await forget('spot', SECRET)).toBe(true);
+      expect(await alarmAt()).toEqual(expect.any(Number));
+      expect(tasks()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+      expect(cardStatus(card)).toBe('running');
+      await alarms(1);
       expect(cardStatus(card)).toBe('skipped');
     });
   });
