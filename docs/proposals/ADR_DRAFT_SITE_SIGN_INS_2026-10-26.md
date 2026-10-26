@@ -52,7 +52,9 @@ plaintext lives in memory for at most 10 minutes, and every outbound sink fails 
 3. **Exact origin, fenced.**
    - Equality of `URL.origin` (https, no userinfo) is required between the stored origin, the top-level page and the
      frame holding the field. There is no subdomain, `www` or registrable-domain folding. The top frame only.
-   - From release through submit, the route guard aborts every document request to another origin.
+   - From release until the submission request is dispatched, the route guard aborts every document request to
+     another origin. After that, only the submission's own body-less redirect chain may leave the origin. Any other
+     cross-origin document request stays aborted while a filled field holds the value.
    - Before each insert and before Enter, the harness checks over CDP:
      - the main frame's `frameId` and `loaderId` are unchanged;
      - origin equality still holds;
@@ -76,14 +78,15 @@ plaintext lives in memory for at most 10 minutes, and every outbound sink fails 
    - Filled nodes stay masked by `backendNodeId` whatever their type becomes, and commands aimed at them are refused.
      No clipboard or drag command exists.
    - Chrome's autofill and password-manager save are off.
-   - No screenshot leaves the host while a filled node is attached.
+   - After submit settles, still-attached filled fields are cleared through a call that carries no argument. No
+     screenshot leaves the host while a filled field holds a value.
    - The exact value, raw and percent-encoded, is scanned at every sink: observation, checkpoint, tool-output ledger and
      offload store, tool result, errors, OTLP export and R2 writes. It is also an ephemeral canary in the model-request
      sanitiser.
    - Page console messages are never captured, protocol debug logging stays off by guard, and the route guard never
      reads request bodies.
-   - The plaintext is dropped when the filled document is gone or 10 minutes after release, whichever is first. A
-     session still showing a filled field at 10 minutes is ended.
+   - The plaintext is dropped when no filled field holds it any more, or 10 minutes after release, whichever is first.
+     A session with a filled field still holding the value at 10 minutes is ended.
 7. **Bounded release.** Every release purpose counts: fill, scan restore and rewrap each have a per-owner daily
    budget, under a per-owner total and a server total that are SQL ceilings. One owner can use at most 14% of the
    server's day. Reaching a cap hands off to the owner.

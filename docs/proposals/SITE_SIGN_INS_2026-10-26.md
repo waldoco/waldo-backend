@@ -308,13 +308,23 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
    - A page with a username field and no password field (a two-step login) gets the username only, then submission. The
      password step is a second `sign_in` call on the next page, which repeats every step.
    - The harness captures the main frame's `frameId` and `loaderId` and the target node's `backendNodeId`.
-4. **Fence on.** Every document request is checked against the stored origin from here through the end of the fill
-   (step 10):
+4. **Fence on.** From here until the submission request is dispatched (step 8), every document request is checked
+   against the stored origin:
    - The check runs in the context's existing route guard (`guardGeneralBrowserRoute`, which is Playwright's CDP
      `Fetch` interception).
    - It covers top-level navigations, frame navigations and popups; any to another origin is aborted.
    - While fenced, `goto`, `back`, `open_tab`, `switch_tab` and `download` are refused.
-   - A 307/308 that would replay a POST body is already refused (`general-browser-redirects.ts:44-45`).
+   - After Enter, exactly one document request is let through: the submission itself, to the stored origin, matching
+     the form's checked method and action.
+   - From then on the fence admits only that request's own redirect chain. That chain is the route guard's
+     host-followed GET hops, each still authorised by the egress grant, so a normal post-login redirect to another
+     origin (`login.example.com` to `app.example.com`, or an SSO hop) completes. Every other document request to
+     another origin stays aborted while a filled node still holds a value.
+   - Those hops carry no body. The route guard turns a 301/302/303 after a POST into a GET and refuses a 307/308 that
+     would replay a POST body (`general-browser-redirects.ts:43-45`). The URL scan still catches the value echoed into a
+     `Location`.
+   - This meets "through submit": the value leaves for the stored origin's submission and nowhere else by navigation.
+     Same-origin script that sends the value by other means is the stated residual of trusting the exact-origin site.
 5. **Intent, then release.**
    - The host writes the intent to the checkpoint before any I/O: sign-in id, `request_id` and session ref.
    - It then calls `sign_in_release` with the origin read over CDP.
@@ -339,8 +349,12 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
      never reads, logs or keeps `postData`, and its errors map to fixed codes.
 9. **Wait** for the main frame's `loaderId` to change or the page to settle. No observation is built or published
    between steps 5 and 9.
-10. **Fence off, publish.** The fence lifts once the filled nodes are detached from the document. The next observation
-    is built through the filled-registry rules below.
+10. **Clear, fence off, publish.**
+    - If the page settled without navigating (an XHR login), the harness clears every filled node that is still
+      attached. It runs `Runtime.callFunctionOn` on the node's object with a function that empties its value and
+      returns only whether it is now empty. No argument is passed, so the value never crosses.
+    - The fence lifts once no filled node holds a value: every one is detached, or empty.
+    - The next observation is built through the filled-registry rules below.
 
 Every failure maps to a fixed code. No message interpolates a value, an envelope, a URL, a database error or a CDP or
 Playwright error string. The codes are `not_saved_here`, `approval_required`, `origin_mismatch`, `no_password_field`,
@@ -349,7 +363,7 @@ Playwright error string. The codes are `not_saved_here`, `approval_required`, `o
 
 ### Filled registry: after the fill
 
-- **Moving the value is refused.** While a filled node is attached, any `type`, `fill`, `press`, `select` or
+- **Moving the value is refused.** While a filled node holds a value, any `type`, `fill`, `press`, `select` or
   `set_checked` aimed at a filled node is refused with `fenced`. The command schema has no select-all, copy, cut, paste,
   drag or clipboard operation, and adding one reopens this ADR.
 - **Chrome's own credential features are off.** The harness calls CDP `Autofill.disable` and launches without the
@@ -359,7 +373,8 @@ Playwright error string. The codes are `not_saved_here`, `approval_required`, `o
   below.
 - **Masking by node id.** The filled nodes' `backendNodeId`s join the secret set in the accessibility snapshot and in
   `field_values`, whatever their type becomes.
-- **Screenshots are withheld** while any filled node is attached to the document. That applies to the observation image,
+- **Screenshots are withheld** while any filled node still holds a value: attached and not empty, checked by the same
+  value-free `Runtime.callFunctionOn`. That applies to the observation image,
   the `screenshot` command and R2 writes. A canvas or CSS echo cannot be masked or text-scanned, so withholding is the
   only safe rule. The observation says `image_withheld: 'sign_in_on_page'` and still carries scanned text.
 - **Exact-value scan at every outbound sink.** The value is checked raw and percent-encoded. A hit fails closed: the
@@ -380,9 +395,10 @@ Playwright error string. The codes are `not_saved_here`, `approval_required`, `o
   - Playwright and CDP protocol debug logging (`DEBUG=pw:*`) stays off. A guard fails if a Wrangler config, env
     default or code path enables it.
 - **The plaintext lifetime is bounded.** The value lives only in the owner object's memory. It is dropped at the
-  earlier of two points: the filled document is gone (main-frame `loaderId` changed and the filled nodes are detached),
-  or 10 minutes after release.
-  - If filled nodes are still attached at 10 minutes, the browser session ends.
+  earlier of two points: no filled node holds the value any more (the document changed, or the nodes were cleared) or
+  10 minutes after release.
+  - If a filled node still holds a value at 10 minutes, the browser session ends. After the step 10 clear that is rare,
+    so an XHR login keeps its signed-in session past the bound; only the plaintext is dropped.
   - Once the value is dropped, scanning for it ends. A later page on the same exact origin that echoes it from the
     server is a stated residual.
   - The checkpoint records only filled sign-in ids, generations and release times.
@@ -450,11 +466,13 @@ Playwright error string. The codes are `not_saved_here`, `approval_required`, `o
 | Prompt injection steers the model to a lookalike (`examp1e.com`, `example.com.evil.io`, `login-example.com`) | No `saved_sign_ins` there; the command needs a listed id; host and SQL both compare exact `URL.origin` | None for the value |
 | Subdomain or `www` variant of a real site | Exact origin only; the owner saves another sign-in for that origin | Owner may need two entries for one account |
 | Redirect chain ends on another origin | The origin is read at release and before every insert; each redirect hop is already authorised by the route guard | None |
-| Navigation races the fill | The fence aborts every document request to another origin from release through submit; `frameId` and `loaderId` are checked before each insert; any change ends the session | None |
+| Navigation races the fill | The fence aborts every document request to another origin from release until the submission is dispatched; `frameId` and `loaderId` are checked before each insert; any change ends the session | None |
+| Post-login redirect to another origin of the same service | Only the submission's own body-less GET redirect chain is admitted, each hop authorised by the egress grant | None; it is how those sign-ins complete |
+| XHR login leaves the filled field on the page | After settle, the harness empties it with a value-free `Runtime.callFunctionOn`; screenshots resume once no field holds the value | None |
 | Page moves focus to another field during the fill | `activeElement` must resolve to the target `backendNodeId` before each insert and before Enter | None |
 | Page swaps the form's `method` or `action` after the checks | Re-checked before each insert and before Enter | Same-origin script can still send the value anywhere the egress grant allows; the exact-origin site is trusted with its own password |
 | Page script reads the field and echoes it into the DOM | Exact-value scan withholds the observation; screenshots are withheld while the field is on the page; the model-request canary backs it up | A transformed echo (reversed, base64) is not caught, and neither is a server echo after the value is dropped. The exact-origin site is trusted with its own password, as a browser password manager trusts it |
-| Show-password toggle, canvas or CSS rendering of the value | Masking by node id in the accessibility snapshot and `field_values`; no screenshot while a filled node is attached | None for the model |
+| Show-password toggle, canvas or CSS rendering of the value | Masking by node id in the accessibility snapshot and `field_values`; no screenshot while a filled node holds a value | None for the model |
 | Model asks to "type the password", or a page tells it to | The model never holds the value; `type` and `fill` into password fields are refused; `sign_in` has no value argument and picks its own target | None |
 | Model or page moves the value (select-all, copy, paste, drag, or typing into the filled field) | Commands aimed at filled nodes are refused; no clipboard or drag command exists | None |
 | Chrome saves or autofills the password | `Autofill.disable`; no password-manager save service; ephemeral profile; session bound | [inference] until PR 2 probes it on real Browser Rendering |
