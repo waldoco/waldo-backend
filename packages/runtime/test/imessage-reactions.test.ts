@@ -148,6 +148,7 @@ it('only the owner, in their bound chat, on a message Waldo sent them, leaves a 
   expect(ownerInput(proof.turns[1]!)).not.toContain('Owner reacted');
 });
 
+// The card turn's reply waits on the bridge's one mailbox slot, which the card holds until the host pulls it (up to 4 s).
 it('a tapback on the message that carries a pending card changes no approval, card or ledger row', async () => {
   const w = await world();
   await w.activate();
@@ -173,7 +174,7 @@ it('a tapback on the message that carries a pending card changes no approval, ca
   await w.exchange('ok');
   expect(ownerInput(proof.turns.at(-1)!)).toContain('Owner reacted 👍 to your message');
   expect(await desk()).toEqual(before);
-});
+}, 20_000);
 
 // Outbound: the model's tapback on the owner's message, offered and sent only where the bridge's host verified tapbacks.
 const TAPBACKS = { receive: true, send: true, exactTarget: true, verified: true };
