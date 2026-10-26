@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
-import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
+import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type McpCatalogueTile, type ProactiveSurface } from './controls-model';
 import { ConnectorMark, Icon, Logo, type IconName } from './icons';
 import { Explained, InfoTip } from './InfoTip';
 import { Patch } from '@lucasmarkes/hairline/react';
@@ -158,6 +158,15 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
   return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
+// Connecting from a tile is the owner's consent, so its consent text always stays in view above the button; only the
+// description's detail goes behind the (i). A payload without the consent field shows the whole text.
+function TileText({ tile }: { tile: McpCatalogueTile }) {
+  const { about, consent } = tile;
+  if (consent === undefined || (consent !== null && !about.endsWith(` ${consent}`))) return <p className="meta">{about}</p>;
+  if (consent === null) return <p className="meta"><Explained about={tile.label} text={about}/></p>;
+  return <><p className="meta"><Explained about={tile.label} text={about.slice(0, -consent.length - 1)}/></p><p className="meta">{consent}</p></>;
+}
+
 // Remote MCP servers the owner connected. A tool asks first until the owner allows it: here, or for an official server's
 // labelled reads by connecting from its tile, which says so first. The read-only label is the server's claim.
 function McpServers({ servers, catalogue, busy, onAction }: { servers: ConnectionsRecord['data']['mcp']; catalogue: ConnectionsRecord['data']['mcp_catalogue'] } & ActionProps) {
@@ -168,14 +177,14 @@ function McpServers({ servers, catalogue, busy, onAction }: { servers: Connectio
     <p className="tree-group label">Apps over MCP</p>
     <ul>{offered.map(tile => <li key={tile.id} className="branch catalogue-tile">
       <p className="tile-name"><span className="marks"><ConnectorMark id={tile.id} label={tile.label}/></span><span className="value">{tile.label}</span></p>
-      <p className="meta"><Explained about={tile.label} text={tile.about}/></p>
+      <TileText tile={tile}/>
       <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url, id: tile.id })}>Connect {tile.label}</button></div>
     </li>)}
     {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; const listed = catalogue?.find(tile => tile.url === server.server_url); return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
       <details name="connections" className="disclosure"><summary><span className="marks">{listed ? <ConnectorMark id={listed.id} label={listed.label}/> : <Icon name="settings"/>}</span><span className="value">{server.name} · {server.host}</span>
         <span className={`access-label${needs ? ' reconnect' : ''}`}>{server.status === 'reauth_needed' ? 'Reconnect needed' : server.wants_scopes.length ? 'Needs more access' : `${server.tools} tools · ${server.runs_without_asking} run without asking`}</span></summary>
         <div className="disclosure-body">
-          <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} <InfoTip about={server.name}>Waldo has not reviewed this server: its tool names and descriptions are its own words.</InfoTip></p>
+          <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} Not reviewed by Waldo. <InfoTip about={server.name}>Waldo has not reviewed this server: its tool names and descriptions are its own words.</InfoTip></p>
           {server.wants_scopes.length > 0 && <p>A tool asked for more access: {server.wants_scopes.join(', ')}. Reconnect to grant it.</p>}
           {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
           {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow, or a description was too large to keep.</p>}

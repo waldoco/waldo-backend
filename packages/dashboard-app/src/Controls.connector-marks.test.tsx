@@ -15,10 +15,11 @@ import type { ConnectionsRecord, McpCatalogueTile, McpServerRecord } from './con
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const consent = ' Connecting here lets the tools Notion labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first.';
 const tiles: McpCatalogueTile[] = [
-  { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', url: 'https://mcp.granola.ai/mcp', connected: false },
-  { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.' + consent, url: 'https://mcp.notion.com/mcp', connected: false },
-  { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', connected: false },
-  { id: 'zapier', label: 'zapier', about: 'Automations.', url: 'https://mcp.zapier.example/mcp', connected: false },
+  { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', consent: null, url: 'https://mcp.granola.ai/mcp', connected: false },
+  { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases. Notion workspaces only.' + consent, consent: consent.trim(), url: 'https://mcp.notion.com/mcp', connected: false },
+  // A payload from before consent was its own field: the whole text stays in view.
+  { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects. Connecting here lets the tools Todoist labels read-only run without asking.', url: 'https://ai.todoist.net/mcp', connected: false },
+  { id: 'zapier', label: 'zapier', about: 'Automations.', consent: null, url: 'https://mcp.zapier.example/mcp', connected: false },
   { id: 'linear', label: 'Linear', about: 'Find and read issues.', url: 'https://mcp.linear.app/mcp', connected: true },
 ];
 const server = (name: string, url: string): McpServerRecord => ({ id: `s-${name}`, name, host: new URL(url).host, server_url: url, auth: 'oauth', status: 'active', scopes: [], wants_scopes: [], tools: 0, hidden_tools: 0, runs_without_asking: 0, marked_read_only: 0, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64), tool_list: [] });
@@ -40,6 +41,8 @@ const mount = () => {
   return { host, row };
 };
 const mark = (row: Element) => row.querySelector<HTMLElement>('.marks [data-connector]')!;
+// Text a sighted owner sees: everything except what an (i) holds closed.
+const visible = (node: Node): string => node instanceof HTMLElement && node.hidden ? '' : node.nodeType === Node.TEXT_NODE ? node.textContent ?? '' : [...node.childNodes].map(visible).join('');
 
 describe('connector marks on Connections', () => {
   it('keys marks by catalogue id and channel name, never through the prototype', () => {
@@ -87,18 +90,40 @@ describe('connector marks on Connections', () => {
 });
 
 describe('explanations behind an (i) on Connections', () => {
-  it('keeps the name, purpose and Connect button on a tile and moves the rest of its text behind the (i), verbatim', () => {
+  it('keeps a tile\'s consent in view above its Connect button and puts only the description\'s detail behind the (i)', () => {
     const { row } = mount();
     const notion = row('Notion');
+    expect(visible(notion)).toContain(consent.trim());
+    const shown = [...notion.querySelectorAll('.meta')].find(p => p.textContent === consent.trim())!;
+    const connect = [...notion.querySelectorAll('button')].find(b => b.textContent === 'Connect Notion')!;
+    expect(shown.compareDocumentPosition(connect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const tip = notion.querySelector<HTMLButtonElement>('button.info-button')!;
     expect(tip.getAttribute('aria-label')).toBe('About Notion');
     const hidden = document.getElementById(tip.getAttribute('aria-controls')!)!;
-    expect(hidden.textContent).toBe(consent.trim());
+    expect(hidden.textContent).toBe('Notion workspaces only.');
     expect(hidden.hidden).toBe(true);
-    expect(notion.querySelector('.meta')!.textContent).toBe(tiles[1]!.about);
-    expect([...notion.querySelectorAll('button')].some(b => b.textContent === 'Connect Notion')).toBe(true);
-    act(() => tip.click());
-    expect(hidden.hidden).toBe(false);
+    expect(visible(notion)).toContain('Search and read your pages and databases.');
+    expect(notion.textContent).toBe(`Notion${tiles[1]!.about.replace(consent, '')}${consent.trim()}Connect Notion`);
+  });
+
+  it('shows the whole text with no (i) when a payload has no consent field', () => {
+    const todoist = mount().row('Todoist');
+    expect(todoist.querySelector('button.info-button')).toBeNull();
+    expect(visible(todoist)).toContain(tiles[2]!.about);
+  });
+
+  it('puts a description\'s detail behind the (i) when connecting grants nothing', () => {
+    const granola = mount().row('Granola');
+    const tip = granola.querySelector<HTMLButtonElement>('button.info-button')!;
+    expect(document.getElementById(tip.getAttribute('aria-controls')!)!.textContent).toBe('Waldo never changes anything in Granola.');
+    expect(visible(granola)).not.toContain('Waldo never changes');
+  });
+
+  it('says in view that Waldo has not reviewed a connected server, with the full sentence behind the (i)', () => {
+    const custom = mount().row('Custom · mcp.custom.example');
+    expect(visible(custom)).toContain('Not reviewed by Waldo.');
+    const tip = custom.querySelector<HTMLButtonElement>('button.info-button[aria-label="About Custom"]')!;
+    expect(document.getElementById(tip.getAttribute('aria-controls')!)!.textContent).toBe('Waldo has not reviewed this server: its tool names and descriptions are its own words.');
   });
 
   it('puts the chat rows, Google and server-address notes behind an (i) each', () => {

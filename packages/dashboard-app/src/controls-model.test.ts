@@ -41,6 +41,15 @@ describe('modern owner controls read', () => {
     expect(() => readControls({ ...connections, data: { ...connections.data, mcp_catalogue: tile } }, 'connections')).toThrow();
   });
 
+  it('keeps a tile consent that is text or null, leaves it absent on an older payload, and refuses any other value', () => {
+    const tile = { id: 'notion', label: 'Notion', about: 'Search. Consent.', url: 'https://mcp.notion.com/mcp', connected: false };
+    const withTile = (value: unknown) => ({ ...connections, data: { ...connections.data, mcp_catalogue: [value] } });
+    expect(readControls(withTile({ ...tile, consent: 'Consent.' }), 'connections').data.mcp_catalogue).toEqual([{ ...tile, consent: 'Consent.' }]);
+    expect(readControls(withTile({ ...tile, consent: null }), 'connections').data.mcp_catalogue).toEqual([{ ...tile, consent: null }]);
+    expect(readControls(withTile(tile), 'connections').data.mcp_catalogue?.[0]).not.toHaveProperty('consent');
+    for (const consent of [5, true, {}, ['Consent.']]) expect(() => readControls(withTile({ ...tile, consent }), 'connections')).toThrow();
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);

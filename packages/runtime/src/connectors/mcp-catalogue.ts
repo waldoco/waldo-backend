@@ -45,8 +45,13 @@ export const tileTarget = (id: string, serverUrl: string): McpCatalogueEntry | u
 
 // The catalogue as the console shows it, before the owner connects: the tile says what will run without asking, since
 // connecting is the owner's consent to it. connected means the owner has a server at that address, whatever its sign-in.
-export type McpCatalogueTile = Readonly<{ id: string; label: string; about: string; url: string; connected: boolean }>;
-const tileAbout = (entry: McpCatalogueEntry) => isReviewedGranola(entry.url, entry.issuer) ? entry.about
-  : `${entry.about} Connecting here lets the tools ${entry.label} labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
+// about is the whole tile text and ends with consent; consent is also sent on its own (null when connecting grants
+// nothing) so the console keeps it in view beside the Connect button.
+export type McpCatalogueTile = Readonly<{ id: string; label: string; about: string; consent: string | null; url: string; connected: boolean }>;
+const tileConsent = (entry: McpCatalogueEntry): string | null => isReviewedGranola(entry.url, entry.issuer) ? null
+  : `Connecting here lets the tools ${entry.label} labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
 export const catalogueTiles = (connected: readonly Readonly<{ server_url: string }>[]): readonly McpCatalogueTile[] =>
-  MCP_CATALOGUE.map((entry) => ({ id: entry.id, label: entry.label, about: tileAbout(entry), url: entry.url, connected: connected.some((server) => same(server.server_url, entry.url)) }));
+  MCP_CATALOGUE.map((entry) => {
+    const consent = tileConsent(entry);
+    return { id: entry.id, label: entry.label, about: consent === null ? entry.about : `${entry.about} ${consent}`, consent, url: entry.url, connected: connected.some((server) => same(server.server_url, entry.url)) };
+  });

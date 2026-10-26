@@ -24,10 +24,10 @@ const mcpPreview = {
   mcp: [{ id: 'mcp_linear', name: 'Linear', host: 'mcp.linear.app', server_url: 'https://mcp.linear.app/mcp', auth: 'oauth', status: 'active', scopes: ['read'], wants_scopes: [], tools: 2, hidden_tools: 0, runs_without_asking: 1, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64),
     tool_list: [{ tool: 'list_issues', runs: 'without_asking', read_only_hint: true, digest: 'c'.repeat(64), allowed_on_connect: true }, { tool: 'create_issue', runs: 'asks_first', read_only_hint: false, digest: 'd'.repeat(64) }] }],
   mcp_catalogue: [
-    { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', url: 'https://mcp.granola.ai/mcp', connected: false },
-    { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.' + consent('Notion'), url: 'https://mcp.notion.com/mcp', connected: false },
-    { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.' + consent('Todoist'), url: 'https://ai.todoist.net/mcp', connected: false },
-    { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.' + consent('Linear'), url: 'https://mcp.linear.app/mcp', connected: true }] };
+    { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', consent: null, url: 'https://mcp.granola.ai/mcp', connected: false },
+    { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.' + consent('Notion'), consent: consent('Notion').trim(), url: 'https://mcp.notion.com/mcp', connected: false },
+    { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.' + consent('Todoist'), consent: consent('Todoist').trim(), url: 'https://ai.todoist.net/mcp', connected: false },
+    { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.' + consent('Linear'), consent: consent('Linear').trim(), url: 'https://mcp.linear.app/mcp', connected: true }] };
 const controls = (view) => {
   const base = { version: 1, view, state: 'available', csrf: 'synthetic-csrf', revision: rev };
   const data = {
