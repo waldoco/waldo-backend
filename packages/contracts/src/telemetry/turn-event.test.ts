@@ -11,9 +11,9 @@ import {
 
 const minimal = { trace: 'tg-1', hop: 'llm_reply', ms: 12, ok: true };
 
-describe('turn event schema v13', () => {
+describe('turn event schema v14', () => {
   it('pins the schema version and the ladder, outcome and cost vocabularies', () => {
-    expect(TURN_EVENT_SCHEMA_VERSION).toBe('13');
+    expect(TURN_EVENT_SCHEMA_VERSION).toBe('14');
     expect(executionRungSchema.options).toEqual(['memory', 'connector', 'email', 'fetch', 'browser', 'sandbox', 'mac', 'human']);
     expect(rungBlockedReasonSchema.options).toEqual(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required', 'device_offline']);
     expect(turnOutcomeSchema.options).toEqual(['answered', 'completed', 'failed', 'dropped', 'delivery_pending', 'blocked']);
@@ -48,6 +48,15 @@ describe('turn event schema v13', () => {
     expect(turnEventSchema.parse(minimal)).toEqual(minimal);
   });
 
+  it('accepts a tool search rejection made of identifiers and refuses prose', () => {
+    const reason = 'OpenAI request failed (400 unsupported_parameter tools[12].type)';
+    expect(turnEventSchema.parse({ ...minimal, tool_search_rejection: reason })).toEqual({ ...minimal, tool_search_rejection: reason });
+    expect(turnEventSchema.safeParse({ ...minimal, tool_search_rejection: 'OpenAI request failed: "the owner wrote this"' }).success).toBe(false);
+    // Words inside the brackets are prose too, however plain: only a status and up to two identifiers fit.
+    expect(turnEventSchema.safeParse({ ...minimal, tool_search_rejection: 'OpenAI request failed (400 my dentist is on Elm Road)' }).success).toBe(false);
+    expect(turnEventSchema.parse({ ...minimal, tool_search_rejection: 'gateway_http_400' }).tool_search_rejection).toBe('gateway_http_400');
+    expect(turnEventSchema.parse({ ...minimal, tool_search_rejection: 'Anthropic request failed (400 invalid_request_error)' }).tool_search_rejection).toBeDefined();
+  });
   it('accepts tool_search_degraded as a boolean and nothing else', () => {
     expect(turnEventSchema.parse({ ...minimal, tool_search_degraded: true })).toEqual({ ...minimal, tool_search_degraded: true });
     expect(turnEventSchema.safeParse({ ...minimal, tool_search_degraded: 'yes' }).success).toBe(false);
