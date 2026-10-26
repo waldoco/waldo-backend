@@ -8,6 +8,7 @@ import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, tu
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
 import { numericHealthIn } from '../scribe/sanitiser';
+import { META_TOOLS, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -158,8 +159,12 @@ export async function runToolLoop(input: Readonly<{
   // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
   // rest of the turn. propose_action refuses an untainted call and dispatch refuses withheld browsing instead.
   stableMenu?: boolean;
+  // Builds the round's offered list from this loop's tools: the harness tool loader offers the core and its meta tools, and
+  // routes a use_tool call to the call it names before anything below reads the call. Not for a task worker's remote loop.
+  loader?: (tools: readonly LLMTool[]) => ToolLoader;
 }>): Promise<string> {
-  const tools = input.remote ? [...input.remote.tools] : toolDefinitions(input.handlers);
+  const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
+  const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
   const seen = new Map<string, LoopToolResult>();
   // A resumed step that cannot be repeated and already ran is refused if called again, as it is within one slice. One whose
@@ -291,23 +296,30 @@ export async function runToolLoop(input: Readonly<{
     }
     let firstCall = true;
     roundStarts.push(turns.length);
+    // The model's calls as it made them, which its history replays, and the calls the loop runs for them.
     const calls = response.tool_calls;
+    const routed: readonly RoutedCall[] = calls.map((made) => loader?.route(made) ?? { call: made });
+    const runCalls = routed.map((route) => route.call);
     // Reads dispatched ahead of their turn in a batch, by call index. A batch starts at the first read of a run of
     // concurrent reads and is fully settled before any of its results is applied, so a hook's context write-back never
     // lands over a taint the loop applied. Results then apply strictly in model order, as if each had just run.
     const early = new Map<number, Promise<Readonly<{ result: LoopToolResult; ms: number }>>>();
     // A task worker's calls run on the brain over RPC; every other loop runs its handlers here.
-    const run = (call: LLMToolCall) => input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+    const run = (index: number) => {
+      const { call, answer } = routed[index]!;
+      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+    };
     let batchLead = true;
-    for (const [index, call] of calls.entries()) {
+    for (const [index, made] of calls.entries()) {
+      const call = runCalls[index]!;
       input.ctx.runScope?.admit();
       if (!early.has(index)) {
-        const batch = offer ? concurrentBatch(calls, index, mutationTools, seen) : [index];
+        const batch = offer ? concurrentBatch(runCalls, index, mutationTools, seen) : [index];
         if (batch.length > 1) {
           for (const member of batch) {
-            input.onToolStart?.(calls[member]!.name);
+            input.onToolStart?.(runCalls[member]!.name);
             const startedAt = Date.now();
-            early.set(member, run(calls[member]!).then((result) => ({ result, ms: Date.now() - startedAt })));
+            early.set(member, run(member).then((result) => ({ result, ms: Date.now() - startedAt })));
           }
           await Promise.allSettled(batch.map((member) => early.get(member)!));
           input.ctx.runScope?.admit();
@@ -341,11 +353,16 @@ export async function runToolLoop(input: Readonly<{
           ? refusal(toolError('tools_withdrawn'), 'not_found', 'handler_unavailable')
           : !runs
             ? refusal(toolError('browsing_withheld', BROWSING_UNAVAILABLE), 'auth_failed', 'withheld_this_turn')
-            : settled?.result ?? await run(call);
+            : settled?.result ?? await run(index);
       if (runs) {
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
-        if (result.ok) done.push(call.name);
+        if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
+      }
+      // A call through use_tool whose arguments missed the schema gets the definition back, so its next call can be right.
+      if (routed[index]!.via && !result.ok && result.error_code === 'invalid_args') {
+        const definition = loader?.definition(call.name);
+        if (definition) result = { ...result, tool_definition: definition };
       }
       input.ctx.runScope?.admit();
       const browsingNote = !browsingWithheld && !result.ok && result.code === 'auth_failed' && BROWSE_TOOLS.has(call.name)
@@ -414,7 +431,7 @@ export async function runToolLoop(input: Readonly<{
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
       const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
-      turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+      turns.push({ call: made, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       results.push({ lead: '', full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
@@ -467,7 +484,7 @@ const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationT
   return batch.length > 1 ? batch : [start];
 };
 
-export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome }>;
+export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome; tool_definition?: LLMTool }>;
 
 // A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
 const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>

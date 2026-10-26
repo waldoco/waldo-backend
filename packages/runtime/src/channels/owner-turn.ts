@@ -36,6 +36,7 @@ import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGa
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, toolActivity, toolsWhere } from '../tools/records';
+import { FIND_TOOLS, harnessToolLoader } from '../tools/loader';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -206,6 +207,8 @@ export const createOwnerResponder = (
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
   const access = ownerModelAccess(modelAccess);
+  const harnessLoader = access.toolLoader === 'harness';
+  const providerSearch = access.toolSearch === true && !harnessLoader;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
@@ -299,7 +302,7 @@ export const createOwnerResponder = (
           system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? brainTools(tools, access.toolSearch === true && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools ? brainTools(tools, providerSearch && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
           ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
@@ -522,7 +525,7 @@ export const createOwnerResponder = (
       turnLoopCtx = loopCtx;
       return runToolLoop({
         handlers: turnHandlers,
-        ...(access.toolSearch ? { stableMenu: true } : {}),
+        ...(harnessLoader ? { stableMenu: true, loader: harnessToolLoader } : providerSearch ? { stableMenu: true } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
@@ -606,7 +609,7 @@ export const createOwnerResponder = (
             turns: { kind: 'turns', turns },
           }, held, forgetBarrierMode);
           const instructions = {
-            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, harnessLoader ? 'harness' : providerSearch),
             skillCatalog: skillMetadata, orders: cut.orders, reasons: reasons?.instructions,
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
@@ -658,11 +661,13 @@ export const createOwnerResponder = (
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
-          if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
+          // Loaded definitions are the turn's own catalogue: no receipt, and nothing a later turn should read back as a result.
+          const loaded = event.call.name === FIND_TOOLS;
+          if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), ...(event.blocked ? { blocked_reason: event.blocked } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
+          if (!loaded) pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });

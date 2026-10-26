@@ -26,7 +26,9 @@ export type FloorTurn = Readonly<{ traceId: string; conversationRef: string; sur
 export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // toolSearch: the brain's reply loads core tools up front and the rest through the provider's tool search, with strict
 // schemas where the provider allows them. Off by default until a staging smoke shows both providers take the request.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean }>;
+// toolLoader 'harness': the reply loads core tools up front and the rest through the harness's own find_tools and use_tool
+// (tools/loader.ts), on any provider. It wins over toolSearch.
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness' }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;
