@@ -26,7 +26,10 @@ const model = vi.hoisted(() => ({
   calls: [] as { name: string; arguments: string }[],
   // What the compaction call answers, from what it was given; and work to run while that call is in flight.
   summary: (_input: string): string => 'Owner instructions:\n- The owner prefers harbour walks.',
-  during: async (): Promise<void> => undefined,
+  during: async (_signal?: AbortSignal): Promise<void> => undefined,
+  // Work to run while a reply call (not the summary) is in flight; and what happened, in order.
+  onReply: async (): Promise<void> => undefined,
+  events: [] as string[],
 }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
@@ -40,9 +43,12 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const format = request.request.response_format?.name;
     const answer = (text: string, calls?: { call_id: string; name: string; arguments: string }[]) => ({ ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0, ...(calls ? { tool_calls: calls } : {}) } });
     if (request.request.system === instruction) {
-      await model.during();
+      model.events.push('summary_started');
+      await model.during(request.runScope?.signal);
+      model.events.push('summary_returned');
       return answer(model.summary(JSON.stringify(request.request.messages)));
     }
+    if (format === undefined) { model.events.push(`reply:${JSON.stringify(request.request.messages.at(-1)?.content ?? '').slice(1, 30)}`); await model.onReply(); }
     if (format === 'task_source_scope') return answer('{"decision":"retain","sources":[]}');
     if (format !== undefined) return answer('{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const call = request.request.tool_turns?.length ? undefined : model.calls.shift();
@@ -55,7 +61,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 afterEach(() => {
   vi.unstubAllGlobals();
   model.requests = []; model.calls = [];
-  model.summary = () => SUMMARY; model.during = async () => undefined;
+  model.summary = () => SUMMARY; model.during = async () => undefined; model.onReply = async () => undefined; model.events = [];
 });
 
 const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -229,25 +235,83 @@ it('a summary that carries a health number is not stored, and the attempt still 
   });
 });
 
-it('an owner message sent while the summary is being written is kept, answered after it, and in order', async () => {
+it('an owner message sent while the summary is being written stops it: its turn starts at once, and nothing is written', async () => {
   directory();
   const name = 'compaction-post-reply-mid';
   await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     await seed(state);
     let late = '';
-    model.during = async () => { model.during = async () => undefined; late = await send(owner, name, 'One more thing: book the ferry'); };
+    // The summary call answers only when its run is aborted, or after far longer than the late turn takes.
+    model.during = async (signal) => {
+      model.during = async () => undefined;
+      model.events.push(signal ? 'summary_signal' : 'summary_no_signal');
+      const stopped = new Promise<void>(resolve => {
+        signal?.addEventListener('abort', () => { model.events.push('summary_aborted'); resolve(); }, { once: true });
+        setTimeout(() => { model.events.push('summary_timed_out'); resolve(); }, 12_000);
+      });
+      late = await send(owner, name, 'One more thing: book the ferry');
+      await stopped;
+    };
     await turn(owner, state, name, 'What is on today?');
     expect(late, 'the message arrived while the summary call was in flight').not.toBe('');
     await settled(state, late);
     await drained(owner);
-    expect(compactions()).toHaveLength(1);
-    expect(summaries(state)).toHaveLength(1);
+    // The new message aborted the summary call in flight, and its turn ran right after, not when the call would have ended.
+    expect(model.events.filter(event => event.startsWith('summary_')).join(',')).toBe('summary_started,summary_signal,summary_aborted,summary_returned');
+    expect(model.events.findIndex(event => event.includes('One more thing'))).toBeGreaterThan(model.events.indexOf('summary_returned'));
+    expect(compactions(), 'the aborted attempt counts; the late reply asks again within the hour and is not due').toHaveLength(1);
+    expect(summaries(state)).toEqual([]);
+    expect(typeof state.storage.kv.get(`${PREFIX}compaction-attempt:${CHAT}`)).toBe('number');
     const owners = stored(state).filter(entry => entry.role === 'user').map(entry => entry.appPayload);
     expect(owners.slice(-2)).toEqual(['What is on today?', 'One more thing: book the ferry']);
-    // The late message continues the chain from the first reply, never from the summary row.
-    const lateRow = stored(state).find(entry => entry.appPayload === 'One more thing: book the ferry')!;
-    expect(stored(state).find(entry => entry.id === lateRow.parentId)?.role).toBe('assistant');
-    expect(JSON.stringify(replyTo('book the ferry')[0]!.messages)).toContain('harbour walks');
+  });
+}, 30_000);
+
+it('a message admitted while the turn ran is answered before the chain compacts', async () => {
+  directory();
+  const name = 'compaction-post-reply-waiting';
+  await inOwner(name, async (state) => {
+    const owner = await ownerFor(name, state, 'on');
+    await seed(state);
+    let late = '';
+    model.onReply = async () => { model.onReply = async () => undefined; late = await send(owner, name, 'Also: book the ferry'); };
+    await turn(owner, state, name, 'What is on today?');
+    await settled(state, late);
+    await drained(owner);
+    expect(compactions()).toHaveLength(1);
+    expect(model.events.findIndex(event => event.includes('Also: book the ferry'))).toBeLessThan(model.events.indexOf('summary_started'));
+    expect(summaries(state)).toHaveLength(1);
+  });
+});
+
+type Private = { compactApp(record: unknown, alarmEnd?: number): Promise<void>; setup(channel: string): { compactChain: (...args: unknown[]) => Promise<void> }; appContext: (...args: unknown[]) => unknown };
+const recordFor = (conversationRef: string) => ({ id: 'app-900', updateId: 900, clientId: 'client-900', digest: 'd', text: 'What is on today?', owner: '', sessionHash: 'c'.repeat(64), conversationRef, admittedAt: Date.now(), state: 'completed' });
+
+it('with the switch off the compaction job reads nothing: no runtime, no admission, no directory call', async () => {
+  const calls: string[] = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { calls.push(String(input instanceof globalThis.Request ? input.url : input)); return new Response('unexpected', { status: 500 }); });
+  const name = 'compaction-job-off';
+  await inOwner(name, async (state) => {
+    const owner = await ownerFor(name, state, 'off') as unknown as Private;
+    const setup = vi.spyOn(owner, 'setup'), admission = vi.spyOn(owner, 'appContext');
+    await owner.compactApp({ ...recordFor(CHAT), owner: name });
+    expect(setup).not.toHaveBeenCalled();
+    expect(admission).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+});
+
+it('the compaction job runs only on a chain of the owner the session admits', async () => {
+  directory();
+  const name = 'compaction-job-chain';
+  await inOwner(name, async (state) => {
+    const owner = await ownerFor(name, state, 'on') as unknown as Private;
+    const runtime = owner.setup('app');
+    const compact = vi.spyOn(runtime, 'compactChain').mockResolvedValue(undefined);
+    await owner.compactApp({ ...recordFor(`owner:prn_${'0'.repeat(32)}`), owner: name });
+    expect(compact, 'another principal\'s chain').not.toHaveBeenCalled();
+    await owner.compactApp({ ...recordFor(CHAT), owner: name });
+    expect(compact, 'the admitted owner\'s own chain').toHaveBeenCalledTimes(1);
   });
 });

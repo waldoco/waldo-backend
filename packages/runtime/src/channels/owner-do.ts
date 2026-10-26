@@ -485,6 +485,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
+  // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
+  private compactionAbort: AbortController | undefined;
 
   // Background task jobs (task_jobs): this object writes every row and is their only retry owner. The book is built per
   // use, so an owner storage erase leaves no handle to a dropped table.
@@ -1517,7 +1519,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             admit:async(client,text)=>{
               this.bindAppSubject(name);
               const result=await this.appInbox.admit(name,hash,client,text,mainRef);
-              if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+              if(result.kind==='admitted')this.appAdmitted();
               return result.kind==='admitted'||result.kind==='duplicate';
             }}));
         }catch(error){logAppReadFailure('app_onboarding',path,error);return fail(503);}
@@ -1594,7 +1596,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       admit:async(ref,clientId,text,assertCurrent,revision)=>{
         this.bindAppSubject(name);
         const result=await this.appInbox.admit(name,hash,clientId,text,ref,assertCurrent,revision);
-        if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+        if(result.kind==='admitted')this.appAdmitted();
         return result;
       },
       receipt:(ref,clientId,revision)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref,revision);},
@@ -1706,8 +1708,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const conversationRef=ownerChainRef('app',ownerPrincipalRef(ownerId));
     const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
     if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
+    if(result.kind==='admitted')this.compactionAbort?.abort();
     this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
+  }
+  // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
+  private appAdmitted(): void {
+    this.compactionAbort?.abort();
+    this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
   }
   private bindAppSubject(name: string): void {
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
@@ -1762,6 +1770,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(alarmEnd!==undefined&&alarmEnd<deadline)return;
     const runtime=this.setup('app'),trace=`compaction:${record.id}`,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),COMPACTION_BUDGET_MS);
     const admit=()=>{if(abort.signal.aborted||Date.now()>=deadline)throw new ClosedRunError();};
+    this.compactionAbort=abort;
     const scope=this.threadFenced({runId:trace,attempt:trace,deadline,signal:abort.signal,admit,commit:work=>this.ctx.storage.transactionSync(()=>{admit();return work();})},threadOfChain(record.conversationRef),record.threadRevision);
     try{
       await runtime.ready;
@@ -1770,7 +1779,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if(context.conversationRef!==(thread?threadChainRef(principal,thread):ownerChainRef('app',principal)))throw new ClosedRunError();
       await runtime.compactChain(trace,context,scope);
     }catch(error){runtime.log({trace,hop:'compaction',ms:Date.now()-started,ok:false,code:error instanceof ClosedRunError?'closed':'unavailable'});}
-    finally{clearTimeout(timer);abort.abort();}
+    finally{clearTimeout(timer);abort.abort();if(this.compactionAbort===abort)this.compactionAbort=undefined;}
   }
   // The model may name a thread once, from its first exchange; see askThreadTitle for when the title lands.
   private async titleThread(thread: string, rows: string): Promise<void> {
