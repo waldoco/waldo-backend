@@ -10,7 +10,7 @@ import type { ClaimStore } from '../memory/claims';
 import { runWelcome, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
 // What each source gives the welcome build: bounded reads, as pointers to the items, never their contents.
-export const WELCOME_HEALTH_DAYS = 90;
+export const WELCOME_HEALTH_DAYS = 30;
 const CALENDAR_PAST_DAYS = 60, CALENDAR_AHEAD_DAYS = 14, CALENDAR_PAGES = 3, CALENDAR_PAGE = 100, TASKS_PAGE = 100;
 const MAIL_DAYS = 90, MAIL_PAGES = 4, MAIL_PAGE = 50;
 // Mail Waldo was sent in bulk says little about the owner's life.
@@ -25,8 +25,10 @@ const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV1>, poi
 // not welcome sources.
 const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV1>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
 
-// Readings go to the model only inside its untainted welcome call; nothing here is stored.
-export const healthStage = (book: HealthReadBook, timezone: () => string, now: () => number) => async (): Promise<StageInput> => {
+// Readings go to the model only inside its untainted welcome call; nothing here is stored. An owner who keeps health out of
+// memory gets no health nodes, so the stage reads nothing.
+export const healthStage = (book: HealthReadBook, timezone: () => string, now: () => number, healthMemory: () => boolean) => async (): Promise<StageInput> => {
+  if (!healthMemory()) return settled('skipped');
   const consent = await book.consent();
   if (consent.kind === 'consent_withdrawn') return settled('revoked');
   if (consent.kind === 'read_failed') return settled('unavailable');
@@ -154,14 +156,14 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
 // The owner object's welcome run: the four readers over its own connections, and one model call per stage, which the owner
 // object runs as an owner job on its queue.
 export const ownerWelcome = (deps: Readonly<{
-  sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string;
+  sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string; healthMemory(): boolean;
   healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
   ask(stage: WelcomeStage, input: string): Promise<string>;
 }>) => ({
   build: () => welcomeBuild(deps.sql, deps.now),
   run: () => runWelcome({
     build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask,
-    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())() },
+    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())() },
   }),
 });
 export type OwnerWelcome = ReturnType<typeof ownerWelcome>;
