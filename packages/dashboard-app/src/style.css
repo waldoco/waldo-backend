@@ -829,6 +829,7 @@ footer .refresh:disabled { opacity:1; }
 .vault-head { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
 .vault-page .panel>h3 { margin:12px 0 6px; font-size:14px; }
 /* Patrol's access log: two plain tables that scroll sideways on a phone rather than widen the page. */
+.access-log { margin-top:20px; }
 .access-log>h3 { margin:16px 0 8px; font-size:14px; }
 .access-log-table { width:100%; border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; margin-bottom:8px; }
 .access-log-table th,.access-log-table td { text-align:left; padding:6px 10px 6px 0; border-bottom:.5px solid var(--hair); white-space:nowrap; }
