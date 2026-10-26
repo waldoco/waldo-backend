@@ -368,6 +368,38 @@ describe('from the app\'s Connections tile', () => {
     }, { revocation: false });
   });
 
+  // A page reached from the app's sheet names the Waldo app and returns there, never to the console or a chat request.
+  const toApp = async (page: Response, status: number, says: string) => {
+    expect(page.status).toBe(status);
+    const html = await page.text();
+    expect(html).toContain(says);
+    expect(html).toContain('href="waldo://oauth/complete"');
+    expect(html).not.toMatch(/\/console|Ask Waldo|Google/);
+  };
+
+  it('ends every page the app\'s sheet can reach before the provider back in the app, naming the app', async () => {
+    await withRig('connect-app-tile-pages', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0008'));
+      const link = `${ORIGIN}${connect.navigation!}`;
+      // Cancel on the confirm page.
+      const page = await rig.hop(link), cancel = /href="([^"]*cancelled[^"]*)"/.exec(await page.text())![1]!.replaceAll('&amp;', '&');
+      await toApp(await rig.hop(`${ORIGIN}${cancel}`), 200, 'Nothing was connected');
+      // A used link, opened again from the app.
+      const go = await rig.hop(link, { method: 'POST', headers: { origin: ORIGIN, cookie: bindingOf(page) } });
+      expect(go.status).toBe(303);
+      await toApp(await rig.hop(link, { headers: { cookie: bindingOf(page) } }), 410, 'Connect Notion again from Connections in the Waldo app.');
+      // The same, reloaded without its handoff code in the address: the directory still knows the app issued it.
+      await toApp(await rig.hop(link.split('?')[0]!), 410, 'Connect Notion again from Connections in the Waldo app.');
+      // A link the directory does not know, opened from the app.
+      await toApp(await rig.hop(`${ORIGIN}/c/${'A'.repeat(22)}?handoff=${'B'.repeat(22)}`), 400, 'Start the connection again from Connections in the Waldo app.');
+    });
+    await withRig('connect-app-tile-expired-page', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0009'));
+      rig.state.storage.sql.exec('UPDATE mcp_attempts SET expires = ?', Date.now() - 1);
+      await toApp(await rig.hop(`${ORIGIN}${connect.navigation!}`), 410, 'Connect Notion again from Connections in the Waldo app.');
+    });
+  });
+
   it('refuses an app that is not a tile, a disconnect with nothing connected, and a connect after a stale sign-in', async () => {
     await withRig('connect-app-tile-refused', async (rig) => {
       // Refused before anything starts: the answer is the eligibility refusal, not a receipt.
