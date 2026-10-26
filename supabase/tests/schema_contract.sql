@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(53);
+select plan(50);
 
 select is(
   (select array_agg(table_name::text order by table_name)
@@ -31,28 +31,15 @@ select is(
   'RLS is forced on every public table'
 );
 
-select is(
-  (select array_agg(table_name::text order by table_name)
-   from information_schema.role_table_grants
-   where table_schema = 'public' and grantee = 'authenticated'
-     and privilege_type = 'SELECT'),
-  array[
-    'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
-    'user_baselines', 'user_consents', 'user_devices', 'users'
-  ]::text[],
-  'authenticated SELECT grants match client-readable tables'
+select is_empty(
+  $$select table_name, privilege_type from information_schema.role_table_grants
+    where table_schema = 'public' and grantee = 'authenticated'$$,
+  'authenticated has no public table privileges of any kind'
 );
 
-select is(
-  (select array_agg(tablename::text order by tablename)
-   from pg_policies where schemaname = 'public'),
-  array[
-    'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
-    'user_baselines', 'user_consents', 'user_devices', 'users'
-  ]::text[],
-  'only client-readable tables have policies'
+select is_empty(
+  $$select tablename from pg_policies where schemaname = 'public'$$,
+  'no public table has a policy for a client session'
 );
 
 select is_empty(
@@ -62,18 +49,11 @@ select is_empty(
 );
 
 select is_empty(
-  $$select table_name, privilege_type from information_schema.role_table_grants
-    where table_schema = 'public' and grantee = 'authenticated'
-      and privilege_type <> 'SELECT'$$,
-  'authenticated has no non-SELECT table privileges'
-);
-
-select is_empty(
-  $$select table_name from (values
-      ('agent_logs'), ('notification_log'), ('oauth_tokens'), ('one_time_tokens')
-    ) service_only(table_name)
-    where has_table_privilege('authenticated', 'public.' || table_name, 'SELECT')$$,
-  'service-only tables are inaccessible to authenticated clients'
+  $$select table_name from information_schema.tables
+    where table_schema = 'public' and table_type = 'BASE TABLE'
+      and (has_table_privilege('authenticated', 'public.' || table_name, 'SELECT')
+        or has_table_privilege('anon', 'public.' || table_name, 'SELECT'))$$,
+  'no public table is readable by a client session'
 );
 
 select ok(
@@ -377,29 +357,17 @@ insert into public.one_time_tokens (token, user_id, kind, expires_at) values
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000a1', true);
 
-select is_empty(
-  $$select table_name from (values
-      ('users', (select count(*) from public.users)),
-      ('user_consents', (select count(*) from public.user_consents)),
-      ('health_daily', (select count(*) from public.health_daily)),
-      ('crs_scores', (select count(*) from public.crs_scores)),
-      ('user_baselines', (select count(*) from public.user_baselines)),
-      ('spots', (select count(*) from public.spots)),
-      ('patrol_entries', (select count(*) from public.patrol_entries)),
-      ('feedback_signals', (select count(*) from public.feedback_signals)),
-      ('chat_threads', (select count(*) from public.chat_threads)),
-      ('chat_messages', (select count(*) from public.chat_messages)),
-      ('user_devices', (select count(*) from public.user_devices)),
-      ('subscriptions', (select count(*) from public.subscriptions))
-    ) visible(table_name, row_count) where row_count <> 1$$,
-  'authenticated user sees exactly one own row per client-readable table'
+select throws_ok(
+  $$select count(*) from public.health_daily$$,
+  '42501'::char(5), null,
+  'an authenticated user cannot read even their own health days'
 );
 
 select throws_ok(
   $$insert into public.user_devices (user_id, platform) values
     ('10000000-0000-0000-0000-0000000000a1', 'ios')$$,
   '42501'::char(5), null,
-  'authenticated own-row inserts are denied by the read-only contract'
+  'authenticated own-row inserts are denied'
 );
 
 select throws_ok(
@@ -412,15 +380,8 @@ select throws_ok(
   $$update public.users set timezone = 'UTC'
     where auth_id = '00000000-0000-0000-0000-0000000000a1'$$,
   '42501'::char(5), null,
-  'authenticated own-row updates are denied by the read-only contract'
+  'authenticated own-row updates are denied'
 );
-
-select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000d4', true);
-select is((select count(*) from public.users), 0::bigint,
-  'an authenticated subject without an app user mapping sees no users');
-select set_config('request.jwt.claim.sub', '', true);
-select is((select count(*) from public.users), 0::bigint,
-  'a missing subject sees no users');
 
 reset role;
 
