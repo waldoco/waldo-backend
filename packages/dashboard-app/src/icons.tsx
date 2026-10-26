@@ -28,6 +28,11 @@ import graph from './assets/icons/graph.svg?inline';
 import gmail from './assets/logos/gmail.svg?inline';
 import googleCalendar from './assets/logos/google-calendar.svg?inline';
 import telegram from './assets/logos/telegram.svg?inline';
+import granola from './assets/logos/granola.svg?inline';
+import notion from './assets/logos/notion.svg?inline';
+import linear from './assets/logos/linear.svg?inline';
+import slack from './assets/logos/slack.svg?inline';
+import whatsapp from './assets/logos/whatsapp.svg?inline';
 
 // SF Symbols from Waldo's icon set (Waldo-App/assets/sf, waldo-landing). Drawn as masks so each
 // glyph takes the colour of the text around it.
@@ -40,6 +45,16 @@ export const Icon = ({ name, className }: { name: IconName; className?: string }
 const logos = { gmail, googleCalendar, telegram };
 export type LogoName = keyof typeof logos;
 export const Logo = ({ name }: { name: LogoName }) => <img className="logo" src={logos[name]} alt="" aria-hidden="true"/>;
+
+// Connector marks keyed by catalogue id or channel name; the server sends no icon. Each bundled mark's source is in
+// assets/logos/README.md. Any other id, known or not, draws a neutral lettermark of its label.
+const connectorLogos: Readonly<Record<string, string>> = { telegram, whatsapp, granola, notion, linear, slack };
+export const connectorLogo = (id: string): string | undefined => Object.hasOwn(connectorLogos, id) ? connectorLogos[id] : undefined;
+export function ConnectorMark({ id, label }: { id: string; label: string }) {
+  const src = connectorLogo(id);
+  return src ? <img className="logo" src={src} alt="" aria-hidden="true" data-connector={id}/>
+    : <span className="lettermark" aria-hidden="true" data-connector={id}>{[...(label.trim() || id)][0]?.toUpperCase()}</span>;
+}
 
 // Waldo's mark, exactly as the landing's nav draws it (waldo-landing components/site/site-nav.tsx).
 const SPOTS = [
