@@ -272,6 +272,14 @@ describe('v9 typed fields at the gate', () => {
     for (const key of ['error_code', 'rung', 'blocked_reason', 'provider', 'job_id', 'job_profile', 'outcome', 'ttft_ms', 'tools_called'] as const) expect(smuggled[key]).toBeUndefined();
   });
 
+  it('keeps a tool search rejection made of identifiers and drops one that carries words', () => {
+    const base: TurnLogEntry = { trace: 't13', hop: 'llm_reply', ms: 5, ok: true, tool_search_degraded: true };
+    const reason = 'OpenAI request failed (400 unsupported_parameter tools[12].type)';
+    expect(gateTraceEntry({ ...base, tool_search_rejection: reason }, false).tool_search_rejection).toBe(reason);
+    const smuggled = gateTraceEntry({ ...base, tool_search_rejection: `OpenAI request failed: "${MARKER}, my dentist is on Elm Road"` }, false);
+    expect(smuggled.tool_search_rejection).toBeUndefined();
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
+  });
   it('keeps tool_search_degraded as a boolean with capture off and drops anything else', () => {
     const base: TurnLogEntry = { trace: 't12', hop: 'llm_reply', ms: 5, ok: true };
     expect(gateTraceEntry({ ...base, tool_search_degraded: true }, false).tool_search_degraded).toBe(true);
