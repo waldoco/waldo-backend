@@ -3,7 +3,9 @@
 This is a draft for `Pin4sf/waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`. The design it records is
 [`OWNER_BACKLOG_2026-10-26.md`](OWNER_BACKLOG_2026-10-26.md).
 
-- It lands in waldo-brain through brain's own review, after the owner answers the design's §11 decisions.
+- The owner ruled on 26 Oct that open loops, responsibilities and the backlog are one thing, so §1 is decided.
+- It lands in waldo-brain through brain's own review, after the owner answers the design's three §11 questions: cohort
+  scope, weekly review, and capture confirmation.
 - The number is the next free slot at publication. 0085 and 0086 are claimed by open drafts.
 - Nothing here changes an accepted ADR by itself. The ADR-0064 amendment and the ADR-0079 supersession take effect only
   when brain publishes them.
@@ -42,9 +44,10 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
 
 ## Decision
 
-1. **One aggregate, one writer.**
-   - `loops` in the owner's Durable Object SQLite is the only store for open items, Waldo's and the owner's. The owner DO
-     is its only writer.
+1. **One aggregate, one writer.** Per the owner's 26 Oct ruling, open loops, responsibilities, follow-ups and the
+   owner's backlog are one concept.
+   - `loops` in the owner's Durable Object SQLite is the only store for open items, Waldo's and the owner's. A `holder`
+     field says whose item it is. The owner DO is its only writer.
    - `responsibilities` is deleted. It has no runtime caller and is a forget gap.
    - Multi-step work belongs to task jobs (the worker layer), not to loop steps.
    - This ADR supersedes ADR-0079. Its prospective-commitment semantics live on `loops`.
@@ -55,6 +58,7 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
    - `check_at`, separate from `due`;
    - `goal_ref` (a goal claim id, resolved through the supersede chain at read time);
    - `origin` (`chat|mail|calendar|meeting`) and `origin_ref` (ids only), both harness-set;
+   - `external_ref` (a Google Tasks id, set only from an approved task card's receipt);
    - `closed_by` and `updated_at`.
 
    Statuses are `candidate`, `open`, `waiting`, `done`, `dropped`, `rejected`.
@@ -73,7 +77,8 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
    - Owner loops nudge only when `check_at` is set, which means the owner asked Waldo to check.
    - The Close card carries owner items, Waldo's items, up to three candidates and up to three stale items.
 
-5. **Goals are claims of kind `goal`** (ADR-0064 amendment).
+5. **Goals are a separate concept, linked from items.** An item's `goal_ref` points at a goal; a goal holds no items.
+   Goals are claims of kind `goal` (ADR-0064 amendment).
    - The `goals` table and its migration stay inert, with no writer, until a separate cleanup.
    - `GoalRecord` remains a contract, usable as a projection of goal claims.
    - Forgetting a goal claim nulls `goal_ref` on loops. It never closes them.
@@ -93,8 +98,14 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
    - The console gets a Backlog view.
    - iMessage answers briefly and links to the app.
 
-9. **Google Tasks** is the owner's external list. It is read for planning, and changed only through its existing
-   approval card. It is never mirrored into or out of `loops`.
+9. **Google Tasks is reconciled by link, never mirrored.**
+   - It stays the owner's external list. Google is the only writer of its tasks, and Waldo changes one only on the
+     existing approval card.
+   - An item the owner asks to send to Google Tasks keeps its row and gains `external_ref` from the approved card's
+     receipt.
+   - On the `get_tasks` reads Waldo already makes, a completed linked task closes its item `done`, and a deleted one
+     clears the link.
+   - Nothing is copied either way, and look-alikes are never linked without the owner's word.
 
 ## Considered options
 
@@ -110,10 +121,13 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
   - Rejections must be remembered.
   - A candidate asks for attention; it is not an effect.
 
-  Cards stay for effects. This is an owner decision recorded in the design.
+  Cards stay for effects.
 - **Build out the ADR-0064 `goals` table.** Rejected for now. It would be a second representation of goals beside
   claims, with its own writers, prompt block, surfaces and forget path, and no owner benefit over claims.
-- **Mirror loops to Google Tasks.** Rejected for now. It creates two writers for one item and a reconciliation problem.
+- **Mirror loops to Google Tasks, or tasks into loops.** Rejected. It creates two writers for one item and edit
+  conflicts on both sides. It also sends Waldo's own promises and health items into a list other apps read.
+- **No relationship at all with Google Tasks.** Rejected. An item the owner moved to Google Tasks would stay open in the
+  backlog forever, or be lost from it.
 
 ## Consequences
 
@@ -127,7 +141,7 @@ The product theory (waldo-brain `02-Knowledge/open-loop.md`) requires:
   - goals live in claims;
   - the backlog is not a general life ledger.
 - #1138 (app open work) and #1282 (console Tasks) are reworked onto `loops` only.
-- #1431's radars feed the candidate list rather than a separate queue, if the owner agrees.
+- #1431's radars feed the candidate list rather than a separate queue; its ADR draft is amended to match.
 
 ## Failure and degraded paths
 
