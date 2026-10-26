@@ -22,7 +22,9 @@ describe('modern owner controls read', () => {
     const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
     expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
     expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
-    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+    const onConnect = { ...server, tool_list: [{ ...server.tool_list[0], runs: 'without_asking', allowed_on_connect: true }] };
+    expect(readControls(withServer(onConnect), 'connections').data.mcp?.[0]?.tool_list[0]?.allowed_on_connect).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }, { ...server, tool_list: [{ ...server.tool_list[0], allowed_on_connect: false }] }, { ...server, tool_list: [{ ...server.tool_list[0], allowed_on_connect: 'yes' }] }]) {
       expect(() => readControls(withServer(broken), 'connections')).toThrow();
     }
   });

@@ -180,7 +180,8 @@ function McpServers({ servers, catalogue, busy, onAction }: { servers: Connectio
           {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
           {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow, or a description was too large to keep.</p>}
           {server.tools_capped && <p className="meta">This server lists more tools than Waldo keeps for one server, so only the first {server.tools} are available.</p>}
-          <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}
+          <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}{tool.allowed_on_connect ? ' · allowed when you connected: runs without asking only when you ask Waldo yourself' : ''}
+            {tool.allowed_on_connect && <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: `${tool.tool}|on|${tool.digest}` })}>Run without asking in every chat</button>}
             <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: tool.runs === 'without_asking' ? `${tool.tool}|off` : `${tool.tool}|on|${tool.digest}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
           {!server.tool_list.length && <p className="empty-line">No tools returned yet.</p>}
           <div className="control-actions">

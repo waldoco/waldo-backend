@@ -250,6 +250,10 @@ export async function runToolLoop(input: Readonly<{
   });
   let browsingWithheld = false;
   let exit: LoopExit = 'completed';
+  // Taint the turn started with came from somewhere this loop did not see.
+  const ctxOrigins = input.ctx as { taintOrigins?: readonly string[]; toolArgSourceTaint?: unknown };
+  ctxOrigins.taintOrigins ??= ctxOrigins.toolArgSourceTaint === 'external' ? ['*'] : [];
+  const taintedBy = (origin: string) => { ctxOrigins.taintOrigins = [...(ctxOrigins.taintOrigins ?? ['*']), origin]; };
   for (let round = 0; ; round += 1) {
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
@@ -287,6 +291,7 @@ export async function runToolLoop(input: Readonly<{
     // result. They taint the rest of the turn the same way (ADR-0049), before this round's calls are dispatched.
     if (response.output_items?.some((item) => item.type === 'web_search_call')) {
       (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+      taintedBy('*');
     }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
@@ -411,6 +416,7 @@ export async function runToolLoop(input: Readonly<{
       // per-round derivation for conversational turns.
       if ((result as { source_taint?: 'external' | null }).source_taint === 'external') {
         (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+        taintedBy(taintOrigin(call.name, result));
       }
       const roundsLeft = Math.min(input.maxSteps - round - 1, input.budget?.remaining ?? Infinity);
       const toolTimeLeft = deadline - Date.now() - FINAL_ANSWER_RESERVE_MS;
@@ -482,6 +488,14 @@ const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationT
     batch.push(index);
   }
   return batch.length > 1 ? batch : [start];
+};
+
+// Where a tainting result's outside content came from. Only tools whose data Waldo itself shapes may name it
+// (data.taint_origin); any other tool's data may carry provider fields, so its origin is unknown.
+const ORIGIN_DECLARING_TOOLS: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool']);
+const taintOrigin = (tool: string, result: LoopToolResult): string => {
+  const origin = ORIGIN_DECLARING_TOOLS.has(tool) && result.ok && typeof result.data === 'object' && result.data !== null ? (result.data as { taint_origin?: unknown }).taint_origin : undefined;
+  return typeof origin === 'string' && /^[a-z]+(:[a-z0-9-]+)?$/.test(origin) ? origin : '*';
 };
 
 export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome; tool_definition?: LLMTool }>;

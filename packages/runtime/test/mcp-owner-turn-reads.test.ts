@@ -8,7 +8,7 @@ const recorder = () => {
   const seen: unknown[] = [];
   const owner: McpOwnerServers = {
     list: () => [{ name: 'notion', runs_without_asking: 1 } as ReturnType<McpOwnerServers['list']>[number]],
-    search: async (input) => { seen.push(input.ownerTurn); return { tools: [], servers: [], failures: [] }; },
+    search: async (input) => { seen.push(input.ownerTurn?.('notion')); return { tools: [], servers: [], failures: [] }; },
     invoke: async (input) => { seen.push('ownerTurn' in input ? input.ownerTurn : 'approved'); return { server: 'notion', result: {} }; },
     describe: async () => { throw new Error('not used'); },
     checkAnswers: async () => [],

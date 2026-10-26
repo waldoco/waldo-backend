@@ -84,7 +84,9 @@ export type McpAnswers = Readonly<{ handle: string; responses: Readonly<Record<s
 // A server's tools as the console lists them, each with the digest of the definition shown. read_only_digest covers the
 // set behind "let tools labelled read-only run without asking". A grant names the digest the owner saw, so a definition
 // that changes between the page load and the click is never the one granted.
-export type McpConsoleTools = Readonly<{ tools: readonly Readonly<{ tool: string; runs: McpToolCard['runs']; read_only_hint: boolean; title?: string; digest: string }>[]; read_only_digest: string }>;
+// allowed_on_connect: it runs without asking only because the owner connected an official server from its tile, so only in
+// their own untainted turns; allowing it here makes it a standing permission for every turn.
+export type McpConsoleTools = Readonly<{ tools: readonly Readonly<{ tool: string; runs: McpToolCard['runs']; read_only_hint: boolean; title?: string; digest: string; allowed_on_connect?: true }>[]; read_only_digest: string }>;
 export type McpWaiting = Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; answers_handle: string; questions: readonly McpQuestion[] }>;
 
 type Attempt = Readonly<{
@@ -612,14 +614,15 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const granted = reads(r.id);
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       return {
-        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted, true) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
+        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted, true) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest,
+          ...(granted.get(t.name)?.source === 'catalogue' && granted.get(t.name)?.digest === t.digest ? { allowed_on_connect: true as const } : {}) })),
         read_only_digest: await readOnlyDigest(tools.filter((t) => marksReadOnly(t.def))),
       };
     },
 
-    // The model's search over the owner's tools: words, or one server's full list, a page at a time. ownerTurn: the turn is
-    // the owner's own and read nothing from outside, so reads allowed on connect show as running without asking.
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
+    // The model's search over the owner's tools: words, or one server's full list, a page at a time. ownerTurn: whether this
+    // turn lets that server's reads allowed on connect run without asking (the owner's own, untainted by anything else).
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: (server: string) => boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -630,7 +633,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const page = pool.slice(offset, offset + SEARCH_PAGE);
       const asked = waiting().filter((q) => !input.server || q.server === input.server);
       return {
-        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted, input.ownerTurn === true))),
+        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted, input.ownerTurn?.(item.r.name) === true))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
         servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
@@ -668,7 +671,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         if (input.mode === 'read' && !runsWithoutAsking(r, input.tool, found.digest, reads(r.id), input.ownerTurn === true)) {
           const grant = reads(r.id).get(input.tool);
           const why = !grant ? '' : grant.digest !== found.digest ? ' (its definition changed since the owner allowed it)'
-            : ' (it was allowed when the owner connected the server, which covers only their own requests, not turns that read outside content or that they did not start)';
+            : ' (it was allowed when the owner connected the server, which covers only their own requests, not turns that read content from anywhere but this server or that they did not start)';
           throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${why}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
         }
         if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
