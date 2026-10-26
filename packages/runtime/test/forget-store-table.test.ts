@@ -27,6 +27,7 @@ const TABLES: Record<string, Row> = {
   forget_purge_steps: exempt('fingerprint hash, store name, state, attempt count, a content-free code and a time'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   claim_recall_ready: exempt('claim ids'),
+  claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),
   app_write_requests: exempt('request id, route, body digest and the stored answer: ids, states and times, never owner text'),

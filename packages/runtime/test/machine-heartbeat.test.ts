@@ -1,4 +1,5 @@
 import { manualAlarmStorage } from './helpers/manual-alarm-storage';
+import { NO_REPLAYS } from './helpers/no-replays';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -166,7 +167,7 @@ const applying = (h: Harness): Apply => {
   const deps: JobsLaneDeps = {
     book: h.book, host, now: () => h.clock.at, timezone: TZ, surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
     turn: async () => { throw new Error('a machine job took the task apply turn'); }, applyTools: () => { throw new Error('a machine job reached applyTools()'); },
-    deliver: async () => { throw new Error('a machine job took the task delivery'); }, room: () => true, heldTopics: () => [], machine: { heartbeat: applier },
+    deliver: async () => { throw new Error('a machine job took the task delivery'); }, room: () => true, heldTopics: () => [], ...NO_REPLAYS, machine: { heartbeat: applier },
   };
   return {
     turns, reply, enabled, outbox, log,

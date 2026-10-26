@@ -1,3 +1,4 @@
+import { fuseRanked } from './semantic-recall';
 import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
 import { replaceLiteralText } from '@waldo/contracts';
@@ -26,7 +27,7 @@ export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
 // A claim Waldo inferred or confirmed waits for the owner's own confirm.
 export const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
-const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
+export const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
   PROFILE_KINDS.includes(claim.kind) && !awaitsOwnerConfirm(claim) && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
@@ -444,19 +445,30 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_edges (
     from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, relation TEXT NOT NULL, strength REAL NOT NULL, evidence_count INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (from_id, to_id, relation))`);
+  // The recallable claims among ids, in the order given.
+  const nearClaims = (ids: readonly number[]): Claim[] => {
+    const found = new Map(sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (SELECT value FROM json_each(?)) AND status IN ('active','promoted') AND COALESCE(origin, '') != 'untrusted'`,
+      JSON.stringify(ids)).toArray().map((claim) => [claim.id, claim]));
+    return ids.flatMap((id) => found.get(id) ?? []);
+  };
   return {
     claims: (status = 'active') => sql.exec<Claim>('SELECT * FROM claims WHERE status = ? ORDER BY last_seen_at DESC, id DESC', status).toArray(),
     // Every row whatever its status (active, promoted, superseded, purging, dismissed): the forget guard must not depend on a list of statuses.
     allClaims: () => sql.exec<Claim>('SELECT * FROM claims').toArray(),
-    recall(query: string, limit = 8): Claim[] {
+    // near: claim ids the semantic leg ranked, best first. They only rank: each is read again here under the same filter as
+    // the words, and fused with them by reciprocal rank, so a view that filters what recall returns filters both legs. With
+    // no words, the result is the near claims alone.
+    recall(query: string, limit = 8, near: readonly number[] = []): Claim[] {
       // Quote literal terms so owner text cannot become FTS operators.
       const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
-      if (!words.length || !Number.isFinite(limit) || limit < 1) return [];
+      if (!Number.isFinite(limit) || limit < 1 || (!words.length && !near.length)) return [];
+      const cap = Math.max(1, Math.min(12, Math.trunc(limit)));
       const match = words.map((word) => `"${word}"`).join(' OR ');
-      return sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid
+      const lexical = words.length ? sql.exec<Claim>(`SELECT claims.* FROM claim_recall JOIN claims ON claims.id = claim_recall.rowid
         WHERE claim_recall MATCH ? AND claims.status IN ('active','promoted') AND COALESCE(claims.origin, '') != 'untrusted'
         ORDER BY bm25(claim_recall), claims.last_seen_at DESC, claims.id DESC LIMIT ?`,
-        match, Math.max(1, Math.min(12, Math.trunc(limit)))).toArray();
+        match, cap).toArray() : [];
+      return near.length ? fuseRanked([lexical, nearClaims(near)], (claim) => claim.id).slice(0, cap) : lexical;
     },
     barriers: () => sql.exec<ForgetBarrier>('SELECT * FROM forget_barriers ORDER BY id').toArray(),
     forgetGeneration: (): number => sql.exec<{ value: number }>('SELECT value FROM forget_generation WHERE id = 1').toArray()[0]?.value ?? 0,
@@ -1070,7 +1082,7 @@ export const claimTag = (claim: Pick<Claim, 'id' | 'verification_status'>) => `c
 const profileLine = (claim: Claim) => `- [${claimTag(claim)}] ${fence(claim.text)}`;
 const pinnedIn = (claims: readonly Claim[], block: PinBlock) =>
   claims.filter((claim) => claim.pinned === block).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0) || a.id - b.id);
-const fittingLines = (lines: readonly string[], budget: number): readonly string[] => {
+export const fittingLines = (lines: readonly string[], budget: number): readonly string[] => {
   const kept: string[] = [];
   let used = 0;
   for (const line of lines) {
@@ -1110,10 +1122,15 @@ export const turnMemoryPrompt = (store: ClaimStore, _question: string, maxChars 
     parts.push(text);
     room -= text.length + 1;
   }
-  const open = '<owner_constellation>', close = '</owner_constellation>';
-  const nodes = fittingLines(constellationLines(store), Math.min(CONSTELLATION_BLOCK_MAX_CHARS, room - 1) - open.length - close.length - CONSTELLATION_HEADER.length - 3);
-  if (nodes.length) parts.push([open, CONSTELLATION_HEADER, ...nodes, close].join('\n'));
+  const constellation = constellationBlock(store, room - 1);
+  if (constellation) parts.push(constellation);
   return parts.join('\n');
+};
+// The <owner_constellation> block within room, or '' when no live node fits.
+export const constellationBlock = (store: ClaimStore, room: number): string => {
+  const open = '<owner_constellation>', close = '</owner_constellation>';
+  const nodes = fittingLines(constellationLines(store), Math.min(CONSTELLATION_BLOCK_MAX_CHARS, room) - open.length - close.length - CONSTELLATION_HEADER.length - 3);
+  return nodes.length ? [open, CONSTELLATION_HEADER, ...nodes, close].join('\n') : '';
 };
 
 export const barrierPrompt = (store: ClaimStore): string => {
