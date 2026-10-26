@@ -1,7 +1,7 @@
 import { APP_WELCOME_STAGES_V1, type AppNodeSourceV1, type AppWelcomeBuildV1 } from '../../../contracts/src/app/controls';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
 import { carriesTopic } from '../memory/forget-guard';
-import { nodeSupports, refSource, sourceRef } from '../memory/node-sources';
+import { nodeSources, nodeSupports, refSource, sourceRef } from '../memory/node-sources';
 import { numericHealthIn } from '../scribe/sanitiser';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -78,7 +78,8 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
 export type WelcomeBuild = ReturnType<typeof welcomeBuild>;
 
 export const WELCOME_INSTRUCTION = [
-  'The owner has just set up Waldo. From one of their connected sources, write a few short notes on who they are and how they live: their health rhythm, their work, the people they deal with, their routines and their interests. They are shown to the owner as a welcome gift, and Waldo reads them on every turn.',
+  'The owner has just set up Waldo. Waldo gives them a welcome gift: a small constellation of their last thirty days, centred on their health when they share it, with their work, the people they deal with, their routines and their interests around it. Waldo reads these notes on every turn.',
+  'You see one source at a time. The health source comes first and sets the centre. Each later source comes with the health notes already written: add what this source shows around them, how the owner\'s days, work and people bear on that rhythm, and do not repeat them. When the owner shares no health, build from the source alone and say nothing of their body, sleep, energy, fitness or readiness: you have no data for it.',
   'Each node has a domain (health, work, people, routines or interests), a label of at most 40 characters, a summary sentence of at most 140, and an observation of at most 200 saying what in the data shows it. Name the source it came from and the ids of the items it rests on (pointers), exactly as the data gives them.',
   'Write patterns in words, never numbers: no digits, no counts, no times, no measurements. "Sleeps in on weekends", not a time or a duration.',
   'Write only what the data shows. A pattern you cannot point to an item for is not a node. Prefer what would help Waldo help them; leave out what would feel intrusive to see written down about yourself, and anything clinical.',
@@ -144,7 +145,7 @@ const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
 
 // Reads run outside any SQLite transaction; only the admission and the state change commit. A stage that fails settles
 // unavailable and leaves the others standing.
-const runStage = async (deps: WelcomeDeps, stage: WelcomeStage): Promise<void> => {
+const runStage = async (deps: WelcomeDeps, stage: WelcomeStage, centre?: string): Promise<void> => {
   let state: Settled, added = 0, late = false;
   try {
     state = await within((async () => {
@@ -152,7 +153,7 @@ const runStage = async (deps: WelcomeDeps, stage: WelcomeStage): Promise<void> =
       if (input.kind === 'settled') return input.state;
       // The budget cannot cancel a read or a model call, so work that finishes after the stage settled must not write.
       if (late) return 'unavailable' as const;
-      const raw = await deps.ask(stage, `${WELCOME_STAGE_HEADER[stage]}\n\n${input.text}`);
+      const raw = await deps.ask(stage, [WELCOME_STAGE_HEADER[stage], centre, input.text].filter(Boolean).join('\n\n'));
       if (late) return 'unavailable' as const;
       added = deps.transaction(() => admitWelcomeNodes(deps.claims, deps.build, stage, input, raw, new Date(deps.now()).toISOString()));
       return added > 0 ? 'done' as const : 'empty' as const;
@@ -161,15 +162,31 @@ const runStage = async (deps: WelcomeDeps, stage: WelcomeStage): Promise<void> =
   deps.transaction(() => deps.build.settle(stage, state, added));
 };
 const WELCOME_STAGE_HEADER: Readonly<Record<WelcomeStage, string>> = {
-  health: 'Source: the owner\'s own health readings, by day, over the last ninety days. Pointers are the signal names.',
+  health: 'Source: the owner\'s own health readings, by day, over the last thirty days. Pointers are the signal names.',
   calendar: 'Source: the owner\'s calendars and task lists. Pointers are the event and task ids in brackets.',
   mail: 'Source: who the owner has written with over the last ninety days, and the subject lines. Pointers are the thread ids in brackets.',
   web: 'Source: the public web.',
 };
 
+const HEALTH_SOURCES: readonly AppNodeSourceV1[] = ['apple_health', 'health_connect'];
+export const WELCOME_HEALTH_NOT_SHARED = 'Health: the owner shares none with Waldo, or it showed nothing yet. Say nothing of their body, sleep, energy, fitness or readiness.';
+// The centre the later sources build around: the health nodes already written, as their words. They carry no readings.
+const healthCentre = (claims: ClaimStore): string => {
+  const all = claims.allClaims();
+  const lines = claims.nodes().filter((node) => node.status === 'active' && nodeSources(all, node).some((source) => HEALTH_SOURCES.includes(source)))
+    .map((node) => `- ${node.label}: ${node.summary}`);
+  return lines.length ? `Health, the centre (already written; build around it, do not repeat it):\n${lines.join('\n')}` : WELCOME_HEALTH_NOT_SHARED;
+};
+
+// Health goes first and sets the centre; the other sources then run side by side with it as context.
 export const runWelcome = async (deps: WelcomeDeps): Promise<void> => {
-  const stages = deps.transaction(() => deps.build.due().map((stage) => { deps.build.begin(stage); return stage; }));
-  await Promise.all(stages.map((stage) => runStage(deps, stage)));
+  const begin = (stages: readonly WelcomeStage[]) => deps.transaction(() => stages.map((stage) => { deps.build.begin(stage); return stage; }));
+  const due = deps.transaction(() => deps.build.due());
+  if (due.includes('health')) await runStage(deps, begin(['health'])[0]!);
+  const rest = due.filter((stage) => stage !== 'health');
+  if (!rest.length) return;
+  const centre = healthCentre(deps.claims);
+  await Promise.all(begin(rest).map((stage) => runStage(deps, stage, centre)));
 };
 
 // The supports a welcome node rests on that are still Waldo's read; they exist only to back the node.
