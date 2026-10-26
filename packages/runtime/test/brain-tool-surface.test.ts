@@ -267,9 +267,10 @@ describe('the brain tool surface', () => {
   });
 });
 
-// The deployed switch: staging runs tool search; production keeps the full menu until its own flip. Off is the rollback.
-it('staging runs tool search and production does not', () => {
+// The deployed switch: off in both. OpenAI refused the tool-search request shape on every staging round (400 on `tools`),
+// so each round paid a refused request before the full-menu resend; on comes back once a live round is accepted.
+it('neither staging nor production runs tool search', () => {
   const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('on');
+  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
