@@ -41,6 +41,16 @@ const logos = { gmail, googleCalendar, telegram };
 export type LogoName = keyof typeof logos;
 export const Logo = ({ name }: { name: LogoName }) => <img className="logo" src={logos[name]} alt="" aria-hidden="true"/>;
 
+// Connector marks keyed by catalogue id or channel name; the server sends no icon. Only a mark with a recorded source
+// is bundled (assets/logos/README.md). Every other id, known or not, draws a neutral lettermark of its label.
+const connectorLogos: Readonly<Record<string, string>> = { telegram };
+export const connectorLogo = (id: string): string | undefined => Object.hasOwn(connectorLogos, id) ? connectorLogos[id] : undefined;
+export function ConnectorMark({ id, label }: { id: string; label: string }) {
+  const src = connectorLogo(id);
+  return src ? <img className="logo" src={src} alt="" aria-hidden="true" data-connector={id}/>
+    : <span className="lettermark" aria-hidden="true" data-connector={id}>{[...(label.trim() || id)][0]?.toUpperCase()}</span>;
+}
+
 // Waldo's mark, exactly as the landing's nav draws it (waldo-landing components/site/site-nav.tsx).
 const SPOTS = [
   'M12.0455 8.19435C8.5546 8.63273 6.68628 1.37044 10.4049 0.0167778C14.1721 -0.400611 15.7586 7.09811 12.0455 8.19435Z',

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { confirmHref, SignInRequired, signInHref, StepUpRequired } from './model';
 import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
-import { Icon, Logo, type IconName } from './icons';
+import { ConnectorMark, Icon, Logo, type IconName } from './icons';
+import { Explained, InfoTip } from './InfoTip';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
 import { ActivityControls, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
@@ -109,7 +110,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
       <div className="chart-head"><h2 id="tree-title">Connected to Waldo</h2><span className="legend"><i className="line"/>Access saved<i className="line dashed"/>Needs you</span></div>
       <div className="with-figure"><div className="tree">
         <div className="tree-root"><span className="root-mark" aria-hidden="true"/>Waldo</div>
-        <p className="tree-group label">Google accounts</p>
+        <p className="tree-group label">Google accounts <InfoTip about="Google accounts">Saved access is permission, not proof that a live Calendar, Gmail or Tasks request worked. Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</InfoTip></p>
         <ul>{google.accounts.map(account => { const broken = account.health === 'needs_reconnect'; return <li key={account.id} className={`branch${broken ? ' broken' : ''}`}>
           <details name="connections" className="disclosure control-account"><summary>
             <span className="marks">{account.calendar && <Logo name="googleCalendar"/>}{account.mail && <Logo name="gmail"/>}{account.tasks && <Icon name="checklist"/>}</span>
@@ -117,7 +118,6 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
             <div className="disclosure-body">
               <ul className="grant-list">{[account.calendar ? 'Calendar' : null, account.mail ? 'Gmail' : null, account.tasks ? 'Tasks' : null].filter(Boolean).map(grant => <li key={grant}>{grant}</li>)}</ul>
               {![account.calendar, account.mail, account.tasks].some(Boolean) && <p>No service grants recorded for this account.</p>}
-              <p className="meta">Saved access is permission, not proof that a live Calendar, Gmail or Tasks request worked.</p>
               {broken && <p>Reconnect and choose {account.email} in Google to refresh this account’s access.</p>}
               <div className="control-actions">{broken && google.connectAvailable && <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>Reconnect {account.email}</button>}
                 <button disabled={busy} onClick={() => { if (window.confirm(`Disconnect ${account.email}? Waldo loses this Google access.`)) onAction('google.disconnect', { id: account.id }); }}>Disconnect {account.email}</button></div>
@@ -125,17 +125,17 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           {!google.accounts.length && <li className="branch broken"><p className="empty-line">No Google accounts returned.</p></li>}
         </ul>
         <p className="tree-group label">Chat</p>
-        <ul><li className={`branch${telegram.linked ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Logo name="telegram"/></span><span className="value">Telegram</span><span className={`access-label${telegram.linked ? '' : ' reconnect'}`}>{telegram.linked ? 'Linked' : 'Unlinked'}</span></summary>
-          <div className="disclosure-body"><p>Chat, cards and reminders arrive in your Telegram DM. Instructions appear here once you ask to link.</p>
+        <ul><li className={`branch${telegram.linked ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><ConnectorMark id="telegram" label="Telegram"/></span><span className="value">Telegram</span><span className={`access-label${telegram.linked ? '' : ' reconnect'}`}>{telegram.linked ? 'Linked' : 'Unlinked'}</span></summary>
+          <div className="disclosure-body"><p><Explained about="Telegram" text="Chat, cards and reminders arrive in your Telegram DM. Instructions appear here once you ask to link."/></p>
             <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li>
-          <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
-            <div className="disclosure-body"><p>Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code.</p>
+          <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><ConnectorMark id="imessage" label="iMessage"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
+            <div className="disclosure-body"><p><Explained about="iMessage" text="Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code."/></p>
               <div className="control-actions"><a className="quiet-link" href="#/connections/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a><a className="quiet-link" href="#/connections/phone">Your phone</a></div></div></details></li>
-          <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
-            <div className="disclosure-body"><p>Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number.</p>
+          <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><ConnectorMark id="whatsapp" label="WhatsApp"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
+            <div className="disclosure-body"><p><Explained about="WhatsApp" text="Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number."/></p>
               <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>Get a WhatsApp link code</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}</div></div></details></li>
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
-            <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
+            <div className="disclosure-body"><p><Explained about="This console" text="Chat with Waldo right here. It’s the same conversation as the Waldo app."/></p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
         <McpServers servers={record.data.mcp} catalogue={record.data.mcp_catalogue} busy={busy} onAction={onAction}/>
         <p className="tree-group label">Devices</p>
@@ -144,7 +144,6 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
             <div className="control-actions"><a className="quiet-link" href="#/connections/devices">Manage devices</a></div></div></details></li></ul>
       </div><Patch className="figure" label="A patch panel of ports, an interactive illustration. Decorative."/></div>
       <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
-      <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>
     </section>}
     {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This browser stays signed in while you use it; left unused, it signs out at {sessions.until}.</p>
       <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, signs out {item.until} if unused</li>)}</ul>
@@ -167,15 +166,16 @@ function McpServers({ servers, catalogue, busy, onAction }: { servers: Connectio
   const offered = (catalogue ?? []).filter(tile => !tile.connected);
   return <>
     <p className="tree-group label">Apps over MCP</p>
-    <ul>{offered.map(tile => <li key={tile.id} className="branch">
-      <span className="value">{tile.label}</span><p className="meta">{tile.about}</p>
+    <ul>{offered.map(tile => <li key={tile.id} className="branch catalogue-tile">
+      <p className="tile-name"><span className="marks"><ConnectorMark id={tile.id} label={tile.label}/></span><span className="value">{tile.label}</span></p>
+      <p className="meta"><Explained about={tile.label} text={tile.about}/></p>
       <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url, id: tile.id })}>Connect {tile.label}</button></div>
     </li>)}
-    {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
-      <details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">{server.name} · {server.host}</span>
+    {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; const listed = catalogue?.find(tile => tile.url === server.server_url); return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
+      <details name="connections" className="disclosure"><summary><span className="marks">{listed ? <ConnectorMark id={listed.id} label={listed.label}/> : <Icon name="settings"/>}</span><span className="value">{server.name} · {server.host}</span>
         <span className={`access-label${needs ? ' reconnect' : ''}`}>{server.status === 'reauth_needed' ? 'Reconnect needed' : server.wants_scopes.length ? 'Needs more access' : `${server.tools} tools · ${server.runs_without_asking} run without asking`}</span></summary>
         <div className="disclosure-body">
-          <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} Waldo has not reviewed this server: its tool names and descriptions are its own words.</p>
+          <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} <InfoTip about={server.name}>Waldo has not reviewed this server: its tool names and descriptions are its own words.</InfoTip></p>
           {server.wants_scopes.length > 0 && <p>A tool asked for more access: {server.wants_scopes.join(', ')}. Reconnect to grant it.</p>}
           {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
           {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow, or a description was too large to keep.</p>}
@@ -193,7 +193,7 @@ function McpServers({ servers, catalogue, busy, onAction }: { servers: Connectio
       <li className="branch"><form className="control-form" onSubmit={event => { event.preventDefault(); if (address.trim()) onAction('mcp.connect', { value: address.trim() }); }}>
         <label>Server address<input type="url" inputMode="url" placeholder="https://mcp.example.com/mcp" value={address} onChange={event => setAddress(event.target.value)}/></label>
         <div className="control-actions"><button className="primary" disabled={busy || !address.trim()}>Connect a server</button></div>
-        <p className="meta">Use the MCP address the app publishes. Its tools ask you first; you choose which may run without asking.</p>
+        <p className="meta"><Explained about="Server address" text="Use the MCP address the app publishes. Its tools ask you first; you choose which may run without asking."/></p>
       </form></li>
     </ul>
   </>;

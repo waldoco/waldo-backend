@@ -5,3 +5,5 @@ Original product icons (SF Symbols exports from Waldo's icon set) and Mottle.ttf
 Decorative React figures are @lucasmarkes/hairline 0.3.0 (MIT, Copyright 2026 Lucas Marques). The package licence applies and must remain with distributed copies. This change does not alter the figures.
 
 Waldo and connector brand marks remain project/vendor identifiers. This notice does not claim independent clearance of trademark or brand-use terms.
+
+Per-mark source and licence for connector logos, and which connectors draw a lettermark instead, are recorded in `src/assets/logos/README.md`.
