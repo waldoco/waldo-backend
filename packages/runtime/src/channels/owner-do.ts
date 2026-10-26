@@ -2884,6 +2884,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.googleChain = run.catch(() => undefined);
     return run;
   }
+  // Every Google client and account read migrates a legacy grant first, and the migration hands the grant to Vault before it
+  // deletes it, so reads that start at once wait on the one migration in flight instead of each adopting the grant.
+  private googleMigration: Promise<void> | null = null;
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
@@ -3385,6 +3388,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
       return handoff ? `${origin}/c/${ticket}?${HANDOFF_PARAM}=${handoff.code}` : `${origin}/c/${ticket}`;
     };
+    // Tokens saved before multi-account and Vault move into the account list once.
+    const migrateLegacyGoogle = async (): Promise<void> => {
+      const linked = await storage.get<{ id: string; email: string | null; scopes: readonly string[] }>('google:connection');
+      if (linked) {
+        await storage.put('google:accounts', [...(await accounts()).filter((known) => known.id !== linked.id), { id: linked.id, email: linked.email ?? 'google', scopes: linked.scopes }]);
+        await storage.delete('google:connection');
+      }
+      const legacy = await storage.get<GoogleTokens>('google:tokens');
+      if (!legacy) return;
+      const doName = vaultOwner();
+      const adopted = vault && doName ? await vault.adopt(doName, legacy).catch(() => null) : null;
+      if (vault && !adopted) return;
+      await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? LEGACY_GRANT } : { ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
+      await storage.delete(['google:tokens', 'google:connection']);
+      log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
+    };
     const googleEnvironment = this.env;
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
@@ -3409,22 +3428,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armWatchUpkeep(scheduler, grants, Date.now(), true);
         await endWatchUpkeep(scheduler, grants);
       },
-      // Tokens saved before multi-account and Vault move into the account list once.
-      async migrate(): Promise<void> {
-        const linked = await storage.get<{ id: string; email: string | null; scopes: readonly string[] }>('google:connection');
-        if (linked) {
-          await storage.put('google:accounts', [...(await accounts()).filter((known) => known.id !== linked.id), { id: linked.id, email: linked.email ?? 'google', scopes: linked.scopes }]);
-          await storage.delete('google:connection');
-        }
-        const legacy = await storage.get<GoogleTokens>('google:tokens');
-        if (!legacy) return;
-        const doName = vaultOwner();
-        const adopted = vault && doName ? await vault.adopt(doName, legacy).catch(() => null) : null;
-        if (vault && !adopted) return;
-        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? LEGACY_GRANT } : { ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
-        await storage.delete(['google:tokens', 'google:connection']);
-        log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
-      },
+      migrate: (): Promise<void> => this.googleMigration ??= migrateLegacyGoogle().finally(() => { this.googleMigration = null; }),
       // The first healthy account whose grant covers the feature serves it.
       async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, selectedAccount?: string) {
         const app = await googleApp();

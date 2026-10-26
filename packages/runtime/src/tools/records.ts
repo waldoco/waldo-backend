@@ -43,8 +43,12 @@ export type ToolReplayRow = { readonly replay: ToolReplayClass; readonly basis: 
 //          nothing back.
 //  concurrent  one model response may run it beside other concurrent reads: it changes nothing a later call can
 //          observe (no store write that spans an await, no send, no session, no tool-menu change). The Google reads and
-//          read_drive are not: their client stamps probe and health state across awaits and can send a reconnect link.
-//          read_thread can relay a message, and read_tool_output reads a store sibling calls evict from.
+//          read_drive are: grant health, the circuit's probe stamp and the reconnect notice run one at a time on the owner
+//          object's Google chain, a client's token refresh is shared by the calls waiting on it, and the legacy-grant
+//          migration is shared by the reads that start it. read_thread's code relay goes to the owner alone and changes
+//          nothing a call reads. The MCP reads are not: a call stamps its connection's token version and status after it
+//          returns, a stale tool list is rewritten while sibling reads check its digests, and a server's question is stored.
+//          read_tool_output reads a store sibling calls evict from.
 //  probe   strip = a synthetic capture probe never reaches it: Google reads and writes (private data), the browser,
 //          the MCP bridge, the connect flow and the console link (a capture probe hands its sends to the probe caller).
 //  paid    held past the owner's monthly spend ceiling: it bills browser or sandbox time on top of the model call.
@@ -85,15 +89,15 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   use_mac: { brain: 'actions', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'mac_action_requested', replay: { replay: 'provider_idempotent', basis: 'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.', evidence: { file: 'tools/live/use-mac.ts', needle: 'request_id' } } },
   get_crs: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_health: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  query_calendar: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  get_communication: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  search_communication: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  search_contacts: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  read_thread: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  get_tasks: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_contacts: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_thread: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_tasks: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_master_metrics: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_context: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
-  query_availability: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  query_availability: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   read_memory: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_episodes: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.
@@ -104,7 +108,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   read_artifact: { brain: 'artifacts', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   read_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('deploy-configured Google MCP reads carry a host-derived read intent through the connector-proxy; reads on owner-connected servers run only for tools the owner allowed at their current definition digest and have no intent ledger, so a replay runs the read again (tools/live/mcp.ts); either way the remote server is trusted to be read-only') },
   search_mcp_tools: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
-  read_drive: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_drive: { brain: 'web', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_connector: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
   propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposal handler not inspected') },
   search_tools: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
