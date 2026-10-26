@@ -43,9 +43,10 @@ export type IMessageProactiveTarget = Readonly<{ bridgeDoName: string; ownerDoNa
 export const targetOf = (record: IMessageInboxRecord): IMessageProactiveTarget =>
   ({ bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject, revision: record.revision, bindingDigest: record.bindingDigest });
 
-/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console link or a progress note. */
+/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console link, tapback or a progress note. */
 export const sentByTurn = (replyRef: string, turnId: string) =>
-  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef.startsWith(`${PROGRESS}${turnId}:`);
+  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef === `react:${turnId}`
+  || replyRef.startsWith(`${PROGRESS}${turnId}:`);
 
 export class IMessageFinalOutbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
