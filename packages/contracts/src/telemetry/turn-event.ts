@@ -10,7 +10,10 @@ import { providerSchema } from '../model/roster';
 // v12: `tool_search_degraded` marks a model call answered after the model refused the tool search request shape and
 // every tool was resent up front; `tools_bytes` is the size of the offered catalogue either way.
 // v13: `rung_blocked` can name `device_offline`, a use_mac call refused because the owner's Mac was not connected.
-export const TURN_EVENT_SCHEMA_VERSION = '13';
+// v14: `tool_search_rejection` names why the model refused the tool search request: the adapter's failure line, made of
+// the status, the provider's error code and the parameter name only.
+export const TURN_EVENT_SCHEMA_VERSION = '14';
+export const toolSearchRejectionSchema = z.string().max(160).regex(/^[A-Za-z]+ request failed(?: \([A-Za-z0-9_.\-\[\] ]+\))?$/);
 
 // Every v9 addition is a number, a boolean or a member of a closed vocabulary. Free text lives only in the
 // fields named by TURN_EVENT_TEXT_FIELDS, which the privacy gate strips whenever text capture is off.
@@ -96,6 +99,7 @@ export const turnEventSchema = z.strictObject({
   provider: providerSchema.optional(),
   fallback_fired: z.boolean().optional(),
   tool_search_degraded: z.boolean().optional(),
+  tool_search_rejection: toolSearchRejectionSchema.optional(),
   ttft_ms: millis.optional(),
   // v9: how the turn ended, set on the root (turn / machine_turn) hop.
   outcome: turnOutcomeSchema.optional(),
