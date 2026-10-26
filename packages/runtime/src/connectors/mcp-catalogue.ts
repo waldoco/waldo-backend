@@ -23,11 +23,10 @@ export type McpCatalogueEntry = Readonly<{
 }>;
 
 export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
-  { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', url: 'https://mcp.notion.com/mcp', issuer: 'https://mcp.notion.com' },
-  { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.', url: 'https://mcp.linear.app/mcp', issuer: 'https://mcp.linear.app' },
-  { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', issuer: 'https://todoist.com' },
   { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', url: GRANOLA_MCP_URL, issuer: GRANOLA_AUTH_ORIGIN },
-  { id: 'sentry', label: 'Sentry', about: 'Search errors, issues and traces in your projects.', url: 'https://mcp.sentry.dev/mcp', issuer: 'https://mcp.sentry.dev' },
+  { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', url: 'https://mcp.notion.com/mcp', issuer: 'https://mcp.notion.com' },
+  { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', issuer: 'https://todoist.com' },
+  { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.', url: 'https://mcp.linear.app/mcp', issuer: 'https://mcp.linear.app' },
 ];
 
 const same = (a: string, b: string) => {

@@ -152,7 +152,7 @@ it('the console connections read offers the official MCP servers, none connected
     expect(response.status).toBe(200);
     const read = await response.json() as { data: { mcp: unknown[]; mcp_catalogue: { id: string; url: string; connected: boolean }[] } };
     expect(read.data.mcp).toEqual([]);
-    expect(read.data.mcp_catalogue.map((tile) => tile.id)).toEqual(['notion', 'linear', 'todoist', 'granola', 'sentry']);
+    expect(read.data.mcp_catalogue.map((tile) => tile.id)).toEqual(['granola', 'notion', 'todoist', 'linear']);
     expect(read.data.mcp_catalogue.every((tile) => !tile.connected && tile.url.startsWith('https://'))).toBe(true);
   });
 });
