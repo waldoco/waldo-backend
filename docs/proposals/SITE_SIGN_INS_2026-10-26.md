@@ -246,6 +246,14 @@ create table waldo.site_sign_in_uses (
 - **Key rotation is out of band.** Rotation never goes through `sign_in_release` and is never reachable from an owner
   turn, a console route or the model. It is a one-off job:
   - The owner authorises it per run.
+  - It runs outside the runtime Worker, in one of two places:
+    - Under D7 option B, in the custodian.
+    - Under option A, in a dedicated rotation Worker deployed only for the run and deleted after it, with no routes
+      beyond its signed trigger.
+
+    `WALDO_SIGN_IN_KEY_NEXT` and the rotation HMAC are never in the runtime Worker's env, and the key-isolation guard
+    fails if the runtime's Wrangler config or code names them. An operator script on a workstation is rejected,
+    because it would put both keys on a laptop.
   - It runs with `WALDO_SIGN_IN_KEY_NEXT` set and a rotation HMAC that the database holds only for the run, under a
     Vault name separate from `waldo_router_hmac`.
   - `sign_in_rotate_batch` re-wraps a bounded batch per call. It logs each row as a rotation in its own run record, not
@@ -273,6 +281,15 @@ create table waldo.site_sign_in_uses (
 - `saved_sign_ins` is never persisted. It is stripped before the `common-browser:*` checkpoint, the tool-output ledger,
   the offload store, receipts and the OTLP export, so a deleted sign-in's label and username do not outlive it in
   Waldo's records. The next observation re-adds it while the sign-in exists.
+- **Where tool results persist** (observed):
+  - Only the tool-output ledger keeps them, in DO KV `toolout:`, at most 6 rows per kind, cut to 500 characters
+    (`conversation/tool-output-ledger.ts:52,62`). They are not rows of the conversation chain.
+  - Compaction summarises the chain, the owner's and Waldo's messages, and its instruction drops tool mechanics
+    (`conversation/compaction.ts:26-34`).
+  - Episodes index saved chat messages (`channels/episodes.ts:7-8`) [inference: no tool rows; PR 2 asserts].
+  - So the strip at the ledger covers persisted history and compaction. A label or username reaches the transcript, a
+    summary or episodes only through Waldo's own reply text. That is the existing chat residual, which forget
+    reaches.
 - There is no tool that lists sign-ins for other sites in v1. [proposed]
 
 ### The command and its record
@@ -314,7 +331,7 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
      `Fetch` interception).
    - It covers top-level navigations, frame navigations and popups; any to another origin is aborted.
    - While fenced, `goto`, `back`, `open_tab`, `switch_tab` and `download` are refused.
-   - After Enter, exactly one document request is let through: the submission itself, to the stored origin, matching
+   - After submit, exactly one document request is let through: the submission itself, to the stored origin, matching
      the form's checked method and action.
    - From then on the fence admits only that request's own redirect chain. That chain is the route guard's
      host-followed GET hops, each still authorised by the egress grant, so a normal post-login redirect to another
@@ -332,19 +349,42 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
      registry**.
    - A lost answer is never retried with the same `request_id`. A retry is a new attempt and counts against the cap.
 6. **Pre-insert checks**, all over CDP and immediately before each insert:
+   - From step 3 on, the harness listens for main-frame `Page.frameStartedNavigating` and `Page.frameNavigated`,
+     including a back-forward cache restore. Any such event before an insert aborts it; any after an insert ends the
+     session.
    - The main frame's `frameId` and `loaderId` are unchanged.
    - The top-level origin and the field's frame origin equal the stored origin.
    - The form's `method` and `action` still pass step 3.
    - `DOM.focus` is called on the resolved `backendNodeId`.
    - `Runtime.evaluate('document.activeElement')` is resolved through `DOM.describeNode` to the same `backendNodeId`. A
      page that moves focus on the focus event fails here.
-7. **Insert.** The username, then the password, each with `Input.insertText`, which is raw CDP. The value never
-   passes through `page.evaluate` arguments, Playwright locators or a Playwright call log. The step 6 checks repeat after
-   each insert. Any mismatch ends the browser session, so the document holding the value is gone, and returns
-   `origin_changed`.
+7. **Insert, bound to the node.** The username, then the password, are each written into the resolved node itself,
+   never into whatever document has focus.
+   - The node is resolved once at step 3 (`DOM.resolveNode` on its `backendNodeId`, in the main world of that
+     document's execution context). Then one `Runtime.callFunctionOn` runs on that `objectId`, with a fixed,
+     host-authored function and the value as its only argument.
+   - The function sets the value through the native `HTMLInputElement.prototype` value setter and dispatches `input`
+     and `change` events, so frameworks see it as typed. It returns only a boolean, with `returnByValue` and `silent`
+     set.
+   - If the document is gone, whether it navigated, was swapped by a back-forward cache restore, or was destroyed, the
+     object's context no longer exists and the call fails. A navigation that makes no network request therefore cannot
+     redirect the value into another origin's document. This replaces `Input.insertText`, which writes into the focused
+     element of whichever document is current.
+   - The value never passes through `page.evaluate` source text, Playwright locators or a Playwright call log. CDP
+     exception details never carry the argument [inference: PR 2 asserts it with the canary].
+   - The step 6 checks repeat after each insert. Any mismatch ends the browser session and returns `origin_changed`.
+   - **Back-forward cache.** It is turned off for sign-in sessions where Browser Rendering allows it, by a launch flag or
+     a page-level opt-out [inference: probe on real Browser Rendering]. The node-bound write is the guarantee either
+     way.
 8. **Submit.**
-   - The checks of step 6 run once more, including form `method` and `action` and focus on the password node.
-   - Then `Input.dispatchKeyEvent` sends Enter.
+   - The checks of step 6 run once more, including form `method` and `action`.
+   - The harness submits through `Runtime.callFunctionOn` on the form's own object: `this.requestSubmit()`, with no
+     argument. That is bound to the node like the insert, and it runs the form's validation and submit handlers as a
+     user's submit does.
+   - Only if the page neither navigates nor settles, and the password node still holds the value, does the harness fall
+     back to `Input.dispatchKeyEvent` Enter. It first re-runs the step 6 checks and confirms, through a no-argument
+     call on the node's object, that the node is its document's `activeElement`. The keypress carries no value, so
+     the worst a race can do is press Enter in another document.
    - The submission request crosses the route guard in the Worker carrying the value in its body. The route guard
      never reads, logs or keeps `postData`, and its errors map to fixed codes.
 9. **Wait** for the main frame's `loaderId` to change or the page to settle. No observation is built or published
@@ -466,11 +506,11 @@ Playwright error string. The codes are `not_saved_here`, `approval_required`, `o
 | Prompt injection steers the model to a lookalike (`examp1e.com`, `example.com.evil.io`, `login-example.com`) | No `saved_sign_ins` there; the command needs a listed id; host and SQL both compare exact `URL.origin` | None for the value |
 | Subdomain or `www` variant of a real site | Exact origin only; the owner saves another sign-in for that origin | Owner may need two entries for one account |
 | Redirect chain ends on another origin | The origin is read at release and before every insert; each redirect hop is already authorised by the route guard | None |
-| Navigation races the fill | The fence aborts every document request to another origin from release until the submission is dispatched; `frameId` and `loaderId` are checked before each insert; any change ends the session | None |
+| Navigation races the fill, including one with no network request (a back-forward cache restore from `history.back()` by the page or a cross-origin iframe) | The value is written through `Runtime.callFunctionOn` on the resolved node, so a gone document fails the call. Main-frame navigation events abort before an insert and end the session after one. The fence covers network navigations. `frameId` and `loaderId` are checked before each insert. The back-forward cache is off where Browser Rendering allows [inference] | The fallback Enter keypress could land in another document; it carries no value |
 | Post-login redirect to another origin of the same service | Only the submission's own body-less GET redirect chain is admitted, each hop authorised by the egress grant | None; it is how those sign-ins complete |
 | XHR login leaves the filled field on the page | After settle, the harness empties it with a value-free `Runtime.callFunctionOn`; screenshots resume once no field holds the value | None |
-| Page moves focus to another field during the fill | `activeElement` must resolve to the target `backendNodeId` before each insert and before Enter | None |
-| Page swaps the form's `method` or `action` after the checks | Re-checked before each insert and before Enter | Same-origin script can still send the value anywhere the egress grant allows; the exact-origin site is trusted with its own password |
+| Page moves focus to another field during the fill | The write targets the node, not the focus; `activeElement` must still resolve to the target before each insert and before a fallback Enter | None |
+| Page swaps the form's `method` or `action` after the checks | Re-checked before each insert and before submit | Same-origin script can still send the value anywhere the egress grant allows; the exact-origin site is trusted with its own password |
 | Page script reads the field and echoes it into the DOM | Exact-value scan withholds the observation; screenshots are withheld while the field is on the page; the model-request canary backs it up | A transformed echo (reversed, base64) is not caught, and neither is a server echo after the value is dropped. The exact-origin site is trusted with its own password, as a browser password manager trusts it |
 | Show-password toggle, canvas or CSS rendering of the value | Masking by node id in the accessibility snapshot and `field_values`; no screenshot while a filled node holds a value | None for the model |
 | Model asks to "type the password", or a page tells it to | The model never holds the value; `type` and `fill` into password fields are refused; `sign_in` has no value argument and picks its own target | None |
@@ -603,7 +643,8 @@ PR 2 starts only after the gate approves this design and the owner rules on D7.
    - Envelope module: encrypt and decrypt, authenticated data, key id. Tests for tampered origin, owner, username and
      generation, a wrong key and a retired key id.
    - The release and approve clients.
-   - The atomic `sign_in` host operation: fence, frame and loader checks, focus check, raw CDP insert, re-checked Enter.
+   - The atomic `sign_in` host operation: fence, navigation-event abort, frame and loader checks, focus check, node-bound
+     write, `requestSubmit`, re-checked Enter fallback.
    - The filled registry: node masks, screenshot withholding, refusals of commands aimed at filled nodes, sink scans,
      the 10-minute bound and `scan_restore`.
    - The ephemeral sanitiser canary.
@@ -631,7 +672,12 @@ PR 2 starts only after the gate approves this design and the owner rules on D7.
    - a redirect to a lookalike;
    - a lookalike origin;
    - a 307 to another origin after submit;
-   - a page that logs the field to its console.
+   - a page that logs the field to its console;
+   - a same-page script that calls `history.back()` when the field gains focus;
+   - a cross-origin iframe that calls `history.back()` when the field gains focus.
+
+   For the two `history.back()` fixtures, the earlier document (on another origin) records every value and input event
+   it receives, and the canary must never appear there.
 
    The canary is a synthetic password. The test asserts its absence, raw and percent-encoded, from:
    - provider request bodies;
@@ -700,8 +746,11 @@ the local substitute) and the full `verify`.
   3. It returns a fixed code and the filled `backendNodeId`s, never the value.
 - The runtime keeps masking by node id and withholding screenshots. The exact-value scan becomes a scan oracle: the
   runtime sends each outbound text to the custodian's `scan(browserSessionId, texts)` and gets back a yes or no. The
-  custodian holds the value for the 10-minute bound. The oracle answers only for sessions it filled, and is
-  rate-bounded.
+  custodian holds the value for the 10-minute bound. The oracle's limits:
+  - It answers only for sessions it filled.
+  - It answers only whether the whole value occurs, raw or percent-encoded, in the submitted text. It never answers
+    for a prefix, a substring or a position, so it cannot be used to guess the value a character at a time.
+  - Its queries are rate-capped per session and per owner, and counted in content-free counters beside the use log.
 - *For:* a compromise of the runtime no longer yields any password. It can still drive fills to the exact origins
   under approvals or grants (the runtime writes approvals) and act inside the signed-in session. That is account use,
   not password theft, and it stays capped and visible in the use log. The custodian's dependency surface is the

@@ -47,7 +47,8 @@ plaintext lives in memory for at most 10 minutes, and every outbound sink fails 
      `20260924180000_waldo_connector_proxy.sql`.
    - Only the envelope module reads the key, enforced by a conformance guard, and `env` is never serialised.
    - Key rotation is an out-of-band job, authorised by the owner per run, with its own short-lived HMAC and budget. It
-     is never reachable from a turn, a console route or the model.
+     runs in the custodian or a run-only rotation Worker, never in the runtime Worker or on a workstation. It is never
+     reachable from a turn, a console route or the model.
    - Whether the key and the fill live in the runtime Worker or a dedicated custodian Worker is decision D7.
 3. **Exact origin, fenced.**
    - Equality of `URL.origin` (https, no userinfo) is required between the stored origin, the top-level page and the
@@ -55,14 +56,18 @@ plaintext lives in memory for at most 10 minutes, and every outbound sink fails 
    - From release until the submission request is dispatched, the route guard aborts every document request to
      another origin. After that, only the submission's own body-less redirect chain may leave the origin. Any other
      cross-origin document request stays aborted while a filled field holds the value.
-   - Before each insert and before Enter, the harness checks over CDP:
+   - Main-frame navigation events, including a back-forward cache restore, abort before an insert and end the session
+     after one.
+   - Before each insert and before submit, the harness checks over CDP:
      - the main frame's `frameId` and `loaderId` are unchanged;
      - origin equality still holds;
      - the form's `method` is not GET and its `action` is same-origin;
      - focus is on the resolved `backendNodeId`.
 4. **One atomic host operation.** The model names a sign-in id. The harness picks the password field, inserts the
-   username and password with raw CDP `Input.insertText`, submits with Enter, and waits. No observation is published
-   between release and navigation. Only the Cloudflare CDP engine may sign in.
+   username and password by `Runtime.callFunctionOn` on the resolved node's own object, so a document that is gone
+   fails the write and a navigation with no network request cannot redirect it. It submits with the form's
+   `requestSubmit()` and waits. No observation is published between release and navigation. Only the Cloudflare CDP
+   engine may sign in.
 5. **Authority.**
    - The first use on a site needs a `sign_in_use` card. Approving it writes a single-use row in Supabase, bound to
      sign-in, browser session and approval ref, valid for 10 minutes and requiring a live owner session. Release
