@@ -31,7 +31,7 @@ export const whatsappLinkConfirmAction = async (form: FormData, csrf: string, do
   const token = form.get('token'), subject = form.get('subject');
   if (typeof token !== 'string' || typeof subject !== 'string' || !whatsappLinkToken(`/console/whatsapp/link/${token}`) || !/^[1-9]\d{5,14}$/.test(subject) || !directory) return notFound();
   const outcome = await directory.consume(doName, await whatsappLinkTokenHash(token), subject);
-  if (outcome === 'claimed') return page(`<h1>Already linked elsewhere</h1><p>${escape(`+${subject}`)} is linked to another Waldo account, so nothing changed.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`, 409);
+  if (outcome === 'claimed') return page(`<h1>Already in use elsewhere</h1><p>${escape(`+${subject}`)} is already in use on another Waldo account, so nothing changed.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`, 409);
   if (outcome !== 'linked') return notFound();
   await onLinked(subject);
   return page(`<h1>WhatsApp linked</h1><p>${escape(`+${subject}`)} now talks to your Waldo. Head back to WhatsApp and say hello.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`);
