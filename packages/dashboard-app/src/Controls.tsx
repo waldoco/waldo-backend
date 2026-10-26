@@ -159,12 +159,14 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
 }
 
 // Connecting from a tile is the owner's consent, so its consent text always stays in view above the button; only the
-// description's detail goes behind the (i). A payload without the consent field shows the whole text.
+// description's detail goes behind the (i). A payload without the consent field, or whose about does not end with it,
+// hides nothing.
 function TileText({ tile }: { tile: McpCatalogueTile }) {
   const { about, consent } = tile;
-  if (consent === undefined || (consent !== null && !about.endsWith(` ${consent}`))) return <p className="meta">{about}</p>;
+  if (consent === undefined) return <p className="meta">{about}</p>;
   if (consent === null) return <p className="meta"><Explained about={tile.label} text={about}/></p>;
-  return <><p className="meta"><Explained about={tile.label} text={about.slice(0, -consent.length - 1)}/></p><p className="meta">{consent}</p></>;
+  const described = about.endsWith(` ${consent}`);
+  return <><p className="meta">{described ? <Explained about={tile.label} text={about.slice(0, -consent.length - 1)}/> : about}</p><p className="meta">{consent}</p></>;
 }
 
 // Remote MCP servers the owner connected. A tool asks first until the owner allows it: here, or for an official server's

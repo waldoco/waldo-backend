@@ -86,6 +86,8 @@ const expectedMigrations = [
   '20261025130000_app_session_thirty_days.sql',
   '20261025140000_app_push_expo.sql',
   '20261026120000_waldo_owner_phone_set.sql',
+  '20261026130000_waldo_oauth_client_endpoints.sql',
+  '20261026140000_waldo_text_first_link_phone_proof.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

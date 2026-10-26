@@ -105,6 +105,38 @@ select is(pg_temp.link_consume('do-carol', pg_temp.h('5'), '15550004444'), 'clai
 select is((select phone_verified_at from waldo.owners where do_name = 'do-carol'), null, 'a claimed confirm does not verify the phone');
 update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550004444';
 
+-- The confirm proves the number through the one shared rule: another active owner's iMessage linked from it holds the
+-- number, so the confirm neither verifies it nor links WhatsApp from it.
+insert into waldo.owners (do_name, email, phone) values
+  ('do-dan', 'dan@test.invalid', '+15550006666'),
+  ('do-erin', 'erin@test.invalid', '+15550006000');
+insert into waldo.presences (owner_id, provider, subject) select id, 'imessage', '+15550006666' from waldo.owners where do_name = 'do-erin';
+select is(pg_temp.link_open('15550006666', pg_temp.h('6')), 'opened', 'the one owner with this number on file still gets a link');
+select is(pg_temp.link_consume('do-dan', pg_temp.h('6'), '15550006666'), 'claimed', 'a number another owner''s iMessage comes from is reported claimed');
+select is((select phone_verified_at from waldo.owners where do_name = 'do-dan'), null, 'and the confirm does not verify it');
+select is(pg_temp.link_active('do-dan'), null, 'and links no WhatsApp from it');
+select ok(exists (select 1 from waldo.presences p join waldo.owners w on w.id = p.owner_id
+  where w.do_name = 'do-erin' and p.provider = 'imessage' and p.subject = '+15550006666' and p.state = 'active'), 'the other owner keeps the iMessage link');
+
+update waldo.owners set phone_verified_at = now() where do_name = 'do-dan';
+select is(pg_temp.link_open('15550006666', pg_temp.h('7')), 'opened', 'a fresh link for an owner already verified on the number');
+select is(pg_temp.link_consume('do-dan', pg_temp.h('7'), '15550006666'), 'claimed', 'an earlier proof does not open a number another owner''s link holds');
+select is(pg_temp.link_active('do-dan'), null, 'and links nothing');
+update waldo.owners set phone_verified_at = null where do_name = 'do-dan';
+
+-- A suspended owner's link routes nothing, so it holds nothing.
+update waldo.owners set state = 'suspended' where do_name = 'do-erin';
+select is(pg_temp.link_open('15550006666', pg_temp.h('8')), 'opened', 'a fresh link once the other owner is suspended');
+select is(pg_temp.link_consume('do-dan', pg_temp.h('8'), '15550006666'), 'linked', 'a suspended owner''s iMessage link does not block the confirm');
+select isnt((select phone_verified_at from waldo.owners where do_name = 'do-dan'), null, 'and the confirm verifies the number');
+select is(pg_temp.link_active('do-dan'), '15550006666', 'and links WhatsApp from it');
+update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550006666';
+update waldo.owners set phone_verified_at = '2026-01-01T00:00:00Z' where do_name = 'do-dan';
+select is(pg_temp.link_open('15550006666', pg_temp.h('9')), 'opened', 'a fresh link for an owner already verified on the number');
+select is(pg_temp.link_consume('do-dan', pg_temp.h('9'), '15550006666'), 'linked', 'with nothing held elsewhere, an owner already verified relinks');
+select is((select phone_verified_at from waldo.owners where do_name = 'do-dan'), '2026-01-01T00:00:00Z'::timestamptz, 'and the earlier proof stands');
+update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550006666';
+
 -- The webhook's per-sender reply throttle (three per hour) holds across a sign-in attempt, which runs the shared cleanup
 -- with a 900 s window.
 create function pg_temp.throttle(k text, lim integer, win integer) returns boolean language sql as $$

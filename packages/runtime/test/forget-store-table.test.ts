@@ -40,6 +40,7 @@ const TABLES: Record<string, Row> = {
   mcp_connections: exempt('a connected MCP server: the https URL the owner entered, Waldo\'s name for it, issuer, granted scopes, status, token version and expiry; no conversation text and no token'),
   mcp_tools: exempt('server-written tool definitions with their digests; no owner text'),
   mcp_tool_reads: exempt('which tool definitions the owner lets run without a card: tool name, digest and time'),
+  mcp_sends: exempt('a send as the owner for Patrol: time, Waldo\'s name for the server, the server\'s tool name, how it was allowed, whether it ran and an intent hash; never its arguments or result'),
   mcp_attempts: exempt('a consent attempt: endpoints, client id and the PKCE verifier until it settles, then only its outcome; no owner text'),
   mcp_questions: gap('a server\'s questions for the owner and the call\'s arguments, which can carry owner text, kept up to 24 hours; a forget does not reach it'),
   calendar_demand: exempt('local day, zone, a sha256 of the selected calendar set and busy-minute counts; no event titles, attendees or ids'),

@@ -189,6 +189,7 @@ describe('the access log is a signed-in read', () => {
   it('reads only the paging keys it names', () => {
     expect(readAccessLogQuery(new URLSearchParams())).toEqual({});
     expect(readAccessLogQuery(new URLSearchParams('tools_before=12&approvals_before=1793008800000.p00a'))).toEqual({ toolsBefore: 12, approvalsBefore: { at: 1793008800000, id: 'p00a' } });
-    for (const bad of ['view=x', 'tools_before=-1', 'tools_before=1.5', 'approvals_before=', 'tools_before=1&tools_before=1']) expect(readAccessLogQuery(new URLSearchParams(bad)), bad).toBeNull();
+    expect(readAccessLogQuery(new URLSearchParams('sends_before=7'))).toEqual({ sendsBefore: 7 });
+    for (const bad of ['view=x', 'tools_before=-1', 'tools_before=1.5', 'approvals_before=', 'tools_before=1&tools_before=1', 'sends_before=0', 'sends_before=x', 'sends_before=1&sends_before=2']) expect(readAccessLogQuery(new URLSearchParams(bad)), bad).toBeNull();
   });
 });

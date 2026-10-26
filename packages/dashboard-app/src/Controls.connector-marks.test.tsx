@@ -112,6 +112,16 @@ describe('explanations behind an (i) on Connections', () => {
     expect(visible(todoist)).toContain(tiles[2]!.about);
   });
 
+  it('shows about and then the consent, both in view, when about does not end with the consent', () => {
+    const odd: McpCatalogueTile = { id: 'notion', label: 'Notion', about: 'Search and read your pages. Notion workspaces only.', consent: consent.trim(), url: 'https://mcp.notion.com/mcp', connected: false };
+    const host = document.body.appendChild(document.createElement('div'));
+    root = createRoot(host);
+    act(() => root!.render(<ConnectionsControls record={{ ...record, data: { ...record.data, mcp_catalogue: [odd] } }} busy={false} onAction={vi.fn()}/>));
+    const tile = [...host.querySelectorAll('li.branch')].find(li => li.querySelector('.value')?.textContent === 'Notion')!;
+    expect(tile.querySelector('button.info-button')).toBeNull();
+    expect([...tile.querySelectorAll('.meta')].map(p => p.textContent)).toEqual([odd.about, consent.trim()]);
+  });
+
   it('puts a description\'s detail behind the (i) when connecting grants nothing', () => {
     const granola = mount().row('Granola');
     const tip = granola.querySelector<HTMLButtonElement>('button.info-button')!;
