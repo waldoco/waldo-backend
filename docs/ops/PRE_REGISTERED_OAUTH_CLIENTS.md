@@ -77,10 +77,13 @@ The function returns `false` and changes nothing when any of these holds:
 None of this has been done. Once these steps are done, the Slack tile in Connections (catalogue entry `slack`)
 connects with the seeded client, and Waldo then behaves as follows:
 
-- **Reads.** The reads Slack labels read-only run without asking, in the owner's own requests only.
-- **Sends.** A send asks first, unless the owner allows it in Connections. Even then, it never runs without a card in a
-  turn that read outside content or that the owner did not start.
-- **Patrol.** Every send is listed under "Sent as you", with the tool's name only.
+- **Reads.** Only the read tools named in the catalogue entry count as reads, whatever Slack labels a tool. They run
+  without asking, in the owner's own requests only.
+- **Sends.** Every other Slack tool is a send. A send asks first, unless the owner allows it in Connections. Even then,
+  it never runs without a card in a turn that read outside content (Slack messages included) or that the owner did not
+  start. Looking up Slack's tool list does not count as outside content.
+- **Patrol.** Every send is listed under "Sent as you" with its time, the workspace, the channel or person it went to,
+  the tool and how it was allowed. What it said is never kept.
 
 1. **Choose how Waldo is distributed.**
    - **Internal app.** It installs only in the workspace that owns it, and needs no review. This fits the

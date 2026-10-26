@@ -36,7 +36,8 @@ export type OAuthProxyReply<T> = Readonly<{ ok: true; data: T } | { ok: false; e
 
 // account is the provider's own id for whose tokens these are: read from pins.account_url when pinned,
 // otherwise the issuer and resource of an MCP server.
-export type ExchangeData = Readonly<{ id: string; account: string; scopes: readonly string[]; expires_at?: number; version: string }>;
+// workspace: the account the provider named in its token answer, when it names one (a Slack team), as metadata only.
+export type ExchangeData = Readonly<{ id: string; account: string; scopes: readonly string[]; expires_at?: number; version: string; workspace?: string }>;
 export type CallData = Readonly<{ result: unknown; era: McpEra; version: string }>;
 // The provider's answer, whatever its status except a 401 (reauth_needed, so the caller refreshes once).
 // body is the parsed JSON, or null for an empty or non-JSON body. Only rate-limit headers cross.

@@ -67,7 +67,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const token = `at_${counter}`, rt = `rt_${counter}`;
     access.set(token, { expires: now + options.accessTtlSeconds * 1000, scope });
     refresh.set(rt, { scope, family });
-    if (options.envelope) return { ok: true, access_token: token, token_type: 'user', expires_in: options.accessTtlSeconds, refresh_token: rt, authed_user: { id: 'U0FIXTURE', scope: scope.split(' ').join(',') } };
+    if (options.envelope) return { ok: true, access_token: token, token_type: 'user', expires_in: options.accessTtlSeconds, refresh_token: rt, authed_user: { id: 'U0FIXTURE', scope: scope.split(' ').join(',') }, team: { id: 'T0FIXTURE', name: 'Fixture Co' } };
     return { access_token: token, token_type: 'Bearer', expires_in: options.accessTtlSeconds, refresh_token: rt, scope };
   };
   const tokenError = (error: string, status = 400) => options.envelope ? json({ ok: false, error }) : json({ error }, status);

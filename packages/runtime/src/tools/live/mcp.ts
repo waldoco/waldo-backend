@@ -157,18 +157,24 @@ const ownerTurn = (ctx: ToolDispatcherContext | undefined) => (server: string): 
   if (ctx?.ownerInitiated !== true || ctx.trigger !== 'user_message' || ctx.sourceTaint === 'external') return false;
   if (ctx.toolArgSourceTaint !== 'external') return true;
   const origins = ctx.taintOrigins ?? [];
-  return origins.length > 0 && origins.every((origin) => origin === 'none' || origin === `mcp:${server}`);
+  return origins.length > 0 && origins.every((origin) => origin === 'none' || origin === `mcp:${server}` || origin === `mcptools:${server}`);
 };
-// The owner's own request with no outside content in it at all: the only turn in which a write that speaks as the owner,
-// and that they allowed in Connections, runs without a card. Content from the same server counts as outside: on Slack it is
-// other people's messages.
-const untaintedOwnerTurn = (ctx: ToolDispatcherContext | undefined): ctx is ToolDispatcherContext & { turnId: string; toolCallId: string } =>
-  ctx?.ownerInitiated === true && ctx.trigger === 'user_message' && ctx.sourceTaint !== 'external' && ctx.toolArgSourceTaint !== 'external' && !!ctx.turnId && !!ctx.toolCallId;
+// The owner's own request whose only outside content is this server's tool definitions (pinned by digest to what the owner
+// allowed): the only turn in which a send that speaks as the owner, and that they allowed in Connections, runs without a
+// card. Anything a tool read counts, the same server's included: on Slack it is other people's messages.
+const sendTurn = (ctx: ToolDispatcherContext | undefined) => (server: string): boolean => {
+  if (ctx?.ownerInitiated !== true || ctx.trigger !== 'user_message' || ctx.sourceTaint === 'external' || !ctx.turnId || !ctx.toolCallId) return false;
+  if (ctx.toolArgSourceTaint !== 'external') return true;
+  const origins = ctx.taintOrigins ?? [];
+  return origins.length > 0 && origins.every((origin) => origin === 'none' || origin === `mcptools:${server}`);
+};
 // Where a search's outside content came from: one server's tool text, none at all, or unknown (several servers, failures).
 const searchOrigin = (found: Awaited<ReturnType<McpOwnerServers['search']>>): string | undefined => {
   if (found.failures.length) return undefined;
   const servers = new Set([...found.tools.map((tool) => tool.server), ...(found.questions_waiting ?? []).map((asked) => asked.server)]);
-  return servers.size === 0 ? 'none' : servers.size === 1 ? `mcp:${[...servers][0]}` : undefined;
+  if (servers.size !== 1) return servers.size === 0 ? 'none' : undefined;
+  // Only definitions: a server's questions for the owner are its own words, so they count as its content.
+  return found.questions_waiting?.length ? `mcp:${[...servers][0]}` : `mcptools:${[...servers][0]}`;
 };
 const refused = (error: unknown): ToolResult<unknown> => error instanceof McpRefusal
   ? { ok: false, code: error.code, error: error.message, source_taint: 'external' }
@@ -193,7 +199,7 @@ export const searchMcpToolsHandler = (owner: McpOwnerServers | undefined): ToolH
     if (!owner) return { ok: false, code: 'not_found', error: 'MCP connections are not set up on this Waldo.', source_taint: 'external' };
     try {
       await ctx?.assertTaskSourceCurrent?.();
-      const found = await owner.search({ ...args, ownerTurn: ownerTurn(ctx) });
+      const found = await owner.search({ ...args, ownerTurn: ownerTurn(ctx), sendTurn: sendTurn(ctx) });
       await ctx?.assertTaskSourceCurrent?.();
       const origin = searchOrigin(found);
       return { ok: true, data: { ...found, ...(origin ? { taint_origin: origin } : {}), source_taint: 'external' as const }, source_taint: 'external' };
@@ -217,7 +223,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
     const found = servers.find((s) => s.name === server);
     if (!found && ownerHas(owner, server)) {
       // A send the owner allowed runs now, in their own untainted request, once per call: the edge keeps the intent.
-      if (!answers && untaintedOwnerTurn(ctx) && owner!.sendsNow(server, tool)) {
+      if (!answers && ctx && sendTurn(ctx)(server) && owner!.sendsNow(server, tool)) {
         try {
           const intentId = `mcpsend:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`;
           await ctx.assertTaskSourceCurrent?.();

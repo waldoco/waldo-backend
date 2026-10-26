@@ -6,8 +6,9 @@ export const ACCESS_LOG_URL = '/console/dashboard/api/v1/access-log';
 
 export type ToolStep = { at: string; tool: string; category: string; kind: 'read' | 'acted' | 'unknown'; ok: boolean };
 export type ApprovalStep = { at: string; kind: string; decision: string; decided_at: string | null };
-// A write on a connected tool that speaks as you, such as a Slack message: the tool's name and how it was allowed, never its text.
-export type SendStep = { at: string; server: string; tool: string; via: 'without_asking' | 'approved'; ok: boolean };
+// A send on a connected tool that speaks as you, such as a Slack message: the tool, the workspace and channel it went to and
+// how it was allowed, never what it said.
+export type SendStep = { at: string; server: string; tool: string; workspace: string | null; channel: string | null; via: 'without_asking' | 'approved'; ok: boolean };
 export type AccessLogRecord = {
   as_of: string; window_days: number; kept_steps: number;
   tools: { rows: ToolStep[]; next_before: number | null; oldest_at: string | null };
@@ -18,6 +19,7 @@ export type AccessLogCursors = { tools_before?: number; approvals_before?: strin
 
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown): v is string => typeof v === 'string';
+const nullableStr = (v: unknown): v is string | null => v === null || str(v);
 const instant = (v: unknown): v is string => str(v) && Number.isFinite(Date.parse(v));
 const maybeInstant = (v: unknown): v is string | null => v === null || instant(v);
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
@@ -47,8 +49,8 @@ export function readAccessLog(value: unknown): AccessLogRecord {
       return { at: row.at as string, kind: row.kind as string, decision: row.decision as string, decided_at: row.decided_at as string | null };
     }) },
     sends: { next_before: sent.next_before as number | null, rows: list(sent.rows, row => {
-      check(instant(row.at) && str(row.server) && str(row.tool) && among(['without_asking', 'approved'] as const, row.via) && typeof row.ok === 'boolean');
-      return { at: row.at as string, server: row.server as string, tool: row.tool as string, via: row.via as SendStep['via'], ok: row.ok as boolean };
+      check(instant(row.at) && str(row.server) && str(row.tool) && nullableStr(row.workspace) && nullableStr(row.channel) && among(['without_asking', 'approved'] as const, row.via) && typeof row.ok === 'boolean');
+      return { at: row.at as string, server: row.server as string, tool: row.tool as string, workspace: row.workspace as string | null, channel: row.channel as string | null, via: row.via as SendStep['via'], ok: row.ok as boolean };
     }) },
   };
 }

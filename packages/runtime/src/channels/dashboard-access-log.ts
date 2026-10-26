@@ -66,9 +66,10 @@ export function readAccessLog(sql: Sql, now: number, query: AccessLogQuery) {
     `SELECT id, kind, status, created_at, decided_at FROM ledger WHERE kind IN (${APPROVAL_KINDS.map(() => '?').join(', ')}) AND created_at >= ?
      AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?`,
     ...APPROVAL_KINDS, since, before?.at ?? null, before?.at ?? null, before?.at ?? null, before?.id ?? null, PAGE + 1).toArray() : [];
-  // Writes on connected servers whose writes speak as the owner, such as a Slack message: the tool's name, never its text.
-  const sends = present.has('mcp_sends') ? sql.exec<{ id: number; at: number; server: string; tool: string; via: string; ok: number }>(
-    'SELECT id, at, server, tool, via, ok FROM mcp_sends WHERE at >= ? AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT ?3',
+  // Sends on connected servers whose writes speak as the owner, such as a Slack message: the tool, the workspace and channel
+  // it went to, never what it said.
+  const sends = present.has('mcp_sends') ? sql.exec<{ id: number; at: number; server: string; tool: string; workspace: string | null; channel: string | null; via: string; ok: number }>(
+    'SELECT id, at, server, tool, workspace, channel, via, ok FROM mcp_sends WHERE at >= ? AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT ?3',
     since, query.sendsBefore ?? null, PAGE + 1).toArray() : [];
   return {
     version: 1 as const, as_of: iso(now),
@@ -88,7 +89,7 @@ export function readAccessLog(sql: Sql, now: number, query: AccessLogQuery) {
       next_before: approvals.length > PAGE ? `${approvals[PAGE - 1]!.created_at}.${approvals[PAGE - 1]!.id}` : null,
     },
     sends: {
-      rows: sends.slice(0, PAGE).map(row => ({ at: iso(row.at), server: row.server, tool: row.tool, via: row.via === 'approved' ? 'approved' as const : 'without_asking' as const, ok: row.ok === 1 })),
+      rows: sends.slice(0, PAGE).map(row => ({ at: iso(row.at), server: row.server, tool: row.tool, workspace: row.workspace, channel: row.channel, via: row.via === 'approved' ? 'approved' as const : 'without_asking' as const, ok: row.ok === 1 })),
       next_before: sends.length > PAGE ? sends[PAGE - 1]!.id : null,
     },
   };

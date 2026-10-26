@@ -30,9 +30,13 @@ export type McpCatalogueEntry = Readonly<{
   scopes?: readonly string[];
   // How the vendor's token endpoint answers, pinned with the connection for the edge.
   token_dialect?: ClientPins['token_dialect'];
-  // Its writes speak as the owner to other people. A write the owner allowed runs without a card only in their own
-  // untainted turns, and every write that runs is kept, without its arguments or result, for Patrol's access log.
+  // Its writes speak as the owner to other people. Only the tools named in reads are reads, whatever the server labels
+  // them; every other tool is a send. A send the owner allowed runs without a card only in their own untainted turns, and
+  // every send that runs is kept for Patrol's access log with where it went (the argument named in send_target), never
+  // what it said.
   sends_as_owner?: true;
+  reads?: readonly string[];
+  send_target?: readonly string[];
 }>;
 
 export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
@@ -43,6 +47,10 @@ export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
   {
     id: 'slack', label: 'Slack', url: 'https://mcp.slack.com/mcp', issuer: 'https://mcp.slack.com', pre_registered: true, token_dialect: 'ok_envelope', sends_as_owner: true,
     about: 'Search messages and read channels and threads. Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol.',
+    // Slack's read tools by name. Slack's documentation describes its tools by what they do, not by name, so a name here
+    // that Slack does not use only means that tool is treated as a send.
+    reads: ['slack_search_public', 'slack_search_public_and_private', 'slack_search_channels', 'slack_search_users', 'slack_read_channel', 'slack_read_thread', 'slack_read_canvas', 'slack_read_user_profile'],
+    send_target: ['channel_id', 'channel'],
     scopes: ['search:read.public', 'search:read.private', 'search:read.im', 'search:read.mpim', 'search:read.users', 'channels:history', 'groups:history', 'im:history', 'mpim:history', 'channels:read', 'groups:read', 'im:read', 'mpim:read', 'users:read', 'chat:write'],
   },
 ];
@@ -65,6 +73,7 @@ export const tileTarget = (id: string, serverUrl: string): McpCatalogueEntry | u
 // connecting is the owner's consent to it. connected means the owner has a server at that address, whatever its sign-in.
 export type McpCatalogueTile = Readonly<{ id: string; label: string; about: string; url: string; connected: boolean }>;
 const tileAbout = (entry: McpCatalogueEntry) => isReviewedGranola(entry.url, entry.issuer) ? entry.about
+  : entry.reads ? `${entry.about} Connecting here lets the ${entry.label} reads Waldo knows run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`
   : `${entry.about} Connecting here lets the tools ${entry.label} labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
 export const catalogueTiles = (connected: readonly Readonly<{ server_url: string }>[]): readonly McpCatalogueTile[] =>
   MCP_CATALOGUE.map((entry) => ({ id: entry.id, label: entry.label, about: tileAbout(entry), url: entry.url, connected: connected.some((server) => same(server.server_url, entry.url)) }));

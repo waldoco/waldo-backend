@@ -93,7 +93,7 @@ describe('oauth-proxy edge, pre-registered clients', () => {
 
   it('exchanges with the seeded secret at the pinned endpoint, reads the user token and its scopes, and returns neither', async () => {
     const { slack, vault, exchanged, calls } = await linked();
-    expect(exchanged).toEqual({ id: expect.stringMatching(/^0{8}-/), account: `${SLACK_ISSUER} ${SLACK_ORIGIN}`, scopes: ['search:read.public', 'channels:history', 'chat:write'], expires_at: expect.any(Number), version: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    expect(exchanged).toEqual({ id: expect.stringMatching(/^0{8}-/), account: `${SLACK_ISSUER} ${SLACK_ORIGIN}`, scopes: ['search:read.public', 'channels:history', 'chat:write'], expires_at: expect.any(Number), workspace: 'T0FIXTURE', version: expect.stringMatching(/^[0-9a-f]{16}$/) });
     expect(slack.hits).toEqual([`POST ${SLACK_TOKEN_ENDPOINT}`]);
     expect(slack.forms[0]!.get('client_secret')).toBe(SLACK_CLIENT.secret);
     expect(JSON.parse(vault.rows[0]!.secret)).toMatchObject({ access_token: 'xoxe.xoxp-2', refresh_token: 'xoxe-1-2' });

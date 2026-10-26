@@ -10,7 +10,7 @@ const log = (over: Record<string, unknown> = {}) => ({
   version: 1, as_of: '2026-10-26T10:00:00.000Z', window_days: 30, kept_steps: 500,
   tools: { rows: [{ at: '2026-10-26T09:00:00.000Z', tool: 'search_communication', category: 'core', kind: 'read', ok: true }, { at: '2026-10-26T08:00:00.000Z', tool: 'other', category: 'other', kind: 'unknown', ok: false }], next_before: 41, oldest_at: '2026-10-10T00:00:00.000Z' },
   approvals: { rows: [{ at: '2026-10-25T09:00:00.000Z', kind: 'email_send', decision: 'skipped', decided_at: '2026-10-25T09:05:00.000Z', summary: 'LEAKED-SUBJECT' }], next_before: '1793008800000.p00a' },
-  sends: { rows: [{ at: '2026-10-26T09:30:00.000Z', server: 'slack', tool: 'slack_send_message', via: 'without_asking', ok: true, text: 'LEAKED-BODY' }, { at: '2026-10-26T09:10:00.000Z', server: 'slack', tool: 'slack_schedule_message', via: 'approved', ok: false }], next_before: 7 },
+  sends: { rows: [{ at: '2026-10-26T09:30:00.000Z', server: 'slack', tool: 'slack_send_message', workspace: 'Fixture Co (T0FIXTURE)', channel: 'C0GENERAL', via: 'without_asking', ok: true, text: 'LEAKED-BODY' }, { at: '2026-10-26T09:10:00.000Z', server: 'slack', tool: 'slack_schedule_message', workspace: null, channel: null, via: 'approved', ok: false }], next_before: 7 },
   ...over,
 });
 const activity = { version: 1, view: 'activity', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64), data: {
@@ -46,7 +46,7 @@ describe('the access log on Patrol', () => {
   it('lists what Waldo sent as you on connected tools, with how it was allowed, and never the message', async () => {
     const { host, root, calls } = await mountPatrol(patrolReads);
     const text = host.textContent ?? '';
-    for (const shown of ['Sent as you', 'slack', 'slack_send_message', 'You allowed it without asking', 'slack_schedule_message', 'You approved the card', 'Not confirmed']) expect(text, shown).toContain(shown);
+    for (const shown of ['Sent as you', 'slack', 'Fixture Co (T0FIXTURE)', 'C0GENERAL', 'slack_send_message', 'You allowed it without asking', 'slack_schedule_message', 'You approved the card', 'Not confirmed', 'never what it said']) expect(text, shown).toContain(shown);
     expect(host.innerHTML).not.toContain('LEAKED-BODY');
     expect(Object.keys(readAccessLog(log()).sends.rows[0]!)).not.toContain('text');
     const older = [...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Older sends')!;
@@ -84,7 +84,7 @@ describe('the access log on Patrol', () => {
   });
 
   it('refuses a read out of shape', () => {
-    for (const bad of [log({ version: 2 }), log({ approvals: { rows: [], next_before: '12; drop' } }), log({ tools: { rows: [{ at: 'x', tool: 't', category: 'c', kind: 'read', ok: true }], next_before: null, oldest_at: null } }), log({ sends: { rows: [{ at: '2026-10-26T09:30:00.000Z', server: 'slack', tool: 't', via: 'sometimes', ok: true }], next_before: null } }), log({ sends: { rows: [], next_before: -1 } })]) {
+    for (const bad of [log({ version: 2 }), log({ approvals: { rows: [], next_before: '12; drop' } }), log({ tools: { rows: [{ at: 'x', tool: 't', category: 'c', kind: 'read', ok: true }], next_before: null, oldest_at: null } }), log({ sends: { rows: [{ at: '2026-10-26T09:30:00.000Z', server: 'slack', tool: 't', workspace: null, channel: null, via: 'sometimes', ok: true }], next_before: null } }), log({ sends: { rows: [{ at: '2026-10-26T09:30:00.000Z', server: 'slack', tool: 't', workspace: 7, channel: null, via: 'approved', ok: true }], next_before: null } }), log({ sends: { rows: [], next_before: -1 } })]) {
       expect(() => readAccessLog(bad)).toThrow('unsupported data shape');
     }
   });
