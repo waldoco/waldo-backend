@@ -10,6 +10,7 @@ Direct source modules: `packages/contracts/src/app/core.ts` and `controls.ts`. N
 | --- | --- | --- |
 | POST | `/app/v1/auth/code` | `{email}` → `{ok:true}`; same response for invited/unknown address |
 | POST | `/app/v1/auth/verify` | `{email,code}` → active session plus credential, or needs_invite |
+| POST | `/app/v1/auth/id_token` | `{provider: apple\|google, id_token, nonce, request_id}` (plus the same optional invite and phone) → the `/auth/verify` answer; a token Supabase refuses, or one with no confirmed email, is the generic 403 |
 | GET | `/app/v1/session` | active session with full sess_/acct_ hashes, surface app, integer absolute_expires_at |
 | POST | `/app/v1/auth/signout` | fence the session's queued and running work, push custody revoke, console-session revoke, fresh validated absence, fence again; 503 with nothing revoked if the first fence cannot be placed |
 | GET | `/app/v1/chat/main` | witnessed canonical-owner history; newest first, opaque before-row cursor |

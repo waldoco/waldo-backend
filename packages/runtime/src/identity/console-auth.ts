@@ -53,6 +53,9 @@ export const sessionFamily = (rows: readonly ConsoleSession[], session: string):
   return [...family];
 };
 
+// refused: Supabase declined the token or code. no_email: it vouched for no confirmed email, so no owner can be matched.
+export type IdentitySignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'needs_invite' } | { state: 'refused'; reason: 'token' | 'no_email' }>;
+
 export type ConsoleAuth = Readonly<{
   sendCode(email: string, code?: string): Promise<boolean>;
   // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
@@ -63,6 +66,11 @@ export type ConsoleAuth = Readonly<{
   // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite. The phone is
   // kept, unverified, only on a join; an existing member's sign-in never changes the number on file.
   verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string): Promise<string | null>;
+  // App sign-in with Apple or Google: Supabase checks the identity token's signature, audience and nonce, and the owner
+  // resolves from the email it confirms exactly as verifyOrJoin resolves it.
+  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string): Promise<IdentitySignIn>;
+  // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
+  signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
   issueLinkCode(doName: string): Promise<string | null>;
   /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
@@ -216,15 +224,33 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return user;
     });
     if (!user?.id || user.email?.toLowerCase() !== address) return null;
-    // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
-    // owner_for_auth refuse new provisioning; only the join path admits a new member, through
-    // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
+    return ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone);
+  };
+  // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
+  // owner_for_auth refuse new provisioning; only the join path admits a new member, through
+  // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
+  const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = ''): Promise<string | null> => {
+    const address = user.email;
     const phoneE164 = '';
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
     const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     if (owner || !join || !codeHash) return owner;
     const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
     return typeof joined === 'string' && joined.length > 0 ? joined : null;
+  };
+  // Supabase's own refusal body can echo the token's claims, so only its status is read. A limit or an outage is not a
+  // refusal of the token, and throws.
+  const granted = (grant: 'id_token' | 'pkce', body: object) => auth(`token?grant_type=${grant}`, body, async response => {
+    if (response.status === 429 || response.status >= 500) throw new Error(`token grant ${response.status}`);
+    if (!response.ok) return { state: 'refused', reason: 'token' } as const;
+    const { user } = (await response.json()) as { user?: { id?: string; email?: string | null; email_confirmed_at?: string | null } };
+    if (!user?.id) return { state: 'refused', reason: 'token' } as const;
+    return user.email && user.email_confirmed_at ? { state: 'user', id: user.id, email: user.email.toLowerCase() } as const : { state: 'refused', reason: 'no_email' } as const;
+  });
+  const signInGranted = async (grant: Awaited<ReturnType<typeof granted>>, inviteCode: string, join: boolean, joinPhone = ''): Promise<IdentitySignIn> => {
+    if (grant.state === 'refused') return grant;
+    const doName = await ownerFor(grant, inviteCode, join, joinPhone);
+    return doName ? { state: 'owner', doName } : { state: 'needs_invite' };
   };
   return {
     async throttle(key, limit, windowSeconds) {
@@ -243,6 +269,9 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
     verify: (email, code, _phone, inviteCode = '') => resolveOwner(email, code, inviteCode, false),
     verifyOrJoin: (email, code, inviteCode, phone = '') => resolveOwner(email, code, inviteCode, true, phone),
+    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '') =>
+      signInGranted(await granted('id_token', { provider, id_token: idToken, ...(nonce ? { nonce } : {}) }), inviteCode, true, phone),
+    signInWithAuthCode: async (code, verifier) => signInGranted(await granted('pkce', { auth_code: code, code_verifier: verifier }), '', false),
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);
