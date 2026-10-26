@@ -33,7 +33,7 @@ describe.each([
   ['whatsapp', presentation('whatsapp')],
   ['imessage', presentation('imessage')],
 ] as const)('%s', (surface, surfacePresentation) => {
-  it('sends byte-identical system prompts across rounds and turns while clock, memory, open loops and the tool menu change', async () => {
+  it('sends byte-identical system prompts and the same tool menu across rounds and turns while clock, memory and open loops change', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-${surface}`)), async (_instance, state) => {
       let minute = 0;
       const clock = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23 + minute, 30)) };
@@ -46,7 +46,7 @@ describe.each([
           handle: async (args: { title: string }) => { loops.push(args.title); return { ok: true as const, data: { opened: true }, source_taint: null }; } },
         { name: 'get_context' as const, description: 'Owner context.', schema: z.object({ topic: z.string() }), trigger_allowlist: allowlist('get_context'), autonomy_gated: false,
           handle: async () => ({ ok: true as const, data: {}, source_taint: null }) },
-        // An outside read taints the turn, so propose_action joins the tool menu for the rounds after it.
+        // An outside read taints the turn; propose_action is on the menu from the first round and refuses an untainted call.
         { name: 'web_search' as const, description: 'Search the web.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('web_search'), autonomy_gated: false,
           handle: async () => ({ ok: true as const, data: { results: [] }, source_taint: 'external' as const }) },
         { name: 'propose_action' as const, description: 'Ask the owner to approve one tool call.', schema: z.object({ tool: z.string() }), trigger_allowlist: allowlist('propose_action'), autonomy_gated: false,
@@ -99,10 +99,9 @@ describe.each([
       expect(calls[3]!.message).not.toContain('Has a dentist on Fridays');
       expect(calls[4]!.message).toContain('Has a dentist on Fridays');
 
-      // The tool menu still changes mid-turn on taint (it precedes the system prompt in the provider's cache prefix);
-      // the system prompt does not follow it.
-      expect(calls[2]!.tools).not.toContain('propose_action');
-      expect(calls[3]!.tools).toContain('propose_action');
+      // The tool menu leads the provider's cache prefix, so it stays the same through the taint and across turns.
+      expect(new Set(calls.map((entry) => JSON.stringify(entry.tools))).size).toBe(1);
+      expect(calls[0]!.tools).toContain('propose_action');
     });
   });
 });
