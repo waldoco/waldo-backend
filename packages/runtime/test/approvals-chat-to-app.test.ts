@@ -87,7 +87,9 @@ describe('a send proposed in a chat surface is handed to the app', () => {
         const card = f.cards.at(-1)!;
         expect(card.text).toContain('Send this message on whatsapp?\n\nOn my way');
         expect(card.text).toContain(`${HANDED_TO_APP} Review and approve it there: waldo://approvals/${id}`);
-        expect(card.buttons).toEqual(['Not now', "Don't do this"]);
+        // iMessage shows no buttons; a card it hands to the app offers no numbers either.
+        expect(card.buttons).toEqual(surface === 'imessage' ? [] : ['Not now', "Don't do this"]);
+        expect(card.text).not.toContain('Reply 1');
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 0 }]);
         expect(f.status(id)).toBe('open');
         expect(f.desk.placement(id)).toMatchObject({ here: true, hereApprovable: false, appApprovable: true, handsToApp: true });
@@ -136,10 +138,11 @@ describe('a low-risk change to the owner\'s own things stays one tap in chat', (
       await owner(`chat-hold-${surface}`, async state => {
         const f = harness(state, surface);
         const id = await f.desk.propose(HOLD);
-        expect(f.cards.at(-1)!.buttons).toEqual(['Do it', 'Modify', 'Not now', "Don't do this"]);
+        if (surface === 'imessage') expect(f.cards.at(-1)!.text).toMatch(/Reply 1 to add it, or 2 to skip\.$/);
+        else expect(f.cards.at(-1)!.buttons).toEqual(['Do it', 'Modify', 'Not now', "Don't do this"]);
         expect(f.cards.at(-1)!.text).not.toContain('Waldo app');
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 1 }]);
-        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, ...(surface === 'imessage' ? { numbered: true } : {}) });
         await f.reply(`a:${id}`);
         await f.reply(`a:${id}`);
         expect(f.created).toHaveLength(1);
@@ -284,7 +287,7 @@ describe('every approval kind is either one tap in chat or handed to the app, by
           const gated = appApprovalStepUp(item!, 'approve');
           expect(gated).toBe(STEP_UP_APPROVALS[kind].gated);
           const card = f.cards[0]!;
-          expect(card.buttons.some(label => label === 'Do it' || label === 'Send it')).toBe(!gated);
+          expect(card.buttons.some(label => label === 'Do it' || label === 'Send it') || /Reply 1 to /.test(card.text)).toBe(!gated);
           expect(f.desk.placement(id).hereApprovable).toBe(!gated);
           const decided = await f.desk.decide(id, 'a', 'trace', { surface });
           expect(decided.toast === 'Review it in the app').toBe(gated);

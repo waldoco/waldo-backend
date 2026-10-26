@@ -143,10 +143,12 @@ export const calendarInviteDetails = (p: Readonly<{ calendar_id?: string; attend
 // Where a proposal's card landed, and where a card that can approve it landed: on the proposing desk's own surface and in the app.
 // waitsHere: the card for this surface waits for the owner's next message there.
 // handsToApp: this chat surface never approves the kind, so its card hands the approval to the app.
-export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean; waitsHere?: boolean; handsToApp?: boolean }>;
+// numbered: this surface shows no buttons, so the card here is approved by the owner replying 1 or 2.
+export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean; waitsHere?: boolean; handsToApp?: boolean; numbered?: boolean }>;
+const NUMBERED_STATUS = 'sent to the owner as its own message ahead of your reply; it asks them to reply 1 to approve or 2 to skip, and a bare 1 or 2 after your reply answers it. Do not offer numbered choices in your reply.';
 // What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
 export const proposalStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
-  !placement || placement.hereApprovable ? shownHere
+  !placement || placement.hereApprovable ? placement?.numbered ? NUMBERED_STATUS : shownHere
     : placement.handsToApp && !placement.appApprovable ? `It cannot be approved in chat, and the Waldo app cannot approve it either. ${nothingDone}`
     : placement.handsToApp && placement.here ? `The review is shown here, but it is approved only in the Waldo app; the card carries the link. ${nothingDone}`
     : placement.appApprovable ? `${placement.here ? 'The full review card is in the Waldo app; it could not be shown in full here.'
@@ -177,6 +179,9 @@ export type ApprovalDesk = Readonly<{
   reraise(id: string): Promise<ReraiseOutcome>;
   // The owner just wrote on this desk's surface, so the cards that waited for that go out now.
   ownerWrote(): Promise<void>;
+  // A message that is exactly 1 or 2 decides the latest numbered card on this surface while its request is open and `latest` says
+  // that card (by its message ref) is still Waldo's latest message in the chat the reply came from; anything else is a turn (null).
+  numberedReply(text: string, trace: string, latest: (messageRef: string) => boolean): Promise<ApprovalDecision | null>;
   placement(id: string): CardPlacement;
   // Approved cards whose call runs on the jobs lane and has not settled.
   replays(): readonly string[];
@@ -315,6 +320,19 @@ const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessag
 const stepUpFor = (entry: LedgerRow, action: ApprovalActionV1): boolean => {
   try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, action); } catch { return true; }
 };
+// iMessage shows no buttons, so a card chat approves there asks for the owner's next message, 1 or 2, naming the change 1 makes.
+const NUMBERED_VERBS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  calendar_change: { create: 'add it', move: 'move it', cancel: 'cancel it' },
+  google_task_change: { create: 'add it', update: 'change it', complete: 'mark it done', reopen: 'reopen it' },
+};
+const numberedVerb = (entry: LedgerRow) => {
+  const p = JSON.parse(entry.payload_json);
+  return NUMBERED_VERBS[entry.kind]?.[entry.kind === 'google_task_change' ? p.args?.action : p.action] ?? 'do it';
+};
+// The surfaces that show no buttons and approve a one-tap card by the owner's numbered reply.
+const NUMBERED: ReadonlySet<ApprovalSurface> = new Set(['imessage']);
+// The reply protocol, not a reading of intent: only a message that is the digit itself decides.
+const NUMBERED_REPLY = /^\s*([12])\s*$/;
 const approvedInApp = (entry: LedgerRow): boolean => stepUpFor(entry, 'approve');
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
 const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be approved at all.";
@@ -485,6 +503,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (ack?.message_id !== undefined) return `${String(ack.chat?.id ?? deps.owner)}:${String(ack.message_id)}`;
     return ack?.messages?.[0]?.id !== undefined ? String(ack.messages[0].id) : 'unreferenced';
   };
+  // The latest card on this surface that offered numbers. The numbers answer it alone, and only while it waits.
+  const latestNumbered = () => sql.exec<{ approval_id: string; message_ref: string; retired_at: number | null }>(
+    'SELECT approval_id, message_ref, retired_at FROM approval_presentations WHERE surface = ? AND approvable = 1 ORDER BY presented_at DESC, rowid DESC LIMIT 1', surface).toArray()[0];
   // Where a request a chat surface hands to the app can be approved: in the app, by its link when there is one, or nowhere.
   const appHandoff = (id: string, inApp: boolean) => !inApp ? `${NOT_IN_APP} Nothing was done.` : deps.appLink ? `Review and approve it there: ${deps.appLink(id)}` : 'Approve it in the Waldo app.';
   // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
@@ -515,12 +536,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
     }
     if (surface !== 'app') {
-      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp;
+      const fits = card.length <= REVIEW_BUDGET, approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
+      const earlier = numbered && approvable ? latestNumbered() : undefined;
+      const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
       const text = handsToApp ? `${fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`}\n\n${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}`
-        : approvable ? card : `${unreviewable(title, summaryOf(entry))}${link}`;
+        : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
-        const sent = await say(text, approvable ? buttons : laterButtons(id, deferrable), true);
+        const sent = await say(text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
         if (sent != null) { shown.push({ surface, message_ref: sentRef(sent), approvable }); sentHere = true; }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
@@ -1181,6 +1204,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         return { outcome: 'unshown' };
       } finally { raising.delete(id); }
     },
+    async numberedReply(text, trace, latest) {
+      const number = NUMBERED_REPLY.exec(text)?.[1];
+      const card = NUMBERED.has(surface) && number ? latestNumbered() : undefined;
+      if (!card || card.retired_at !== null) return null;
+      // The ledger decides whether the card still waits: one past its expiry, closed or not, takes no number.
+      expireDue(card.approval_id);
+      if (row(card.approval_id)?.status !== 'open' || !latest(card.message_ref)) return null;
+      return decideOnce(card.approval_id, number === '1' ? 'a' : 's', trace, { surface, messageRef: card.message_ref });
+    },
     // Oldest first, and only while the approval still waits on the owner and is not put off. Each card is claimed before its
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
     async ownerWrote() {
@@ -1411,8 +1443,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const entry = row(id), appFull = !!entry && appShowsInFull(entry);
       const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1 && (where !== 'app' || appFull)));
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
-      const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry);
-      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}) };
+      const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
+      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}) };
     },
     async approvals(now, filter = {}) {
       expireDue();

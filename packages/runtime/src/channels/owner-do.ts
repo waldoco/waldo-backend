@@ -9,6 +9,7 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
+import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
@@ -950,6 +951,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try { new IMessageFinalOutbox(this.ctx.storage).freezeFailure(record, `${RUN_DID_NOT_FINISH}\n\n${this.requestReceived(record.admittedAt)}`); }
     catch { console.error('imessage failure notice unavailable'); }
   };
+  // A message that is exactly 1 or 2 answers the latest numbered approval card while it waits and is still Waldo's latest
+  // message in this chat, and the decision is the reply. It is read before the cards that waited for this message go out,
+  // so a number never answers a card the owner had not seen.
+  private async iMessageNumberedReply(desk: ApprovalDesk, scope: RunEffectScope, log: (entry: TurnLogEntry) => void): Promise<boolean> {
+    const record = this.activeIMessage!, trace = ownerTurnTrace('imessage', record.updateId);
+    const answered = await desk.numberedReply(record.text, trace, iMessageCardIsLatest(this.ctx.storage, record));
+    try { await desk.ownerWrote(); } catch { console.error('imessage waiting approval cards unavailable'); }
+    if (!answered) return false;
+    scope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, answered.message); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });
+    log({ trace, hop: 'command', ms: 0, ok: true, detail: 'numbered_reply' });
+    return true;
+  }
   // Short notes while a long iMessage turn runs (see progress-pacer). The model writes each one; it freezes under the turn's
   // own scope and goes to the bridge from inside the turn, which already holds the serial queue, so nothing is queued
   // behind the turn and nothing re-arms: a note that cannot go at once is settled unsent. WALDO_IMESSAGE_PROGRESS=0 is off.
@@ -2996,6 +3009,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       scope.admit();
       await currentIMessageAuthority(this.imessageHost.env, record);
       scope.admit();
+      if (await this.iMessageNumberedReply(desk, scope, log)) return;
     }
     if (channel === 'app') {
       const record = this.activeApp;
@@ -3621,17 +3635,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     // The owner-turn tool set, captured where the responder is built: an approved tainted action replays through it.
     let replayHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [];
+    // iMessage shows no buttons: a card goes out as its own message ahead of the turn's reply, and is answered by number.
+    const approvalCallers: Partial<Record<ChannelKind, typeof routedCall>> = {
+      imessage: iMessageApprovalCaller(storage, () => this.activeIMessage && this.activeScope ? { record: this.activeIMessage, scope: this.activeScope } : null),
+    };
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
-      // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
-      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow,
+      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow,
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
         await destination('telegram')!.call('editMessageReplyMarkup', { chat_id: Number(chat), message_id: Number(message), reply_markup: { inline_keyboard: [] } });
       },
       appIdentity: () => !!identity.get<string>('app_subject') || !!identity.get<string>('owner_principal_ref'),
-      call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: approvalCallers[channel] ?? routedCall,
+      owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
