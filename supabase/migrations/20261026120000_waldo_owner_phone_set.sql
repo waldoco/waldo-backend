@@ -62,3 +62,41 @@ end $$;
 
 revoke all on function waldo.owner_phone_set(text, bigint, text) from public, anon, authenticated;
 grant execute on function waldo.owner_phone_set(text, bigint, text) to anon;
+
+-- The phone view shows the code in flight for the number on file. Once phone.set changes the number, a code sent to the earlier one still
+-- spaces the next send, since the ledger checks the owner's one challenge whatever number it went to. Until that wait ends the read reports an
+-- expired challenge, with no checks left and the time a code may go, so no surface offers a send the ledger would refuse. Same-number reads
+-- are unchanged.
+create or replace function waldo.owner_phone_state(p_do_name text, p_at bigint, p_sig text) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare o waldo.owners; c waldo.phone_sms_challenges; v_state text; v_retry timestamptz;
+begin
+  if not waldo.router_signed('phonestate.' || p_do_name, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select * into o from waldo.owners where do_name = p_do_name and state = 'active';
+  if o.id is null then return null; end if;
+  select * into c from waldo.phone_sms_challenges where owner_id = o.id;
+  if c.owner_id is not null and c.phone is distinct from o.phone then
+    v_retry := case
+      when c.state in ('sending', 'unknown') then greatest(c.next_send, c.recipient_hold_until)
+      when c.state = 'checking' then greatest(c.next_send, c.expires_at)
+      else c.next_send end;
+    return jsonb_build_object('phone', case when o.phone ~ '^\+[1-9][0-9]{6,14}$' then o.phone end, 'verified', o.phone_verified_at is not null,
+      'challenge', case when v_retry > now() then jsonb_build_object('state', 'expired', 'expires_at', extract(epoch from c.expires_at)::bigint,
+        'retry_at', extract(epoch from v_retry)::bigint, 'checks_left', 0) end);
+  end if;
+  v_state := case
+    when c.owner_id is null then null
+    when c.state = 'sending' and c.recipient_hold_until <= now() then 'unknown'
+    when c.state in ('pending', 'checking') and c.expires_at <= now() then 'expired'
+    else c.state end;
+  v_retry := case
+    when v_state in ('pending', 'checking') and c.sends >= 3 then c.expires_at
+    when v_state = 'sending' or c.state = 'unknown' then c.recipient_hold_until
+    else c.next_send end;
+  return jsonb_build_object('phone', case when o.phone ~ '^\+[1-9][0-9]{6,14}$' then o.phone end, 'verified', o.phone_verified_at is not null,
+    'challenge', case when v_state is null then null
+      else jsonb_build_object('state', v_state, 'expires_at', extract(epoch from c.expires_at)::bigint,
+        'retry_at', case when v_retry > now() then extract(epoch from v_retry)::bigint end, 'checks_left', 5 - c.checks) end);
+end $$;

@@ -182,3 +182,13 @@ it('with the switch off the number cannot be set', async () => {
     expect(w.sets).toEqual([]);
   });
 });
+
+it('after a number change lists no send while the ledger still spaces codes, and says until when', async () => {
+  const w = world();
+  const retry = Math.floor(Date.now() / 1000) + 45;
+  Object.assign(w.ledger, { phone: NEW, challenge: { state: 'expired', expires_at: 1, retry_at: retry, checks_left: 0 } });
+  await app('1', async ({ read }) => {
+    const projection = appControlProjectionV1Schema.parse((await read()).body);
+    expect(projection).toMatchObject({ data: { phone: NEW, challenge: { state: 'expired', retry_at: retry, checks_left: 0 }, actions: ['phone.set'] } });
+  });
+});
