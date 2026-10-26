@@ -7,6 +7,7 @@ import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { MEMORY_CONTROL_PATH } from '../src/channels/dashboard-memory-actions';
 import { DASHBOARD_VAULT_PATH, projectVault, readVaultQuery } from '../src/channels/dashboard-vault';
 import { STEP_UP_ROUTES } from '../src/channels/console-step-up';
+import { healthSharing } from '../src/channels/dashboard-health';
 
 // The Vault shows what Waldo keeps, what it can reach and what it did, behind a fresh email code. Without one, the read
 // answers step_up_required before any of it is read. It never carries a token, a secret reference, a mail subject, a
@@ -273,6 +274,29 @@ describe('the Vault projection', () => {
       { channel: 'imessage', state: 'linked', revoke: { view: 'imessage', action: 'imessage.unlink' } },
       { channel: 'whatsapp', state: 'unlinked', revoke: null },
     ]);
+  });
+
+  it('reads health sharing from consent_list and freshness_read only, keeping no score, count or extra field', async () => {
+    const asked: string[] = [];
+    let planted = false;
+    const rpc = async (fn: string) => {
+      asked.push(fn);
+      if (fn === 'health_consent_list') return { consents: [{ consent_class: 'health_processing', source: 'apple', purpose: 'storage_compute', version: 2, status: 'granted', epoch: 1,
+        granted_at: '2026-10-01T08:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required', ...(planted ? { score: 87.5 } : {}) }] };
+      return { freshness: { sources: [{ source: 'apple', newest_upload_at: '2026-10-26T07:00:00.000Z', uploads_7d: 173, rejected_readings_7d: [{ reason: 'invalid_sample', count: 9 }] }],
+        refusals_7d: [], newest_derived: { day: '2026-10-26', compiled_at: '2026-10-26T07:30:00.000Z' } } };
+    };
+    const shared = await healthSharing({ rpc, doName: 'vault-health-owner' });
+    expect(asked.sort()).toEqual(['health_consent_list', 'health_freshness_read']);
+    expect(shared).toEqual({ consents: [{ source: 'apple', purpose: 'storage_compute', status: 'granted', granted_at: '2026-10-01T08:00:00.000Z', withdrawn_at: null }],
+      sources: [{ source: 'apple', newest_upload_at: '2026-10-26T07:00:00.000Z' }] });
+    const body = JSON.stringify(projectVault({ ...base, health: shared }));
+    for (const value of ['173', 'invalid_sample', 'epoch', 'deletion_state', 'compiled_at', 'consent_class']) expect(body).not.toContain(value);
+    // The consent contract is strict: a row carrying any field it does not name fails the whole section closed.
+    planted = true;
+    expect(await healthSharing({ rpc, doName: 'vault-health-owner' })).toBeNull();
+    expect(await healthSharing({ rpc: async () => { throw new Error('down'); }, doName: 'vault-health-owner' })).toBeNull();
+    expect(await healthSharing({ rpc: null, doName: 'vault-health-owner' })).toBeNull();
   });
 
   it('reads only the paging keys it names', () => {

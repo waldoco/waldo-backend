@@ -103,7 +103,8 @@ export function projectVault(input: Readonly<{
     memory: memorySection(input.memory),
     connections: {
       token_note: VAULT_TOKEN_NOTE,
-      // Neither the account list nor the connection row Waldo reads records when a grant was made or last used.
+      // waldo.connections records created_at and last_used_at, but no signed call returns them to the Worker, and the
+      // account list in this owner's storage keeps neither, so both stay null here.
       google: input.google.map(grant => ({
         account_id: grant.id, email: grant.email,
         grants: [grant.calendar ? 'calendar' : null, grant.mail ? 'gmail' : null, grant.tasks ? 'tasks' : null].filter((value): value is string => value !== null),
