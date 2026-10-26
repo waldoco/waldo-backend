@@ -39,13 +39,13 @@ const PROVIDERS: Readonly<Record<'google' | 'granola', Provider>> = {
 const providerOf = (value: string | undefined): Provider | null => (value === 'granola' ? PROVIDERS.granola : value === 'google' ? PROVIDERS.google : null);
 
 type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown }>;
-const used = (provider: Provider, fromApp: boolean) => ({ status: 410, title: 'This link was already used', body: !fromApp && (provider.name === 'Google' || provider.fromChat)
+const used = (provider: Provider, viaHandoff: boolean) => ({ status: 410, title: 'This link was already used', body: !viaHandoff && (provider.name === 'Google' || provider.fromChat)
   ? `Each connect link starts one sign-in. Ask Waldo to connect ${provider.name} for a fresh one.`
   : `Each connect link starts one sign-in. Connect ${provider.name} again from Connections in the Waldo app.` });
 const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Nothing was connected. You can close this tab.' };
 // Only the app's own links carry its handoff code, so a page reached with one ends in the app: it names the Waldo app and
 // its button is the app's one return address. Without the code, the pages keep their Google and console wording.
-const FROM_APP = {
+const HANDED = {
   invalid: { status: 400, title: 'This link is not valid', body: 'Start the connection again from Connections in the Waldo app.' },
   expired: { status: 410, title: 'This link has expired', body: 'Start the connection again from Connections in the Waldo app.' },
   failed: { status: 502, title: 'Nothing was connected', body: 'Waldo could not start the sign-in. Start the connection again from Connections in the Waldo app.' },
@@ -66,9 +66,9 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   const call = signedRpc(env);
   const owners = env.OWNER_DO, bindingSecret = oauthStateSecret(env);
   if (!call || !owners || !bindingSecret) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-  let fromApp = url.searchParams.has(HANDOFF_PARAM) || url.searchParams.get('cancelled') === 'app';
-  const back = () => (fromApp ? returnAction('app', null) : '');
-  const refused = (kind: keyof typeof FROM_APP, reason = '') => (fromApp ? callbackPage(false, FROM_APP[kind], '', back()) : consentPage(kind === 'failed' ? { kind, reason } : { kind }, null));
+  let viaHandoff = url.searchParams.has(HANDOFF_PARAM) || url.searchParams.get('cancelled') === HANDOFF_PARAM;
+  const back = () => (viaHandoff ? returnAction('app', null) : '');
+  const refused = (kind: keyof typeof HANDED, reason = '') => (viaHandoff ? callbackPage(false, HANDED[kind], '', back()) : consentPage(kind === 'failed' ? { kind, reason } : { kind }, null));
   if (request.method === 'GET' && url.searchParams.has('cancelled')) return callbackPage(false, CANCELLED, '', back());
   const hash = await ticketHash(ticket);
   const hashPrefix = hash.slice(0, 8);
@@ -90,7 +90,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     hop('expired', hashPrefix);
     return refused('expired');
   }
-  if (session.handoff === true) fromApp = true;
+  if (session.handoff === true) viaHandoff = true;
   const app = appConnectEntry(session.provider);
   let provider = app ? { name: app.label, origin: '', binding: 'mcp' as const, callback: MCP_CALLBACK_PATH, ttlMs: MCP_ATTEMPT_TTL_MS, fromChat: true as const } : providerOf(session.provider);
   if (session.status !== 'ok' || !session.do_name || !provider) {
@@ -99,7 +99,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (session.begun) {
     hop('used', hashPrefix);
-    return callbackPage(false, used(provider, fromApp), '', back());
+    return callbackPage(false, used(provider, viaHandoff), '', back());
   }
   if (app) {
     let described: { origin?: unknown; consent?: unknown } | null;
@@ -111,7 +111,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     // The sign-in this link started has run out or already moved on: nothing here can start it again.
     if (typeof described?.origin !== 'string' || typeof described.consent !== 'string') {
       hop('expired', hashPrefix);
-      return callbackPage(false, { status: 410, title: 'This link has expired', body: fromApp ? `Connect ${app.label} again from Connections in the Waldo app.` : `Connect links last 15 minutes. Ask Waldo to connect ${app.label} for a fresh one.` }, '', back());
+      return callbackPage(false, { status: 410, title: 'This link has expired', body: viaHandoff ? `Connect ${app.label} again from Connections in the Waldo app.` : `Connect links last 15 minutes. Ask Waldo to connect ${app.label} for a fresh one.` }, '', back());
     }
     provider = { ...provider, origin: described.origin, consent: described.consent };
   }
@@ -125,7 +125,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (request.method === 'GET') {
     hop('confirm', hashPrefix);
-    const page = confirmPage({ provider: provider.name, providerOrigin: provider.origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled${fromApp ? '=app' : ''}`, ...(provider.consent ? { consent: provider.consent } : {}) });
+    const page = confirmPage({ provider: provider.name, providerOrigin: provider.origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled${viaHandoff ? `=${HANDOFF_PARAM}` : ''}`, ...(provider.consent ? { consent: provider.consent } : {}) });
     if (handed.setCookie) page.headers.append('set-cookie', handed.setCookie);
     return page;
   }
@@ -141,7 +141,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (!begun?.do_name) {
     hop('used', hashPrefix);
-    return callbackPage(false, used(provider, fromApp), '', back());
+    return callbackPage(false, used(provider, viaHandoff), '', back());
   }
   try {
     const reply = await owners.get(owners.idFromName(begun.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {
