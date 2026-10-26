@@ -6,4 +6,4 @@ Decorative React figures are @lucasmarkes/hairline 0.3.0 (MIT, Copyright 2026 Lu
 
 Waldo and connector brand marks remain project/vendor identifiers. This notice does not claim independent clearance of trademark or brand-use terms.
 
-Per-mark source and licence for connector logos, and which connectors draw a lettermark instead, are recorded in `src/assets/logos/README.md`.
+Connector logos (Gmail, Google Calendar, Telegram, WhatsApp, Granola, Notion, Linear, Slack) are copied unmodified from waldo-landing `public/assets/connectors` (commit 86992b3) and used only to name the connected service. Their original source is not recorded. Per-mark detail, and which connectors draw a lettermark instead, is in `src/assets/logos/README.md`.

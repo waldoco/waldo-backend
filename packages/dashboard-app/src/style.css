@@ -617,6 +617,8 @@ footer .refresh:disabled { opacity:1; }
   color-scheme:dark;
 }
 :root[data-scene="night"] .heading-figure { opacity:0; pointer-events:none; }
+/* Brand marks keep their own colours, so at night each sits on a small light tile; dark marks (Granola) stay legible. */
+:root[data-scene="night"] .marks .logo { box-sizing:border-box; padding:1px; border-radius:4px; background:#f4f3f0; }
 :root[data-scene="night"] .page-heading:has(.heading-figure) { padding-right:0; }
 @media(max-width:640px) { :root[data-scene="night"] .primary-nav { background:rgba(28,27,26,.92); } }
 .view-toggle .icon { width:14px; height:14px; }

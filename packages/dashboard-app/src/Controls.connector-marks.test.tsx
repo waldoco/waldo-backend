@@ -5,6 +5,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { ConnectionsControls } from './Controls';
 import { connectorLogo } from './icons';
 import telegram from './assets/logos/telegram.svg?inline';
+import granola from './assets/logos/granola.svg?inline';
+import notion from './assets/logos/notion.svg?inline';
+import linear from './assets/logos/linear.svg?inline';
+import slack from './assets/logos/slack.svg?inline';
+import whatsapp from './assets/logos/whatsapp.svg?inline';
 import type { ConnectionsRecord, McpCatalogueTile, McpServerRecord } from './controls-model';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,24 +43,28 @@ const mark = (row: Element) => row.querySelector<HTMLElement>('.marks [data-conn
 
 describe('connector marks on Connections', () => {
   it('keys marks by catalogue id and channel name, never through the prototype', () => {
-    expect(connectorLogo('telegram')).toBe(telegram);
-    for (const id of ['granola', 'notion', 'todoist', 'linear', 'slack', 'imessage', 'whatsapp', 'zapier', 'constructor', '__proto__', 'toString']) expect(connectorLogo(id)).toBeUndefined();
+    for (const [id, src] of [['telegram', telegram], ['granola', granola], ['notion', notion], ['linear', linear], ['slack', slack], ['whatsapp', whatsapp]] as const) expect(connectorLogo(id)).toBe(src);
+    expect(new Set([telegram, granola, notion, linear, slack, whatsapp]).size).toBe(6);
+    for (const id of ['todoist', 'imessage', 'zapier', 'constructor', '__proto__', 'toString']) expect(connectorLogo(id)).toBeUndefined();
   });
 
   it('draws each catalogue tile and chat row with its own mark, decorative and hidden from assistive tech', () => {
     const { row } = mount();
-    for (const [name, id, letter] of [['Granola', 'granola', 'G'], ['Notion', 'notion', 'N'], ['Todoist', 'todoist', 'T'], ['iMessage', 'imessage', 'I'], ['WhatsApp', 'whatsapp', 'W']] as const) {
+    for (const [name, id, letter] of [['Todoist', 'todoist', 'T'], ['iMessage', 'imessage', 'I']] as const) {
       const drawn = mark(row(name));
       expect(drawn.dataset.connector).toBe(id);
       expect(drawn.className).toBe('lettermark');
       expect(drawn.textContent).toBe(letter);
       expect(drawn.getAttribute('aria-hidden')).toBe('true');
     }
-    const telegramMark = mark(row('Telegram'));
-    expect(telegramMark.tagName).toBe('IMG');
-    expect(telegramMark.getAttribute('src')).toBe(telegram);
-    expect(telegramMark.getAttribute('alt')).toBe('');
-    expect(telegramMark.getAttribute('aria-hidden')).toBe('true');
+    for (const [name, id, src] of [['Telegram', 'telegram', telegram], ['WhatsApp', 'whatsapp', whatsapp], ['Granola', 'granola', granola], ['Notion', 'notion', notion]] as const) {
+      const logo = mark(row(name));
+      expect(logo.dataset.connector).toBe(id);
+      expect(logo.tagName).toBe('IMG');
+      expect(logo.getAttribute('src')).toBe(src);
+      expect(logo.getAttribute('alt')).toBe('');
+      expect(logo.getAttribute('aria-hidden')).toBe('true');
+    }
   });
 
   it('falls back to a lettermark from the label for an id it does not know', () => {
@@ -68,7 +77,9 @@ describe('connector marks on Connections', () => {
 
   it('marks a connected catalogue server with its catalogue mark and leaves a custom server on the generic glyph', () => {
     const { row } = mount();
-    expect(mark(row('Linear · mcp.linear.app')).dataset.connector).toBe('linear');
+    const connected = mark(row('Linear · mcp.linear.app'));
+    expect(connected.dataset.connector).toBe('linear');
+    expect(connected.getAttribute('src')).toBe(linear);
     const custom = row('Custom · mcp.custom.example');
     expect(custom.querySelector('.marks [data-connector]')).toBeNull();
     expect(custom.querySelector('.marks .icon')).not.toBeNull();
