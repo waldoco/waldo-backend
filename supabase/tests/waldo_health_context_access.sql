@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(32);
 
 select is(
   (select array_agg(column_name::text || ':' || udt_name || ':' || is_nullable || ':' || coalesce(column_default, '<null>') order by ordinal_position)
@@ -34,15 +34,14 @@ select ok((select not prosecdef and prorettype='trigger'::regtype and proconfig=
   'helper remains a trigger invoker with empty search_path');
 select ok((select relrowsecurity and relforcerowsecurity from pg_class where oid='public.health_context_daily'::regclass),
   'RLS is enabled and explicitly forced, including non-bypass table owners');
-select is((select array_agg(policyname::text || ':' || cmd || ':' || roles::text || ':' || qual order by policyname)
-  from pg_policies where schemaname='public' and tablename='health_context_daily'),
-  array['own rows:SELECT:{public}:(auth.uid() = user_id)']::text[], 'the sole historical owner SELECT policy is unchanged');
+select is_empty($q$select policyname from pg_policies where schemaname='public' and tablename='health_context_daily'$q$,
+  'no client policy remains: no Supabase user session reads the derived context');
 select is_empty($q$with expected(grantee, privilege_type) as (values
-  ('authenticated','SELECT'), ('service_role','SELECT')),
+  ('service_role','SELECT')),
   actual as (select grantee::text, privilege_type::text from information_schema.table_privileges
     where table_schema='public' and table_name='health_context_daily' and grantee in ('PUBLIC','anon','authenticated','service_role'))
   (select * from actual except select * from expected) union all (select * from expected except select * from actual)$q$,
-  'exact table ACL is authenticated SELECT and trusted SELECT only; the signed backend function is the sole writer');
+  'exact table ACL is trusted SELECT only; the signed backend function is the sole reader for owners and the sole writer');
 select is_empty($q$select privilege_type from information_schema.column_privileges
   where table_schema='public' and table_name='health_context_daily' and grantee in ('PUBLIC','anon','authenticated')
   and privilege_type <> 'SELECT'$q$, 'no client column write privilege survives');
@@ -75,10 +74,8 @@ create temporary table health_before as select * from public.health_context_dail
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-00000000ac01',true);
-select is((select array_agg(user_id::text) from public.health_context_daily),
-  array['00000000-0000-0000-0000-00000000ac01']::text[], 'authenticated A reads only A on the shared day');
-select is((select count(*) from public.health_context_daily where user_id='00000000-0000-0000-0000-00000000ac02'),
-  0::bigint, 'explicit foreign-owner read returns no row');
+select throws_ok($q$select * from public.health_context_daily$q$,
+  '42501','permission denied for table health_context_daily','a Supabase user session cannot read even its own row');
 select throws_ok($q$insert into public.health_context_daily(user_id,day) values
   ('00000000-0000-0000-0000-00000000ac01','2026-10-01')$q$,
   '42501','permission denied for table health_context_daily','authenticated cannot insert an own row');
@@ -87,11 +84,11 @@ select throws_ok($q$update public.health_context_daily set form='{"zone":"good"}
 select throws_ok($q$delete from public.health_context_daily$q$,
   '42501','permission denied for table health_context_daily','authenticated cannot delete any row');
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-00000000ac02',true);
-select is((select array_agg(user_id::text) from public.health_context_daily),
-  array['00000000-0000-0000-0000-00000000ac02']::text[], 'authenticated B independently reads only B');
+select throws_ok($q$select * from public.health_context_daily where user_id='00000000-0000-0000-0000-00000000ac02'$q$,
+  '42501','permission denied for table health_context_daily','nor B''s');
 set local role anon;
 select throws_ok($q$select * from public.health_context_daily$q$,
-  '42501','permission denied for table health_context_daily','anon cannot read despite the historical PUBLIC policy target');
+  '42501','permission denied for table health_context_daily','anon cannot read');
 select throws_ok($q$insert into public.health_context_daily(user_id,day) values
   ('00000000-0000-0000-0000-00000000ac01','2026-10-01')$q$,
   '42501','permission denied for table health_context_daily','anon cannot write');

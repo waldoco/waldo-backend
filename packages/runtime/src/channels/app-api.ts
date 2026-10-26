@@ -1,6 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
@@ -25,7 +25,8 @@ export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string }>;
+// APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -68,7 +69,8 @@ const authenticate = async (request: Request, auth: ConsoleAuth): Promise<{ doNa
   } catch { return 'unavailable'; }
 };
 
-const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'send' | 'verify', address: string): Promise<'ok' | 'limited' | 'unavailable'> => {
+// An identity token is keyed by its digest: the throttle table keeps its keys.
+const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'send' | 'verify' | 'id_token', address: string): Promise<'ok' | 'limited' | 'unavailable'> => {
   if (!env.RESPONSIBILITY_RATE_LIMITER) return 'unavailable';
   const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
   try {
@@ -135,6 +137,19 @@ const devicesRequest = async (request: Request, path: string, who: { doName: str
   return parsed.success ? ok(parsed.data) : fail(503);
 };
 
+// The answer to a sign-in that resolved an owner: the same session whichever way the owner proved their email.
+const appSignIn = async (auth: ConsoleAuth, doName: string): Promise<Response> => {
+  let credential: string | null;
+  try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
+  if (!credential) return fail(503);
+  // A new credential opens a 12-hour session; renewing it at once makes it a 30-day one. A directory that cannot renew
+  // yet leaves the 12-hour credential.
+  const sessionId = sessionIdOf(credential);
+  try { credential = (sessionId ? await auth.renewAppCredential(doName, sessionId) : null) ?? credential; }
+  catch { console.error(JSON.stringify({ hop: 'app_session_renew', ok: false, code: 'renew_unavailable' })); }
+  try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
+};
+
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
@@ -165,17 +180,36 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : ''); } catch { return fail(503); }
+    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : ''); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
-    let credential: string | null;
-    try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
-    if (!credential) return fail(503);
-    // A new credential opens a 12-hour session; renewing it at once makes it a 30-day one. A directory that cannot renew
-    // yet leaves the 12-hour credential.
-    const sessionId = sessionIdOf(credential);
-    try { credential = (sessionId ? await auth.renewAppCredential(doName, sessionId) : null) ?? credential; }
-    catch { console.error(JSON.stringify({ hop: 'app_session_renew', ok: false, code: 'renew_unavailable' })); }
-    try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
+    return appSignIn(auth, doName);
+  }
+
+  if (url.pathname === `${APP_PATH}/auth/id_token`) {
+    if (env.APP_ID_TOKEN_SIGNIN !== '1' || !auth.signInWithIdToken) return fail(404);
+    if (request.method !== 'POST') return fail(405);
+    const asked = appIdTokenRequestV1Schema.safeParse(await readJson(request));
+    if (!asked.success) return fail(403);
+    const { provider, id_token: token, nonce, invite, phone } = asked.data;
+    const gate = await admit(env, auth, request, 'id_token', await sha256Hex(token));
+    if (gate === 'limited') return fail(429);
+    if (gate === 'unavailable') return fail(503);
+    let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithIdToken']>>>;
+    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? ''); } catch { return fail(503); }
+    if (signedIn.state === 'refused') {
+      console.error(JSON.stringify({ hop: 'app_id_token', ok: false, code: signedIn.reason === 'token' ? 'id_token_refused' : 'id_token_no_email', provider }));
+      return fail(403);
+    }
+    if (signedIn.state === 'needs_invite') return ok({ state: 'needs_invite' });
+    if (signedIn.state === 'confirm') {
+      // Each confirm emails the owner, so it spends the same per-address send budget as /auth/code.
+      const sending = await admit(env, auth, request, 'send', signedIn.email);
+      if (sending === 'limited') return fail(429);
+      if (sending === 'unavailable') return fail(503);
+      try { if (!(await auth.sendCode(signedIn.email))) return fail(503); } catch { return fail(503); }
+      return ok({ state: 'confirm_with_email_code', email: signedIn.email, link: signedIn.link });
+    }
+    return appSignIn(auth, signedIn.doName);
   }
 
   const who = await authenticate(request, auth);
