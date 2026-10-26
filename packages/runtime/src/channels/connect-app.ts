@@ -7,9 +7,15 @@
 // A forwarded link is a bearer link until the owner uses it: whoever presses Continue first connects their account to the
 // owner's Waldo, which the hop warns about by naming the owner. Once Continue ran, or 15 minutes after the link was sent, the
 // link starts nothing anywhere. No owner id, code or secret travels in the link.
+//
+// Where the app's sign-in service advertises a device code (RFC 8628) and Waldo signs in there as a public client, the owner
+// can ask for a code instead: the chat gets the user code and where to enter it, the owner object polls the provider through
+// the edge on its scheduler, and the same line goes back when it settles. A code someone else enters connects their account,
+// as a forwarded link would; it lives only as long as the provider allows (at most 30 minutes) and is sent only to the owner's
+// own turn. Where no device code is advertised, none is offered.
 import type { ConnectAppResult } from '@waldo/contracts';
 import { catalogueTiles, MCP_CATALOGUE, type McpCatalogueEntry } from '../connectors/mcp-catalogue';
-import { MCP_ATTEMPT_TTL_MS, MCP_START_PATH, type BeginResult, type ConnectOutcome } from '../connectors/mcp-connections';
+import { MCP_ATTEMPT_TTL_MS, MCP_START_PATH, type BeginResult, type ConnectOutcome, type DevicePollResult } from '../connectors/mcp-connections';
 import type { ConnectAppSend, ConnectAppTurn } from '../tools/live/connect-app';
 import type { AppLinkBook, ConsoleLinkRoute } from './console-link';
 import type { TurnLogEntry } from './owner-turn-types';
@@ -24,15 +30,20 @@ export const appConnectEntry = (provider: string | undefined): McpCatalogueEntry
 
 export const CONNECT_APP_LINKS: AppLinkBook = { key: 'app_connect_links_v1', ttlMs: MCP_ATTEMPT_TTL_MS, gone: 'Connect link: expired or used. Ask me for a new one.' };
 export const connectAppLinkText = (label: string, link: string): string => `Connect ${label} (the link works once, for 15 minutes): ${link}`;
+export const connectAppCodeText = (label: string, where: string, code: string, minutes: number): string =>
+  `Connect ${label}: open ${where} and enter the code ${code}. It works for ${minutes} minutes.`;
 
 export type ConnectAppChannel = 'telegram' | 'app' | 'imessage' | 'whatsapp';
 type Pending = Readonly<{ nonce: string; connector: string; channel: ConnectAppChannel; thread?: string; at: number }>;
 const RECORD = 'connect_app:';
 // The key the MCP callback reads to close a ticket once its sign-in settles (owner-do completeConnectTicket).
 const BY_NONCE = 'connect_mcp_ticket:';
+// A device-code attempt, by its nonce: no ticket exists for it. polls counts the scheduled polls, so each has its own id.
+const DEVICE = 'connect_app_device:';
+type DeviceRecord = Readonly<{ connector: string; channel: ConnectAppChannel; thread?: string; at: number; polls: number }>;
 const KEEP_MS = 24 * 60 * 60_000;
 
-export type Issued = Readonly<{ kind: 'link'; url: string } | { kind: 'already' } | { kind: 'refused'; reason: 'unavailable' | 'sign_in_failed' | 'code_unavailable' }>;
+export type Issued = Readonly<{ kind: 'link'; url: string } | { kind: 'code'; userCode: string; verificationUri: string; minutes: number } | { kind: 'already' } | { kind: 'refused'; reason: 'unavailable' | 'sign_in_failed' | 'code_unavailable' }>;
 // Failures that mean this Waldo cannot start a sign-in at all, as opposed to the app's sign-in service failing.
 const UNAVAILABLE: ReadonlySet<string> = new Set(['oauth_unavailable', 'origin_unknown']);
 
@@ -40,7 +51,10 @@ type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value:
 
 export const appConnects = (deps: Readonly<{
   kv: Kv;
-  begin(entry: McpCatalogueEntry): Promise<BeginResult>;
+  begin(entry: McpCatalogueEntry, how: 'browser' | 'device'): Promise<BeginResult>;
+  pollDevice(nonce: string): Promise<DevicePollResult>;
+  // Arms one poll of a device-code attempt, under its own schedule id.
+  schedulePoll(id: string, nonce: string, at: number): Promise<void>;
   attemptTarget(nonce: string): Readonly<{ origin: string; expires: number }> | null;
   start(nonce: string): Promise<string | null>;
   issueTicket(provider: string, channel: ConnectAppChannel): Promise<Readonly<{ url: string; hash: string }> | null>;
@@ -50,13 +64,25 @@ export const appConnects = (deps: Readonly<{
   const pending = (hash: string) => kv.get<Pending>(`${RECORD}${hash}`);
   const sweep = () => {
     for (const [key, entry] of kv.list<Pending>({ prefix: RECORD })) if (deps.now() - entry.at > KEEP_MS) { kv.delete(key); kv.delete(`${BY_NONCE}${entry.nonce}`); }
+    for (const [key, entry] of kv.list<DeviceRecord>({ prefix: DEVICE })) if (deps.now() - entry.at > KEEP_MS) kv.delete(key);
+  };
+  const arm = async (nonce: string, record: DeviceRecord, at: number) => {
+    kv.put(`${DEVICE}${nonce}`, { ...record, polls: record.polls + 1 } satisfies DeviceRecord);
+    await deps.schedulePoll(`connect-poll:${nonce}:${record.polls + 1}`, nonce, at);
   };
   return {
-    // Starts the app's sign-in and issues its link. Nothing is kept for a sign-in that could not start.
-    async issue(entry: McpCatalogueEntry, channel: ConnectAppChannel, thread?: string): Promise<Issued> {
-      const begun = await deps.begin(entry);
+    // Starts the app's sign-in and issues its link, or with code its device code. Nothing is kept for a sign-in that could not
+    // start.
+    async issue(entry: McpCatalogueEntry, channel: ConnectAppChannel, thread?: string, method: 'link' | 'code' = 'link'): Promise<Issued> {
+      const begun = await deps.begin(entry, method === 'code' ? 'device' : 'browser');
       if (begun.kind === 'already' || begun.kind === 'connected') return { kind: 'already' };
-      if (begun.kind === 'failed') return { kind: 'refused', reason: UNAVAILABLE.has(begun.reason) ? 'unavailable' : 'sign_in_failed' };
+      if (begun.kind === 'failed') return { kind: 'refused', reason: begun.reason === 'device_unsupported' ? 'code_unavailable' : UNAVAILABLE.has(begun.reason) ? 'unavailable' : 'sign_in_failed' };
+      if (begun.kind === 'device') {
+        sweep();
+        const at = deps.now();
+        await arm(begun.nonce, { connector: entry.id, channel, ...(thread ? { thread } : {}), at, polls: 0 }, at + 5_000);
+        return { kind: 'code', userCode: begun.user_code, verificationUri: begun.verification_uri, minutes: Math.max(1, Math.floor((begun.expires - at) / 60_000)) };
+      }
       const nonce = begun.path.slice(MCP_START_PATH.length);
       const ticket = await deps.issueTicket(appConnectProvider(entry), channel);
       if (!ticket) return { kind: 'refused', reason: 'unavailable' };
@@ -79,6 +105,15 @@ export const appConnects = (deps: Readonly<{
       const record = pending(hash);
       const url = record ? await deps.start(record.nonce) : null;
       return record && url ? { url, nonce: record.nonce } : null;
+    },
+    // One due poll of a device code: armed again while the provider says wait, else the line for the conversation that asked.
+    async poll(nonce: string): Promise<Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }> | null> {
+      const record = kv.get<DeviceRecord>(`${DEVICE}${nonce}`), entry = MCP_CATALOGUE.find((candidate) => candidate.id === record?.connector);
+      if (!record || !entry) return null;
+      const out = await deps.pollDevice(nonce);
+      if (out.kind === 'wait') { await arm(nonce, record, out.at); return null; }
+      kv.delete(`${DEVICE}${nonce}`);
+      return { channel: record.channel, ...(record.thread ? { thread: record.thread } : {}), text: settledText(entry.label, out.outcome) };
     },
     // The line the conversation that asked gets once the sign-in settles, and where it goes. Taken once.
     settled(hash: string, outcome: ConnectOutcome): Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }> | null {
@@ -123,9 +158,9 @@ export const connectAppSender = (deps: Readonly<{
     if (out.kind === 'refused') return done({ status: 'not_sent', reason: out.reason });
     issued.add(turn.turnId);
     let delivered: boolean;
-    try { delivered = await route.deliver(connectAppLinkText(entry.label, out.url), turn); }
+    try { delivered = await route.deliver(out.kind === 'link' ? connectAppLinkText(entry.label, out.url) : connectAppCodeText(entry.label, out.verificationUri, out.userCode, out.minutes), turn); }
     catch (error) { issued.delete(turn.turnId); done({ status: 'not_sent', reason: 'send_failed' }); throw error; }
     if (!delivered) issued.delete(turn.turnId);
-    return done(delivered ? { status: 'sent', method: 'link', surface: route.surface } : { status: 'not_sent', reason: 'send_failed' });
+    return done(delivered ? { status: 'sent', method: out.kind === 'link' ? 'link' : 'code', surface: route.surface } : { status: 'not_sent', reason: 'send_failed' });
   };
 };

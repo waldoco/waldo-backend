@@ -23,12 +23,17 @@ export type OAuthProxyRequest =
   | Readonly<{ op: 'call'; do_name: string; connection: string; method: McpMethod; params: Readonly<Record<string, unknown>>; era?: McpEra; headers?: Readonly<Record<string, string>>; intent_id?: string }>
   | Readonly<{ op: 'fetch'; do_name: string; connection: string; method: FetchMethod; path: string; query?: Readonly<Record<string, string>> }>
   | Readonly<{ op: 'refresh'; do_name: string; connection: string; version?: string }>
-  | Readonly<{ op: 'revoke'; do_name: string; connection: string }>;
+  | Readonly<{ op: 'revoke'; do_name: string; connection: string }>
+  // RFC 8628 for an MCP server's public client: the device code request, then the poll that stores the grant as an exchange does.
+  | Readonly<{ op: 'device_start'; pins: ClientPins; device_endpoint: string; scope?: string }>
+  | Readonly<{ op: 'device_poll'; do_name: string; provider: string; pins: ClientPins; device_code: string; scope?: string }>;
 
 export const OAUTH_PROXY_CODES = [
   'unsigned', 'unconfigured', 'invalid_request', 'connection_unavailable', 'token_expired', 'reauth_needed', 'scope_missing',
   'not_found', 'rate_limited', 'unavailable', 'protocol', 'rpc_error', 'egress_refused', 'egress_oversize',
   'intent_pending', 'intent_conflict', 'intent_unavailable', 'registration_refused', 'token_failed', 'account_linked',
+  // A device-code poll's answers (RFC 8628 §3.5).
+  'authorization_pending', 'slow_down', 'expired_token', 'access_denied',
 ] as const;
 export type OAuthProxyCode = (typeof OAUTH_PROXY_CODES)[number];
 export type OAuthProxyFailure = Readonly<{ code: OAuthProxyCode; retry_after?: number; scope?: string; rpc_code?: number; message?: string }>;
@@ -45,6 +50,8 @@ export type FetchData = Readonly<{ status: number; body: unknown; headers: Reado
 export type RefreshData = Readonly<{ scopes: readonly string[]; expires_at?: number; version: string; refreshed: boolean }>;
 export type RevokeData = Readonly<{ provider: 'revoked' | 'unsupported' | 'failed' }>;
 export type RegisterData = Readonly<{ client_id: string; client_auth: ClientPins['client_auth'] }>;
+// device_code goes back to the owner object, which keeps it with the attempt as it keeps a PKCE verifier; it is no token.
+export type DeviceStartData = Readonly<{ device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number }>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -77,6 +84,8 @@ const parsePins = (v: unknown): ClientPins | null => {
   return v as unknown as ClientPins;
 };
 
+const devicePins = (pins: ClientPins) => pins.client_auth === 'none' && pins.server_url !== undefined && pins.token_dialect === undefined;
+
 export const parseOAuthProxyRequest = (raw: unknown): OAuthProxyRequest | null => {
   if (!isObject(raw)) return null;
   const owner = text(raw.do_name, 200), connection = typeof raw.connection === 'string' && UUID.test(raw.connection);
@@ -85,6 +94,18 @@ export const parseOAuthProxyRequest = (raw: unknown): OAuthProxyRequest | null =
       return only(raw, ['op', 'issuer', 'registration_endpoint', 'redirect_uri', 'origin']) && https(raw.issuer) && https(raw.registration_endpoint) && https(raw.redirect_uri) && https(raw.origin) ? raw as OAuthProxyRequest : null;
     case 'client':
       return only(raw, ['op', 'issuer', 'redirect_uri']) && https(raw.issuer) && https(raw.redirect_uri) ? raw as OAuthProxyRequest : null;
+    // Only a public client polls, so no client secret ever goes to an endpoint the Worker names, and only to the token
+    // endpoint's own origin.
+    case 'device_start': {
+      if (!only(raw, ['op', 'pins', 'device_endpoint', 'scope']) || !https(raw.device_endpoint) || (raw.scope !== undefined && !text(raw.scope, 4096))) return null;
+      const pins = parsePins(raw.pins);
+      return pins && devicePins(pins) && new URL(raw.device_endpoint as string).origin === new URL(pins.token_endpoint).origin ? raw as OAuthProxyRequest : null;
+    }
+    case 'device_poll': {
+      if (!only(raw, ['op', 'do_name', 'provider', 'pins', 'device_code', 'scope']) || !owner || !(typeof raw.provider === 'string' && PROVIDER.test(raw.provider))) return null;
+      const pins = parsePins(raw.pins);
+      return pins && devicePins(pins) && text(raw.device_code, 4096) && (raw.scope === undefined || text(raw.scope, 4096)) ? raw as OAuthProxyRequest : null;
+    }
     case 'exchange': {
       if (!only(raw, ['op', 'do_name', 'provider', 'pins', 'code', 'verifier', 'scope']) || !owner || !(typeof raw.provider === 'string' && PROVIDER.test(raw.provider))) return null;
       const pins = parsePins(raw.pins);

@@ -483,14 +483,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private appConnects(issueTicket: (provider: string, channel: ConnectAppChannel) => Promise<Readonly<{ url: string; hash: string }> | null> = async () => null): AppConnects {
     return appConnects({
       kv: this.ctx.storage.kv,
-      begin: (entry) => {
+      begin: (entry, how) => {
         const origin = this.ctx.storage.kv.get<string>('origin');
-        return origin ? this.mcp().begin(entry.url, origin, entry.id) : Promise.resolve({ kind: 'failed', reason: 'origin_unknown' });
+        return origin ? this.mcp().begin(entry.url, origin, entry.id, how) : Promise.resolve({ kind: 'failed', reason: 'origin_unknown' });
       },
       attemptTarget: (nonce) => this.mcp().attemptTarget(nonce),
       start: (nonce) => this.mcp().start(nonce),
+      pollDevice: (nonce) => this.mcp().pollDevice(nonce),
+      schedulePoll: async (id, nonce, at) => { await this.setup(this.taskChannel()).scheduler.schedule({ id, kind: 'connect_poll', occurrenceAt: at, dueAt: at, payloadRefs: { id: nonce } }); },
       issueTicket, now: () => Date.now(),
     });
+  }
+  // A device code's due poll, from the scheduler. A settled attempt tells the conversation that asked.
+  private async pollAppConnect(nonce: string): Promise<void> {
+    const told = await this.appConnects().poll(nonce);
+    if (told) await this.tellConnectOutcome(nonce, told);
   }
   // The settled line goes to the conversation the link was sent to, through that surface's delivery outbox, once per attempt.
   private async tellConnectOutcome(nonce: string, told: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
@@ -2767,7 +2774,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async (entry: ScheduleEntry) => { if (entry.id === HEALTH_RECOMPUTE_ID) await this.setup('app').healthRecompute(); else await this.providerOwner().sync(); }, forget_purge: async () => { await this.forgetPurgeJob().run(); } };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async (entry: ScheduleEntry) => { if (entry.id === HEALTH_RECOMPUTE_ID) await this.setup('app').healthRecompute(); else await this.providerOwner().sync(); }, connect_poll: async (entry: ScheduleEntry) => { if (entry.payload_refs.id) await this.pollAppConnect(entry.payload_refs.id); }, forget_purge: async () => { await this.forgetPurgeJob().run(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
@@ -3376,8 +3383,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       imessage: iMessageConsoleRoute(storage, () => this.activeIMessage, 'connect'), app: appConsoleRoute(storage.kv, Date.now, CONNECT_APP_LINKS) };
     const connectAppTool = connectAppHandler(connectAppSender({
       route: connectAppRoutes[channel], available: () => probeCapture.current === null, log,
-      issue: async (entry, method, turn) => method === 'code' ? { kind: 'refused', reason: 'code_unavailable' }
-        : this.appConnects((provider, surface) => issueTicket(provider as ConnectProvider, surface)).issue(entry, channel, turnThread(turn.runScope)),
+      issue: (entry, method, turn) => this.appConnects((provider, surface) => issueTicket(provider as ConnectProvider, surface)).issue(entry, channel, turnThread(turn.runScope), method),
     }));
     // The model's progress-note tool goes only where a send can leave while the turn runs. A Telegram turn runs inside alarm(),
     // so its note goes straight out on the reply caller, not through the final outbox that alarm drains. iMessage times its

@@ -10,7 +10,7 @@ import { MCP_CATALOGUE } from '../src/connectors/mcp-catalogue';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { fakeMcpWorld, type FakeMcpWorld } from './support/fake-mcp-world';
+import { fakeMcpWorld, type FakeMcpWorld, type FakeOptions } from './support/fake-mcp-world';
 import { presenceAuthority } from './helpers/directory-presence';
 import { EDGE_ENV, loadEdge, vaultFake, WORKER_ENV, type VaultFake } from './support/oauth-edge-harness';
 
@@ -25,8 +25,9 @@ vi.mock('../src/channels/telegram-turn', async load => {
     model.all.push(JSON.stringify(request));
     if (request.response_format) return { ok: true as const, data: { model: request.model, text: '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     model.requests.push(JSON.stringify(request));
-    const call = !request.tool_turns?.length && JSON.stringify(request.messages.at(-1)).includes('connect my Notion');
-    return { ok: true as const, data: { model: request.model, text: call ? '' : 'Your Notion link is just below.', ...(call ? { tool_calls: [{ call_id: 'connect', name: 'connect_app', arguments: '{"connector_id":"notion"}' }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    const said = JSON.stringify(request.messages.at(-1)), call = !request.tool_turns?.length && said.includes('connect my Notion');
+    const args = said.includes('with a code') ? '{"connector_id":"notion","method":"code"}' : '{"connector_id":"notion"}';
+    return { ok: true as const, data: { model: request.model, text: call ? '' : 'Your Notion link is just below.', ...(call ? { tool_calls: [{ call_id: 'connect', name: 'connect_app', arguments: args }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -48,9 +49,9 @@ type Rig = Readonly<{
   hop(link: string, init?: RequestInit): Promise<Response>; callback(back: URL, cookie?: string): Promise<Response>; drain(path: string, text: string): Promise<void>;
 }>;
 
-const withRig = (name: string, run: (rig: Rig) => Promise<void>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const withRig = (name: string, run: (rig: Rig) => Promise<void>, options: Partial<FakeOptions> = {}) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   model.requests = []; model.all = [];
-  const world = fakeMcpWorld({ origin: NOTION_ORIGIN, issuer: NOTION.issuer }), vault = vaultFake([name]);
+  const world = fakeMcpWorld({ origin: NOTION_ORIGIN, issuer: NOTION.issuer, ...options }), vault = vaultFake([name]);
   const tickets = new Map<string, Ticket>(), rpcs: string[] = [];
   const directory = async (fn: string, a: Record<string, string>): Promise<Response> => {
     rpcs.push(fn);
@@ -129,6 +130,8 @@ const withRig = (name: string, run: (rig: Rig) => Promise<void>) => runInDurable
       // A record the outbox holds is due a moment after it is queued; each pass stands in for the alarm that fires then.
       for (let pass = 0; pass < 40 && !(await rig.read(path)).some((message) => message.text === text); pass += 1) {
         await new Promise((resolve) => setTimeout(resolve, 50));
+        // A device code's next poll is seconds away; the scheduler is brought to it rather than waited for.
+        state.storage.sql.exec("UPDATE schedule SET due_at = ?, occurrence_at = ? WHERE kind = 'connect_poll'", Date.now(), Date.now());
         await state.storage.deleteAlarm(); await owner.alarm();
       }
     },
@@ -241,5 +244,36 @@ it('a new link revokes the one before it, and a refused consent is told to the c
     await rig.drain('/chat/main', 'Notion was not connected: access was not granted.');
     expect((await rig.read('/chat/main')).some((message) => message.text === 'Notion was not connected: access was not granted.')).toBe(true);
     expect(rig.vault.rows).toHaveLength(0);
+  });
+});
+
+it('connects Notion with a device code: the code under the reply, polls that wait, slow down, and then link, and "connected" in the chat', async () => {
+  await withRig('connect-app-chat-device', async (rig) => {
+    const asked = await rig.say('/chat/main', 'connect-client-06', 'Please connect my Notion with a code');
+    const reply = (await rig.read('/chat/main')).find((message) => message.role === 'assistant' && message.parent_id === asked)!;
+    expect(reply.text).toBe(`Your Notion link is just below.\n\nConnect Notion: open ${NOTION.issuer}/activate and enter the code WDJB-MJHT. It works for 15 minutes.`);
+    expect(model.requests.join('\n').replaceAll('\\"', '"')).toContain('"status":"sent","method":"code","surface":"app"');
+    // The model reads only that a code went out; the code, the device code and every token stay out of its requests.
+    expect(model.all.join('\n')).not.toMatch(/WDJB-MJHT|dc_\d|at_\d/);
+    expect(rig.tickets.size).toBe(0);
+    await rig.drain('/chat/main', 'Notion is connected.');
+    expect(rig.world.devicePolls).toEqual(['authorization_pending', 'slow_down', 'ok']);
+    expect((await rig.read('/chat/main')).filter((message) => message.text === 'Notion is connected.')).toHaveLength(1);
+    expect(rig.vault.rows).toHaveLength(1);
+    expect(rig.state.storage.sql.exec("SELECT COUNT(*) AS n FROM schedule WHERE kind = 'connect_poll'").one().n).toBe(0);
+  }, { device: true, deviceAnswers: ['authorization_pending', 'slow_down', 'ok'] });
+});
+
+it('tells the chat when the owner refuses at the device page, and offers no code where none is advertised', async () => {
+  await withRig('connect-app-chat-device-denied', async (rig) => {
+    await rig.say('/chat/main', 'connect-client-07', 'Please connect my Notion with a code');
+    await rig.drain('/chat/main', 'Notion was not connected: access was not granted.');
+    expect((await rig.read('/chat/main')).some((message) => message.text === 'Notion was not connected: access was not granted.')).toBe(true);
+    expect(rig.vault.rows).toHaveLength(0);
+  }, { device: true, deviceAnswers: ['access_denied'] });
+  await withRig('connect-app-chat-device-none', async (rig) => {
+    await rig.say('/chat/main', 'connect-client-08', 'Please connect my Notion with a code');
+    expect(model.requests.join('\n').replaceAll('\\"', '"')).toContain('"status":"not_sent","reason":"code_unavailable"');
+    expect(rig.world.hits.some((hit) => hit.endsWith('/device'))).toBe(false);
   });
 });

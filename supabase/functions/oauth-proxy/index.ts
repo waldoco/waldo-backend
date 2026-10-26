@@ -4,7 +4,7 @@
 // never travel back. Every request goes to an endpoint pinned when the owner connected, and a provider's
 // behaviour (client authentication, PKCE, rotation, refresh scope, API base) comes from those pins, never
 // from a branch on its name.
-import { exchangeCode, refreshTokens, registerClient, revokeToken, TokenEndpointError, type ClientPins, type TokenSet } from '../../../packages/runtime/src/connectors/mcp-oauth.ts';
+import { DeviceFlowError, exchangeCode, pollDeviceToken, refreshTokens, registerClient, requestDeviceCode, revokeToken, TokenEndpointError, type ClientPins, type TokenSet } from '../../../packages/runtime/src/connectors/mcp-oauth.ts';
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from '../../../packages/runtime/src/connectors/mcp-protocol.ts';
 import { EgressError, guardedFetch } from '../../../packages/runtime/src/connectors/egress.ts';
 import { OAUTH_PROXY_SIGNATURE_TAG, parseOAuthProxyRequest, type OAuthProxyCode, type OAuthProxyFailure, type OAuthProxyRequest } from '../../../packages/runtime/src/connectors/oauth-proxy-wire.ts';
@@ -128,6 +128,21 @@ const rotate = async (args: Record<string, unknown>): Promise<boolean> => {
   }
 };
 
+// A new grant, from a code exchange or a device poll, stored under the owner and the account it belongs to.
+const keep = async (body: Readonly<{ do_name: string; provider: string; pins: ClientPins; scope?: string }>, tokens: TokenSet) => {
+  const account = await accountOf(body.pins, tokens.access_token);
+  const stored = JSON.stringify(bundleOf(tokens, body.pins));
+  // RFC 6749 §5.1: without a scope in the response, the grant covers what was requested.
+  const scopes = (tokens.scope ?? body.scope)?.split(/\s+/).filter(Boolean) ?? [];
+  const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; error?: unknown } | null;
+  if (out?.error === 'account_linked') return refuse('account_linked');
+  if (typeof out?.id !== 'string') return refuse('connection_unavailable');
+  return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
+};
+const DEVICE_REFUSAL: Readonly<Record<DeviceFlowError['kind'], OAuthProxyCode>> = {
+  pending: 'authorization_pending', slow_down: 'slow_down', expired: 'expired_token', denied: 'access_denied', transient: 'unavailable', failed: 'token_failed',
+};
+
 const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
   switch (body.op) {
     case 'register': {
@@ -151,14 +166,13 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
     case 'exchange': {
       const secret = await clientSecret(body.pins, body.pins.token_endpoint);
       const tokens = await exchangeCode(fetch, body.pins, { code: body.code, ...(body.verifier ? { verifier: body.verifier } : {}), redirectUri: body.pins.redirect_uri }, secret, Date.now()).catch(tokenRefusal);
-      const account = await accountOf(body.pins, tokens.access_token);
-      const stored = JSON.stringify(bundleOf(tokens, body.pins));
-      // RFC 6749 §5.1: without a scope in the response, the grant covers what was requested.
-      const scopes = (tokens.scope ?? body.scope)?.split(/\s+/).filter(Boolean) ?? [];
-      const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; error?: unknown } | null;
-      if (out?.error === 'account_linked') return refuse('account_linked');
-      if (typeof out?.id !== 'string') return refuse('connection_unavailable');
-      return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
+      return keep(body, tokens);
+    }
+    case 'device_start':
+      return requestDeviceCode(fetch, body.pins, body.device_endpoint, body.scope).catch((error: unknown) => refuse(error instanceof DeviceFlowError && error.kind === 'transient' ? 'unavailable' : 'token_failed'));
+    case 'device_poll': {
+      const tokens = await pollDeviceToken(fetch, body.pins, body.device_code, Date.now()).catch((error: unknown) => refuse(error instanceof DeviceFlowError ? DEVICE_REFUSAL[error.kind] : 'token_failed'));
+      return keep(body, tokens);
     }
     case 'refresh': {
       const current = await grant(body.do_name, body.connection);
@@ -236,7 +250,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
 };
 
 const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-const LOGGED_OPS = new Set(['register', 'client', 'exchange', 'call', 'fetch', 'refresh', 'revoke']);
+const LOGGED_OPS = new Set(['register', 'client', 'exchange', 'call', 'fetch', 'refresh', 'revoke', 'device_start', 'device_poll']);
 
 Deno.serve(async (request) => {
   const started = Date.now();

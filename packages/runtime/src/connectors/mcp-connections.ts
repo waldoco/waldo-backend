@@ -7,7 +7,7 @@ import { egressTarget, EgressError } from './egress';
 import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorizationServer, discoverProtectedResource, McpOAuthError, pkceChallenge, pkceVerifier, readCallback, registrationMode, requestedScope, type ClientPins, type McpPins, type RegistrationMode } from './mcp-oauth';
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
-import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
+import type { ExchangeData, McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
 import { isGranolaHost, isGranolaRead, isReviewedGranola } from './granola-mcp';
 import { catalogueEntry, tileTarget } from './mcp-catalogue';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
@@ -18,6 +18,9 @@ export const MCP_START_PATH = '/console/mcp/start/';
 // The Worker hands the provider's callback to the owner object on this internal path.
 export const MCP_FINISH_PATH = '/mcp/consent';
 export const MCP_ATTEMPT_TTL_MS = 15 * 60_000;
+// A device code lives as long as its provider says, but never past this, and is asked about no faster than every 5 s.
+const DEVICE_TTL_MAX_MS = 30 * 60_000;
+const DEVICE_INTERVAL_MIN_S = 5;
 // How long a server's questions wait for the owner's answer. The server's own requestState may expire
 // sooner; its retry then simply asks again.
 const QUESTION_TTL_MS = 24 * 60 * 60_000;
@@ -108,12 +111,15 @@ type Attempt = Readonly<{
   scope?: string;
   // The catalogue id of the console tile the owner connected from: their consent to its labelled reads.
   official?: string;
+  // A device-code attempt (RFC 8628): the code the edge polls with, kept like the PKCE verifier, and how often it may ask.
+  device?: Readonly<{ code: string; interval: number }>;
   token_dialect?: ClientPins['token_dialect'];
 }>;
 // reviewed: a server Waldo reviewed (Granola), whose reads run without asking; its sign-in page says so.
 // official: the catalogue id of an official server whose labelled reads were just allowed (mcp-catalogue).
 export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string; reviewed?: true; official?: string } | { kind: 'denied' } | { kind: 'expired' } | { kind: 'invalid' } | { kind: 'failed'; reason: string }>;
-export type BeginResult = Readonly<{ kind: 'redirect'; path: string } | { kind: 'connected'; id: string; name: string } | { kind: 'already'; id: string; name: string } | { kind: 'failed'; reason: string }>;
+export type BeginResult = Readonly<{ kind: 'redirect'; path: string } | { kind: 'device'; nonce: string; user_code: string; verification_uri: string; expires: number } | { kind: 'connected'; id: string; name: string } | { kind: 'already'; id: string; name: string } | { kind: 'failed'; reason: string }>;
+export type DevicePollResult = Readonly<{ kind: 'wait'; at: number } | { kind: 'done'; outcome: ConnectOutcome }>;
 
 // The one shape handlers turn into a tool refusal. cause is safe to show the model; nothing here is a
 // token, and server text appears only where the model needs it to correct a call. notApplied is true only
@@ -514,6 +520,28 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   };
   const setRuns = (id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string) => grantRuns(id, tool, withoutAsking, seen, 'owner');
 
+  // The endpoints and client an attempt fixed, pinned with its grant at the edge.
+  const pinsOf = (attempt: Attempt): McpPins => ({ server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(attempt.origin), ...(attempt.token_dialect ? { token_dialect: attempt.token_dialect } : {}) });
+  // A grant the edge stored, from a callback's code or a device poll: the server is kept under it, and the attempt settles.
+  const linkGrant = async (nonce: string, attempt: Attempt, previous: Row | undefined, started: number, exchanged: ExchangeData): Promise<ConnectOutcome> => {
+    const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }), ...(exchanged.workspace ? { workspace: exchanged.workspace } : {}) });
+    // The edge stored this grant under a new id (the server's sign-in identity moved), and store() moved the server
+    // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
+    if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy!.revoke(deps.doName()!, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
+    await refreshTools(r).catch(() => undefined);
+    // Connected from an official server's tile, the first link allows the tools its vendor labels read-only, each at the
+    // definition it has now, when the sign-in came from that vendor's own issuer. A reconnect keeps the owner's choices.
+    const tile = attempt.official === undefined || previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
+    const catalogue = tile?.id === attempt.official ? tile : undefined;
+    if (catalogue) await grantRuns(r.id, EVERY_READ_ONLY_HINT, true, undefined, 'catalogue');
+    // Named on the page only when something was allowed: a tool list that failed to load grants nothing.
+    const official = catalogue && reads(r.id).size > 0 ? catalogue : undefined;
+    const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}), ...(official ? { official: official.id } : {}) };
+    settle(nonce, outcome);
+    log('mcp_consent', started);
+    return outcome;
+  };
+
   return {
     list: (): readonly McpConnectionView[] => rows().map(view),
     // Servers waiting on an owner's answer; the prompt names only the server, the questions come back through search.
@@ -526,7 +554,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
     // Discovery for a server URL the owner typed on the connect page. Nothing here holds a secret.
     // official: the catalogue id when the owner pressed that server's tile; it must name this exact address.
-    async begin(raw: string, origin: string, official?: string): Promise<BeginResult> {
+    // how: device asks the provider for a device code instead (RFC 8628), only where it advertises one for a public client.
+    async begin(raw: string, origin: string, official?: string, how: 'browser' | 'device' = 'browser'): Promise<BeginResult> {
       const started = deps.now();
       let url: URL;
       try { url = egressTarget(raw.trim()); } catch (error) { return { kind: 'failed', reason: error instanceof EgressError ? error.code : 'egress_malformed' }; }
@@ -570,6 +599,16 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
           ...(entry?.token_dialect ? { token_dialect: entry.token_dialect } : {}),
         };
         sweep();
+        if (how === 'device') {
+          const endpoint = server.device_authorization_endpoint;
+          if (!endpoint || client.client_auth !== 'none' || new URL(endpoint).origin !== new URL(server.token_endpoint).origin) { log('mcp_connect', started, 'device_unsupported'); return { kind: 'failed', reason: 'device_unsupported' }; }
+          const code = await deps.proxy.deviceStart(pinsOf(attempt), endpoint, scope);
+          const expires = deps.now() + Math.min(code.expires_in * 1000, DEVICE_TTL_MAX_MS);
+          // Started at once: no browser hop exists to start it, and finish() never accepts a callback for it.
+          sql.exec('INSERT INTO mcp_attempts (nonce, record, expires, started) VALUES (?, ?, ?, 1)', nonce, JSON.stringify({ ...attempt, device: { code: code.device_code, interval: Math.max(code.interval, DEVICE_INTERVAL_MIN_S) } } satisfies Attempt), expires);
+          log('mcp_connect', started);
+          return { kind: 'device', nonce, user_code: code.user_code, verification_uri: code.verification_uri, expires };
+        }
         sql.exec('INSERT INTO mcp_attempts (nonce, record, expires) VALUES (?, ?, ?)', nonce, JSON.stringify(attempt), deps.now() + MCP_ATTEMPT_TTL_MS);
         log('mcp_connect', started);
         return { kind: 'redirect', path: `${MCP_START_PATH}${nonce}` };
@@ -608,37 +647,57 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       if (found.settled) return JSON.parse(found.settled) as ConnectOutcome;
       if (found.expires < deps.now()) { settle(nonce, { kind: 'expired' }); return { kind: 'expired' }; }
       const attempt = JSON.parse(found.record) as Attempt;
+      if (attempt.device) return { kind: 'invalid' };
       const callback = readCallback(params, attempt.issuer, attempt.iss_supported);
       if (!callback.ok) { const outcome: ConnectOutcome = callback.reason === 'denied' ? { kind: 'denied' } : { kind: 'failed', reason: callback.reason }; settle(nonce, outcome); log('mcp_consent', started, callback.reason); return outcome; }
-      const doName = deps.doName(), origin = attempt.origin;
+      const doName = deps.doName();
       if (!deps.proxy || !doName) { const outcome: ConnectOutcome = { kind: 'failed', reason: 'oauth_unavailable' }; settle(nonce, outcome); return outcome; }
       // Settled before the exchange: the code is single-use, so a second callback must never redeem it.
       settle(nonce, { kind: 'failed', reason: 'exchange_unconfirmed' });
       const previous = rows().find((r) => r.server_url === attempt.server_url);
-      const pins: McpPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin), ...(attempt.token_dialect ? { token_dialect: attempt.token_dialect } : {}) };
       try {
-        const exchanged = await deps.proxy.exchange(doName, 'mcp', pins, callback.code, { verifier: attempt.verifier, ...(attempt.scope ? { scope: attempt.scope } : {}) });
-        const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }), ...(exchanged.workspace ? { workspace: exchanged.workspace } : {}) });
-        // The edge stored this grant under a new id (the server's sign-in identity moved), and store() moved the server
-        // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
-        if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
-        await refreshTools(r).catch(() => undefined);
-        // Connected from an official server's tile, the first link allows the tools its vendor labels read-only, each at the
-        // definition it has now, when the sign-in came from that vendor's own issuer. A reconnect keeps the owner's choices.
-        const tile = attempt.official === undefined || previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
-        const catalogue = tile?.id === attempt.official ? tile : undefined;
-        if (catalogue) await grantRuns(r.id, EVERY_READ_ONLY_HINT, true, undefined, 'catalogue');
-        // Named on the page only when something was allowed: a tool list that failed to load grants nothing.
-        const official = catalogue && reads(r.id).size > 0 ? catalogue : undefined;
-        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}), ...(official ? { official: official.id } : {}) };
-        settle(nonce, outcome);
-        log('mcp_consent', started);
-        return outcome;
+        return await linkGrant(nonce, attempt, previous, started, await deps.proxy.exchange(doName, 'mcp', pinsOf(attempt), callback.code, { verifier: attempt.verifier, ...(attempt.scope ? { scope: attempt.scope } : {}) }));
       } catch (error) {
         const outcome: ConnectOutcome = { kind: 'failed', reason: error instanceof OAuthProxyError ? error.failure.code : 'exchange_failed' };
         settle(nonce, outcome);
         log('mcp_consent', started, outcome.reason);
         return outcome;
+      }
+    },
+
+    // One poll of a device-code attempt, run when its interval comes due. The one retry owner is this object's scheduler:
+    // a pending answer names when to ask again (five seconds later after slow_down, for the rest of the attempt).
+    async pollDevice(nonce: string): Promise<DevicePollResult> {
+      const started = deps.now();
+      const found = sql.exec<{ record: string; expires: number; settled: string | null }>('SELECT record, expires, settled FROM mcp_attempts WHERE nonce = ?', nonce).toArray()[0];
+      if (!found) return { kind: 'done', outcome: { kind: 'invalid' } };
+      if (found.settled) return { kind: 'done', outcome: JSON.parse(found.settled) as ConnectOutcome };
+      const attempt = JSON.parse(found.record) as Attempt;
+      if (!attempt.device) return { kind: 'done', outcome: { kind: 'invalid' } };
+      const end = (outcome: ConnectOutcome, code?: string): DevicePollResult => { settle(nonce, outcome); log('mcp_device', started, code); return { kind: 'done', outcome }; };
+      if (found.expires < deps.now()) return end({ kind: 'expired' }, 'expired');
+      const doName = deps.doName();
+      if (!deps.proxy || !doName) return end({ kind: 'failed', reason: 'oauth_unavailable' }, 'oauth_unavailable');
+      const previous = rows().find((r) => r.server_url === attempt.server_url);
+      let exchanged;
+      try {
+        exchanged = await deps.proxy.devicePoll(doName, 'mcp', pinsOf(attempt), attempt.device.code, attempt.scope);
+      } catch (error) {
+        const code = error instanceof OAuthProxyError ? error.failure.code : 'unavailable';
+        if (code === 'expired_token') return end({ kind: 'expired' }, code);
+        if (code === 'access_denied') return end({ kind: 'denied' }, code);
+        if (code === 'slow_down') {
+          const slower = { ...attempt, device: { ...attempt.device, interval: attempt.device.interval + 5 } } satisfies Attempt;
+          sql.exec('UPDATE mcp_attempts SET record = ? WHERE nonce = ?', JSON.stringify(slower), nonce);
+          return { kind: 'wait', at: deps.now() + slower.device.interval * 1000 };
+        }
+        if (code === 'authorization_pending' || code === 'unavailable' || code === 'rate_limited') return { kind: 'wait', at: deps.now() + attempt.device.interval * 1000 };
+        return end({ kind: 'failed', reason: code }, code);
+      }
+      try {
+        return { kind: 'done', outcome: await linkGrant(nonce, attempt, previous, started, exchanged) };
+      } catch (error) {
+        return end({ kind: 'failed', reason: error instanceof OAuthProxyError ? error.failure.code : 'exchange_failed' }, 'link_failed');
       }
     },
 

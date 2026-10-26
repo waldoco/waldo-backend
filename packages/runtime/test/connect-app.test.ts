@@ -4,6 +4,7 @@ import { connectAppHandler, type ConnectAppSend, type ConnectAppTurn } from '../
 import { appConnectEntry, appConnectProvider, appConnects, connectAppLinkText, connectAppSender, type Issued } from '../src/channels/connect-app';
 import type { ConsoleLinkRoute } from '../src/channels/console-link';
 import { MCP_CATALOGUE, type McpCatalogueEntry } from '../src/connectors/mcp-catalogue';
+import type { BeginResult, DevicePollResult } from '../src/connectors/mcp-connections';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import { runToolLoop, type ToolLoopEvent } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -186,7 +187,9 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
     const issued: [string, string][] = [];
     const deps = {
       kv, now: () => now.at,
-      begin: vi.fn(async (_entry: McpCatalogueEntry) => ({ kind: 'redirect' as const, path: `/console/mcp/start/${NONCE}` })),
+      begin: vi.fn(async (_entry: McpCatalogueEntry, _how: 'browser' | 'device'): Promise<BeginResult> => ({ kind: 'redirect' as const, path: `/console/mcp/start/${NONCE}` })),
+      pollDevice: vi.fn(async (_nonce: string): Promise<DevicePollResult> => ({ kind: 'wait', at: 0 })),
+      schedulePoll: vi.fn(async (_id: string, _nonce: string, _at: number) => undefined),
       attemptTarget: vi.fn((nonce: string) => nonce === NONCE ? { origin: 'https://mcp.notion.com', expires: 9_999 } : null),
       start: vi.fn(async (nonce: string) => nonce === NONCE ? 'https://mcp.notion.com/authorize?state=s' : null),
       issueTicket: vi.fn(async (provider: string, channel: string) => { issued.push([provider, channel]); return { url: LINK, hash: 'h'.repeat(64) }; }),
@@ -204,7 +207,7 @@ describe('app connects: the owner object\'s record of a link sent to chat', () =
   it('starts the sign-in when the link is sent, then describes, starts once and settles once with a line for the same thread', async () => {
     const { connects, deps, kv, issued } = book();
     expect(await connects.issue(NOTION, 'app', 'th_one')).toEqual({ kind: 'link', url: LINK });
-    expect(deps.begin).toHaveBeenCalledWith(NOTION);
+    expect(deps.begin).toHaveBeenCalledWith(NOTION, 'browser');
     expect(issued).toEqual([['mcp:notion', 'app']]);
     expect(kv.get(`connect_mcp_ticket:${NONCE}`)).toMatchObject({ ticket: 'h'.repeat(64) });
     expect(connects.describe('h'.repeat(64))).toMatchObject({ entry: NOTION, origin: 'https://mcp.notion.com', consent: expect.stringContaining('read-only') });
