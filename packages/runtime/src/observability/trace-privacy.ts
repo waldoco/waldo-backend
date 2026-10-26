@@ -1,16 +1,22 @@
 import { z } from 'zod';
 import {
-  executionRungSchema, providerSchema, rungBlockedReasonSchema, sanitiseCheckSchema, sanitiseFailureReasonSchema,
-  toolSearchRejectionSchema, turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
+  executionRungSchema, providerSchema, rungBlockedReasonSchema, sanitiseCheckSchema, sanitiseDecodeFailureSchema,
+  sanitiseDenialStageSchema, sanitiseFailureReasonSchema, toolSearchRejectionSchema, turnErrorCodeSchema,
+  turnIdentifierSchema, turnOutcomeSchema,
 } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 import { scrubTraceHealth } from './trace-health-scrub';
 
 // The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
-// pair survives capture-off. A malformed caller cannot smuggle free-form provider text past
-// the error/detail gate by writing it into guard (owner security review, #203 round 2).
+// pair, optionally followed by the denial stage label (stage, then decode cause:kind:depth),
+// survives capture-off. A malformed caller cannot smuggle free-form provider text past the
+// error/detail gate by writing it into guard.
+const alternatives = (options: readonly string[]): string => `(?:${options.join('|')})`;
+const decodeShape = sanitiseDecodeFailureSchema.shape;
 const GUARD_DIAGNOSTIC = new RegExp(
-  `^(?:${sanitiseCheckSchema.options.join('|')}):(?:${sanitiseFailureReasonSchema.options.join('|')})$`,
+  `^${alternatives(sanitiseCheckSchema.options)}:${alternatives(sanitiseFailureReasonSchema.options)}` +
+  `(?::${alternatives(sanitiseDenialStageSchema.options)}` +
+  `(?::${alternatives(decodeShape.cause.options)}:${alternatives(decodeShape.kind.options)}:[1-8])?)?$`,
 );
 // typeof first: RegExp.test coerces non-strings, so an object whose toString() yields a valid
 // enum pair could otherwise pass the gate and serialize private fields into the sinks.
