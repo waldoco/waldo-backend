@@ -1,13 +1,23 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(57);
+select plan(69);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
 create function pg_temp.rsig(msg text) returns text language sql as $$
   select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
-create function pg_temp.raw(payload text) returns text language sql as $$
-  select waldo.owner_phone_set(payload, pg_temp.at(), pg_temp.rsig('phoneset.' || payload))->>'kind' $$;
+create function pg_temp.answer(payload text) returns jsonb language sql as $$
+  select waldo.owner_phone_set(payload, pg_temp.at(), pg_temp.rsig('phoneset.' || payload)) $$;
+create function pg_temp.raw(payload text) returns text language sql as $$ select pg_temp.answer(payload)->>'kind' $$;
+create function pg_temp.set_full(o text, n text) returns jsonb language sql as $$
+  select pg_temp.answer(jsonb_build_object('do_name', o, 'phone', n, 'countries', '["+91"]'::jsonb)::text) $$;
+create function pg_temp.link(o text, provider text, subject text) returns void language sql as $$
+  insert into waldo.presences (owner_id, provider, subject) select id, $2, $3 from waldo.owners where do_name = $1 $$;
+create function pg_temp.linked(o text, provider text, subject text) returns boolean language sql as $$
+  select exists (select 1 from waldo.presences p join waldo.owners w on w.id = p.owner_id
+    where w.do_name = $1 and p.provider = $2 and p.subject = $3 and p.state = 'active') $$;
+create function pg_temp.proves(o text, n text) returns boolean language sql as $$
+  select waldo.verify_owner_phone((select id from waldo.owners where do_name = o), n) $$;
 create function pg_temp.set_as(o text, n text, countries jsonb) returns text language sql as $$
   select pg_temp.raw(jsonb_build_object('do_name', o, 'phone', n, 'countries', countries)::text) $$;
 create function pg_temp.set(o text, n text) returns text language sql as $$ select pg_temp.set_as(o, n, '["+91"]') $$;
@@ -45,7 +55,11 @@ insert into waldo.owners (do_name, email, phone) values
   ('set-fay', 'fay@test.invalid', '+919800000006'),
   ('set-gus', 'gus@test.invalid', '+919800000007'),
   ('set-hal', 'hal@test.invalid', '+919800000008'),
-  ('set-ivy', 'ivy@test.invalid', '+919800000009');
+  ('set-ivy', 'ivy@test.invalid', '+919800000009'),
+  ('set-jo', 'jo@test.invalid', '+919800000031'),
+  ('set-kay', 'kay@test.invalid', '+919800000035'),
+  ('set-lee', 'lee@test.invalid', '+919800000041'),
+  ('set-mia', 'mia@test.invalid', '+919800000045');
 update waldo.owners set phone_verified_at = now() where do_name in ('set-ben', 'set-cai', 'set-gus');
 update waldo.owners set state = 'suspended' where do_name = 'set-gus';
 
@@ -137,6 +151,33 @@ select is(pg_temp.sent('set-ivy', pg_temp.op('d'), 'unknown'), 'unknown', 'and i
 select is(pg_temp.set('set-ivy', '+919800000019'), 'set', 'the number is changed');
 select is((pg_temp.state('set-ivy')->'challenge'->>'retry_at')::bigint, pg_temp.challenge_at('set-ivy', 'recipient_hold_until'),
   'the view says a code may go only when the hold ends');
+
+-- A number change takes the old number's WhatsApp and iMessage links with it, so once another owner proves that number its messages
+-- route to them, not here. Links from other handles stay.
+update waldo.owners set phone_verified_at = now() where do_name in ('set-jo', 'set-lee');
+select pg_temp.link('set-jo', 'whatsapp', '919800000031');
+select pg_temp.link('set-jo', 'imessage', '+919800000031');
+select pg_temp.link('set-jo', 'imessage', 'jo@test.invalid');
+select pg_temp.link('set-jo', 'telegram', '424242');
+select is(pg_temp.set('set-kay', '+919800000031'), 'taken', 'jo''s verified number is taken');
+select is(pg_temp.set_full('set-jo', '+919800000032'), jsonb_build_object('kind', 'set', 'unlinked', jsonb_build_array('imessage', 'whatsapp')),
+  'jo changes number, and the answer names the links that went with the old one');
+select ok(not pg_temp.linked('set-jo', 'whatsapp', '919800000031'), 'the old number''s WhatsApp link is unlinked');
+select ok(not pg_temp.linked('set-jo', 'imessage', '+919800000031'), 'and its iMessage link');
+select ok(pg_temp.linked('set-jo', 'imessage', 'jo@test.invalid') and pg_temp.linked('set-jo', 'telegram', '424242'), 'links from other handles stay');
+select is(pg_temp.set('set-kay', '+919800000031'), 'set', 'the old number is free for another owner');
+select ok(pg_temp.proves('set-kay', '+919800000031'), 'who can now prove it');
+select is(pg_temp.set_full('set-kay', '+919800000033'), jsonb_build_object('kind', 'set', 'unlinked', '[]'::jsonb), 'a change with no links unlinks nothing');
+
+-- Another active owner's live link on a number makes it taken, for setting and for proving, even while their number on file is another.
+select pg_temp.link('set-lee', 'whatsapp', '919800000042');
+select pg_temp.link('set-lee', 'imessage', '+919800000043');
+select is(pg_temp.set('set-mia', '+919800000042'), 'taken', 'a number another owner''s WhatsApp is linked from is taken');
+select is(pg_temp.set('set-mia', '+919800000043'), 'taken', 'and one their iMessage is linked from');
+update waldo.owners set phone = '+919800000042' where do_name = 'set-mia';
+select ok(not pg_temp.proves('set-mia', '+919800000042'), 'a code cannot prove a number another owner is linked from');
+update waldo.owners set state = 'suspended' where do_name = 'set-lee';
+select ok(pg_temp.proves('set-mia', '+919800000042'), 'a suspended owner''s link holds nothing');
 
 select * from finish();
 rollback;

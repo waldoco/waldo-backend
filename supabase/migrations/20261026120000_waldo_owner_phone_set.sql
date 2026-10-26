@@ -1,8 +1,32 @@
 -- The owner sets or changes their own number on file from the app or console. Only the router calls it, for an owner it
 -- has already signed in. The number is stored unverified: a change clears the old proof through
--- owners_phone_change_unverifies, and only verify_owner_phone proves a number. A number another active owner has
--- verified is refused as taken, without saying whose. Each attempt that could answer taken counts against a small daily
--- cap per owner, so the answer cannot be used to sweep for numbers registered with Waldo.
+-- owners_phone_change_unverifies, and only verify_owner_phone proves a number. A number another active owner holds is
+-- refused as taken, without saying whose. Each attempt that could answer taken counts against a small daily cap per
+-- owner, so the answer cannot be used to sweep for numbers registered with Waldo.
+
+-- Whether another active owner holds a number: they have proven it, or their WhatsApp or iMessage is linked from it, so its
+-- messages route to them. Neither setting nor proving the number is open to anyone else while either holds.
+create function waldo.phone_held_by_other(p_owner uuid, p_number text) returns boolean
+language sql stable set search_path = '' as $$
+  select exists (select 1 from waldo.owners other
+      where other.id <> p_owner and other.state = 'active' and other.phone = p_number and other.phone_verified_at is not null)
+    or exists (select 1 from waldo.presences p join waldo.owners other on other.id = p.owner_id
+      where p.owner_id <> p_owner and other.state = 'active' and p.state = 'active'
+        and ((p.provider = 'whatsapp' and p.subject = substr(p_number, 2)) or (p.provider = 'imessage' and p.subject = p_number)))
+$$;
+revoke all on function waldo.phone_held_by_other(uuid, text) from public, anon, authenticated;
+
+-- The one rule for proving a number, now also refusing a number another active owner's link comes from.
+create or replace function waldo.verify_owner_phone(p_owner uuid, p_number text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_owner is null or p_number is null or p_number !~ '^\+[1-9][0-9]{6,14}$' then return false; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('waldophone.' || p_number, 0));
+  if waldo.phone_held_by_other(p_owner, p_number) then return false; end if;
+  update waldo.owners set phone_verified_at = now()
+    where id = p_owner and state = 'active' and phone = p_number and phone_verified_at is null;
+  return found;
+end $$;
 
 create table waldo.phone_set_daily (
   owner_id uuid primary key references waldo.owners (id) on delete cascade,
@@ -15,9 +39,11 @@ revoke all on waldo.phone_set_daily from public, anon, authenticated;
 
 -- Outcomes: set (stored, unverified), unchanged (already the number on file; its proof stands), taken, invalid (not
 -- E.164), unsupported (outside the country codes the router signs in), throttled (five attempts this UTC day), denied.
+-- A set also names, in unlinked, the providers whose links from the old number went with it: those links would otherwise
+-- keep routing that number's messages here once another owner proves it. The Worker clears what the owner DO holds for them.
 create function waldo.owner_phone_set(p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare p jsonb; o waldo.owners; v_phone text; v_day date;
+declare p jsonb; o waldo.owners; v_phone text; v_day date; v_unlinked jsonb;
 begin
   if not waldo.router_signed('phoneset.' || p_payload, p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
@@ -52,12 +78,15 @@ begin
       attempts = case when waldo.phone_set_daily.day = v_day then waldo.phone_set_daily.attempts + 1 else 1 end
     where waldo.phone_set_daily.day <> v_day or waldo.phone_set_daily.attempts < 5;
   if not found then return jsonb_build_object('kind', 'throttled'); end if;
-  if exists (select 1 from waldo.owners other where other.id <> o.id and other.state = 'active'
-      and other.phone = v_phone and other.phone_verified_at is not null) then
-    return jsonb_build_object('kind', 'taken');
-  end if;
+  if waldo.phone_held_by_other(o.id, v_phone) then return jsonb_build_object('kind', 'taken'); end if;
+  with gone as (
+    update waldo.presences set state = 'unlinked', unlinked_at = now()
+      where owner_id = o.id and state = 'active' and o.phone ~ '^\+[1-9][0-9]{6,14}$'
+        and ((provider = 'whatsapp' and subject = substr(o.phone, 2)) or (provider = 'imessage' and subject = o.phone))
+      returning provider)
+  select coalesce(jsonb_agg(distinct provider order by provider), '[]'::jsonb) into v_unlinked from gone;
   update waldo.owners set phone = v_phone where id = o.id;
-  return jsonb_build_object('kind', 'set');
+  return jsonb_build_object('kind', 'set', 'unlinked', v_unlinked);
 end $$;
 
 revoke all on function waldo.owner_phone_set(text, bigint, text) from public, anon, authenticated;

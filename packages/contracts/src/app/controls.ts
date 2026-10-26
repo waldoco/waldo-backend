@@ -226,6 +226,8 @@ export const appControlPhoneDataV1Schema = z.strictObject({
 // they are contract, and none of them repeats the number. unavailable covers a server that does not offer texting.
 export const APP_PHONE_SET_RECEIPTS_V1 = {
   set: { state: 'recorded', message: 'Number saved. It is not verified yet: ask for a code to prove it is yours.' },
+  // A set that also unlinked the WhatsApp or iMessage chat linked from the old number.
+  set_unlinked: { state: 'recorded', message: 'Number saved, not verified yet. Messages from your old number no longer reach Waldo; link your chat again from the new one.' },
   unchanged: { state: 'recorded', message: 'That is already the number on file.' },
   taken: { state: 'rejected', message: 'That number is already verified on another account, so it cannot be used here.' },
   invalid: { state: 'rejected', message: 'That is not a full number. Start with + and the country code.' },

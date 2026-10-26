@@ -5,6 +5,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { consoleAccess } from '../src/channels/console';
+import { APP_PHONE_SET_RECEIPTS_V1 } from '../../contracts/src/app/controls';
+import { WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-console', CODE = '424242';
 const vars = {
@@ -15,7 +17,7 @@ type Read = { csrf: string; revision: string; data: { phone: string | null; veri
 type Acted = { status: number; body: { receipt?: { state: string; message: string }; error?: string; duplicate?: boolean } };
 
 // A ledger that keeps one owner's number and challenge, and a Twilio that approves only CODE.
-function world(phone: string | null, twilioStatus = 200) {
+function world(phone: string | null, twilioStatus = 200, linked: string[] = []) {
   const open = { expires_at: 1, retry_at: null as number | null, checks_left: 5 };
   const ledger = { phone, verified: false, challenge: null as null | { state: string; expires_at: number; retry_at: number | null; checks_left: number } };
   const twilio: URLSearchParams[] = [], sets: Record<string, unknown>[] = [];
@@ -33,7 +35,7 @@ function world(phone: string | null, twilioStatus = 200) {
     if (fn === 'owner_phone_set') {
       sets.push(JSON.parse(args.p_payload!) as Record<string, unknown>);
       Object.assign(ledger, { phone: sets.at(-1)!.phone, verified: false, challenge: null });
-      return Response.json({ kind: 'set' });
+      return Response.json({ kind: 'set', unlinked: linked.splice(0) });
     }
     if (fn !== 'phone_sms_transition') return new Response('unexpected', { status: 500 });
     const payload = JSON.parse(args.p_payload!) as Record<string, string>;
@@ -121,6 +123,26 @@ describe('the console phone view', () => {
       expect(w.sets).toEqual([{ do_name: expect.stringMatching(/^phone-console-/), phone: '+919800000002', countries: ['+91'] }]);
       expect((await read()).data).toMatchObject({ phone: '+919800000002', verified: false, actions: ['phone.sms_send', 'phone.set'] });
       expect(JSON.stringify([...(await state.storage.list()).entries()])).not.toContain('9800000002');
+    });
+  });
+
+  it('a change of number that unlinked the WhatsApp chat from the old one clears the bound sender and what was held for it', async () => {
+    world('+919800000001', 200, ['whatsapp']);
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act, state }) => {
+      state.storage.kv.put('whatsapp_subject', '919800000001');
+      state.storage.kv.put(`${WA_HELD_PREFIX}0001`, { heldAt: 1, body: { text: 'held for the old chat' } });
+      expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set_unlinked } });
+      expect(state.storage.kv.get('whatsapp_subject')).toBeUndefined();
+      expect([...state.storage.kv.list({ prefix: WA_HELD_PREFIX })]).toEqual([]);
+    });
+  });
+
+  it('a change of number with nothing linked from the old one leaves the WhatsApp chat alone', async () => {
+    world('+919800000001');
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act, state }) => {
+      state.storage.kv.put('whatsapp_subject', '919800000077');
+      expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set } });
+      expect(state.storage.kv.get('whatsapp_subject')).toBe('919800000077');
     });
   });
 

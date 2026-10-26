@@ -60,10 +60,17 @@ const SET: Readonly<Record<PhoneSetOutcome['kind'], ControlReceipt>> = {
   ...APP_PHONE_SET_RECEIPTS_V1, denied: APP_PHONE_SET_RECEIPTS_V1.unavailable, disabled: APP_PHONE_SET_RECEIPTS_V1.unavailable,
 };
 
-// The receipt never holds the code or the number.
-export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt> {
+// The receipt never holds the code or the number. A change of number unlinks, in the directory, the chats linked from the
+// old one; what the owner DO holds for a WhatsApp chat (the bound sender, its held and outbox messages) is cleared through
+// whatsappUnlinked, as the WhatsApp unlink action does. An iMessage unlink is the directory's alone, as in that action.
+export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>,
+  whatsappUnlinked: () => Promise<void>): Promise<ControlReceipt> {
   const sms = phoneSms(env);
-  if (action.action === 'phone.set') return SET[(await sms.set(owner, action.value)).kind];
+  if (action.action === 'phone.set') {
+    const outcome = await sms.set(owner, action.value);
+    if (outcome.unlinked?.includes('whatsapp')) await whatsappUnlinked();
+    return outcome.unlinked?.length ? APP_PHONE_SET_RECEIPTS_V1.set_unlinked : SET[outcome.kind];
+  }
   if (action.action === 'phone.sms_send') return SENT[(await sms.send(owner)).kind];
   const code = (fields.code ?? '').replace(/\s/g, '');
   if (!/^\d{6}$/.test(code)) return rejected('Enter the six digits from the text.');
