@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -497,6 +497,27 @@ describe('the phone view', () => {
   it('sets the number on file with phone.set, which carries the E.164 number in value and nothing else', () => {
     expect(appControlActionV1Schema.safeParse(set).success).toBe(true);
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: ['phone.set'] } }).success).toBe(true);
+  });
+
+  it('sets up the number on file for iMessage with imessage.enroll, which carries nothing and is the phone view\'s alone', () => {
+    const enroll = { view: 'phone', action: 'imessage.enroll', revision, request_id: 'phone-0009' };
+    expect(appControlActionV1Schema.safeParse(enroll).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, actions: ['phone.set', 'imessage.enroll'] } }).success).toBe(true);
+    for (const bad of [{ ...enroll, value: '+919800000001' }, { ...enroll, code: '424242' }, { ...enroll, id: 'imessage' }, { ...enroll, view: 'connections' }]) {
+      expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    const messages = Object.values(APP_IMESSAGE_ENROLL_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    for (const message of messages) expect(message).not.toMatch(/\d/);
+  });
+
+  it('names the ways this server proves a number, and how the linked iMessage relates to it, without the handle', () => {
+    const phone = (extra: Record<string, unknown>) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, ...extra } }).success;
+    for (const proof of [[], ['sms'], ['imessage'], ['sms', 'imessage']]) expect(phone({ proof })).toBe(true);
+    for (const from of ['none', 'number', 'email', 'other_number']) expect(phone({ proof: ['imessage'], imessage_from: from })).toBe(true);
+    for (const bad of [{ proof: ['whatsapp'] }, { proof: 'sms' }, { proof: [null] }, { imessage_from: 'woof@heywaldo.in' }, { imessage_from: '0001' }, { imessage_from: null }]) {
+      expect(phone(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it('refuses a phone.set without a number, with a malformed one, with anything else, or elsewhere', () => {

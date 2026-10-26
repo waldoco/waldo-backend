@@ -4,7 +4,7 @@ import { mintSetupSecret, sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeListing } from './directory';
 import { consoleAuth } from '../../identity/console-auth';
 import { iMessageSendUrl } from './send-url';
-import { enrollOwner, iMessageNumberView, photonConnection, type EnrollOutcome } from './enrollment';
+import { enrollAtTap, iMessageNumberView, photonConnection, type EnrollOutcome } from './enrollment';
 
 // Private owner lifecycle UI. The authenticated owner console session + CSRF is the sole authority
 // for pair/verify/activate/revoke; host S2 credentials can never reach these actions.
@@ -109,13 +109,12 @@ export async function iMessageAction(env: IMessageEnv, owner: string, action: st
   const id = field(input.id, 64), subject = field(input.subject), chat = field(input.chat);
   try {
     if (action === 'imessage.enroll') {
-      const auth = consoleAuth(env);
-      if (!auth || !(await auth.throttle(`imessage.enroll.${owner}`, 5, 3600))) return { kind: 'failed' };
-      const enrolled = await enrollOwner(env, owner, input.phone);
+      const enrolled = await enrollAtTap(env, owner, input.phone);
+      if (enrolled.kind === 'throttled') return { kind: 'failed' };
       if (enrolled.kind === 'disabled' || enrolled.kind === 'unknown') return { kind: enrolled.kind };
       if (enrolled.kind !== 'enrolled') return { kind: 'enroll_refused', reason: enrolled.kind };
       // Enrolled, but the code could not be confirmed: the number is set up, so this is not a refusal.
-      const code = await auth.issueProviderLinkCode?.(owner, 'imessage').catch(() => null);
+      const code = await consoleAuth(env)?.issueProviderLinkCode?.(owner, 'imessage').catch(() => null);
       return code ? { kind: 'link_code', code, address: enrolled.number } : { kind: 'unknown' };
     } else if (action === 'imessage.link') {
       const view = await iMessageNumberView(env, owner);
