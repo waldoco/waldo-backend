@@ -6,14 +6,17 @@ import { CONSENT_TTL_MS } from '../connectors/google-consent';
 import { GRANOLA_AUTH_ORIGIN } from '../connectors/granola-mcp';
 import { MCP_CALLBACK_PATH } from '../connectors/mcp-oauth';
 import { MCP_ATTEMPT_TTL_MS } from '../connectors/mcp-connections';
-import { startRedirect } from '../connectors/oauth-browser-binding';
+import { startRedirect, type BoundProvider } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from './connect-confirm';
+import { appConnectEntry } from './connect-app';
 import { callbackPage, consentPage } from './google-oauth';
 
 export const CONNECT_LINK_PREFIX = '/c/';
 export const BEGIN_SESSION_PATH = '/google/begin-session';
+// The owner object answers what a catalogue app's ticket shows before Continue (channels/connect-app.ts).
+export const DESCRIBE_SESSION_PATH = '/connect/describe';
 
 const TICKET = /^[A-Za-z0-9_-]{22}$/;
 
@@ -25,17 +28,20 @@ export const ticketHash = async (ticket: string): Promise<string> =>
   hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ticket)));
 
 // Each provider a ticket can name: what the confirm page calls it, the origin its consent lives on (the page's form-action
-// allows only that one), and the browser binding and callback its sign-in finishes on. Granola rides the MCP sign-in.
-const PROVIDERS = {
+// allows only that one), and the browser binding and callback its sign-in finishes on. Granola rides the MCP sign-in. A
+// catalogue app's ticket (mcp:<id>) is described by the owner object instead, whose attempt fixed its consent origin when
+// the link was sent.
+type Provider = Readonly<{ name: string; origin: string; binding: BoundProvider; callback: string; ttlMs: number; consent?: string; fromChat?: true }>;
+const PROVIDERS: Readonly<Record<'google' | 'granola', Provider>> = {
   google: { name: 'Google', origin: GOOGLE_AUTH_ORIGIN, binding: 'google', callback: GOOGLE_CALLBACK_PATH, ttlMs: CONSENT_TTL_MS },
   granola: { name: 'Granola', origin: GRANOLA_AUTH_ORIGIN, binding: 'mcp', callback: MCP_CALLBACK_PATH, ttlMs: MCP_ATTEMPT_TTL_MS },
 } as const;
-const providerOf = (value: string | undefined) => (value === 'granola' ? PROVIDERS.granola : value === 'google' ? PROVIDERS.google : null);
+const providerOf = (value: string | undefined): Provider | null => (value === 'granola' ? PROVIDERS.granola : value === 'google' ? PROVIDERS.google : null);
 
 type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string; begun?: boolean; handoff?: boolean; owner_hint?: unknown }>;
-const used = (provider: string) => ({ status: 410, title: 'This link was already used', body: provider === 'Google'
-  ? 'Each connect link starts one sign-in. Ask Waldo to connect Google for a fresh one.'
-  : `Each connect link starts one sign-in. Connect ${provider} again from Connections in the Waldo app for a fresh one.` });
+const used = (provider: Provider) => ({ status: 410, title: 'This link was already used', body: provider.name === 'Google' || provider.fromChat
+  ? `Each connect link starts one sign-in. Ask Waldo to connect ${provider.name} for a fresh one.`
+  : `Each connect link starts one sign-in. Connect ${provider.name} again from Connections in the Waldo app for a fresh one.` });
 const CANCELLED = { status: 200, title: 'Nothing was connected', body: 'Nothing was connected. You can close this tab.' };
 const ALREADY = (provider: string) => ({ status: 200, title: `${provider} is already connected`, body: 'Nothing else is needed. You can close this tab.' });
 
@@ -74,14 +80,29 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     hop('expired', hashPrefix);
     return consentPage({ kind: 'expired' }, null);
   }
-  const provider = providerOf(session.provider);
+  const app = appConnectEntry(session.provider);
+  let provider = app ? { name: app.label, origin: '', binding: 'mcp' as const, callback: MCP_CALLBACK_PATH, ttlMs: MCP_ATTEMPT_TTL_MS, fromChat: true as const } : providerOf(session.provider);
   if (session.status !== 'ok' || !session.do_name || !provider) {
     hop(session.status, hashPrefix);
     return consentPage({ kind: 'invalid' }, null);
   }
   if (session.begun) {
     hop('used', hashPrefix);
-    return callbackPage(false, used(provider.name), '', '');
+    return callbackPage(false, used(provider), '', '');
+  }
+  if (app) {
+    let described: { origin?: unknown; consent?: unknown } | null;
+    try {
+      described = await (await owners.get(owners.idFromName(session.do_name)).fetch(`https://telegram-owner${DESCRIBE_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: hash }) })).json() as typeof described;
+    } catch (error) {
+      return failed(error, 'describe failed');
+    }
+    // The sign-in this link started has run out or already moved on: nothing here can start it again.
+    if (typeof described?.origin !== 'string' || typeof described.consent !== 'string') {
+      hop('expired', hashPrefix);
+      return callbackPage(false, { status: 410, title: 'This link has expired', body: `Connect links last 15 minutes. Ask Waldo to connect ${app.label} for a fresh one.` }, '', '');
+    }
+    provider = { ...provider, origin: described.origin, consent: described.consent };
   }
   let handed: HandOff = { ok: true };
   if (session.handoff) {
@@ -93,7 +114,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (request.method === 'GET') {
     hop('confirm', hashPrefix);
-    const page = confirmPage({ provider: provider.name, providerOrigin: provider.origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled` });
+    const page = confirmPage({ provider: provider.name, providerOrigin: provider.origin, hint: ownerHint(session.owner_hint), cancel: `${url.pathname}?cancelled`, ...(provider.consent ? { consent: provider.consent } : {}) });
     if (handed.setCookie) page.headers.append('set-cookie', handed.setCookie);
     return page;
   }
@@ -109,7 +130,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   }
   if (!begun?.do_name) {
     hop('used', hashPrefix);
-    return callbackPage(false, used(provider.name), '', '');
+    return callbackPage(false, used(provider), '', '');
   }
   try {
     const reply = await owners.get(owners.idFromName(begun.do_name)).fetch(`https://telegram-owner${BEGIN_SESSION_PATH}`, {

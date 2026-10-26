@@ -39,6 +39,7 @@ describe('scheduleKind', () => {
       'watch_upkeep',
       'provider_sync',
       'forget_purge',
+      'connect_poll',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -54,6 +55,7 @@ describe('scheduleKind', () => {
       watch_upkeep: 10,
       provider_sync: 11,
       forget_purge: 12,
+      connect_poll: 13,
     });
   });
 
@@ -72,6 +74,7 @@ describe('scheduleKind', () => {
       watch_upkeep: null,
       provider_sync: null,
       forget_purge: null,
+      connect_poll: null,
     });
   });
 
