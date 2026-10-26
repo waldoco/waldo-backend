@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -93,6 +93,41 @@ describe('app sign-in requests', () => {
     for (const [schema, body] of requests)
       for (const invite of ['abcdefghjkmnpqrstuvw', 'ABCDEFGHJKMNPQRSTUV', 'ABCDEFGHJKMNPQRSTUVWX', 'IBCDEFGHJKMNPQRSTUVW', 'OBCDEFGHJKMNPQRSTUVW', '0BCDEFGHJKMNPQRSTUVW', '1BCDEFGHJKMNPQRSTUVW', ' ABCDEFGHJKMNPQRSTUVW', '', null])
         expect({ invite, ok: schema.safeParse({ ...body, invite }).success }).toEqual({ invite, ok: false });
+  });
+});
+
+describe('app sign-in with an Apple or Google identity token', () => {
+  const apple = { provider: 'apple', id_token: 'fixture-header.fixture-payload.fixture-signature', nonce: 'raw-nonce-0123456789abcdef', request_id: 'signin-0001' } as const;
+  const google = { provider: 'google', id_token: 'fixture-header.fixture-payload.fixture-signature', request_id: 'signin-0002' } as const;
+
+  it('accepts the fixture requests and answers, and adds the route without touching /auth/verify', async () => {
+    const fixture = (await import('./fixtures/app-auth-id-token.v1.json')).default;
+    for (const request of fixture.requests) expect(appIdTokenRequestV1Schema.safeParse(request).success).toBe(true);
+    for (const response of fixture.responses) expect(appIdTokenResultV1Schema.safeParse(response).success).toBe(true);
+    expect(appIdTokenResultV1Schema).toBe(appVerifyResultV1Schema);
+    const route = appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/id_token');
+    expect(route).toMatchObject({ method: 'POST', request: appIdTokenRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 });
+  });
+
+  it('takes an invite and an E.164 phone exactly as /auth/verify does', () => {
+    expect(appIdTokenRequestV1Schema.safeParse({ ...google, nonce: 'raw-nonce-0123456789abcdef', invite: 'ABCDEFGHJKMNPQRSTUVW', phone: '+919876543210' }).success).toBe(true);
+    for (const invalid of [{ ...google, invite: 'abcdefghjkmnpqrstuvw' }, { ...google, phone: '919876543210' }, { ...apple, phone: '' }])
+      expect(appIdTokenRequestV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('requires a nonce from Apple and keeps it optional for Google', () => {
+    const { nonce: _nonce, ...bare } = apple;
+    expect(appIdTokenRequestV1Schema.safeParse(bare).success).toBe(false);
+    expect(appIdTokenRequestV1Schema.safeParse(google).success).toBe(true);
+  });
+
+  it('refuses another provider, a token that is not a compact JWT, an unsafe nonce, a bad request id and unknown keys', () => {
+    for (const invalid of [
+      { ...google, provider: 'facebook' }, { ...google, provider: 'Apple' }, { ...google, id_token: 'not-a-jwt' }, { ...google, id_token: 'a.b.c.d' },
+      { ...google, id_token: `a.${'b'.repeat(8192)}.c` }, { ...google, id_token: 'a b.c.d' }, { ...apple, nonce: 'short' }, { ...apple, nonce: 'has spaces in the nonce value' },
+      { ...apple, nonce: 'n'.repeat(129) }, { ...google, request_id: 'short' }, { ...google, request_id: undefined }, { ...google, email: 'someone@example.test' },
+      { ...google, client_id: 'web-client' }, { ...google, issuer: 'https://accounts.google.com' },
+    ]) expect({ invalid, ok: appIdTokenRequestV1Schema.safeParse(invalid).success }).toEqual({ invalid, ok: false });
   });
 });
 

@@ -40,7 +40,22 @@ export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), 
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
 // phone is the number a new member joins with, in E.164 as the console stores it. It is unverified contact data until the
 // owner texts their link code to Waldo from it. A member who already has an account is not changed by it.
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: z.string().regex(/^\+[1-9]\d{6,14}$/).optional() });
+const joinPhone = z.string().regex(/^\+[1-9]\d{6,14}$/);
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: joinPhone.optional() });
+// Sign in with Apple or Google: id_token is the identity token the platform SDK returned. nonce is the raw value whose
+// SHA-256, lower-case hex, the app handed the SDK; Supabase hashes it the same way and compares it with the token's nonce
+// claim, and refuses a request where only one of the two has a nonce. Supabase also checks the signature, the issuer and
+// that the audience is a client id the provider lists. The owner is resolved from the email Supabase confirms, never one
+// the app sends, then exactly as /auth/verify resolves it, with the same invite and phone. A token Supabase refuses, or one
+// with no confirmed email, gets the generic 403. Repeating a request_id never creates a second owner or spends an invite
+// twice; it may open another session.
+const idToken = z.string().max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+const idTokenNonce = z.string().regex(/^[A-Za-z0-9._~-]{16,128}$/);
+const idTokenRequestId = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
+export const appIdTokenRequestV1Schema = z.discriminatedUnion('provider', [
+  z.strictObject({ provider: z.literal('apple'), id_token: idToken, nonce: idTokenNonce, request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
+  z.strictObject({ provider: z.literal('google'), id_token: idToken, nonce: idTokenNonce.optional(), request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
+]);
 // absolute_expires_at is when this credential stops working. renew_after, when sent, is when the app should call
 // /auth/renew for a new credential.
 export const appSessionV1Schema = z.strictObject({
@@ -52,6 +67,7 @@ export const appVerifyResultV1Schema = z.union([
   appSessionV1Schema.extend({ credential: z.string().min(20).max(512) }),
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
+export const appIdTokenResultV1Schema = appVerifyResultV1Schema;
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
 // A new credential for a new session, and when to renew that. The presented credential keeps working for 5 more
 // minutes, then stops; it renews once, so a second renewal of it is refused.
@@ -114,6 +130,8 @@ export const appIMessageLinkCodeV1Schema = z.strictObject({
 export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
+  // A Worker without this route answers 404; the app then offers the email code only.
+  { method: 'POST', path: '/app/v1/auth/id_token', request: appIdTokenRequestV1Schema, response: appIdTokenResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
   // A Worker without this route answers 404; the app then keeps its credential.
