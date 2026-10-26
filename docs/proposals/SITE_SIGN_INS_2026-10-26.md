@@ -360,18 +360,22 @@ z.strictObject({ operation: z.literal('sign_in'), sign_in_id: z.uuid(), username
      page that moves focus on the focus event fails here.
 7. **Insert, bound to the node.** The username, then the password, are each written into the resolved node itself,
    never into whatever document has focus.
-   - The node is resolved once at step 3 (`DOM.resolveNode` on its `backendNodeId`, in the main world of that
-     document's execution context). Then one `Runtime.callFunctionOn` runs on that `objectId`, with a fixed,
-     host-authored function and the value as its only argument.
-   - The function sets the value through the native `HTMLInputElement.prototype` value setter and dispatches `input`
-     and `change` events, so frameworks see it as typed. It returns only a boolean, with `returnByValue` and `silent`
-     set.
+   - At step 3 the harness creates an isolated world for that frame (`Page.createIsolatedWorld`) and resolves the node
+     in it, using `DOM.resolveNode` on its `backendNodeId` with the isolated world's `executionContextId`. Then one
+     `Runtime.callFunctionOn` runs on that `objectId`, with a fixed, host-authored function and the value as its only
+     argument.
+   - Page script shares the DOM but not the isolated world's JavaScript globals. So the
+     `HTMLInputElement.prototype` value setter the function uses is untampered by the page, and the isolated world's
+     context is destroyed with the document, so the write still fails closed if the document has gone.
+   - The function sets the value and dispatches `input` and `change` events on the node, which page listeners
+     receive, so frameworks see it as typed. It returns only a boolean, with `returnByValue` and `silent` set.
    - If the document is gone, whether it navigated, was swapped by a back-forward cache restore, or was destroyed, the
      object's context no longer exists and the call fails. A navigation that makes no network request therefore cannot
      redirect the value into another origin's document. This replaces `Input.insertText`, which writes into the focused
      element of whichever document is current.
-   - The value never passes through `page.evaluate` source text, Playwright locators or a Playwright call log. CDP
-     exception details never carry the argument [inference: PR 2 asserts it with the canary].
+   - The value never passes through `page.evaluate` source text, Playwright locators or a Playwright call log.
+   - CDP `exceptionDetails` must never carry the argument. PR 2 asserts it with the canary: it makes the function throw
+     on purpose (setter missing, node detached) and checks the whole CDP response and the mapped error.
    - The step 6 checks repeat after each insert. Any mismatch ends the browser session and returns `origin_changed`.
    - **Back-forward cache.** It is turned off for sign-in sessions where Browser Rendering allows it, by a launch flag or
      a page-level opt-out [inference: probe on real Browser Rendering]. The node-bound write is the guarantee either
@@ -644,7 +648,9 @@ PR 2 starts only after the gate approves this design and the owner rules on D7.
      generation, a wrong key and a retired key id.
    - The release and approve clients.
    - The atomic `sign_in` host operation: fence, navigation-event abort, frame and loader checks, focus check, node-bound
-     write, `requestSubmit`, re-checked Enter fallback.
+     write in an isolated world, `requestSubmit`, re-checked Enter fallback.
+   - A test that forces the write to throw and asserts that the canary is absent from CDP `exceptionDetails` and
+     from the mapped error.
    - The filled registry: node masks, screenshot withholding, refusals of commands aimed at filled nodes, sink scans,
      the 10-minute bound and `scan_restore`.
    - The ephemeral sanitiser canary.

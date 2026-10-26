@@ -64,7 +64,8 @@ plaintext lives in memory for at most 10 minutes, and every outbound sink fails 
      - the form's `method` is not GET and its `action` is same-origin;
      - focus is on the resolved `backendNodeId`.
 4. **One atomic host operation.** The model names a sign-in id. The harness picks the password field, inserts the
-   username and password by `Runtime.callFunctionOn` on the resolved node's own object, so a document that is gone
+   username and password by `Runtime.callFunctionOn` on the node resolved in an isolated world, so page script cannot
+   tamper with the setter and a document that is gone
    fails the write and a navigation with no network request cannot redirect it. It submits with the form's
    `requestSubmit()` and waits. No observation is published between release and navigation. Only the Cloudflare CDP
    engine may sign in.
