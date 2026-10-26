@@ -1,21 +1,24 @@
 import type { ConsoleAction } from './console';
 import type { ControlReceipt } from './dashboard-control-actions';
-import { phoneSms, type OwnerPhoneState, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
+import { APP_PHONE_SET_RECEIPTS_V1 } from '../../../contracts/src/app/controls';
+import { phoneSms, type OwnerPhoneState, type PhoneSetOutcome, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
 
 export type PhoneControls = Readonly<{ version: 1; view: 'phone'; state: 'available'; csrf: string;
-  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check')[] }> }>;
+  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set')[] }> }>;
 
 // The number on file and how to prove it. Texting a code is listed only while it is offered, the number is unproven,
-// nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left. The
-// ledger re-checks both when the owner acts, and also applies the daily caps, which this read does not show.
+// nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left; setting
+// the number while texting is offered to an active owner. The ledger re-checks each when the owner acts, and also
+// applies the daily caps, which this read does not show.
 export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, now = Date.now()): Promise<PhoneControls> {
   if (!owner) throw new Error('owner_unbound');
   const sms = phoneSms(env);
-  const state = await sms.state(owner) ?? { phone: null, verified: false, sms: sms.offered, challenge: null };
+  const read = await sms.state(owner), state = read ?? { phone: null, verified: false, sms: sms.offered, challenge: null };
   const open = state.sms && state.phone !== null && !state.verified, challenge = state.challenge;
   const sendable = !challenge || (challenge.state !== 'sending' && challenge.state !== 'checking' && (challenge.retry_at === null || challenge.retry_at * 1000 <= now));
   const actions = [...(open && sendable ? ['phone.sms_send' as const] : []),
-    ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : [])];
+    ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : []),
+    ...(sms.offered && read !== null ? ['phone.set' as const] : [])];
   return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions } };
 }
 
@@ -53,9 +56,14 @@ const CHECKED: Readonly<Record<PhoneSmsOutcome['kind'], ControlReceipt>> = {
   disabled: rejected('Texting a code is not available on this server.'),
 };
 
+const SET: Readonly<Record<PhoneSetOutcome['kind'], ControlReceipt>> = {
+  ...APP_PHONE_SET_RECEIPTS_V1, denied: APP_PHONE_SET_RECEIPTS_V1.unavailable, disabled: APP_PHONE_SET_RECEIPTS_V1.unavailable,
+};
+
 // The receipt never holds the code or the number.
 export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt> {
   const sms = phoneSms(env);
+  if (action.action === 'phone.set') return SET[(await sms.set(owner, action.value)).kind];
   if (action.action === 'phone.sms_send') return SENT[(await sms.send(owner)).kind];
   const code = (fields.code ?? '').replace(/\s/g, '');
   if (!/^\d{6}$/.test(code)) return rejected('Enter the six digits from the text.');

@@ -22,11 +22,15 @@ export type PhoneChallenge = Readonly<{ state: PhoneChallengeState; expires_at: 
 export type OwnerPhoneState = Readonly<{ phone: string | null; verified: boolean; sms: boolean; challenge: PhoneChallenge | null }>;
 const OUTCOMES = ['denied', 'no_number', 'verified', 'unsupported', 'number_taken', 'held', 'busy', 'throttled', 'expired', 'unknown', 'refused', 'pending', 'approved'] as const;
 export type PhoneSmsOutcome = Readonly<{ kind: 'disabled' | (typeof OUTCOMES)[number] }>;
+const SET_OUTCOMES = ['set', 'unchanged', 'taken', 'invalid', 'unsupported', 'throttled', 'denied'] as const;
+export type PhoneSetOutcome = Readonly<{ kind: 'disabled' | 'unknown' | (typeof SET_OUTCOMES)[number] }>;
 export type PhoneSms = Readonly<{
   offered: boolean;
   state(doName: string): Promise<OwnerPhoneState | null>;
   send(doName: string): Promise<PhoneSmsOutcome>;
   check(doName: string, code: string): Promise<PhoneSmsOutcome>;
+  // Stores the owner's number unverified, or answers why not; a number another active owner has verified is taken.
+  set(doName: string, phone: string): Promise<PhoneSetOutcome>;
 }>;
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -97,5 +101,16 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     },
     send: (doName) => run(doName, 'send'),
     check: (doName, code) => run(doName, 'check', code),
+    // Offered with texting, so a number is set only where it can then be proven. The ledger applies the same country
+    // codes and counts the attempts; a lost answer may have saved the number, so it reads as unknown.
+    async set(doName, phone) {
+      if (!offered) return { kind: 'disabled' };
+      if (!E164.test(phone)) return { kind: 'invalid' };
+      const payload = JSON.stringify({ do_name: doName, phone, countries });
+      let result: unknown;
+      try { result = await rpc!('owner_phone_set', `phoneset.${payload}`, { p_payload: payload }); } catch { return { kind: 'unknown' }; }
+      const kind = result && typeof result === 'object' ? (result as Record<string, unknown>).kind : undefined;
+      return { kind: SET_OUTCOMES.includes(kind as (typeof SET_OUTCOMES)[number]) ? kind as (typeof SET_OUTCOMES)[number] : 'unknown' };
+    },
   };
 };

@@ -52,7 +52,7 @@ export type IMessageRecord = Base<'imessage', {
 export type DevicesRecord = Base<'devices', {
   actions: 'device.pair'[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: (typeof DEVICE_ROW)[number][] }[]; query_kinds: string[]; notification_bodies: string[];
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
-const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
+const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check', 'phone.set'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
 /** The number on file and how to prove it. Times are epoch seconds; retry_at null means a code may be asked for now. */
 export type PhoneRecord = Base<'phone', {
   phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
