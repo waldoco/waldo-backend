@@ -28,7 +28,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -854,8 +854,11 @@ export const createOwnerResponder = (
       if (!compaction.enabled) return;
       if (!conversationStore?.appendCompaction) return;
       const ref = context?.conversationRef ?? conversationRef;
-      const leafId = conversationLeaves.get(ref), stats = lastWindow.get(ref);
-      if (!leafId || !stats) return;
+      // A post-run job's responder ran no turn: it reads the chain, and measures the window the next turn would get.
+      if (!lastWindow.has(ref)) await restored();
+      const leafId = conversationLeaves.get(ref);
+      if (!leafId) return;
+      const stats = lastWindow.get(ref) ?? compactedHistory(tree, leafId, undefined, compaction).stats;
       const now = Date.now();
       const live = liveCompaction(tree, leafId);
       const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
@@ -905,6 +908,15 @@ export const createOwnerResponder = (
   };
   return {
     compactIfDue,
+    async compactChain(trace, jobContext, scope) {
+      if (privateRunScope !== scope) {
+        if (!privateOwner?.history) return;
+        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}) });
+        return job.compactChain!(trace, jobContext, scope);
+      }
+      traceId = trace;
+      await compactIfDue(jobContext.conversationRef);
+    },
     async respond(turn, time) {
       const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {

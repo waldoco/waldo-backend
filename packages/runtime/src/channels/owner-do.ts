@@ -31,7 +31,7 @@ import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueA
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
-import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextCapability, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, shapeFault, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
 import {MAC_FOLLOWUP_RECORD_PREFIX,MAC_FOLLOWUP_RETRY_MS,MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS,macDelivery,macInbox,macResultNotice,type MacDelivery} from '../devices/mac-delivery';
@@ -57,7 +57,7 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
+import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, COMPACTION_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -301,6 +301,7 @@ type OwnerRuntime = Readonly<{
   ready: Promise<void>;
   log(entry: TurnLogEntry): void;
   titleThread(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
+  compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>;
   // The owner-turn tool set and the dispatch context a background task's tool calls run under.
   toolHandlers(): DispatchToolOptions<ToolDispatcherContext>['handlers'];
   taskContext(): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
@@ -484,6 +485,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
+  // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
+  private compactionAbort: AbortController | undefined;
 
   // Background task jobs (task_jobs): this object writes every row and is their only retry owner. The book is built per
   // use, so an owner storage erase leaves no handle to a dropped table.
@@ -1516,7 +1519,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             admit:async(client,text)=>{
               this.bindAppSubject(name);
               const result=await this.appInbox.admit(name,hash,client,text,mainRef);
-              if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+              if(result.kind==='admitted')this.appAdmitted();
               return result.kind==='admitted'||result.kind==='duplicate';
             }}));
         }catch(error){logAppReadFailure('app_onboarding',path,error);return fail(503);}
@@ -1593,7 +1596,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       admit:async(ref,clientId,text,assertCurrent,revision)=>{
         this.bindAppSubject(name);
         const result=await this.appInbox.admit(name,hash,clientId,text,ref,assertCurrent,revision);
-        if(result.kind==='admitted')this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+        if(result.kind==='admitted')this.appAdmitted();
         return result;
       },
       receipt:(ref,clientId,revision)=>{this.recoverApp();return this.appInbox.receipt(name,clientId,ref,revision);},
@@ -1705,8 +1708,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const conversationRef=ownerChainRef('app',ownerPrincipalRef(ownerId));
     const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
     if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
+    if(result.kind==='admitted')this.compactionAbort?.abort();
     this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
+  }
+  // A newly admitted app message ends a compaction in flight, which writes nothing, and queues its own turn.
+  private appAdmitted(): void {
+    this.compactionAbort?.abort();
+    this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
   }
   private bindAppSubject(name: string): void {
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
@@ -1726,7 +1735,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async drainApp(alarmEnd?: number): Promise<void> {
     this.appInbox.recover(this.appAttempts);
     await this.writeAppNotices();
-    const untitled=new Map<string,string>();
+    const untitled=new Map<string,string>(),compactable=new Map<string,AppInboxRecord>();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
       try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await this.rearmWithSchedule();return;}}
@@ -1742,11 +1751,35 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.appAuthority(record.owner,record.sessionHash);scope.admit();completed=true;
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);if(completed&&thread){this.ctx.storage.transactionSync(()=>touchThread(this.ctx.storage.kv,thread,Date.now()));untitled.set(thread,threadRowsOfChain(record.conversationRef)!);}abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
+      if(completed)compactable.set(record.conversationRef,record);
       await this.writeAppNotices();
     }
     // Named after the queue drains, so a message already queued never waits on a title.
     for(const [thread,rows] of untitled){try{await this.titleThread(thread,rows);}catch{console.error(JSON.stringify({hop:'thread_title',ok:false,code:'unavailable'}));}}
+    // Compacted last, once every reply is delivered and its run settled. A message already waiting goes first: its own
+    // reply asks again.
+    for(const record of compactable.values()){if(this.appInbox.records().some(row=>row.state==='admitted'))break;await this.compactApp(record,alarmEnd);}
     await this.rearmWithSchedule();
+  }
+  // A chain's compaction job, after the turn that made it due. Its own scope and deadline, the owner admitted again through
+  // the session the turn ran under, and the thread's fence; off unless WALDO_COMPACTION=on. Anything that ends it early
+  // writes no summary, and the chain's next eligible reply asks again.
+  private async compactApp(record: AppInboxRecord, alarmEnd?: number): Promise<void> {
+    if(!compactionSettings(this.env).enabled)return;
+    const started=Date.now(),deadline=started+COMPACTION_BUDGET_MS;
+    if(alarmEnd!==undefined&&alarmEnd<deadline)return;
+    const runtime=this.setup('app'),trace=`compaction:${record.id}`,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),COMPACTION_BUDGET_MS);
+    const admit=()=>{if(abort.signal.aborted||Date.now()>=deadline)throw new ClosedRunError();};
+    this.compactionAbort=abort;
+    const scope=this.threadFenced({runId:trace,attempt:trace,deadline,signal:abort.signal,admit,commit:work=>this.ctx.storage.transactionSync(()=>{admit();return work();})},threadOfChain(record.conversationRef),record.threadRevision);
+    try{
+      await runtime.ready;
+      const context=await this.appContext(record.owner,record.sessionHash,'Compact this conversation.',trace,started,scope,{conversationRef:record.conversationRef});
+      const principal=context.invocation.verified_authority.principal_ref,thread=threadOfChain(record.conversationRef);
+      if(context.conversationRef!==(thread?threadChainRef(principal,thread):ownerChainRef('app',principal)))throw new ClosedRunError();
+      await runtime.compactChain(trace,context,scope);
+    }catch(error){runtime.log({trace,hop:'compaction',ms:Date.now()-started,ok:false,code:error instanceof ClosedRunError?'closed':'unavailable'});}
+    finally{clearTimeout(timer);abort.abort();if(this.compactionAbort===abort)this.compactionAbort=undefined;}
   }
   // The model may name a thread once, from its first exchange; see askThreadTitle for when the title lands.
   private async titleThread(thread: string, rows: string): Promise<void> {
@@ -4940,6 +4973,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       },
       titleThread: (trace, exchange, scope) => responder.threadTitle(trace, exchange, scope),
+      compactChain: async (trace, context, scope) => { await responder.compactChain?.(trace, context, scope); },
       progressNote: (trace, input, scope) => responder.progressNote(trace, input, scope),
       get timezone() { return clock.timezone; }, ready };
     this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
