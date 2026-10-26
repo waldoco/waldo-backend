@@ -3,7 +3,7 @@ import { memoryPreview } from './memory-preview.mjs';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 const dist = new URL('../dist/console/dashboard/', import.meta.url);
-const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure','memory','memory-partial','memory-error','vault-locked'];
+const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure','memory','memory-partial','memory-error'];
 const selected = process.argv.find((arg) => arg.startsWith('--case='))?.slice(7) ?? 'recorded';
 const port = Number(process.argv.find((arg) => arg.startsWith('--port='))?.slice(7) ?? 4178);
 if (!cases.includes(selected) || !Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Use --case=' + cases.join('|') + ' and --port=1024..65535');
@@ -14,20 +14,9 @@ const nowMinutes = Math.floor((Date.now() - zoneMidnight) / 60000);
 const payload = { version: 1, as_of: new Date().toISOString(), timezone: 'Asia/Kolkata', brief: { status: 'sent_recorded', at: at(8 * 60) }, waiting: { count: 2, first: { id: 'synthetic-1', summary: 'Move Design review from 3:00 pm to 4:30 pm.' } }, next_card: { id: 'synthetic-card', label: 'Check-in', scheduled_at: at(Math.min(23 * 60 + 30, nowMinutes + 95)) }, latest_activity: { kind: 'update_card', status: 'recorded', at: at(Math.max(0, nowMinutes - 25)), summary: 'Updated the Check-in card with a shifted meeting.' }, services: [{ account_id: 'synthetic-google', email: 'sample@example.test', grants: ['calendar', 'gmail'], health: 'needs_reconnect' }] };
 const admin = {csrf:'synthetic-csrf',as_of:'2026-09-30T08:00:00Z',current_issuer:{id:'issuer',email:'admin@example.test',issued_count:2},owners:[{id:'issuer',email:'admin@example.test',state:'active',presences:['telegram'],created_at:'2026-09-01T00:00:00Z',issued_count:2},...Array.from({length:12},(_,i)=>({id:`owner-${i}`,email:`person${i}@example.test`,state:'active',presences:[],created_at:'2026-09-01T00:00:00Z',issued_count:0}))],invites:[{id:'one',email:'one@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-29T00:00:00Z',expires_at:'2026-10-13T00:00:00Z',used_at:null,revoked_at:null},{id:'two',email:'two@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-01T00:00:00Z',expires_at:'2026-09-15T00:00:00Z',used_at:null,revoked_at:null}]};
 
-const vault = { version: 1, state: 'available', as_of: new Date().toISOString(),
-  memory: { state: 'available', groups: [
-    { kind: 'fact', total: 2, items: [{ id: 'syn:claim:1', text: 'Lives in Bengaluru and works from home on Fridays', source_label: 'You said this', origin: 'owner', recorded_at: '2026-10-02' }, { id: 'syn:claim:2', text: 'Leads the design team at a small studio', source_label: 'You confirmed this', origin: 'owner', recorded_at: '2026-10-09' }] },
-    { kind: 'preference', total: 1, items: [{ id: 'syn:claim:3', text: 'Prefers meetings after 11 am', source_label: "Waldo's inference", origin: 'agent', recorded_at: '2026-10-14' }] },
-    { kind: 'interpretation', total: 1, items: [{ id: 'syn:node:1', text: 'Protects mornings for deep work', source_label: "Waldo's pattern from your Spots", origin: 'agent', recorded_at: '2026-10-20' }] },
-  ] },
-  connections: { token_note: "Tokens are stored encrypted (Supabase Vault). Waldo's model never sees them.",
-    google: [{ account_id: 'synthetic-google', email: 'sample@example.test', grants: ['calendar', 'gmail'], status: 'active', token_storage: 'supabase_vault', connected_at: null, last_used_at: null, revoke: { view: 'connections', action: 'google.disconnect' } }],
-    mcp: [{ id: 'synthetic-mcp', name: 'Granola', host: 'mcp.granola.example', status: 'active', scopes: ['meetings.read'], tools: 6, runs_without_asking: 6, connected_at: '2026-10-18T09:00:00.000Z', last_used_at: null, revoke: { view: 'connections', action: 'mcp.disconnect' } }],
-    channels: [{ channel: 'telegram', state: 'unlinked', revoke: null }, { channel: 'imessage', state: 'linked', revoke: { view: 'imessage', action: 'imessage.unlink' } }, { channel: 'whatsapp', state: 'unlinked', revoke: null }],
-    health: { state: 'available', manage: 'app', rows: [{ source: 'apple', purpose: 'storage_compute', status: 'granted', granted_at: '2026-10-01T08:00:00.000Z', withdrawn_at: null, newest_upload_at: new Date(Date.now() - 3600000).toISOString() }, { source: 'apple', purpose: 'model_processing', status: 'granted', granted_at: '2026-10-01T08:00:00.000Z', withdrawn_at: null, newest_upload_at: new Date(Date.now() - 3600000).toISOString() }] } },
-  access_log: { window_days: 30, kept_steps: 500,
+const accessLog = { version: 1, as_of: new Date().toISOString(), window_days: 30, kept_steps: 500,
     tools: { rows: [['search_communication', 'core', 'read', true, 20], ['query_calendar', 'core', 'read', true, 22], ['propose_calendar_change', 'calendar', 'acted', true, 23], ['get_health', 'core', 'read', true, 90], ['web_search', 'core', 'read', false, 200]].map(([tool, category, kind, ok, ago]) => ({ at: new Date(Date.now() - ago * 60000).toISOString(), tool, category, kind, ok })), next_before: null, oldest_at: new Date(Date.now() - 6 * 86400000).toISOString() },
-    approvals: { rows: [{ at: new Date(Date.now() - 23 * 60000).toISOString(), kind: 'calendar_change', decision: 'done', decided_at: new Date(Date.now() - 21 * 60000).toISOString() }, { at: new Date(Date.now() - 86400000).toISOString(), kind: 'email_send', decision: 'skipped', decided_at: new Date(Date.now() - 86000000).toISOString() }], next_before: null } } };
+    approvals: { rows: [{ at: new Date(Date.now() - 23 * 60000).toISOString(), kind: 'calendar_change', decision: 'done', decided_at: new Date(Date.now() - 21 * 60000).toISOString() }, { at: new Date(Date.now() - 86400000).toISOString(), kind: 'email_send', decision: 'skipped', decided_at: new Date(Date.now() - 86000000).toISOString() }], next_before: null } };
 const rev = 'a'.repeat(64);
 const controls = (view) => {
   const base = { version: 1, view, state: 'available', csrf: 'synthetic-csrf', revision: rev };
@@ -156,9 +145,8 @@ const server = createServer((req, res) => {
       if(selected==='admin-refresh-failure')adminReadFailed=true;
     });return;
   }
-  if (req.url?.startsWith('/console/dashboard/api/v1/vault')) {
-    res.writeHead(selected === 'vault-locked' ? 403 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(selected === 'vault-locked' ? { error: 'step_up_required' } : vault)); return;
+  if (req.url?.startsWith('/console/dashboard/api/v1/access-log')) {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(accessLog)); return;
   }
   if (req.url === '/console/dashboard/api/v1/overview') {
     if (selected === 'signed-out' || selected === 'unavailable') { res.writeHead(selected === 'signed-out' ? 401 : 503); res.end(); return; }

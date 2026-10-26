@@ -6,7 +6,6 @@ import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
 import { CONSOLE_ACTION_PATH, CONSOLE_GOOGLE_START_PATH, type ConsoleSession } from './console';
 import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
-import { DASHBOARD_VAULT_PATH } from './dashboard-vault';
 import { OWNER_CONTROLS_ACTION_PATH } from './dashboard-owner-controls';
 import { CONSOLE_PHOTON_START_PATH } from './imessage/console';
 import { APP_PROVIDERS_PATH } from '../health/providers/app-providers';
@@ -86,8 +85,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'phone.set': { gated: true, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
 };
 
-// Console routes that start access, record consent or read the Vault outside an action. A gated route is refused whatever its
-// method; a dashboard API route is refused as JSON.
+// Console routes that start access or record consent outside an action. A gated route is refused whatever its method.
 // startsFlow: a GET there begins a flow rather than reads, so the cross-site guard refuses it when another site sends
 // it. A path ending in "/" is a prefix that needs a token after it. This is the only list of flow-starting GETs: a new
 // one belongs here, or behind a POST.
@@ -98,7 +96,6 @@ export const STEP_UP_ROUTES: Readonly<Record<string, StepUpRule & Readonly<{ sta
   [MCP_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated mcp.connect mints.' },
   [CONSOLE_GOOGLE_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated google.connect mints.' },
   '/console/workspace': { gated: false, startsFlow: false, why: 'Uploads, reads or removes the owner\'s own files; grants no access.' },
-  [DASHBOARD_VAULT_PATH]: { gated: true, startsFlow: false, why: 'Shows every memory, login and recent access in one place: a copied 30-day cookie must not read it.' },
 };
 const FLOW_STARTS = Object.entries(STEP_UP_ROUTES).filter(([, rule]) => rule.startsFlow).map(([path]) => path);
 export const startsConsoleFlow = (path: string): boolean =>
@@ -106,7 +103,6 @@ export const startsConsoleFlow = (path: string): boolean =>
 
 const gated = (table: Readonly<Record<string, StepUpRule>>) => new Set(Object.entries(table).filter(([, rule]) => rule.gated).map(([name]) => name));
 const GATED_ACTIONS = gated(STEP_UP_ACTIONS), GATED_ROUTES = gated(STEP_UP_ROUTES);
-const DASHBOARD_API_PREFIX = '/console/dashboard/api/';
 const ACTION_PATHS = new Set([CONSOLE_ACTION_PATH, CONTROL_ACTION_PATH, OWNER_CONTROLS_ACTION_PATH]);
 export const CONSOLE_CONFIRM_HREF = '/console/signin?confirm=1';
 
@@ -130,7 +126,7 @@ export const consoleStepUpRefusal = async (request: Request, session: ConsoleSes
   const route = GATED_ROUTES.has(path);
   if (!route && (request.method !== 'POST' || !ACTION_PATHS.has(path))) return null;
   if (session.verified_at !== undefined && now - session.verified_at < CONSOLE_STEP_UP_MS) return null;
-  if (route) return path.startsWith(DASHBOARD_API_PREFIX) ? Response.json({ error: 'step_up_required' }, { status: 403, headers: DASHBOARD_OVERVIEW_HEADERS }) : confirmPage(null);
+  if (route) return confirmPage(null);
   const form = await request.clone().formData().catch(() => null);
   const action = form?.get('action');
   if (typeof action !== 'string' || !GATED_ACTIONS.has(action)) return null;
