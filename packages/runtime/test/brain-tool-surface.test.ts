@@ -284,3 +284,10 @@ it('neither staging nor production runs tool search', () => {
   expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
+
+// Staging loads tools through the harness (find_tools/use_tool), the same on any provider; production keeps the full menu.
+it('staging loads tools through the harness and production does not', () => {
+  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  expect(parsed.env.staging.vars.WALDO_TOOL_LOADER).toBe('harness');
+  expect(parsed.vars.WALDO_TOOL_LOADER).toBe('off');
+});
