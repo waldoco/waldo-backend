@@ -201,7 +201,7 @@ it('react_to_message is offered on an iMessage turn only while the host reports 
   expect(await w.bridgeStub().status()).toMatchObject({ textReady: true, tapbacksReady: false });
 });
 
-it('a tapback the model sends goes out once, on the owner\'s own message, through the outbox before the reply', async () => {
+it('a tapback the model sends goes out once, on the owner\'s own message, through the outbox after the reply', async () => {
   const w = await world();
   await w.activate();
   expect((await w.host.capabilities(true, TAPBACKS)).status).toBe(200);
@@ -210,8 +210,13 @@ it('a tapback the model sends goes out once, on the owner\'s own message, throug
   expect((await w.host.send(asked)).status).toBe(200);
   await w.pump();
   expect(toolOutput(proof.turns[1]!)).toEqual([{ queued: true }]);
-  const first = (await w.host.pull()).delivery!;
-  const command = JSON.parse(first.body);
+  // The reply never waits on a tapback: it takes the mailbox's one slot first.
+  const reply = (await w.host.pull()).delivery!;
+  expect(JSON.parse(reply.body)).toMatchObject({ operation: 'send', text: proof.reply });
+  expect((await w.host.postResult(reply, await w.host.execute(reply))).status).toBe(200);
+  let delivery: Delivery | null = null;
+  await vi.waitFor(async () => { await w.pump(1); delivery = (await w.host.pull()).delivery; expect(delivery).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
+  const command = JSON.parse(delivery!.body);
   expect(command).toMatchObject({ operation: 'react', action: 'add', reaction: { kind: 'standard', type: 'love' }, allowSMSFallback: false,
     target: { chatGuid: CHAT, messageGuid: asked.messageGuid, partIndex: 0 }, binding: { subject: SUBJECT, chatGuid: CHAT } });
   // The same frozen intent handed to the bridge again is the same command, never a second one.
@@ -219,12 +224,10 @@ it('a tapback the model sends goes out once, on the owner\'s own message, throug
   expect(frozen).toMatchObject({ state: 'queued', commandId: command.commandId });
   expect(await w.bridgeStub().enqueueReply({ replyRef: frozen.replyRef, commandId: frozen.commandId, text: '', ownerDoName: frozen.ownerDoName, revision: frozen.revision,
     bindingDigest: frozen.bindingDigest, subject: SUBJECT, reaction: frozen.reaction! })).toEqual({ kind: 'queued' });
-  const result = await w.host.execute(first);
-  expect((await w.host.postResult(first, result)).status).toBe(200);
-  // The reply met the mailbox's one slot taken by the tapback, so it goes on its busy retry once the slot frees.
-  let reply: Delivery | null = null;
-  await vi.waitFor(async () => { await w.pump(1); reply = (await w.host.pull()).delivery; expect(reply).not.toBeNull(); }, { timeout: 10_000, interval: 250 });
-  expect(JSON.parse(reply!.body)).toMatchObject({ operation: 'send', text: proof.reply });
+  expect((await w.host.postResult(delivery!, await w.host.execute(delivery!))).status).toBe(200);
+  await w.pump(2);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends.map(sent => sent.text)).toEqual([proof.reply]);
   expect(w.host.nativeReactions).toEqual([{ commandId: command.commandId, messageGuid: asked.messageGuid, partIndex: 0, type: 'love', action: 'add' }]);
   expect((await outbox(w)).find(row => row.replyRef === frozen.replyRef)).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
 }, 30_000);
