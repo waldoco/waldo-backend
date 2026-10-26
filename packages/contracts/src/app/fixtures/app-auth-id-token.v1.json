@@ -2,12 +2,13 @@
   "requests": [
     { "provider": "apple", "id_token": "fixture-header.fixture-payload.fixture-signature", "nonce": "raw-nonce-0123456789abcdef", "request_id": "signin-apple-0001" },
     { "provider": "apple", "id_token": "fixture-header.fixture-payload.fixture-signature", "nonce": "raw-nonce-0123456789abcdef", "request_id": "signin-apple-0002", "invite": "ABCDEFGHJKMNPQRSTUVW", "phone": "+919876543210", "authorization_code": "c0ffee0123456789abcdef.0.fixture.code-value_01" },
-    { "provider": "google", "id_token": "fixture-header.fixture-payload.fixture-signature", "request_id": "signin-google-0001" },
+    { "provider": "google", "id_token": "fixture-header.fixture-payload.fixture-signature", "nonce": "raw-nonce-0123456789abcdef", "request_id": "signin-google-0001" },
     { "provider": "google", "id_token": "fixture-header.fixture-payload.fixture-signature", "nonce": "raw-nonce-0123456789abcdef", "request_id": "signin-google-0002", "invite": "ABCDEFGHJKMNPQRSTUVW" }
   ],
   "responses": [
     { "state": "active", "session_ref": "sess_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "account_ref": "acct_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "surface": "app", "absolute_expires_at": 1793000000000, "credential": "owner-fixture.0123456789abcdef.fixture-signature" },
-    { "state": "needs_invite" }
+    { "state": "needs_invite" },
+    { "state": "confirm_with_email_code", "email": "member@example.test", "link": "sealed-fixture-payload.0123456789abcdef" }
   ],
   "refusals": [
     { "status": 403, "why": "invalid body, a token Supabase refuses (audience, signature, expiry, nonce), or no confirmed email", "body": { "error": "unavailable" } },

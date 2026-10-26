@@ -98,20 +98,20 @@ describe('app sign-in requests', () => {
 
 describe('app sign-in with an Apple or Google identity token', () => {
   const apple = { provider: 'apple', id_token: 'fixture-header.fixture-payload.fixture-signature', nonce: 'raw-nonce-0123456789abcdef', request_id: 'signin-0001' } as const;
-  const google = { provider: 'google', id_token: 'fixture-header.fixture-payload.fixture-signature', request_id: 'signin-0002' } as const;
+  const google = { provider: 'google', id_token: 'fixture-header.fixture-payload.fixture-signature', nonce: 'raw-nonce-0123456789abcdef', request_id: 'signin-0002' } as const;
 
   it('accepts the fixture requests and answers, and adds the route without touching /auth/verify', async () => {
     const fixture = (await import('./fixtures/app-auth-id-token.v1.json')).default;
     for (const request of fixture.requests) expect(appIdTokenRequestV1Schema.safeParse(request).success).toBe(true);
     for (const response of fixture.responses) expect(appIdTokenResultV1Schema.safeParse(response).success).toBe(true);
     for (const refusal of fixture.refusals) expect(appProblemV1Schema.safeParse(refusal.body).success && refusal.body.error === 'unavailable').toBe(true);
-    expect(appIdTokenResultV1Schema).toBe(appVerifyResultV1Schema);
+    for (const response of fixture.responses) expect(appVerifyResultV1Schema.safeParse(response).success).toBe(response.state !== 'confirm_with_email_code');
     const route = appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/id_token');
-    expect(route).toMatchObject({ method: 'POST', request: appIdTokenRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 });
+    expect(route).toMatchObject({ method: 'POST', request: appIdTokenRequestV1Schema, response: appIdTokenResultV1Schema, authenticated: false, success_status: 200 });
   });
 
   it('takes an invite and an E.164 phone exactly as /auth/verify does', () => {
-    expect(appIdTokenRequestV1Schema.safeParse({ ...google, nonce: 'raw-nonce-0123456789abcdef', invite: 'ABCDEFGHJKMNPQRSTUVW', phone: '+919876543210' }).success).toBe(true);
+    expect(appIdTokenRequestV1Schema.safeParse({ ...google, invite: 'ABCDEFGHJKMNPQRSTUVW', phone: '+919876543210' }).success).toBe(true);
     for (const invalid of [{ ...google, invite: 'abcdefghjkmnpqrstuvw' }, { ...google, phone: '919876543210' }, { ...apple, phone: '' }])
       expect(appIdTokenRequestV1Schema.safeParse(invalid).success).toBe(false);
   });
@@ -123,10 +123,23 @@ describe('app sign-in with an Apple or Google identity token', () => {
       expect(appIdTokenRequestV1Schema.safeParse(invalid).success).toBe(false);
   });
 
-  it('requires a nonce from Apple and keeps it optional for Google', () => {
-    const { nonce: _nonce, ...bare } = apple;
-    expect(appIdTokenRequestV1Schema.safeParse(bare).success).toBe(false);
-    expect(appIdTokenRequestV1Schema.safeParse(google).success).toBe(true);
+  it('requires a nonce from both providers', () => {
+    for (const request of [apple, google]) {
+      const { nonce: _nonce, ...bare } = request;
+      expect(appIdTokenRequestV1Schema.safeParse(bare).success).toBe(false);
+      expect(appIdTokenRequestV1Schema.safeParse(request).success).toBe(true);
+    }
+  });
+
+  it('answers a new identity on an existing owner with an email-code confirm whose link /auth/verify takes back', () => {
+    const confirm = { state: 'confirm_with_email_code', email: 'member@example.test', link: 'sealed-fixture-payload.0123456789abcdef' };
+    expect(appIdTokenResultV1Schema.safeParse(confirm).success).toBe(true);
+    for (const invalid of [{ ...confirm, link: undefined }, { ...confirm, email: 'not-an-email' }, { ...confirm, credential: 'x'.repeat(20) }])
+      expect(appIdTokenResultV1Schema.safeParse(invalid).success).toBe(false);
+    const verify = { email: 'member@example.test', code: '123456' };
+    expect(appVerifyRequestV1Schema.safeParse({ ...verify, link: confirm.link }).success).toBe(true);
+    expect(appVerifyRequestV1Schema.safeParse({ ...verify, link: 'short' }).success).toBe(false);
+    expect(appVerifyResultV1Schema.safeParse(confirm).success).toBe(false);
   });
 
   it('refuses another provider, a token that is not a compact JWT, an unsafe nonce, a bad request id and unknown keys', () => {

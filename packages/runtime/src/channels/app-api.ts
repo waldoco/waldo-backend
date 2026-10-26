@@ -25,7 +25,8 @@ export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string }>;
+// APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -179,16 +180,16 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : ''); } catch { return fail(503); }
+    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : ''); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
     return appSignIn(auth, doName);
   }
 
   if (url.pathname === `${APP_PATH}/auth/id_token`) {
+    if (env.APP_ID_TOKEN_SIGNIN !== '1' || !auth.signInWithIdToken) return fail(404);
     if (request.method !== 'POST') return fail(405);
     const asked = appIdTokenRequestV1Schema.safeParse(await readJson(request));
     if (!asked.success) return fail(403);
-    if (!auth.signInWithIdToken) return fail(404);
     const { provider, id_token: token, nonce, invite, phone } = asked.data;
     const gate = await admit(env, auth, request, 'id_token', await sha256Hex(token));
     if (gate === 'limited') return fail(429);
@@ -200,6 +201,14 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       return fail(403);
     }
     if (signedIn.state === 'needs_invite') return ok({ state: 'needs_invite' });
+    if (signedIn.state === 'confirm') {
+      // Each confirm emails the owner, so it spends the same per-address send budget as /auth/code.
+      const sending = await admit(env, auth, request, 'send', signedIn.email);
+      if (sending === 'limited') return fail(429);
+      if (sending === 'unavailable') return fail(503);
+      try { if (!(await auth.sendCode(signedIn.email))) return fail(503); } catch { return fail(503); }
+      return ok({ state: 'confirm_with_email_code', email: signedIn.email, link: signedIn.link });
+    }
     return appSignIn(auth, signedIn.doName);
   }
 

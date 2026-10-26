@@ -41,14 +41,17 @@ export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
 // phone is the number a new member joins with, in E.164 as the console stores it. It is unverified contact data until the
 // owner texts their link code to Waldo from it. A member who already has an account is not changed by it.
 const joinPhone = z.string().regex(/^\+[1-9]\d{6,14}$/);
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: joinPhone.optional() });
+// link is the ticket from an /auth/id_token answer of confirm_with_email_code: with it, the code also confirms that Apple
+// or Google identity for later sign-ins. Without it, or with one that expired, the code still signs the owner in.
+const signinLink = z.string().min(20).max(2048);
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional(), phone: joinPhone.optional(), link: signinLink.optional() });
 // Sign in with Apple or Google: id_token is the identity token the platform SDK returned. nonce is the raw value whose
 // SHA-256, lower-case hex, the app handed the SDK; Supabase hashes it the same way and compares it with the token's nonce
-// claim, and refuses a request where only one of the two has a nonce. Supabase also checks the signature, the issuer and
-// that the audience is a client id the provider lists. The owner is resolved from the email Supabase confirms, never one
-// the app sends, then exactly as /auth/verify resolves it, with the same invite and phone. A token Supabase refuses, or one
-// with no confirmed email, gets the generic 403. Repeating a request_id never creates a second owner or spends an invite
-// twice; it may open another session. authorization_code is Apple's one-time code from the same sign-in: accepted and
+// claim. Supabase also checks the signature, the issuer and that the audience is a client id the provider lists. The owner
+// is resolved from the email Supabase confirms, never one the app sends, then as /auth/verify resolves it, with the same
+// invite and phone. A token Supabase refuses, or one with no confirmed email, gets the generic 403. request_id names the
+// attempt for the client's own retries; the backend keeps no record of it, so a repeat may open another session, though it
+// never creates a second owner or spends an invite twice. authorization_code is Apple's one-time code from the same sign-in: accepted and
 // unused until the backend holds Apple's Sign in with Apple key, after which it is exchanged for the refresh token that
 // account deletion revokes with Apple.
 const idToken = z.string().max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
@@ -56,7 +59,7 @@ const idTokenNonce = z.string().regex(/^[A-Za-z0-9._~-]{16,128}$/);
 const idTokenRequestId = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 export const appIdTokenRequestV1Schema = z.discriminatedUnion('provider', [
   z.strictObject({ provider: z.literal('apple'), id_token: idToken, nonce: idTokenNonce, request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional(), authorization_code: z.string().regex(/^[A-Za-z0-9._-]{16,1024}$/).optional() }),
-  z.strictObject({ provider: z.literal('google'), id_token: idToken, nonce: idTokenNonce.optional(), request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
+  z.strictObject({ provider: z.literal('google'), id_token: idToken, nonce: idTokenNonce, request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
 ]);
 // absolute_expires_at is when this credential stops working. renew_after, when sent, is when the app should call
 // /auth/renew for a new credential.
@@ -69,7 +72,13 @@ export const appVerifyResultV1Schema = z.union([
   appSessionV1Schema.extend({ credential: z.string().min(20).max(512) }),
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
-export const appIdTokenResultV1Schema = appVerifyResultV1Schema;
+// confirm_with_email_code: the identity reached an existing owner but has not signed them in before. Nothing is signed in;
+// Waldo has emailed a code to `email`, the owner's address, which the token already named. The app sends that code to
+// /auth/verify with `link`; the session comes from there, and later sign-ins with this identity go straight through.
+export const appIdTokenResultV1Schema = z.union([
+  ...appVerifyResultV1Schema.options,
+  z.strictObject({ state: z.literal('confirm_with_email_code'), email: z.email().max(254), link: signinLink }),
+]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
 // A new credential for a new session, and when to renew that. The presented credential keeps working for 5 more
 // minutes, then stops; it renews once, so a second renewal of it is refused.

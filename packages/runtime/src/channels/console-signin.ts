@@ -218,7 +218,9 @@ const confirmIntro = `<h1>Confirm it's you</h1><p>Pairing a Mac, linking a chat,
 const googleLink = (target: string | null) => `<a class="alt" id="signin-google" href="${CONSOLE_GOOGLE_PATH}${target ? `?return_to=${encodeURIComponent(target)}` : ''}">Continue with Google</a>`;
 const signinEmailForm = (note = '', email = '', target: string | null = null, confirming = false, google = false) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${confirming ? confirmIntro : '<h1>Sign in to Waldo</h1><p>Enter your email and Waldo sends you a sign-in code.</p>'}${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(email)}" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>${confirming ? '' : `${google ? googleLink(target) : ''}${staysSignedIn}${joinLink}`}`);
 // The default status is the same for every address, so this page never says who is a member.
-const signinCodeForm = (email: string, note = '', target: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
+// link: the Google identity this code also confirms; it rides along with every form on the page.
+const linkField = (link: string | null) => link ? `<input type="hidden" name="link" value="${esc(link)}">` : '';
+const signinCodeForm = (email: string, note = '', target: string | null = null, link: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}${linkField(link)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${linkField(link)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
 
 // With Supabase configured, the console signs in by email code (invite-required for new members) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
@@ -235,7 +237,9 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let target = consoleReturnTarget(url.searchParams.getAll('return_to'));
   const google = env.CONSOLE_GOOGLE_SIGNIN === '1' && Boolean(env.SUPABASE_PROJECT_URL && env.WALDO_ROUTER_HMAC_SECRET && auth.signInWithAuthCode);
   const emailForm = (note = '', email = '') => signinEmailForm(note, email, target, url.searchParams.get('confirm') === '1', google);
-  const codeForm = (email: string, note = '') => signinCodeForm(email, note, target);
+  let link: string | null = null;
+  const codeForm = (email: string, note = '') => signinCodeForm(email, note, target, link);
+  const formLink = (form: FormData) => { const value = form.get('link'); return typeof value === 'string' && value.length > 0 && value.length <= 2048 ? value : null; };
   // The owner's console session, the same whichever way they proved their email. retry is the page to show on a failure.
   const signInOwner = async (doName: string, hop: string, retry: (note: string) => Response, cookies: readonly string[] = []): Promise<Response> => {
     const withCookies = (response: Response) => { cookies.forEach(cookie => response.headers.append('set-cookie', cookie)); return finish(response); };
@@ -290,12 +294,25 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if (signedIn.state === 'refused') return back(signedIn.reason === 'token' ? 'code_refused' : 'no_email', 'Google did not confirm that sign-in. Try again, or use an email code.');
     // The person proved they hold this Google address, so saying it has no account tells them only about themselves.
     if (signedIn.state === 'needs_invite') return back('not_member', 'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
+    if (signedIn.state === 'confirm') {
+      // A Google account this owner has never signed in with: the mailbox confirms it before anything is signed in.
+      let sent = false;
+      try { sent = await auth.throttle(`send:${signedIn.email}`, CONSOLE_OTP_SEND_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS) && await auth.sendCode(signedIn.email); }
+      catch { sent = false; }
+      if (!sent) return back('confirm_unsent', 'Sign-in is having trouble. Try again in a few minutes, or use an email code.');
+      event('console_google', true, 'confirm_sent');
+      link = signedIn.link;
+      const response = codeForm(signedIn.email, `This is the first time this Google account signs in to your Waldo account. To confirm it, enter the code we emailed to ${signedIn.email}.`);
+      response.headers.append('set-cookie', spent);
+      return finish(response);
+    }
     return signInOwner(signedIn.doName, 'console_google', emailForm, [spent]);
   }
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return finish(emailForm());
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const form = await request.formData();
     target = consoleReturnTarget(form.getAll('return_to'));
+    link = formLink(form);
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     if (form.get('intent') === 'edit') return finish(emailForm('Check your email address, then request a code.', email));
     if (!email.includes('@')) return finish(emailForm('Enter your email address.', email));
@@ -338,6 +355,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
     target = consoleReturnTarget(form.getAll('return_to'));
+    link = formLink(form);
     const email = String(form.get('email') ?? '');
     // A verification code is guessable, so verify attempts are throttled like code sends,
     // fail-closed: without the limiter this public endpoint refuses rather than allowing
@@ -366,7 +384,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       return finish(codeForm(email, 'Too many attempts. Try again in a few minutes.'));
     }
     let doName: string | null;
-    try { doName = await auth.verify(email, String(form.get('code') ?? '')); }
+    try { doName = link ? await auth.verify(email, String(form.get('code') ?? ''), undefined, undefined, link) : await auth.verify(email, String(form.get('code') ?? '')); }
     catch {
       event('console_verify', false, 'verification_unavailable');
       return finish(codeForm(email, 'Verification is temporarily unavailable. Try again shortly.'));

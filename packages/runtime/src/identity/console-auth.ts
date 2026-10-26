@@ -1,6 +1,7 @@
 import { withRequestTimeout } from './request-timeout';
 import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
+import { openValue, sealValue } from './sealed-value';
 
 export const OWNER_COOKIE = 'waldo_owner';
 // A console sign-in stays signed in while it is used: it ends 7 days after its last signed-in request, and 30 days
@@ -53,8 +54,13 @@ export const sessionFamily = (rows: readonly ConsoleSession[], session: string):
   return [...family];
 };
 
-// refused: Supabase declined the token or code. no_email: it vouched for no confirmed email, so no owner can be matched.
-export type IdentitySignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'needs_invite' } | { state: 'refused'; reason: 'token' | 'no_email' }>;
+// refused: Supabase declined the token or code, or it vouched for no confirmed email (no_email). confirm: the identity
+// reached an existing owner it has never signed in; nothing is signed in until the owner enters an email code with link.
+export type IdentitySignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'needs_invite' } | { state: 'refused'; reason: 'token' | 'no_email' }
+  | { state: 'confirm'; email: string; link: string }>;
+// How long a confirm link stays good: about as long as the email code it travels with.
+export const SIGNIN_LINK_SECONDS = 15 * 60;
+const SIGNIN_LINK_PURPOSE = 'signinlink';
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string, code?: string): Promise<boolean>;
@@ -62,12 +68,16 @@ export type ConsoleAuth = Readonly<{
   // the per-location binding layer, which only expresses 10s/60s periods.
   throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
   // Console sign-in: resolves an existing member only; new console members use the signup flow.
-  verify(email: string, code: string, phone?: string, inviteCode?: string): Promise<string | null>;
+  // A link from a confirm also records that Apple or Google identity as trusted, once the code proves the mailbox.
+  verify(email: string, code: string, phone?: string, inviteCode?: string, link?: string): Promise<string | null>;
   // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite. The phone is
   // kept, unverified, only on a join; an existing member's sign-in never changes the number on file.
-  verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string): Promise<string | null>;
+  verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string, link?: string): Promise<string | null>;
   // App sign-in with Apple or Google: Supabase checks the identity token's signature, audience and nonce, and the owner
-  // resolves from the email it confirms exactly as verifyOrJoin resolves it.
+  // resolves from the email it confirms as verifyOrJoin resolves it. An identity signs an existing owner in only once it
+  // is trusted: it created the owner through an invite, or the owner confirmed it with an email code. Supabase links a new
+  // identity to the Auth user holding the same verified email, and a provider's verified flag is the provider's view of the
+  // address (Google's covers whoever held a custom domain's address before), so the mailbox decides.
   signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string): Promise<IdentitySignIn>;
   // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
   signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
@@ -109,6 +119,14 @@ export type ConsoleAuth = Readonly<{
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
 }>;
+
+// The sub claim of a compact JWT; null when the payload is not JSON or carries no usable subject.
+const tokenSubject = (token: string): string | null => {
+  try {
+    const { sub } = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(token.split('.')[1]!.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0)))) as { sub?: unknown };
+    return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? sub : null;
+  } catch { return null; } // Not a JWT payload: the sign-in is refused as an unusable token.
+};
 
 const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newLinkCode = () => [...crypto.getRandomValues(new Uint8Array(10))].map((byte) => LINK_ALPHABET[byte % LINK_ALPHABET.length]).join('');
@@ -216,7 +234,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
     return revoked;
   };
-  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '') => {
+  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '', link = '') => {
     const address = email.trim().toLowerCase();
     const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
       if (!response.ok) return null;
@@ -224,33 +242,56 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return user;
     });
     if (!user?.id || user.email?.toLowerCase() !== address) return null;
-    return ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone);
+    const owner = await ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone);
+    const ticket = owner && link ? await openValue(secret, SIGNIN_LINK_PURPOSE, link, now(), SIGNIN_LINK_SECONDS) : null;
+    if (ticket && ticket.user === user.id && ticket.email === address && (ticket.provider === 'apple' || ticket.provider === 'google') && typeof ticket.subject === 'string')
+      await trustIdentity({ id: user.id, email: address }, ticket.provider, ticket.subject);
+    return owner?.doName ?? null;
   };
   // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
   // owner_for_auth refuse new provisioning; only the join path admits a new member, through
   // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
-  const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = ''): Promise<string | null> => {
+  // joined: this call created the owner, spending its invite.
+  const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = ''): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
     const address = user.email;
     const phoneE164 = '';
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
     const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
-    if (owner || !join || !codeHash) return owner;
+    if (owner) return { doName: owner, joined: false };
+    if (!join || !codeHash) return null;
     const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
-    return typeof joined === 'string' && joined.length > 0 ? joined : null;
+    return typeof joined === 'string' && joined.length > 0 ? { doName: joined, joined: true } : null;
+  };
+  type Identity = Readonly<{ id: string; email: string }>;
+  const identityTrusted = async (user: Identity, provider: string, subject: string) =>
+    (await rpc('signin_identity_trusted', `signinid.trusted.${user.id}.${user.email}.${provider}.${subject}`, { p_auth_user: user.id, p_email: user.email, p_provider: provider, p_subject: subject })) === true;
+  // Recording trust is never what signs the owner in, so a failure here costs only an email code at the next sign-in.
+  const trustIdentity = async (user: Identity, provider: string, subject: string) => {
+    try { await rpc('trust_signin_identity', `signinid.trust.${user.id}.${user.email}.${provider}.${subject}`, { p_auth_user: user.id, p_email: user.email, p_provider: provider, p_subject: subject }); }
+    catch { console.error(JSON.stringify({ hop: 'signin_identity_trust', ok: false, code: 'trust_unavailable' })); }
   };
   // Supabase's own refusal body can echo the token's claims, so only its status is read. A limit or an outage is not a
   // refusal of the token, and throws.
   const granted = (grant: 'id_token' | 'pkce', body: object) => auth(`token?grant_type=${grant}`, body, async response => {
     if (response.status === 429 || response.status >= 500) throw new Error(`token grant ${response.status}`);
     if (!response.ok) return { state: 'refused', reason: 'token' } as const;
-    const { user } = (await response.json()) as { user?: { id?: string; email?: string | null; email_confirmed_at?: string | null } };
+    type GrantedIdentity = { id?: unknown; provider?: unknown; last_sign_in_at?: unknown };
+    const { user } = (await response.json()) as { user?: { id?: string; email?: string | null; email_confirmed_at?: string | null; identities?: GrantedIdentity[] | null } };
     if (!user?.id) return { state: 'refused', reason: 'token' } as const;
-    return user.email && user.email_confirmed_at ? { state: 'user', id: user.id, email: user.email.toLowerCase() } as const : { state: 'refused', reason: 'no_email' } as const;
+    if (!user.email || !user.email_confirmed_at) return { state: 'refused', reason: 'no_email' } as const;
+    return { state: 'user', id: user.id, email: user.email.toLowerCase(), identities: Array.isArray(user.identities) ? user.identities : [] } as const;
   });
-  const signInGranted = async (grant: Awaited<ReturnType<typeof granted>>, inviteCode: string, join: boolean, joinPhone = ''): Promise<IdentitySignIn> => {
+  const signInIdentity = async (grant: Awaited<ReturnType<typeof granted>>, provider: 'apple' | 'google', subject: (identities: readonly { id?: unknown; provider?: unknown; last_sign_in_at?: unknown }[]) => string | null,
+    inviteCode: string, join: boolean, joinPhone = ''): Promise<IdentitySignIn> => {
     if (grant.state === 'refused') return grant;
-    const doName = await ownerFor(grant, inviteCode, join, joinPhone);
-    return doName ? { state: 'owner', doName } : { state: 'needs_invite' };
+    const user = { id: grant.id, email: grant.email }, sub = subject(grant.identities);
+    if (!sub) return { state: 'refused', reason: 'token' };
+    const owner = await ownerFor(user, inviteCode, join, joinPhone);
+    if (!owner) return { state: 'needs_invite' };
+    if (owner.joined) await trustIdentity(user, provider, sub);
+    else if (!(await identityTrusted(user, provider, sub)))
+      return { state: 'confirm', email: user.email, link: await sealValue(secret, SIGNIN_LINK_PURPOSE, { user: user.id, email: user.email, provider, subject: sub, expires: Math.floor(now() / 1000) + SIGNIN_LINK_SECONDS }) };
+    return { state: 'owner', doName: owner.doName };
   };
   return {
     async throttle(key, limit, windowSeconds) {
@@ -267,11 +308,19 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         return true;
       });
     },
-    verify: (email, code, _phone, inviteCode = '') => resolveOwner(email, code, inviteCode, false),
-    verifyOrJoin: (email, code, inviteCode, phone = '') => resolveOwner(email, code, inviteCode, true, phone),
+    verify: (email, code, _phone, inviteCode = '', link = '') => resolveOwner(email, code, inviteCode, false, '', link),
+    verifyOrJoin: (email, code, inviteCode, phone = '', link = '') => resolveOwner(email, code, inviteCode, true, phone, link),
+    // The identity is the token's own subject. Supabase accepted these exact bytes, so the claim is authentic; the grant's
+    // identity list cannot name it, because Supabase leaves an identity it links in this call out of that list.
     signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '') =>
-      signInGranted(await granted('id_token', { provider, id_token: idToken, ...(nonce ? { nonce } : {}) }), inviteCode, true, phone),
-    signInWithAuthCode: async (code, verifier) => signInGranted(await granted('pkce', { auth_code: code, code_verifier: verifier }), '', false),
+      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, () => tokenSubject(idToken), inviteCode, true, phone),
+    // The console's code carries no token, so the identity is the Google one Supabase signed in last: the callback that
+    // issued this code set its last_sign_in_at. Two at the same instant are refused rather than guessed.
+    signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', identities => {
+      const google = identities.filter(identity => identity.provider === 'google' && typeof identity.id === 'string' && typeof identity.last_sign_in_at === 'string' && Number.isFinite(Date.parse(identity.last_sign_in_at)))
+        .map(identity => ({ id: identity.id as string, at: Date.parse(identity.last_sign_in_at as string) })).sort((a, b) => b.at - a.at);
+      return google[0] && google[0].at !== google[1]?.at ? google[0].id : null;
+    }, '', false),
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);
