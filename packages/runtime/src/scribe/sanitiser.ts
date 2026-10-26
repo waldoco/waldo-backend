@@ -207,10 +207,10 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
 ];
-// Matched with only emphasis blanked. A metric named by a word ordinary life shares (hr, pulse, steps, recovery), with no
-// unit, is a reading only when tied to its number as plain text would tie it: "**Steps:** 8,432" is one, "| HR | 12 |" or
-// "Steps — 1500 words" is not. A table row is read by its cells: a metric's own cell, then its value with a unit a cell or
-// three along.
+// Matched with only emphasis blanked. A word ordinary life shares (hr, pulse, steps, recovery), with no unit, names a
+// reading only when tied to its number as plain text would tie it: bold around "Steps:" keeps the tie, a table cell border
+// or a dash between word and number breaks it. A table row is read by its cells: the name's own cell, then its value with a
+// unit a cell or three along.
 const PLAIN_READINGS: readonly RegExp[] = [
   // "1 hr 30" is an hour, and "HR of 12 people" a team.
   reading(String.raw`(?<!\d\s?)\b(?:hr|pulse)\b${STEADY_GAP}${BARE_VALUE}(?!\s*(?:people|staff|employees|members|%))`),
