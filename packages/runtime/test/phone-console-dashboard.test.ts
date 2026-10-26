@@ -5,7 +5,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { consoleAccess } from '../src/channels/console';
-import { APP_PHONE_SET_RECEIPTS_V1 } from '../../contracts/src/app/controls';
+import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-console', CODE = '424242';
@@ -33,6 +33,13 @@ function world(phone: string | null, twilioStatus = 200, linked: string[] = []) 
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1], args = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
     if (fn === 'owner_phone_state') return Response.json(ledger);
     if (fn === 'presence_hint') return Response.json(args.p_provider === 'imessage' ? imessageHint : null);
+    if (fn === 'imessage_enrollment_read') return Response.json({ email: 'owner@example.invalid', phone: ledger.phone, phone_verified: ledger.verified, enrollment: photonEnrollment });
+    if (fn === 'app_session_authority') return Response.json({ owner_id: '5b3c4d5e-6f70-4a8b-9cad-1e2f3a4b5c6d', do_name: args.p_do_name, session_hash: args.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
+    if (fn === 'console_session_inventory') {
+      const at = new Date(Date.now() - 60_000).toISOString();
+      return Response.json([{ session: APP_SESSION, created_at: at, last_seen_at: at, expires_at: new Date(Date.now() + 3_600_000).toISOString(), rotated_to: null, signed_in_at: at }]);
+    }
+    if (fn === 'console_auth_throttle') return Response.json(true);
     if (fn === 'owner_phone_set') {
       sets.push(JSON.parse(args.p_payload!) as Record<string, unknown>);
       Object.assign(ledger, { phone: sets.at(-1)!.phone, verified: false, challenge: null });
@@ -58,10 +65,14 @@ function world(phone: string | null, twilioStatus = 200, linked: string[] = []) 
 }
 // The last characters of the handle the owner's iMessage is linked from, as the directory's presence hint gives them.
 let imessageHint: string | null = null;
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; });
+// The owner's Photon enrollment as the directory reads it, where Waldo's iMessage runs on Photon.
+let photonEnrollment: { phone: string; assigned_number: string; photon_user_id: string } | null = null;
+const APP_SESSION = 'a'.repeat(64);
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; photonEnrollment = null; });
 
 let n = 0;
-const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; state: DurableObjectState }) => Promise<void>) => {
+type AppRead = { revision: string; data: { phone: string | null; verified: boolean; actions: string[]; proof?: string[] } };
+const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; appRead(): Promise<AppRead>; appAct(action: string): Promise<Acted>; state: DurableObjectState }) => Promise<void>) => {
   const name = `phone-console-${n++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
@@ -81,7 +92,18 @@ const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Pr
       return { status: response.status, body: await response.json(), revision: used };
     };
     const act = (action: string, fields: Record<string, string> = {}): Promise<Acted> => actAs(`phone-request-${++request}`, action, fields);
-    await work({ read, act, actAs, state });
+    const app = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': APP_SESSION };
+    const appRead = async (): Promise<AppRead> => {
+      const response = await object.fetch(new Request('https://owner/app/v1/controls?view=phone', { headers: app }));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const appAct = async (action: string): Promise<Acted> => {
+      const body = JSON.stringify({ view: 'phone', revision: (await appRead()).revision, request_id: `phone-app-${++request}`, action });
+      const response = await object.fetch(new Request('https://owner/app/v1/actions', { method: 'POST', headers: { ...app, 'content-type': 'application/json' }, body }));
+      return { status: response.status, body: await response.json() };
+    };
+    await work({ read, act, actAs, appRead, appAct, state });
   });
 };
 
@@ -218,6 +240,32 @@ describe('the console phone view', () => {
         expect(w.ledger.phone).toBe('+919800000002');
         expect(await act('phone.sms_send')).toMatchObject({ status: 409 });
         expect(w.twilio).toEqual([]);
+      });
+    });
+    // Waldo's iMessage on Photon: an owner texts their own assigned number, which exists only once the number on file is enrolled.
+    const photonOn = { PHONE_SMS_VERIFY: '0', IMESSAGE_WALDO_ADDRESS: 'woof@fixture.invalid', IMESSAGE_CONNECTOR_ENABLED: '1', WALDO_ENVIRONMENT: 'test',
+      IMESSAGE_CREDENTIAL_WRAPPING_KEY: 'f'.repeat(64), PHOTON_PROJECT_ID: 'proj-fixture', PHOTON_OAUTH_CLIENT_ID: 'client-fixture', PHOTON_OAUTH_CLIENT_SECRET: 'fictional-photon-client-secret',
+      IMESSAGE_CONNECTOR_POLICY: '{"signatureMaxAgeMs":60000,"heartbeatMaxAgeMs":90000,"capabilityMaxAgeMs":90000,"maxRequestBytes":131072,"maxRetainedBytes":16777216,"maxRecords":4096,"pullMaxWaitMs":0,"deliveryDeadlineMs":20000,"mutationDeadlineMs":30000,"commitmentMaxAgeMs":30000,"setupLifetimeMs":600000,"replyHandoffMaxAgeMs":600000,"source":"handoff-2026-10-10-proposed-local-test-profile"}' };
+    it('on Photon, the app offers to set up iMessage for an unenrolled number and the console does not', async () => {
+      world('+919800000001');
+      await owner(photonOn, async ({ read, appRead, appAct }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set', 'imessage.enroll'], proof: ['imessage'] });
+        expect((await read()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
+        // Photon is not connected in this world, so the tap reaches the enrollment and is refused with its own receipt.
+        expect(await appAct('imessage.enroll')).toMatchObject({ status: 409, body: { receipt: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable } });
+      });
+    });
+    it('on Photon, an owner already enrolled for the number on file is not offered it again', async () => {
+      world('+919800000001');
+      photonEnrollment = { phone: '+919800000001', assigned_number: '+16285550101', photon_user_id: 'user-1' };
+      await owner(photonOn, async ({ appRead }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
+      });
+    });
+    it('without Photon the app is never offered it', async () => {
+      world('+919800000001');
+      await owner(imessageOn, async ({ appRead }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
       });
     });
     it('says an iMessage linked from an Apple ID email proves no number, without showing it', async () => {
