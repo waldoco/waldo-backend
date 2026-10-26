@@ -81,7 +81,8 @@ export const appConnects = (deps: Readonly<{
         sweep();
         const at = deps.now();
         await arm(begun.nonce, { connector: entry.id, channel, ...(thread ? { thread } : {}), at, polls: 0 }, at + 5_000);
-        return { kind: 'code', userCode: begun.user_code, verificationUri: begun.verification_uri, minutes: Math.max(1, Math.floor((begun.expires - at) / 60_000)) };
+        // Rounded: the expiry was fixed when the sign-in began, a few milliseconds before this clock read.
+        return { kind: 'code', userCode: begun.user_code, verificationUri: begun.verification_uri, minutes: Math.max(1, Math.round((begun.expires - at) / 60_000)) };
       }
       const nonce = begun.path.slice(MCP_START_PATH.length);
       const ticket = await deps.issueTicket(appConnectProvider(entry), channel);
