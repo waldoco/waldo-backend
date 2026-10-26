@@ -1,5 +1,6 @@
 import type { ToolName } from '@waldo/contracts';
 import { CHILD_READ_TOOLS } from '../conversation/subagent';
+import { EGRESS_READ_TOOLS } from '../tasks/profiles';
 import { SKIP_UPDATE } from '../prompt/update-cards';
 import type { Loop } from './loops';
 
@@ -7,10 +8,12 @@ import type { Loop } from './loops';
 // read tools only, so a check-back can look but never act; a loop check-back may also close the loops it was given. Once
 // it has read outside text, closing a loop the owner made is the owner's call, so it can put that close on their card.
 export const CHECK_BACK_TOOLS: readonly ToolName[] = CHILD_READ_TOOLS;
-export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'close_loop', 'propose_action'];
+// Turns that start on outside text hold no egress reads (tasks/profiles EGRESS_READ_TOOLS).
+const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
+export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action'];
 // A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
-export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...CHILD_READ_TOOLS, 'propose_action'];
+export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'propose_action'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Say what you checked and what you found, and ask at most one question.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
@@ -18,7 +21,10 @@ const SILENT = `If what you found means the owner gains nothing from hearing fro
 // The note is the owner's own words from when they set it; it says what to look at, it is not the message.
 export const reminderCheckBackText = (note: string): string => [
   `[Reminder due now, set earlier by the owner: "${note}"]`,
-  `${LOOK} If it is a plain reminder, remind them in your own words, with anything current that helps. Do not repeat the note word for word, and do not add a sentence explaining that they asked for it.`,
+  // A due reminder is the nudge itself. Reporting state first ("your reminder is set for 4:13 and doesn't repeat") turns
+  // it into a confirmation of something already done.
+  'This message is the reminder itself: remind them in your own words, usually in one short line. It is not a confirmation, so leave out when it was set, its time and whether it repeats, and do not add a sentence explaining that they asked for it. Do not repeat the note word for word.',
+  'When the reminder is about something you can check (a meeting, an email, a task), check it first with your read tools; if it moved or is already done, say that instead. A plain nudge needs no reads.',
   SILENT,
 ].join('\n\n');
 

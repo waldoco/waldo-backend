@@ -9,6 +9,7 @@ import { episodeIndex } from '../src/channels/episodes';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
+import { jobBook } from '../src/tasks/jobs';
 
 const OWNER_ID = '5b3c4d5e-6f70-4a8b-9cad-1e2f3a4b5c6e';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -84,6 +85,30 @@ describe('look-up erasure through the owner object', () => {
     expect((await call('/app/v1/findings/actions', { request_id: 'forget-do-0001', finding_id: first.id, action: 'forget' })).status).toBe(200);
     expect((state.storage.kv.get('app:thread:th_1') as { title: string }).title).toBe(FORGOTTEN);
     expect(JSON.stringify(state.storage.kv.get('conv:0000000001'))).not.toContain(FOUND.evidence_quote);
+  }));
+  // A background task started from what the look-up found holds its own copy: the open one is cancelled, and no row of the job
+  // book keeps the text in its brief, progress or result once the route answers.
+  const tasked = (state: DurableObjectState) => {
+    const sql = state.storage.sql, book = jobBook(sql, { now: Date.now, newId: () => 'f1d1f1d10001', newToken: () => 'token' });
+    const brief = { title: 'Asha\'s role', goal: `Check that ${FOUND.text}.`, context: `The look-up read: ${FOUND.evidence_quote}.`, done_when: 'Confirmed.', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'lookup-task', origin: 'turn', surface: 'app', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
+    const ticket = book.startAttempt(job.id)!;
+    book.checkpoint(ticket, 1, { turns: [{ call: { call_id: 'c1', name: 'web_search', arguments: '{}' }, output: `Found: ${PUNE.evidence_quote}` }] }, { rounds: 1, costUsd: 0 });
+    return { id: job.id, columns: () => JSON.stringify(sql.exec('SELECT brief_json, checkpoint_json, result_json FROM task_jobs').toArray()), book };
+  };
+  it('withdrawing the look-up cancels a task that carries what it found and leaves no copy in the job book', () => owner('onboarding-erase-withdraw-task', async ({ state, call }) => {
+    seed(state);
+    const task = tasked(state);
+    expect((await call('/app/v1/consents/withdraw', { request_id: 'withdraw-task-0001', purpose: 'owner_lookup' })).status).toBe(200);
+    expect(task.book.get(task.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+    for (const text of [FOUND.text, FOUND.evidence_quote, PUNE.evidence_quote]) expect(task.columns()).not.toContain(text);
+  }));
+  it('forgetting one finding cancels a task that carries it and leaves no copy in the job book', () => owner('onboarding-erase-one-task', async ({ state, call }) => {
+    const { first } = seed(state);
+    const task = tasked(state);
+    expect((await call('/app/v1/findings/actions', { request_id: 'forget-task-0001', finding_id: first.id, action: 'forget' })).status).toBe(200);
+    expect(task.book.get(task.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+    for (const text of [FOUND.text, FOUND.evidence_quote]) expect(task.columns()).not.toContain(text);
   }));
   it('answers nothing when the app session ends while the answer is being built', () => owner('onboarding-session-answer', async ({ call }) => {
     // Admitted by the route and by the onboarding host's first check; the recheck right before the answer finds the session gone.

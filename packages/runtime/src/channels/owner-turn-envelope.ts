@@ -50,12 +50,16 @@ export type OwnerResponder = Readonly<{
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external'): Promise<string>;
+  // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
+  // answers the owner's own message late, never for one Waldo starts itself.
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
-  promote(trace: string): Promise<string>;
+  // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
+  // the memory it leaves to `promoted` once a promotion is applied.
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
   // One welcome-build stage's structured answer; its input and output never reach a trace.
   welcome?(trace: string, stage: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;

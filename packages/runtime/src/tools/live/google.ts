@@ -419,7 +419,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Space-separated Gmail terms must all match; do not paste a full natural-language ask as the query. Start with distinctive sender/repository/topic terms. An empty match is not absence: try a narrower-term query while preserving the same account, date range and result limit, then report the search limit. Never rewrite a quoted or operator query silently. Use get_communication for 'what is new' instead, and read_thread to read one thread in full. Continue search pages with cursor and the same query/date range/account.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match's thread in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
@@ -674,7 +674,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Pass feature to offer one that is not granted yet. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The result says whether a connect button reached the owner or where else they connect; never quote or transcribe a link.',
+  description: 'Read connected Google accounts with their granted features and health status, or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,

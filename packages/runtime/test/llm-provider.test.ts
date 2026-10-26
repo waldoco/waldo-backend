@@ -814,6 +814,29 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests.at(-2)?.step.provider).toBe('workers_ai');
   });
 
+  it('a breaker restored from another one\'s snapshot carries on its failure counts and its cooldown', () => {
+    let now = 1_000;
+    const source = new InMemoryCircuitBreaker({ failureThreshold: 3, cooldownMs: 5_000, now: () => now });
+    for (let failure = 0; failure < 3; failure += 1) source.recordFailure('openai');
+    source.recordFailure('anthropic');
+    const snapshot = source.snapshot();
+    expect(snapshot).toEqual([{ provider: 'openai', failures: 3, opened_at: 1_000 }, { provider: 'anthropic', failures: 1, opened_at: null }]);
+
+    now = 3_000;
+    const restored = new InMemoryCircuitBreaker({ failureThreshold: 3, cooldownMs: 5_000, now: () => now });
+    restored.recordFailure('workers_ai');
+    restored.restore(snapshot);
+    expect(restored.isOpen('openai')).toBe(true);
+    // The restored state replaces what the breaker held.
+    expect(restored.snapshot()).toEqual(snapshot);
+    restored.recordFailure('anthropic');
+    restored.recordFailure('anthropic');
+    expect(restored.isOpen('anthropic')).toBe(true);
+    // The cooldown runs from when the source opened, not from the restore.
+    now = 6_000;
+    expect(restored.isOpen('openai')).toBe(false);
+  });
+
   it('falls to a deterministic template without another gateway call when every route is unavailable', async () => {
     const gateway = new ScriptedGateway(() => ({
       ok: false,
@@ -934,11 +957,11 @@ describe('RuntimeLLMProvider', () => {
         ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
         : { ok: true, data: response(request.request.model, 'answered') });
       const degraded = await new RuntimeLLMProvider({ gateway: refused }).complete(searchTurn, runtimeCtx());
-      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true });
+      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true, tool_search_rejection: 'request rejected (400 invalid_request_error)' });
       const accepted = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model, 'answered') }));
       const clean = await new RuntimeLLMProvider({ gateway: accepted }).complete(searchTurn, runtimeCtx());
       expect(clean).toMatchObject({ ok: true, degraded: false });
-      if (clean.ok) expect(clean.tool_search_degraded).toBeUndefined();
+      if (clean.ok) { expect(clean.tool_search_degraded).toBeUndefined(); expect(clean.tool_search_rejection).toBeUndefined(); }
     });
 
     it('fails as before when the resend is refused too, after one resend only', async () => {

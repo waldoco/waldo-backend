@@ -29,6 +29,8 @@ export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary';
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
+  // The app thread this message belongs in (a task started there); the app route writes it there while the thread is open.
+  appThread?: string;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
@@ -48,6 +50,8 @@ export type FinalRecord = {
   // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
   scheduleNotice?: { scheduleId: string; until: number };
   mailFollowup?: MailFollowupReceipt;
+  // An update card written by a sweep job: its update_cards row, recorded sent once the card is delivered.
+  update?: { recordId: number };
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
@@ -525,4 +529,4 @@ export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], mark
 // owner forget reaches them the same way. A reminder's message is such a copy too: the model writes it from the note and
 // what its read tools find. Only the waiting message is cancelled; the reminder itself is the owner's and stays.
 export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope,
-  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder);
+  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder || !!row.update);

@@ -1,6 +1,6 @@
 import { signInHref } from './model';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
-import { CHAT_TEXT_MAX, visibleText, type ChatMessage, type ChatPart } from './chat-model';
+import { CHAT_TEXT_MAX, visibleText, type ChatActivityKind, type ChatMessage, type ChatPart } from './chat-model';
 import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type LocalMessage } from './chat-store';
 import { ChatText } from './chat-text';
 import { greeting } from './greeting';
@@ -104,13 +104,20 @@ function Closure({ item, store }: { item: LocalMessage; store: ChatStore }) {
     <div className="chat-closure-actions">{!stopped && <button type="button" className="quiet-link" onClick={() => store.askAgain(item.clientId)}>Ask again</button>}<button type="button" className="quiet-link" onClick={() => store.dismiss(item.clientId)}>Dismiss</button></div></div></div>;
 }
 
+// What the working row says while the turn's tools run and no reply is written yet.
+const ACTIVITY_WORDS: Record<ChatActivityKind, string> = {
+  mail: 'Checking your email…', calendar: 'Checking your calendar…', tasks: 'Checking your tasks…', web: 'Looking that up…',
+  files: 'Reading your files…', health: 'Looking at your health data…', memory: 'Checking what I remember…', reminders: 'Checking your reminders…',
+  artifacts: 'Working on the document…', settings: 'Checking your settings…', skills: 'Finding the right tool…', actions: 'Getting that ready…', working: 'Working on it',
+};
+
 function Working({ item, queued, store, now }: { item: LocalMessage; queued: number; store: ChatStore; now: number }) {
   const ms = now - item.sentAt;
   return <div className="chat-msg waldo working" role="status" aria-live="polite">
     <span className="chat-avatar pulse-ring" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
       {item.draft && <div className="chat-prose chat-draft"><ChatText text={item.draft}/></div>}
-      <p className="chat-working"><span className="typing" aria-hidden="true"><i/><i/><i/></span><span className="shimmer">{item.state === 'running' ? 'Working on it' : 'Waldo has your message'}</span>
+      <p className="chat-working"><span className="typing" aria-hidden="true"><i/><i/><i/></span><span className="shimmer">{item.state !== 'running' ? 'Waldo has your message' : item.activity && !item.draft ? ACTIVITY_WORDS[item.activity.kind] : 'Working on it'}</span>
         <span className="meta time" aria-label={`${Math.floor(ms / 1000)} seconds`}>{elapsed(ms)}</span>{queued > 0 && <span className="meta">· {queued} more queued</span>}</p>
       {ms > 45_000 && <p className="meta">Bigger errands can take a few minutes. You can leave this page; the reply will be here.</p>}
       <button type="button" className="quiet" disabled={item.stopping || item.state === 'sending'} onClick={() => void store.stop(item.clientId)}>{item.stopping ? 'Stopping…' : 'Stop'}</button>

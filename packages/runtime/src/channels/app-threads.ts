@@ -7,7 +7,7 @@ import { carriesTopic } from '../memory/forget-guard';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { RunEffectScope } from './run-effect-scope';
 import { APP_THREADS_PATH, type appTranscriptPage } from './app-api';
-import { wantsReplyDraft } from './app-inbox';
+import { chatRevision } from './app-inbox';
 
 // The owner's chats beside main, held in the owner object: one KV record per thread and one per operation. A deleted
 // thread keeps its record as a tombstone, so a read answers 410 and its operations still replay.
@@ -99,7 +99,7 @@ export type AppThreadsHost = Readonly<{
   messages: Readonly<{
     // Admits a message into the owner's inbox; `assertCurrent` runs inside the admission and throws to refuse it.
     admit(conversationRef: string, clientId: string, text: string, assertCurrent: () => void, revision: number): Promise<Admitted>;
-    receipt(conversationRef: string, clientId: string, withDraft?: boolean): unknown;
+    receipt(conversationRef: string, clientId: string, revision?: number): unknown;
     cancel(conversationRef: string, clientId: string): unknown;
     history(thread: string, cursor: string | null, limit: number): Promise<ReturnType<typeof appTranscriptPage>>;
     preview(thread: string): string | null;
@@ -177,7 +177,7 @@ const messages = async (request: Request, host: AppThreadsHost, id: string, rest
   if (verb === undefined ? request.method !== 'GET' : request.method !== 'POST') return problem(405, 'method_not_allowed');
   const refused = refusal(host.storage.kv.get<ThreadRecord>(THREAD + id));
   if (refused) return problem(refused.status, refused.code);
-  const receipt = verb === undefined ? host.messages.receipt(ref, clientId!, wantsReplyDraft(request)) : host.messages.cancel(ref, clientId!);
+  const receipt = verb === undefined ? host.messages.receipt(ref, clientId!, chatRevision(request)) : host.messages.cancel(ref, clientId!);
   return receipt ? answer(receipt) : problem(404, 'message_not_found');
 };
 

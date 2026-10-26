@@ -32,7 +32,7 @@ export const createTelegramFileDownloader = (token: string, fetcher: typeof fetc
   return new Uint8Array(await file.arrayBuffer());
 };
 
-const readableAs = (media: TelegramMedia): Omit<LLMAttachment, 'data_base64'> | null => {
+export const readableAs = (media: TelegramMedia): Omit<LLMAttachment, 'data_base64'> | null => {
   if (media.kind === 'photo') return { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg' };
   const filename = media.fileName ?? 'file';
   if (media.mimeType && IMAGE_TYPES.has(media.mimeType)) return { kind: 'image', mime_type: media.mimeType, filename };

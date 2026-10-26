@@ -43,19 +43,20 @@ export const proactiveTargets = (wanted: readonly ProactiveTarget[], reachable: 
 };
 
 // A call whose effect is a message Waldo sends first, later: a reminder, a scheduled standing order, a loop with a date to
-// check back on. An owner with no surface that takes proactive work (one whose iMessage sender the directory no longer binds,
-// with no other surface) would be promised a message that never comes, so such a call is refused with that reason and nothing is scheduled. A
+// check back on, a background task (it reports when it finishes). An owner with no surface that takes proactive work (one whose
+// iMessage sender the directory no longer binds, with no other surface) would be promised a message that never comes, so such
+// a call is refused with that reason and nothing is scheduled. A
 // standing order for every turn and a loop with no date still work: they need no message from Waldo first.
 const startsLaterMessage = (tool: string, args: unknown): boolean => {
   const given = (args ?? {}) as { trigger?: unknown; due?: unknown };
-  return tool === 'set_reminder'
+  return tool === 'set_reminder' || tool === 'start_task'
     || (tool === 'set_standing_order' && given.trigger !== 'every_turn')
     || (tool === 'open_loop' && given.due !== null && given.due !== undefined);
 };
 export const UNREACHABLE_CHECK_BACK = 'Nothing was scheduled: Waldo cannot message this owner first here, because no surface Waldo can write to first is '
   + 'linked to them now. Tell the owner that, and that a loop with no date stays on the list for when they write.';
 export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string; handle(args: never, ctx: never): Promise<unknown> }>>(handlers: readonly H[], reachable: () => boolean | Promise<boolean>): H[] =>
-  handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop'].includes(handler.name)
+  handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop', 'start_task'].includes(handler.name)
     ? { ...handler, handle: async (args: never, ctx: never) => startsLaterMessage(handler.name, args) && !(await reachable())
       ? { ok: false as const, code: 'rejected' as const, error: UNREACHABLE_CHECK_BACK, source_taint: null }
       : handler.handle(args, ctx) }
@@ -90,12 +91,12 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
 };
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
 
-// What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, meeting prep, a
-// pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
+// What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, an update card,
+// meeting prep, a pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
 // since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote. So does a
 // message WhatsApp took any part of: it is on the owner's phone in part, and the app would get only the rest.
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
-  !!(record.reminder || record.heartbeat || record.mailFollowup || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
+  !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
 // A day card that reaches the app through this route links the app message it became, as a card sent straight to the app does.

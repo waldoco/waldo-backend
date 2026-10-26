@@ -11,7 +11,7 @@ export type PhotonEnv = Readonly<{
 export type PhotonConfig = Readonly<{ projectId: string; clientId: string; clientSecret: string }>;
 
 const ORIGIN = 'https://app.photon.codes';
-const ID = /^[A-Za-z0-9._-]{1,200}$/;
+export const PHOTON_ID = /^[A-Za-z0-9._-]{1,200}$/;
 // projects/spectrum write cover Spectrum users; offline_access yields the refresh token.
 const SCOPE = 'openid offline_access projects:read projects:write spectrum:read spectrum:write';
 export const PHOTON_CALLBACK_PATH = '/imessage/photon/callback';
@@ -24,7 +24,7 @@ export const PHOTON_KEEPALIVE_MS = 7 * 24 * 60 * 60_000;
 
 export const photonConfig = (env: PhotonEnv): PhotonConfig | null => {
   const projectId = env.PHOTON_PROJECT_ID ?? '', clientId = env.PHOTON_OAUTH_CLIENT_ID ?? '', clientSecret = env.PHOTON_OAUTH_CLIENT_SECRET ?? '';
-  return ID.test(projectId) && ID.test(clientId) && clientSecret.length >= 16 ? { projectId, clientId, clientSecret } : null;
+  return PHOTON_ID.test(projectId) && PHOTON_ID.test(clientId) && clientSecret.length >= 16 ? { projectId, clientId, clientSecret } : null;
 };
 
 /** The DO storage subset the token custody uses (a SQLite-backed DO's synchronous KV). */

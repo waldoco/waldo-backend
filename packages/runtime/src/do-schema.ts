@@ -1,8 +1,6 @@
 export const DO_SCHEMA_METADATA_TABLE = 'do_schema_migrations' as const;
 
 export const DO_PRODUCT_TABLES = [
-  'memory_blocks',
-  'memory_inbox',
   'episodes',
   'patrol_log',
   'interventions',
@@ -93,10 +91,8 @@ export const SKILLS_TABLE_SCHEMA = `
       );
     `;
 
-export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
-  version: 1,
-  name: 'hey10-base-context-schema',
-  up: [
+// The five-hall memory tables V1 created. Nothing ever wrote them: owner memory lives in claims and episodes.
+const MEMORY_HALLS_DDL = [
     `
       CREATE TABLE IF NOT EXISTS memory_blocks (
         id                 TEXT PRIMARY KEY,
@@ -156,6 +152,13 @@ export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
       CREATE INDEX IF NOT EXISTS memory_inbox_user_open_idx
         ON memory_inbox(user_id, rejected, needs_confirmation, observed_at);
     `,
+] as const;
+
+export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
+  version: 1,
+  name: 'hey10-base-context-schema',
+  up: [
+    ...MEMORY_HALLS_DDL,
     `
       CREATE TABLE IF NOT EXISTS episodes (
         id            TEXT PRIMARY KEY,
@@ -365,6 +368,70 @@ export const SCHEDULE_RUNS_SCHEMA_MIGRATION: DoMigration = {
   down: ['DROP TABLE IF EXISTS schedule_runs;'],
 };
 
+// Task jobs: one row per job the brain hands to a task worker (kind 'task') or retries itself (kind 'retry_turn'). The
+// owner object is the only writer; every transition compares (id, attempt, lease_token, status), so a late or duplicate
+// worker call changes nothing. A running row always holds a lease token, and a settled row always has its settle time.
+// Shared DDL: the owner's job book creates it idempotently and the product migration below carries the same text.
+export const TASK_JOBS_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS task_jobs (
+    id              TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL CHECK (kind IN ('task', 'retry_turn', 'approval_replay')),
+    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code')),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    origin          TEXT NOT NULL,
+    surface         TEXT NOT NULL,
+    brief_json      TEXT NOT NULL,
+    brief_digest    TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'reported', 'applied', 'cancelled', 'parked')),
+    attempt         INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    lease_token     TEXT,
+    lease_until     INTEGER,
+    crashes         INTEGER NOT NULL DEFAULT 0 CHECK (crashes >= 0),
+    deferrals       INTEGER NOT NULL DEFAULT 0 CHECK (deferrals >= 0),
+    due_at          INTEGER,
+    deadline_at     INTEGER NOT NULL,
+    checkpoint_seq  INTEGER NOT NULL DEFAULT 0 CHECK (checkpoint_seq >= 0),
+    checkpoint_json TEXT,
+    inflight_json   TEXT,
+    taint           TEXT CHECK (taint IS NULL OR taint = 'external'),
+    result_json     TEXT,
+    outcome         TEXT CHECK (outcome IS NULL OR outcome IN ('done', 'partial', 'blocked', 'failed')),
+    park_reason     TEXT CHECK (park_reason IS NULL OR park_reason IN ('crashed', 'provider_unavailable', 'uncertain_effect', 'deadline', 'brief_changed')),
+    cancel_reason   TEXT CHECK (cancel_reason IS NULL OR cancel_reason IN ('owner', 'forgotten')),
+    rounds          INTEGER NOT NULL DEFAULT 0 CHECK (rounds >= 0),
+    cost_usd        REAL NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
+    notes_sent      INTEGER NOT NULL DEFAULT 0 CHECK (notes_sent >= 0),
+    last_note_at    INTEGER,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    settled_at      INTEGER,
+    CHECK ((status = 'running') = (lease_token IS NOT NULL)),
+    CHECK ((status IN ('applied', 'cancelled', 'parked')) = (settled_at IS NOT NULL))
+  );`,
+  'CREATE INDEX IF NOT EXISTS task_jobs_open ON task_jobs (status, due_at);',
+] as const;
+
+export const TASK_JOBS_SCHEMA_MIGRATION: DoMigration = {
+  version: 12,
+  name: 'task-jobs-v0-1',
+  up: TASK_JOBS_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS task_jobs_open;', 'DROP TABLE IF EXISTS task_jobs;'],
+};
+
+// Drops the memory hall tables. Only the retired RunLoopDO ever applied V1, so no live Durable Object holds a row of them.
+export const RETIRE_MEMORY_HALLS_MIGRATION: DoMigration = {
+  version: 13,
+  name: 'retire-memory-halls',
+  up: [
+    'DROP INDEX IF EXISTS memory_inbox_user_open_idx;',
+    'DROP TABLE IF EXISTS memory_inbox;',
+    'DROP INDEX IF EXISTS memory_blocks_recall_idx;',
+    'DROP INDEX IF EXISTS memory_blocks_one_active_pattern;',
+    'DROP TABLE IF EXISTS memory_blocks;',
+  ],
+  down: MEMORY_HALLS_DDL,
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -373,50 +440,13 @@ export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
+  TASK_JOBS_SCHEMA_MIGRATION,
+  RETIRE_MEMORY_HALLS_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
 
 const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
-  memory_blocks: [
-    'id',
-    'user_id',
-    'hall_type',
-    'content',
-    'pattern_id',
-    'rejection_count',
-    'decision_log',
-    'rolled_back_from',
-    'confidence',
-    'last_confirmed_at',
-    'created_at',
-    'valid_from',
-    'valid_to',
-    'superseded_by',
-    'source_trust',
-    'source_ref',
-  ],
-  memory_inbox: [
-    'id',
-    'user_id',
-    'operation',
-    'hall',
-    'claim',
-    'conditions_json',
-    'content',
-    'proposed_pattern_id',
-    'observed_at',
-    'source_trust',
-    'source_ref',
-    'conflict_class',
-    'rationale',
-    'source',
-    'source_taint',
-    'rejected',
-    'rejection_reason',
-    'needs_confirmation',
-    'created_at',
-  ],
   episodes: ['id', 'user_id', 'occurred_at', 'summary', 'source', 'source_ref', 'created_at'],
   patrol_log: ['id', 'user_id', 'observed_at', 'entry_type', 'summary', 'source_ref', 'created_at'],
   interventions: [

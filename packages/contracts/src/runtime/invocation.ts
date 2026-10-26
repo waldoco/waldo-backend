@@ -63,17 +63,20 @@ export const invocationInputReferenceSchema = z.strictObject({
 });
 export type InvocationInputReference = z.infer<typeof invocationInputReferenceSchema>;
 
-// The jobs the owner's own Durable Object runs through the owner responder: the schedule kinds it runs, and the report
-// of a result the owner's paired device sent back, which no schedule entry carries.
+// The jobs the owner's own Durable Object runs through the owner responder: the schedule kinds it runs, the report of a
+// result the owner's paired device sent back, the report of a background task, and the late answer to an owner message
+// no model could answer at the time. No schedule entry carries the last three.
 const SCHEDULED_OWNER_JOBS = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order', 'patrol']).options;
-export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup']);
+export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup', 'task_report', 'retry_turn']);
 export type OwnerJob = z.infer<typeof ownerJobSchema>;
 
-// A reminder, heartbeat, standing-order fire or device follow-up reaches out to the owner without an owner message, which
-// is what the intervention trigger names; the other jobs keep the trigger their schedule kind already carries.
+// A reminder, heartbeat, standing-order fire, device follow-up or task report reaches out to the owner without an owner
+// message, which is what the intervention trigger names; a retried turn answers the owner's own message; the other jobs keep
+// the trigger their schedule kind already carries.
 const OWNER_JOB_TRIGGER: Readonly<Record<OwnerJob, TriggerType>> = {
   brief: 'brief', pre_activity_spot: 'pre_activity_spot', dreaming: 'dreaming_mode',
   reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention', device_followup: 'intervention', patrol: 'patrol',
+  task_report: 'intervention', retry_turn: 'user_message',
 };
 
 export const invocationIntentSchema = z.discriminatedUnion('kind', [

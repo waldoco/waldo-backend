@@ -314,4 +314,9 @@ describe('toolParameters', () => {
     expect(JSON.parse(JSON.stringify(params))).toEqual(params);
     expect(params.type).toBe('object');
   });
+
+  // Every definition rides every round's tool list; a dialect URI tells the model nothing.
+  it('omits the $schema dialect marker', () => {
+    expect(toolParameters(z.strictObject({ q: z.string() }))).not.toHaveProperty('$schema');
+  });
 });

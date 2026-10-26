@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HEALTH_PROPOSAL_MODES, SCHEDULE_KINDS, setSchedulePreferenceArgsSchema } from './loops';
+import { HEALTH_PROPOSAL_MODES, openLoopArgsSchema, SCHEDULE_KINDS, setSchedulePreferenceArgsSchema } from './loops';
 
 describe('set_schedule_preference arguments', () => {
   it('turns health proposals off and on like every other scheduled behavior', () => {
@@ -21,5 +21,14 @@ describe('set_schedule_preference health mode', () => {
   it('refuses a mode with any other kind or action, and a mode it does not know', () => {
     for (const input of [{ action: 'off', kind: 'health_proposals', mode: 'live' }, { action: 'on', kind: 'nightly', mode: 'live' }, { action: 'reset', mode: 'auto' }, { action: 'on', mode: 'live' }, { action: 'on', kind: 'health_proposals', mode: 'loud' }])
       expect(setSchedulePreferenceArgsSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
+  });
+});
+
+describe('open_loop source_ref', () => {
+  // A loop bound to a mail source skips the owner's card (the taint gate's one exception), so the model must read it as a
+  // guess at follow-up, not as something the owner agreed to.
+  it('tells the model a source-bound loop is a follow-up of unknown completion, never the owner\'s commitment or permission', () => {
+    expect(openLoopArgsSchema.shape.source_ref.description).toMatch(/unknown completion/);
+    expect(openLoopArgsSchema.shape.source_ref.description).toMatch(/never an owner commitment or permission/);
   });
 });

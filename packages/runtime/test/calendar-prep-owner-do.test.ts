@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import type { CalendarItem, CalendarChange } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -9,7 +9,11 @@ import { loopBook } from '../src/channels/loops';
 import { updateBook } from '../src/channels/update-cards';
 import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, textFingerprint } from '../src/memory/claims';
+import { FORGET_PURGE_ID } from '../src/memory/forget-purge';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
+import { reportMachineJobs } from './helpers/heartbeat-job';
 
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', changes: [] as CalendarChange[], mutate: null as (() => void) | null, ack: true }));
 vi.mock('../src/connectors/google', async load => {
@@ -180,7 +184,7 @@ it('actual default owner DO freezes grounded local-time prep and rechecks quiet/
   });
 });
 
-type CounterCase = { name: string; zone?: string; now?: string; day?: string; last?: number | string | null; marker?: unknown; tables?: string[]; ready: boolean; flag?: string; advanceTo?: string; updates?: boolean; inspection?: boolean };
+type CounterCase = { name: string; zone?: string; now?: string; day?: string; last?: number | string | null; marker?: unknown; tables?: string[]; ready: boolean; flag?: string; advanceTo?: string; updates?: boolean; inspection?: boolean; capped?: boolean };
 const counterCases: CounterCase[] = [
   { name: 'historical legacy UTC counters', ready: true },
   { name: 'historical budget-only counters', tables: ['daily_push_budget'], ready: true },
@@ -219,7 +223,8 @@ const counterCases: CounterCase[] = [
   { name: 'invalid old zone', marker: 'Invalid/Zone', ready: false, inspection: true },
   { name: 'empty old zone', marker: '', ready: false, inspection: true },
   { name: 'nonstring old zone', marker: 1, ready: false, inspection: true },
-  { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true },
+  // Today's rows already hold the day's two pre-activity sends: read at once, they hold the prep before any model call.
+  { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true, capped: true },
   { name: 'flag zero preserves legacy counters', flag: '0', ready: false },
 ];
 
@@ -259,7 +264,8 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
       expect((await fire(100)).status).toBe(200);
       expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toEqual(scenario.ready ? zone : scenario.marker);
       const decisions = () => fixture.requests.filter(r => r.request.messages.at(-1)?.content.includes('[Meeting prep decision'));
-      expect(decisions()).toHaveLength(scenario.ready ? 1 : 0);
+      expect(decisions()).toHaveLength(scenario.ready && !scenario.capped ? 1 : 0);
+      if (scenario.capped) expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check' AND trace LIKE 'briefs:%'").toArray()).toEqual([{ note: 'held_budget' }]);
       if (!scenario.ready && !scenario.flag) {
         const hold = state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'brief_sweep' AND ok = 0 ORDER BY id DESC LIMIT 1").one();
         expect(hold.note).toContain(scenario.inspection ? 'inspection required' : 'await both civil-day rollovers');
@@ -285,9 +291,106 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
       }
       if (scenario.ready) {
         await fire(102);
-        expect(decisions()).toHaveLength(1);
+        expect(decisions()).toHaveLength(scenario.capped ? 0 : 1);
         expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
       }
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
+});
+
+// A meeting the owner accepted: its prep is grounded by a reader job, whose worker reports (stood in for here); the jobs
+// lane then runs the prep decision on what it found, and the note goes out with the admission. Quiet hours write no job.
+it.each(['accepted', 'quiet'] as const)('an accepted meeting\'s prep runs through a reader job (%s)', async mode => {
+  const name = `calendar-prep-job-${mode}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-03T04:30:00Z');
+    Date.now = () => now;
+    fixture.sent = []; fixture.requests = []; fixture.mutate = null; fixture.decision = 'notify'; fixture.ack = true; fixture.changes = [];
+    fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false,
+      description: 'Bring the onboarding mocks', etag: 'r1', attendee_emails: ['pat@example.test', 'owner@example.test'], owner_status: 'accepted' };
+    const owner = new OwnerDO(state, { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+    state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    try {
+      if (mode === 'quiet') loopBook(state.storage.sql, { now: () => now, newId: () => 'x' }).setProactivity({ quiet_start: '09:00', quiet_end: '11:00', volume: 'normal' });
+      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 100, message: { message_id: 101, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
+      expect(response.status).toBe(200);
+      const decisions = () => fixture.requests.filter(r => r.request.messages.at(-1)?.content.includes('[Meeting prep decision'));
+      // The sweep asks no model for an accepted meeting: it writes the job, or, in quiet hours, nothing.
+      expect(decisions()).toEqual([]);
+      const jobs = reportMachineJobs(state.storage.sql, { status: 'done', summary: 'Pat sent the agenda.', findings: [{ text: 'Pat asks to review the onboarding mocks first.', source_ref: 'thread:t1' }], proposals: [], left: [] });
+      expect(jobs).toHaveLength(mode === 'quiet' ? 0 : 1);
+      if (mode === 'quiet') return;
+      await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
+      expect(decisions()).toHaveLength(1);
+      expect(decisions()[0]!.request.messages.at(-1)!.content).toContain('Pat asks to review the onboarding mocks first.');
+      const rows = (state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(r => r.calendarPrep);
+      expect(rows).toHaveLength(1);
+      now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+      expect(fixture.sent.filter(text => text.startsWith('Design review at 10:30'))).toHaveLength(1);
+      expect(state.storage.sql.exec('SELECT status FROM task_jobs').toArray()).toEqual([{ status: 'applied' }]);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});
+
+// The owner is forgetting a topic: a meeting whose event carries it gets no reader job, so nothing the worker would read is
+// written while the forget runs; the sweep after the forget settles writes it. The topic is in custody with the purge job
+// armed for its next try, as a forget whose first pass left a copy behind is.
+describe('meeting prep while the owner is forgetting a topic', () => {
+  const TOPIC = 'onboarding mocks';
+  const withHeld = (name: string, work: (o: Readonly<{ state: DurableObjectState; fire(): Promise<void>; jobs(): unknown[]; settle(): Promise<void> }>) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const originalNow = Date.now;
+      const now = Date.parse('2026-10-03T04:30:00Z');
+      Date.now = () => now;
+      fixture.sent = []; fixture.requests = []; fixture.mutate = null; fixture.decision = 'notify'; fixture.ack = true; fixture.changes = [];
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false,
+        description: `Bring the ${TOPIC}`, etag: 'r1', attendee_emails: ['pat@example.test', 'owner@example.test'], owner_status: 'accepted' };
+      const owner = new OwnerDO(state, { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+      state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      claimStore(state.storage.sql);
+      state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')", textFingerprint(TOPIC), TOPIC, new Date(now).toISOString());
+      ensureSchema(state.storage);
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: FORGET_PURGE_ID, kind: 'forget_purge', payloadRefs: { id: FORGET_PURGE_ID }, occurrenceAt: now + 3_600_000, dueAt: now + 3_600_000 });
+      let update = 100;
+      try {
+        await work({
+          state,
+          fire: async () => {
+            const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
+            expect(response.status).toBe(200);
+          },
+          jobs: () => state.storage.sql.exec('SELECT origin, status FROM task_jobs').toArray(),
+          settle: async () => {
+            await (owner as unknown as { forgetPurgeJob(): { run(): Promise<unknown> } }).forgetPurgeJob().run();
+            expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM topic_purge_pending').one()).toEqual({ n: 0 });
+          },
+        });
+      } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+    });
+
+  it('a meeting whose event carries the topic writes no reader job, and logs only a code', () => withHeld('calendar-prep-held', async ({ state, fire, jobs }) => {
+    await fire();
+    expect(jobs()).toEqual([]);
+    expect(state.storage.sql.exec("SELECT note FROM trace_log WHERE hop = 'machine_check' AND trace LIKE 'briefs:%'").toArray()).toEqual([{ note: 'held_topic' }]);
+    expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM trace_log').toArray())).not.toContain(TOPIC);
+  }));
+
+  it('the same meeting gets its reader job once the forget settles', () => withHeld('calendar-prep-held-settled', async ({ fire, jobs, settle }) => {
+    await fire();
+    expect(jobs()).toEqual([]);
+    await settle();
+    await fire();
+    expect(jobs()).toEqual([{ origin: 'machine:meeting_prep', status: 'queued' }]);
+  }));
+
+  it('a meeting that does not carry the topic gets its reader job meanwhile', () => withHeld('calendar-prep-held-unrelated', async ({ fire, jobs }) => {
+    fixture.event = { ...fixture.event!, id: 'event-2', title: 'Budget sync', description: 'Bring the numbers' };
+    await fire();
+    expect(jobs()).toEqual([{ origin: 'machine:meeting_prep', status: 'queued' }]);
+  }));
 });

@@ -1,3 +1,4 @@
+import type { EmbeddingRunner } from '../memory/semantic-recall';
 import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
@@ -10,6 +11,7 @@ export type TelegramWebhookEnv = Readonly<{
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
   DEVICE_BRIDGE_DO?: DurableObjectNamespace<import('../devices/device-bridge-do').DeviceBridgeDO>;
+  TASK_WORKER_DO?: DurableObjectNamespace<import('../tasks/worker-do').TaskWorkerDO>;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   // Signs connector OAuth state (Google, MCP). Without it connector sign-in is off; it never falls back to another secret.
@@ -70,10 +72,15 @@ export type TelegramWebhookEnv = Readonly<{
   GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
+  MEMORY_SEMANTIC_RECALL?: string;
+  AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
   OWNER_LOOKUP?: string;
+  // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
+  OWNER_PROFILE?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

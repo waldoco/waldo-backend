@@ -9,7 +9,8 @@ export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 
 // get_health sits in the core brain; the rest of the owner's health reads and logs sit in the health brain.
 const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', ...toolsWhere((record) => record.brain === 'health')]);
-const TOOL_HOP = /^(?:subagent_)?tool_(.+)$/;
+// Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
+const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 
 // The openings of the health blocks the prompt builders write: the composer's and the REASONS builder's derived health
 // context, the owner turn's shared-health label and the owner-logged meals and workouts. Each block is one paragraph.

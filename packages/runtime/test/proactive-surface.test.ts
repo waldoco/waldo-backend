@@ -132,6 +132,7 @@ describe('messages still waiting for WhatsApp', () => {
     expect(waiting(record({ id: 'heartbeat:hb:1', reminder: undefined, heartbeat: { id: 'hb', occurrence: 1, schedulerRunId: 'r', loops: [] } }))).toBe(true);
     expect(waiting(record({ id: 'day-card:2026-10-03:card:brief', reminder: undefined, dayCard: { day: '2026-10-03', card: 'card:brief', foldUpTo: 0 } }))).toBe(true);
     expect(waiting(record({ id: 'standing-order:order:ord1:1', reminder: undefined, standingOrder: { runId: 'run-3', gate: 'act_and_report' } }))).toBe(true);
+    expect(waiting(record({ id: 'update:job_1', reminder: undefined, update: { recordId: 4 } }))).toBe(true);
     expect(waiting(record({ id: `${WHATSAPP_COPY_PREFIX}scheduled-1`, reminder: undefined }))).toBe(false);
     expect(waiting(record({ id: 'turn:wa-1', reminder: undefined, inbox: { id: 'in-1', runId: 'run-2', attempt: 'a' } }))).toBe(false);
     // Another surface's record, and one whose chat and owner disagree, are never taken for WhatsApp's.
@@ -179,13 +180,14 @@ describe('a send on a surface that acknowledges only in its turn', () => {
 describe('a check-back for an owner Waldo cannot message first', () => {
   const handled: string[] = [];
   const handler = (name: string) => ({ name, handle: async (args: never) => { handled.push(`${name}:${JSON.stringify(args)}`); return { ok: true as const, data: {}, source_taint: null }; } });
-  const tools = [handler('set_reminder'), handler('set_standing_order'), handler('open_loop'), handler('read_memory')];
+  const tools = [handler('set_reminder'), handler('set_standing_order'), handler('open_loop'), handler('start_task'), handler('read_memory')];
   const call = (reachable: boolean, name: string, args: object) => refusingUnreachableCheckBacks(tools, () => reachable).find((tool) => tool.name === name)!.handle(args as never);
 
   it.each([
     ['set_reminder', { note: 'call Sam', at: '2026-10-22T09:00', repeat: 'none' }],
     ['set_standing_order', { scope: 'send me a mail digest', trigger: 'daily', at: '08:00' }],
     ['open_loop', { title: 'Check the visa appointment', due: '2026-10-23' }],
+    ['start_task', { profile: 'reader', title: 'Inbox since Monday', goal: 'Who is waiting on me', context: '', done_when: 'A list' }],
   ] as const)('refuses %s with the reason and schedules nothing', async (name, args) => {
     handled.length = 0;
     expect(await call(false, name, args)).toEqual({ ok: false, code: 'rejected', error: UNREACHABLE_CHECK_BACK, source_taint: null });

@@ -29,7 +29,8 @@ const config = { endpoint: 'https://langfuse.test/api/public/otel/v1/traces', he
 const exportBodies = async (entries: readonly TurnLogEntry[], captureText: boolean): Promise<string> => {
   const bodies: string[] = [];
   const exporter = otlpTurnExporter(config, { environment: 'staging', release: 'test', channel: 'telegram', userId: 'tg:1', sessionId: 's', captureText },
-    async (_url, init) => { bodies.push(String(init.body)); return new Response('{}', { status: 200 }); });
+    // Random span ids and nanosecond times can contain any short number, so they are blanked before the value checks.
+    async (_url, init) => { bodies.push(String(init.body).replace(/"(traceId|spanId|parentSpanId|startTimeUnixNano|endTimeUnixNano)":"[^"]*"/g, '"$1":""')); return new Response('{}', { status: 200 }); });
   for (const entry of entries) await exporter(entry);
   // The exporter sends a trace when its root hop arrives; the channel listener logs that root after the responder's hops.
   for (const trace of new Set(entries.map((entry) => entry.trace))) {
@@ -160,6 +161,16 @@ describe('trace health scrub at the gate, capture on', () => {
     for (const value of ['61.7', '57.3']) { expect(JSON.stringify(gated)).not.toContain(value); expect(otlp).not.toContain(value); }
     expect(JSON.stringify(gated[0]!.text)).toContain('Dentist moved to Thursday');
     expect(gated[1]!.text!.output).toBe(HEALTH_WITHHELD);
+  });
+
+  // A task worker's calls log under task_tool_<name>. Its read of a stored output is withheld like an owner turn's: the hop
+  // alone cannot say what the stored output was (a connected server's reply can carry readings).
+  it('withholds a task worker\'s read_tool_output hop the same way', async () => {
+    const { gated } = await sinks([
+      { trace: 'task:job_1:1', hop: 'task_tool_read_tool_output', ms: 1, ok: true, text: { input: '{"id":"job_1.1.to-1"}', output: '{"ok":true,"data":{"text":"Resting heart rate fifty eight this week"}}' } },
+    ]);
+    expect(gated[0]!.text!.output).toBe(HEALTH_WITHHELD);
+    expect(gated[0]!.text!.input).toContain('job_1.1.to-1');
   });
 
   it('runs the free-text floor over error, detail and code too', async () => {

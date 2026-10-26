@@ -41,6 +41,15 @@ authentication/scope failure (including revoked, expired or pending-only credent
 authentication; 409 identity/result/generation conflict; 429 redeem throttle; 503 infrastructure or
 backpressure (never a success ACK). Diagnostics are fixed codes; no bodies, handles, GUIDs or keys.
 
+**Photon attachments (additive, optional).** A `message` or `update` event may carry
+`photonAttachments: [{id,name,mimeType,size}]`: Photon's attachment GUID, its file name (a basename),
+its MIME type and its size in bytes, as Photon reports them. A Photon host sends metadata only and
+`attachments: []`; the Worker fetches the bytes from Photon by `id`, only for the owner whose own
+message Photon shows them on. `messageGuid` must be Photon's message GUID and `senderHandle` Photon's
+sender address, since the Worker checks both against Photon. The caption stays in `text`, without
+U+FFFC placeholders. A host that omits the field behaves as before. A Mac host keeps `attachments`;
+its files are answered, not opened.
+
 **Results.** `local_recorded` means recorded in the Mac's local database, never delivered/read. An
 `unknown` result or a missing result after the mutation deadline permanently quarantines the account's
 send lane; there is no clear/reconciliation API. Receipt events are candidate evidence only.
