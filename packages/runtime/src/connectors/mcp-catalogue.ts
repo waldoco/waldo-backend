@@ -9,9 +9,11 @@
 // definition asks first again. Every other tool asks first until the
 // owner allows it in Connections. Tool names and descriptions stay the server's own words, never Waldo's.
 //
-// Only servers that sign Waldo in without a registered client (a client metadata document or open dynamic registration)
-// belong here, because the oauth-proxy edge holds no pre-registered clients for MCP servers.
+// A server that signs Waldo in without a registered client (a client metadata document or open dynamic registration)
+// needs nothing else. One that accepts only clients registered with the vendor by hand is pre_registered: the operator
+// registers Waldo there once per environment and seeds the client into the oauth-proxy edge, which holds its secret.
 import { GRANOLA_AUTH_ORIGIN, GRANOLA_MCP_URL, isReviewedGranola } from './granola-mcp';
+import type { ClientPins } from './mcp-oauth';
 
 export type McpCatalogueEntry = Readonly<{
   id: string;
@@ -20,6 +22,17 @@ export type McpCatalogueEntry = Readonly<{
   about: string;
   url: string;
   issuer: string;
+  // Signs in only with the client seeded into the edge for this issuer (docs/ops/PRE_REGISTERED_OAUTH_CLIENTS.md).
+  pre_registered?: true;
+  // The scopes Waldo asks for, in place of whatever the server's challenge or metadata offers (offline_access is added
+  // only when the authorization server lists it). A pre-registered app lists the same scopes, and the vendor refuses a
+  // request for any it does not.
+  scopes?: readonly string[];
+  // How the vendor's token endpoint answers, pinned with the connection for the edge.
+  token_dialect?: ClientPins['token_dialect'];
+  // Its writes speak as the owner to other people. A write the owner allowed runs without a card only in their own
+  // untainted turns, and every write that runs is kept, without its arguments or result, for Patrol's access log.
+  sends_as_owner?: true;
 }>;
 
 export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
@@ -27,6 +40,11 @@ export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
   { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', url: 'https://mcp.notion.com/mcp', issuer: 'https://mcp.notion.com' },
   { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', issuer: 'https://todoist.com' },
   { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.', url: 'https://mcp.linear.app/mcp', issuer: 'https://mcp.linear.app' },
+  {
+    id: 'slack', label: 'Slack', url: 'https://mcp.slack.com/mcp', issuer: 'https://mcp.slack.com', pre_registered: true, token_dialect: 'ok_envelope', sends_as_owner: true,
+    about: 'Search messages and read channels and threads. Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol.',
+    scopes: ['search:read.public', 'search:read.private', 'search:read.im', 'search:read.mpim', 'search:read.users', 'channels:history', 'groups:history', 'im:history', 'mpim:history', 'channels:read', 'groups:read', 'im:read', 'mpim:read', 'users:read', 'chat:write'],
+  },
 ];
 
 const same = (a: string, b: string) => {

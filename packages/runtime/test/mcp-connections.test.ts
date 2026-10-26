@@ -12,6 +12,7 @@ import { runToolLoop, type ToolLoopEvent } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { fakeMcpWorld, ISSUER, MCP_URL, WALDO_ORIGIN, type FakeMcpWorld, type FakeOptions } from './support/fake-mcp-world';
+import { readAccessLog } from '../src/channels/dashboard-access-log';
 import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/oauth-edge-harness';
 
 const SECRET = 'fixture-state-secret';
@@ -715,4 +716,100 @@ describe('Official servers from the catalogue', () => {
     expect(new Set(MCP_CATALOGUE.map((entry) => entry.id)).size).toBe(MCP_CATALOGUE.length);
     for (const entry of MCP_CATALOGUE) expect(new URL(entry.url).protocol).toBe('https:');
   });
+});
+
+describe('Slack, an official server that signs in only with a pre-registered client', () => {
+  const SLACK = MCP_CATALOGUE.find((entry) => entry.id === 'slack')!;
+  const CLIENT = { id: 'fixture-slack-client', secret: 'fixture-slack-client-secret' };
+  const message = { type: 'object', properties: { channel: { type: 'string' }, text: { type: 'string' } } };
+  const slackTools = [
+    { name: 'slack_search_public', description: 'Search public channels.', inputSchema: message, annotations: { readOnlyHint: true } },
+    { name: 'slack_read_thread', description: 'Read a thread.', inputSchema: message, annotations: { readOnlyHint: true } },
+    { name: 'slack_send_message', description: 'Send a message as the user.', inputSchema: message, annotations: { readOnlyHint: false } },
+    { name: 'slack_schedule_message', description: 'Schedule a message as the user.', inputSchema: message },
+  ];
+  const slack: Partial<FakeOptions> = { origin: new URL(SLACK.url).origin, issuer: SLACK.issuer, registration: 'none', issParameter: false, revocation: false, offlineAccess: false, clientSecret: CLIENT.secret, envelope: true, tools: slackTools };
+  const seed = (vault: VaultFake, issuer = SLACK.issuer) => vault.clients.set(`${issuer} ${WALDO_ORIGIN}/oauth/mcp/callback`, { client_id: CLIENT.id, client_auth: 'client_secret_post', client_secret: CLIENT.secret, token_endpoint: `${issuer}/token` });
+  const runs = async (mcp: McpConnections, ownerTurn = true) => (await mcp.search({ server: 'slack', ownerTurn: () => ownerTurn })).tools.map((tool) => [tool.tool, tool.runs]);
+
+  it('is in the catalogue with its own scopes, the token dialect and the sends-as-owner rule', () => {
+    expect(SLACK).toMatchObject({ url: 'https://mcp.slack.com/mcp', issuer: 'https://mcp.slack.com', pre_registered: true, token_dialect: 'ok_envelope', sends_as_owner: true });
+    expect(SLACK.scopes).toEqual(['search:read.public', 'search:read.private', 'search:read.im', 'search:read.mpim', 'search:read.users', 'channels:history', 'groups:history', 'im:history', 'mpim:history', 'channels:read', 'groups:read', 'im:read', 'mpim:read', 'users:read', 'chat:write']);
+    expect(SLACK.scopes!.filter((scope) => scope.endsWith(':write'))).toEqual(['chat:write']);
+  });
+
+  it('connects with the client seeded at the edge, asks for the catalogue scopes only, and pins how the token endpoint answers', withRig('slack-connect', slack, async (rig) => {
+    seed(rig.vault);
+    const { authorize, outcome } = await connect(rig, SLACK.url, 'allow', 'slack');
+    expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'slack', official: 'slack' });
+    expect(authorize.searchParams.get('client_id')).toBe(CLIENT.id);
+    expect(authorize.searchParams.get('scope')).toBe(SLACK.scopes!.join(' '));
+    expect(rig.edge.filter((body) => body.op === 'client')).toEqual([{ op: 'client', issuer: SLACK.issuer, redirect_uri: `${WALDO_ORIGIN}/oauth/mcp/callback` }]);
+    expect(rig.edge.some((body) => body.op === 'register')).toBe(false);
+    expect(rig.edge.find((body) => body.op === 'exchange')!.pins).toMatchObject({ issuer: SLACK.issuer, client_id: CLIENT.id, client_auth: 'client_secret_post', token_dialect: 'ok_envelope' });
+    expect(rig.mcp.list()[0]).toMatchObject({ name: 'slack', registration: 'pre_registered', scopes: SLACK.scopes, status: 'active', tools: 4 });
+    expect(JSON.stringify([rig.edge, rig.logs, rig.mcp.list(), catalogueTiles(rig.mcp.list())])).not.toContain(CLIENT.secret);
+  }));
+
+  it('does not connect when no client was seeded for this Waldo', withRig('slack-unseeded', slack, async (rig) => {
+    expect(await rig.mcp.begin(SLACK.url, WALDO_ORIGIN, 'slack')).toEqual({ kind: 'failed', reason: 'registration_refused' });
+  }));
+
+  it('offers the seeded client to no other server: Slack\'s address with another sign-in service, or a look-alike host', withRig('slack-elsewhere', { ...slack, issuer: 'https://auth.chat-lookalike.example' }, async (rig) => {
+    seed(rig.vault, 'https://auth.chat-lookalike.example');
+    expect(await rig.mcp.begin(SLACK.url, WALDO_ORIGIN)).toEqual({ kind: 'failed', reason: 'registration_unsupported' });
+    expect(rig.edge.some((body) => body.op === 'client')).toBe(false);
+  }));
+
+  it('runs the reads Slack labels read-only only in the owner\'s own untainted turns; sending asks first', withRig('slack-reads', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    expect(await runs(rig.mcp)).toEqual([['slack_read_thread', 'without_asking'], ['slack_schedule_message', 'asks_first'], ['slack_search_public', 'without_asking'], ['slack_send_message', 'asks_first']]);
+    expect((await runs(rig.mcp, false)).every(([, how]) => how === 'asks_first')).toBe(true);
+    expect((await refusal(rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_send_message', args: { channel: 'C1', text: 'hi' }, ownerTurn: true }))).code).toBe('forbidden');
+    expect(resultOf(await rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_search_public', args: { text: 'launch' }, ownerTurn: true }))).toMatchObject({ content: [{ text: expect.stringContaining('slack_search_public ran') }] });
+    expect(rig.world.calls.find((call) => call.method === 'tools/call')!.bearer).toMatch(/^at_/);
+  }));
+
+  it('lets the owner allow sending: it runs without a card only in their own untainted turns, and Patrol logs each send without its text', withRig('slack-sends', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    const id = rig.mcp.list()[0]!.id;
+    expect(await rig.mcp.setRuns(id, 'slack_send_message', true)).toBe(true);
+    expect(await runs(rig.mcp)).toContainEqual(['slack_send_message', 'without_asking']);
+    expect(await runs(rig.mcp, false)).toContainEqual(['slack_send_message', 'asks_first']);
+    const tainted = await refusal(rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_send_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, ownerTurn: false }));
+    expect(tainted.code).toBe('forbidden');
+    expect(tainted.message).toContain('call_mcp_tool');
+    expect(rig.world.calls.filter((call) => call.method === 'tools/call')).toEqual([]);
+
+    await rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_send_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, ownerTurn: true });
+    const frozen = await rig.mcp.describe('slack', 'slack_schedule_message');
+    await rig.mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'slack_schedule_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, digest: frozen.digest, intentId: 'approval:00000000-0000-4000-8000-0000000000dd:apply' });
+    await rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_read_thread', args: { channel: 'C0PRIVATE' }, ownerTurn: true });
+
+    const log = readAccessLog(rig.sql, Date.now(), {});
+    expect(log.sends.rows).toEqual([
+      { at: expect.any(String), server: 'slack', tool: 'slack_schedule_message', via: 'approved', ok: true },
+      { at: expect.any(String), server: 'slack', tool: 'slack_send_message', via: 'without_asking', ok: true },
+    ]);
+    expect(log.sends.next_before).toBeNull();
+    expect(JSON.stringify(log)).not.toMatch(/PRIVATE_BODY|C0PRIVATE/);
+  }));
+
+  it('keeps a write the owner allowed on a server without the sends-as-owner rule running in any turn, and logs no send for it', withRig('notion-write-anywhere', { origin: 'https://mcp.notion.com', issuer: 'https://mcp.notion.com', tools: [{ name: 'notion-create-pages', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false } }] }, async (rig) => {
+    await connect(rig, 'https://mcp.notion.com/mcp', 'allow', 'notion');
+    expect(await rig.mcp.setRuns(rig.mcp.list()[0]!.id, 'notion-create-pages', true)).toBe(true);
+    await rig.mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-create-pages', args: {}, ownerTurn: false });
+    expect(readAccessLog(rig.sql, Date.now(), {}).sends.rows).toEqual([]);
+  }));
+
+  it('disconnects by forgetting the grant: Slack offers no revocation, so the receipt says to remove Waldo in Slack', withRig('slack-disconnect', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    expect(await rig.mcp.disconnect(rig.mcp.list()[0]!.id)).toEqual({ ok: true, provider: 'unsupported' });
+    expect(rig.vault.rows[0]!.status).toBe('revoked');
+    expect(rig.mcp.list()).toEqual([]);
+    expect(rig.world.hits.filter((hit) => hit.endsWith('/revoke'))).toEqual([]);
+  }));
 });

@@ -87,7 +87,7 @@ export const mcpRunsReceipt=async(id:string,value:string,setRuns:(id:string,tool
 };
 export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
  ?{state:'rejected',message:result.provider==='not_needed'?'That server is no longer connected. Refresh the records.':'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
- :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='failed'||result.provider==='unsupported'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};
+ :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='unsupported'?'Disconnected and forgotten by Waldo. This service gives Waldo no way to revoke its access, so remove Waldo in that service\'s settings too (in Slack: Settings, then Manage apps).':result.provider==='failed'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};
 export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
  ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
  :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};

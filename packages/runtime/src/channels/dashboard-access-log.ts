@@ -12,20 +12,20 @@ export const ACCESS_LOG_WINDOW_DAYS = 30;
 const PAGE = 50, DAY_MS = 86_400_000;
 
 type ApprovalCursor = Readonly<{ at: number; id: string }>;
-export type AccessLogQuery = Readonly<{ toolsBefore?: number; approvalsBefore?: ApprovalCursor }>;
+export type AccessLogQuery = Readonly<{ toolsBefore?: number; approvalsBefore?: ApprovalCursor; sendsBefore?: number }>;
 const POSITIVE = /^[1-9][0-9]{0,15}$/;
 const position = (raw: string) => POSITIVE.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : null;
-// Paging cursors only: neither selects an owner, a table or a filter. tools_before is a trace row id; approvals_before is
-// "<created_at>.<ledger id>", the last approval of the previous page.
+// Paging cursors only: none selects an owner, a table or a filter. tools_before is a trace row id; approvals_before is
+// "<created_at>.<ledger id>", the last approval of the previous page; sends_before is a send row id.
 export function readAccessLogQuery(params: URLSearchParams): AccessLogQuery | null {
-  const query: { toolsBefore?: number; approvalsBefore?: ApprovalCursor } = {};
+  const query: { toolsBefore?: number; approvalsBefore?: ApprovalCursor; sendsBefore?: number } = {};
   for (const key of new Set(params.keys())) {
     const raw = params.getAll(key);
     if (raw.length !== 1) return null;
-    if (key === 'tools_before') {
+    if (key === 'tools_before' || key === 'sends_before') {
       const at = position(raw[0]!);
       if (at === null) return null;
-      query.toolsBefore = at;
+      if (key === 'tools_before') query.toolsBefore = at; else query.sendsBefore = at;
     } else if (key === 'approvals_before') {
       const [at, id, ...rest] = raw[0]!.split('.');
       const time = position(at ?? '');
@@ -38,7 +38,7 @@ export function readAccessLogQuery(params: URLSearchParams): AccessLogQuery | nu
 
 type Sql = Pick<SqlStorage, 'exec'>;
 const iso = (at: number) => new Date(at).toISOString();
-const tables = (sql: Sql) => new Set(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('trace_log','ledger')").toArray().map(row => row.name));
+const tables = (sql: Sql) => new Set(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('trace_log','ledger','mcp_sends')").toArray().map(row => row.name));
 
 // A trace hop is `tool_<name>` with the name the model asked for, so only names in the tool registry are shown; anything
 // else is "other". The registry's namespace is the category, and a tool whose receipt can back a done-claim is one that acts.
@@ -66,6 +66,10 @@ export function readAccessLog(sql: Sql, now: number, query: AccessLogQuery) {
     `SELECT id, kind, status, created_at, decided_at FROM ledger WHERE kind IN (${APPROVAL_KINDS.map(() => '?').join(', ')}) AND created_at >= ?
      AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?`,
     ...APPROVAL_KINDS, since, before?.at ?? null, before?.at ?? null, before?.at ?? null, before?.id ?? null, PAGE + 1).toArray() : [];
+  // Writes on connected servers whose writes speak as the owner, such as a Slack message: the tool's name, never its text.
+  const sends = present.has('mcp_sends') ? sql.exec<{ id: number; at: number; server: string; tool: string; via: string; ok: number }>(
+    'SELECT id, at, server, tool, via, ok FROM mcp_sends WHERE at >= ? AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT ?3',
+    since, query.sendsBefore ?? null, PAGE + 1).toArray() : [];
   return {
     version: 1 as const, as_of: iso(now),
     // trace_log keeps only its newest steps, so the tool list can run out before 30 days do.
@@ -82,6 +86,10 @@ export function readAccessLog(sql: Sql, now: number, query: AccessLogQuery) {
         decided_at: typeof row.decided_at === 'number' ? iso(row.decided_at) : null,
       })),
       next_before: approvals.length > PAGE ? `${approvals[PAGE - 1]!.created_at}.${approvals[PAGE - 1]!.id}` : null,
+    },
+    sends: {
+      rows: sends.slice(0, PAGE).map(row => ({ at: iso(row.at), server: row.server, tool: row.tool, via: row.via === 'approved' ? 'approved' as const : 'without_asking' as const, ok: row.ok === 1 })),
+      next_before: sends.length > PAGE ? sends[PAGE - 1]!.id : null,
     },
   };
 }

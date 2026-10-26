@@ -21,6 +21,11 @@ export function AccessLogView({ log, onPage, onNewest }: { log: AccessLogRecord;
     {log.approvals.rows.length === 0 ? <p>No approvals recorded.</p> : <table className="access-log-table"><thead><tr><th scope="col">Asked</th><th scope="col">Action</th><th scope="col">How it was decided</th><th scope="col">Decided</th></tr></thead>
       <tbody>{log.approvals.rows.map((row, n) => <tr key={`${row.at}:${n}`}><td>{exactTime(row.at)}</td><td>{APPROVAL_LABEL[row.kind] ?? row.kind}</td><td>{DECISION_LABEL[row.decision] ?? row.decision}</td><td>{row.decided_at ? exactTime(row.decided_at) : '—'}</td></tr>)}</tbody></table>}
     {log.approvals.next_before !== null && <button onClick={() => onPage({ approvals_before: log.approvals.next_before! })}>Older approvals</button>}
+    <h3>Sent as you</h3>
+    <p>Writes on connected tools that speak as you, such as a Slack message. Only the tool’s name is kept, never what was sent.</p>
+    {log.sends.rows.length === 0 ? <p>Nothing sent as you.</p> : <table className="access-log-table"><thead><tr><th scope="col">When</th><th scope="col">Service</th><th scope="col">Tool</th><th scope="col">How it was allowed</th><th scope="col">Result</th></tr></thead>
+      <tbody>{log.sends.rows.map((row, n) => <tr key={`${row.at}:${n}`}><td>{exactTime(row.at)}</td><td>{row.server}</td><td>{row.tool}</td><td>{row.via === 'approved' ? 'You approved the card' : 'You allowed it without asking'}</td><td>{row.ok ? 'Sent' : 'Not confirmed'}</td></tr>)}</tbody></table>}
+    {log.sends.next_before !== null && <button onClick={() => onPage({ sends_before: log.sends.next_before! })}>Older sends</button>}
     {onNewest && <button onClick={onNewest}>Back to the newest</button>}
   </section>;
 }

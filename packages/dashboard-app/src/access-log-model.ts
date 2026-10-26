@@ -6,12 +6,15 @@ export const ACCESS_LOG_URL = '/console/dashboard/api/v1/access-log';
 
 export type ToolStep = { at: string; tool: string; category: string; kind: 'read' | 'acted' | 'unknown'; ok: boolean };
 export type ApprovalStep = { at: string; kind: string; decision: string; decided_at: string | null };
+// A write on a connected tool that speaks as you, such as a Slack message: the tool's name and how it was allowed, never its text.
+export type SendStep = { at: string; server: string; tool: string; via: 'without_asking' | 'approved'; ok: boolean };
 export type AccessLogRecord = {
   as_of: string; window_days: number; kept_steps: number;
   tools: { rows: ToolStep[]; next_before: number | null; oldest_at: string | null };
   approvals: { rows: ApprovalStep[]; next_before: string | null };
+  sends: { rows: SendStep[]; next_before: number | null };
 };
-export type AccessLogCursors = { tools_before?: number; approvals_before?: string };
+export type AccessLogCursors = { tools_before?: number; approvals_before?: string; sends_before?: number };
 
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -29,7 +32,10 @@ const check = (ok: boolean) => { if (!ok) throw unsupported(); };
 export function readAccessLog(value: unknown): AccessLogRecord {
   check(obj(value) && value.version === 1 && instant(value.as_of) && count(value.window_days) && count(value.kept_steps) && obj(value.tools) && obj(value.approvals));
   const v = value as Record<string, unknown>, tools = v.tools as Record<string, unknown>, approvals = v.approvals as Record<string, unknown>;
-  check(cursor(tools.next_before) && maybeInstant(tools.oldest_at) && approvalCursor(approvals.next_before));
+  // A Waldo that records no sends yet leaves the section out.
+  const sends = v.sends === undefined ? { rows: [], next_before: null } : v.sends;
+  check(obj(sends) && cursor(tools.next_before) && maybeInstant(tools.oldest_at) && approvalCursor(approvals.next_before) && cursor((sends as Record<string, unknown>).next_before));
+  const sent = sends as Record<string, unknown>;
   return {
     as_of: v.as_of as string, window_days: v.window_days as number, kept_steps: v.kept_steps as number,
     tools: { next_before: tools.next_before as number | null, oldest_at: tools.oldest_at as string | null, rows: list(tools.rows, row => {
@@ -39,6 +45,10 @@ export function readAccessLog(value: unknown): AccessLogRecord {
     approvals: { next_before: approvals.next_before as string | null, rows: list(approvals.rows, row => {
       check(instant(row.at) && str(row.kind) && str(row.decision) && maybeInstant(row.decided_at));
       return { at: row.at as string, kind: row.kind as string, decision: row.decision as string, decided_at: row.decided_at as string | null };
+    }) },
+    sends: { next_before: sent.next_before as number | null, rows: list(sent.rows, row => {
+      check(instant(row.at) && str(row.server) && str(row.tool) && among(['without_asking', 'approved'] as const, row.via) && typeof row.ok === 'boolean');
+      return { at: row.at as string, server: row.server as string, tool: row.tool as string, via: row.via as SendStep['via'], ok: row.ok as boolean };
     }) },
   };
 }
