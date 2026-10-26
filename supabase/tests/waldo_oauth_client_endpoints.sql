@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(31);
 
 select is(has_function_privilege('anon', 'waldo.oauth_client_seed(text, text, text, text, text, text, text)', 'execute'), false, 'the runtime key cannot seed a client');
 select is(has_function_privilege('authenticated', 'waldo.oauth_client_seed(text, text, text, text, text, text, text)', 'execute'), false, 'a signed-in user cannot seed a client');
@@ -8,6 +8,11 @@ select is(has_function_privilege('anon', 'waldo.oauth_client_registered(text, te
 select is(has_function_privilege('anon', 'waldo.oauth_client_secret(text, text, text, text)', 'execute'), false, 'the runtime key cannot read a client secret');
 select is(has_function_privilege('authenticated', 'waldo.oauth_client_secret(text, text, text, text)', 'execute'), false, 'a signed-in user cannot read a client secret');
 select is(has_function_privilege('service_role', 'waldo.oauth_client_secret(text, text, text, text)', 'execute'), true, 'the edge reads a client secret');
+
+-- The older client read names the client only: the endpoint-bound read is the one path to a secret.
+select is(pg_get_function_result('waldo.oauth_client_get(text, text)'::regprocedure), 'TABLE(client_id text, client_auth text)', 'the older client read returns no secret');
+select is(has_function_privilege('anon', 'waldo.oauth_client_get(text, text)', 'execute'), false, 'and stays closed to the runtime key');
+select is(has_function_privilege('service_role', 'waldo.oauth_client_get(text, text)', 'execute'), true, 'and open to the edge, which reads the client id there');
 
 -- Seeding: the operator enters a pre-registered confidential client with the endpoints its secret may reach.
 select is(waldo.oauth_client_seed('https://mcp.chat.example', 'https://w.example/oauth/mcp/callback', 'chat-client', 'client_secret_post', 'chat-secret-1', 'https://chat.example/api/token', null), true, 'a pre-registered client is seeded');

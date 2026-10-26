@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { oauthProxy, OAuthProxyError } from '../src/connectors/oauth-proxy-client';
 import { parseOAuthProxyRequest } from '../src/connectors/oauth-proxy-wire';
-import { pkceVerifier, type ClientPins } from '../src/connectors/mcp-oauth';
+import { pkceVerifier, refreshTokens, TokenEndpointError, type ClientPins } from '../src/connectors/mcp-oauth';
 import { fakeSlackMcp, SLACK_CLIENT, SLACK_ISSUER, SLACK_MCP_URL, SLACK_ORIGIN, SLACK_TOKEN_ENDPOINT, type FakeSlackMcp } from './support/fake-slack-mcp';
 import { WALDO_ORIGIN } from './support/fake-mcp-world';
 import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/oauth-edge-harness';
@@ -47,6 +47,28 @@ describe('wire contract, pre-registered clients', () => {
     ['a lookup without a redirect address', { op: 'client', issuer: SLACK_ISSUER }],
     ['a token dialect outside the set', { op: 'exchange', do_name: 'owner-a', provider: 'mcp', pins: { ...pins, token_dialect: 'chat' }, code: 'c', verifier: 'v'.repeat(43) }],
   ])('refuses %s', (_name, body) => expect(parseOAuthProxyRequest(body)).toBeNull());
+});
+
+describe('ok-envelope token answers', () => {
+  const answering = (body: unknown, status = 200) => (async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  const kind = (body: unknown, status?: number) => refreshTokens(answering(body, status), pins, 'xoxe-1-1', SLACK_CLIENT.secret, 0).then(() => 'resolved', (error: unknown) => error instanceof TokenEndpointError ? error.kind : String(error));
+  it.each(['invalid_code', 'invalid_refresh_token', 'invalid_grant', 'token_revoked', 'token_expired', 'invalid_auth', 'account_inactive', 'access_denied'])('treats %s as a grant the owner must reconnect', async (error) => {
+    await expect(kind({ ok: false, error })).resolves.toBe('auth');
+  });
+  it.each(['invalid_client_id', 'bad_client_secret', 'bad_redirect_uri', 'invalid_client', 'client_id_mismatch'])('treats %s as a client configuration fault', async (error) => {
+    await expect(kind({ ok: false, error })).resolves.toBe('configuration');
+  });
+  it.each(['ratelimited', 'service_unavailable', 'internal_error', 'fatal_error', 'request_timeout'])('treats %s as transient', async (error) => {
+    await expect(kind({ ok: false, error })).resolves.toBe('transient');
+  });
+  it('treats an unknown error, or an ok answer without a token, as a protocol fault', async () => {
+    await expect(kind({ ok: false, error: 'something_new' })).resolves.toBe('protocol');
+    await expect(kind({ ok: true, token_type: 'user' })).resolves.toBe('protocol');
+  });
+  it('treats a 5xx or 429 as transient whatever the body says', async () => {
+    await expect(kind({ ok: false, error: 'invalid_auth' }, 503)).resolves.toBe('transient');
+    await expect(kind({}, 429)).resolves.toBe('transient');
+  });
 });
 
 describe('oauth-proxy edge, pre-registered clients', () => {

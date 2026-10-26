@@ -222,7 +222,10 @@ Each step lists the owner action, the blast radius and the rollback. A step star
 - **Owner action.**
   - Set the function secret `WALDO_ROUTER_HMAC_SECRET` (the S1 value) with `supabase secrets set --project-ref <prod-ref>`, the value typed at the prompt or read from a file outside the repo. The Google function secrets follow at S7, once the client exists.
   - Deploy `connector-proxy` with `--no-verify-jwt`, then `oauth-proxy`. Do not deploy `mint-agent-jwt`.
-- **Check.** An unsigned `POST /functions/v1/connector-proxy` returns 401 (the same probe as the staging gate).
+  - Enter every pre-issued confidential client (WHOOP once it is enabled; Slack's MCP app) with `waldo.oauth_client_seed`, never `oauth_client_put`, so its secret is bound to its token endpoint (`docs/ops/PRE_REGISTERED_OAUTH_CLIENTS.md`).
+- **Check.**
+  - An unsigned `POST /functions/v1/connector-proxy` returns 401 (the same probe as the staging gate).
+  - `select issuer, redirect_uri from waldo.oauth_clients where client_auth <> 'none' and token_endpoint is null;` returns no rows. A row there is a confidential client whose secret is not bound to an endpoint: seed it again.
 - **Blast radius.** The production project's functions.
 - **Rollback.** Supabase keeps no restorable earlier function version: redeploy from the previous reviewed SHA.
 

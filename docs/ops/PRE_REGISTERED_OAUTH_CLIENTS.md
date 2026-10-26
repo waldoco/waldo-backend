@@ -18,20 +18,33 @@ the Worker, a prompt, a log or this repository.
   request whose pins name any other endpoint gets no secret, and nothing is sent. A revocation endpoint that is
   refused does not receive the token either.
 - **Unseeded rows.** A row with no pinned endpoints keeps the behaviour it had before the migration: a dynamic
-  registration, or a client entered with `oauth_client_put` (such as WHOOP). Seed WHOOP again with
-  `oauth_client_seed` to bind it too.
+  registration, or a client entered with `oauth_client_put` (such as WHOOP). Re-seeding them is a deploy step
+  (below).
+- **One path to a secret.** `waldo.oauth_client_get` names the client only. `oauth_client_secret` is the
+  only function that returns a client secret.
 
 ## Deploy order
 
-1. Apply the migration to the health plane.
-2. Deploy the `oauth-proxy` Edge Function. This order matters: the new edge reads secrets only through
-   `oauth_client_secret`, so deploying it before the migration fails every confidential-client exchange and
-   refresh (WHOOP included).
-3. Seed the clients below. The existing edge keeps working against the migrated schema, because no existing
-   function changed.
+1. Apply migration `20261026130000` to the health plane, then deploy the `oauth-proxy` Edge Function straight
+   after. They ship together. The migration narrows `waldo.oauth_client_get` so it no longer returns a secret,
+   and an edge deployed before it reads secrets there. Between the two steps, a confidential client's exchange
+   or refresh (WHOOP's included) answers `token_failed`, and the next sync retries it. The new edge reads
+   secrets only through `oauth_client_secret`, which the migration creates.
+2. **Re-seed every confidential client entered before this migration**, WHOOP included, with
+   `oauth_client_seed` and its token endpoint (WHOOP's is `https://api.prod.whoop.com/oauth/oauth2/token`, no
+   revocation endpoint). Until it is re-seeded, its secret is not bound to an endpoint.
+3. Check that this returns no rows:
 
-**Rollback.** Redeploy the previous `oauth-proxy`; it ignores the new columns and functions. The migration is
-additive.
+   ```sql
+   select issuer, redirect_uri from waldo.oauth_clients where client_auth <> 'none' and token_endpoint is null;
+   ```
+
+   A row is a confidential client whose secret can still be sent to any endpoint that signed pins name.
+   Dynamic registrations are normally public (`none`) and do not appear.
+4. Seed new pre-registered clients, such as Slack (below).
+
+**Rollback.** Before the migration, redeploy the previous `oauth-proxy`. After it, the previous edge cannot read
+secrets, so roll forward. The migration's other changes are additive.
 
 ## Seeding a client, or rotating its secret
 
@@ -121,11 +134,16 @@ None of this has been done. The Worker side that offers Slack in Connections fol
    read 26 Oct 2026. Slack accepts only `client_secret_post` there.
 5. **Approve the app.** A workspace admin approves it if the workspace requires app approval.
 
+## Disconnecting Slack
+
+Slack has no RFC 7009 revocation endpoint: its authorization server metadata advertises none, and its only
+revocation is the Web API's `auth.revoke`. A Slack disconnect therefore reports `unsupported`. The edge deletes
+the grant from Vault, so Waldo cannot use the token again, but the token stays valid at Slack until it expires
+(with token rotation on) or the owner removes the app in Slack under Settings → Manage apps. Any console copy for
+a Slack disconnect must say so.
+
 ## Known limits
 
-- **Unbound secret read.** `waldo.oauth_client_get` still returns a client secret without an endpoint check.
-  The deployed edge reads secrets through it until this change's edge is live; drop its secret column in a
-  follow-up migration once it is.
 - **Unverified Slack behaviour.** Until an owner signs in, these are not checked:
   - whether Slack accepts space-separated scopes and the RFC 8707 `resource` parameter at
     `/oauth/v2_user/authorize`;

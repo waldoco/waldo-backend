@@ -212,9 +212,9 @@ export class TokenEndpointError extends Error {
 }
 
 const ENVELOPE_ERRORS: Readonly<Record<string, TokenEndpointError['kind']>> = {
-  invalid_code: 'auth', invalid_refresh_token: 'auth', invalid_grant: 'auth',
-  invalid_client_id: 'configuration', bad_client_secret: 'configuration', bad_redirect_uri: 'configuration', invalid_client: 'configuration',
-  ratelimited: 'transient',
+  invalid_code: 'auth', invalid_refresh_token: 'auth', invalid_grant: 'auth', token_revoked: 'auth', token_expired: 'auth', invalid_auth: 'auth', account_inactive: 'auth', access_denied: 'auth',
+  invalid_client_id: 'configuration', bad_client_secret: 'configuration', bad_redirect_uri: 'configuration', invalid_client: 'configuration', client_id_mismatch: 'configuration',
+  ratelimited: 'transient', service_unavailable: 'transient', internal_error: 'transient', fatal_error: 'transient', request_timeout: 'transient',
 };
 const envelopeTokens = (status: number, json: Record<string, unknown>, now: number): TokenSet => {
   if (status === 429 || status >= 500) throw new TokenEndpointError('transient', status);

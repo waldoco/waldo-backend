@@ -43,7 +43,7 @@ export const vaultFake = (owners: readonly string[] = ['owner-a', 'owner-b'], op
       return true;
     },
     oauth_revoke: (a) => { const r = live(a.p_do_name, a.p_connection); if (!r) return false; r.status = 'revoked'; r.secret = ''; return true; },
-    oauth_client_get: (a) => { const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`); return c ? [c] : []; },
+    oauth_client_get: (a) => { const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`); return c ? [{ client_id: c.client_id, client_auth: c.client_auth }] : []; },
     oauth_client_registered: (a) => { const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`); return c?.token_endpoint ? [{ client_id: c.client_id, client_auth: c.client_auth }] : []; },
     oauth_client_secret: (a) => {
       const c = clients.get(`${a.p_issuer} ${a.p_redirect_uri}`);

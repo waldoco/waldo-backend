@@ -59,6 +59,17 @@ language sql stable security definer set search_path = '' as $$
       and (m.token_endpoint is null or p_endpoint = m.token_endpoint or p_endpoint = m.revocation_endpoint)
 $$;
 
+-- The older client read keeps naming the client for the edge's registration path, but no longer returns its
+-- secret: every secret now leaves Vault through oauth_client_secret, bound to the endpoint it is sent to. An edge
+-- deployed before this migration reads secrets here, so this migration and the oauth-proxy deploy go together.
+drop function waldo.oauth_client_get(text, text);
+create function waldo.oauth_client_get(p_issuer text, p_redirect_uri text) returns table(client_id text, client_auth text)
+language sql stable security definer set search_path = '' as $$
+  select m.client_id, m.client_auth from waldo.oauth_clients m where m.issuer = p_issuer and m.redirect_uri = p_redirect_uri
+$$;
+
+revoke all on function waldo.oauth_client_get(text, text) from public, anon, authenticated;
+grant execute on function waldo.oauth_client_get(text, text) to service_role;
 revoke all on function waldo.oauth_client_seed(text, text, text, text, text, text, text) from public, anon, authenticated;
 revoke all on function waldo.oauth_client_registered(text, text) from public, anon, authenticated;
 revoke all on function waldo.oauth_client_secret(text, text, text, text) from public, anon, authenticated;
