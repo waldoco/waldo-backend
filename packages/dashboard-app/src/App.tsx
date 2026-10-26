@@ -14,6 +14,7 @@ import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { AdminPanel, type AdminState } from './Admin';
 import { AdminHealthPanel, HealthPanel } from './Health';
 import { VaultPanel } from './Vault';
+import { AccessLogPanel } from './AccessLog';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
@@ -85,7 +86,8 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='connections')return <><SettingsHead selected="connections" isAdmin={isAdmin}/><ControlsPanel key={route} view="connections" section="connections" embedded/></>;
   if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
-  if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
+  if(route==='waiting')return <ControlsPanel key={route} view="waiting"/>;
+  if(route==='patrol')return <><ControlsPanel key={route} view="activity"/><AccessLogPanel/></>;
   if(route==='invites')return <><SettingsHead selected="invites" isAdmin={isAdmin}/><OwnerControlsPanel view={route} embedded/></>;
   if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section} isAdmin={isAdmin}/>;}
   if (route === 'health') return <><SettingsHead selected="health" isAdmin={isAdmin}/><HealthPanel/></>;
