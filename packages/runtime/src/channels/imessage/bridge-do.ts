@@ -618,13 +618,16 @@ const quoteSent = (store: BridgeStore, messageGuid: string, ownerDoName: string,
   return words.length > QUOTE_CHARS ? `${words.slice(0, QUOTE_CHARS).join('')}…` : words.join('');
 };
 
-/** Same semantics as the relay's buildSendCommand: exact binding, nonblank text, no rich features or SMS; threaded onto replyTo when given. */
-export const buildTextReply = (binding: IMessageBinding, commandId: string, text: string, replyTo?: Readonly<{ messageGuid: string; partIndex: number }>): IMessageCommand => {
+/**
+ * Same semantics as the relay's buildSendCommand: exact binding, nonblank text, no rich features or SMS. With `thread`, the
+ * target names that message and part in the bound chat, and the send goes out as a reply to it.
+ */
+export const buildTextReply = (binding: IMessageBinding, commandId: string, text: string, thread?: Readonly<{ messageGuid: string; partIndex: number }>): IMessageCommand => {
   if (!text.trim()) throw new Error('empty_text');
   const b = iMessageBindingSchema.parse(binding);
   return iMessageCommandSchema.parse({ version: 1, commandId, ownerId: b.ownerId, binding: b,
-    target: { bridgeId: b.bridgeId, accountId: b.accountId, chatGuid: b.chatGuid }, service: 'iMessage', allowSMSFallback: false,
-    operation: 'send', text, attachments: [], ...(replyTo ? { replyTo: { messageGuid: replyTo.messageGuid, partIndex: replyTo.partIndex } } : {}) });
+    target: { bridgeId: b.bridgeId, accountId: b.accountId, chatGuid: b.chatGuid, ...(thread ? { messageGuid: thread.messageGuid, partIndex: thread.partIndex } : {}) },
+    service: 'iMessage', allowSMSFallback: false, operation: 'send', text, attachments: [] });
 };
 
 /** A standard tapback on an exact message and part in the bound chat; added, never removed. */

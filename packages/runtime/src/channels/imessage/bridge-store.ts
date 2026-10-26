@@ -254,9 +254,11 @@ export class BridgeStore {
   postResult(h: S2Headers, input: { deliveryId: string; commandId: string; commandDigest: string; result: IMessageResult }, resultDigest: string): 'accepted' | 'repeat' {
     const outcome = this.tx(() => {
       const row = this.delivery({ deliveryId: input.deliveryId });
-      const target = row ? iMessageCommandSchema.parse(JSON.parse(row.body)).target : null;
+      const command = row ? iMessageCommandSchema.parse(JSON.parse(row.body)) : null, target = command?.target ?? null;
+      // A threaded send's target names the message it replies to; the message it sent is never that one.
+      const sentAsTarget = command?.operation === 'send' && 'messageGuid' in input.result && input.result.messageGuid === target?.messageGuid;
       if (!row || row.state === 'queued' || row.state === 'withdrawn' || row.commandId !== input.commandId || row.commandDigest !== input.commandDigest
-        || input.result.commandId !== row.commandId || JSON.stringify(input.result.target) !== JSON.stringify(target) || ['queued', 'started'].includes(input.result.state))
+        || input.result.commandId !== row.commandId || JSON.stringify(input.result.target) !== JSON.stringify(target) || ['queued', 'started'].includes(input.result.state) || sentAsTarget)
         throw new BridgeStoreError('result_mismatch');
       if (row.result && JSON.stringify(row.result) === JSON.stringify(input.result)) {
         if (!this.rows('SELECT 1 FROM nonces WHERE nonce=?', h.nonce).length) this.consumeNonce(h);
