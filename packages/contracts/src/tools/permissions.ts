@@ -112,6 +112,8 @@ export const toolNameSchema = z.enum([
   // each finding with its source, unconfirmed until the owner keeps or corrects it. Owner chat turns only.
   'record_owner_finding',
   'list_owner_findings',
+  // react_to_message: a standard tapback on the owner's message the turn answers, where the surface's host verified tapbacks.
+  'react_to_message',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -213,6 +215,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_console_link',
     'send_progress_note',
     'attach_file',
+    'react_to_message',
     'get_communication',
     'search_communication',
     'search_contacts',

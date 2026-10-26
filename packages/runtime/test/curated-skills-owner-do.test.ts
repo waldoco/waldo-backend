@@ -89,8 +89,9 @@ it.each([
    expect(seen.requests.some(r=>r.instructions.includes(CURATED_PREPARATION_SKILL.body_markdown))).toBe(true);
    const offered=seen.requests[0]!.tools!.map(t=>t.name).sort();
    expect(offered).not.toContain('execute_code');
-   // propose_action joins the menu once a read taints the turn (H-2); every other tool stays the same across rounds.
-   expect(seen.requests.every(r=>JSON.stringify(r.tools?.map(t=>t.name).filter(name=>name!=='propose_action').sort())===JSON.stringify(offered))).toBe(true);
+   // One menu every round: propose_action is on it from the first round and refuses until a read taints the turn (H-2).
+   expect(offered).toContain('propose_action');
+   expect(seen.requests.every(r=>JSON.stringify(r.tools?.map(t=>t.name).sort())===JSON.stringify(offered))).toBe(true);
    expect(seen.requests.every(r=>!JSON.stringify(r.input).includes(CURATED_PREPARATION_SKILL.body_markdown))).toBe(true);
    const oldRevision=ws.files.find(file=>file.file_id===seen.fileId)!.revision;
    await send('newtarget','Start a new task. Save a new file drafts/new-target.md. Do not revise the demo.');

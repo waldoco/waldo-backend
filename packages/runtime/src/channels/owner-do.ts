@@ -7,13 +7,14 @@ import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
-import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
+import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, CONSOLE_PHOTON_START_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { photonStart } from './imessage/photon-routes';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTurnText, openIMessageTurnMedia, type OpenedIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, handOffIMessageProgress, iMessageOwnerContext, iMessageTapbacks, iMessageTurnParts, iMessageTurnText, noteIMessageReactionHandoff, openIMessageTurnMedia, type OwnerHost } from './imessage/owner-runtime';
+import { reactToMessageHandler } from '../tools/live/react-to-message';
 import { PROGRESS_WRITE_MAX_MS, ProgressPacer, progressInput, type ProgressTiming } from './progress-pacer';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -115,6 +116,7 @@ import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forge
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
+import { semanticRecallFromEnv } from '../memory/semantic-recall';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
@@ -876,8 +878,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly imessageAttempts = new Set<string>();
   private activeIMessage: IMessageInboxRecord | null = null;
   private iMessageProgress: ProgressPacer | null = null;
-  // The running iMessage turn's files, opened before it started; held in memory for that turn only.
-  private iMessageOpened: Readonly<{ updateId: number; parts: OpenedIMessageTurnMedia['parts']; attachments: OpenedIMessageTurnMedia['attachments'] }> | null = null;
+  // The running iMessage turn's parts beyond its text (its files, opened before it started, and the owner's tapbacks); held in memory for that turn only.
+  private iMessageOpened: ReturnType<typeof iMessageTurnParts> = null;
   private readonly iMessageProgressTiming: ProgressTiming | undefined = undefined;
   private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.OWNER_DO }; }
   /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
@@ -889,6 +891,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
     }
     return outcome;
+  }
+  /** Bridge DO RPC: the owner's tapback, kept as a line for their next turn. It starts no turn and reaches no approval. */
+  async noteIMessageReaction(input: IMessageReactionHandoff): Promise<'noted' | 'refused'> {
+    return noteIMessageReactionHandoff(this.imessageHost, input);
   }
   // Local fences after a canonical bridge revocation: queued turns from it close, a running one stops.
   private readonly iMessageBridgeRevoked = (bridgeDoName: string): void => {
@@ -921,7 +927,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const media = await openIMessageTurnMedia(this.imessageHost, record, scope);
         if (media.kind !== 'answered') {
-          this.iMessageOpened = media.kind === 'opened' ? { updateId: record.updateId, parts: [...ownerWords(record.text), ...media.parts], attachments: media.attachments } : null;
+          this.iMessageOpened = iMessageTurnParts(record, media.kind === 'opened' ? media : null);
           this.iMessageProgress = this.startIMessageProgress(record, scope);
           const subject = appSubjectFor(record.ownerDoName);
           await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: iMessageTurnText(record) } }, 'imessage', true, scope);
@@ -3274,6 +3280,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const progressNoteRoute = progressNoteRoutes[channel];
     const progressNoteTools = progressNoteRoute ? [progressNoteHandler({ log, deliver: progressNoteRoute })] : [];
+    // A tapback goes only where a host sends one: iMessage, while the turn's bridge reports tapbacks verified.
+    const tapbackTools = ({ imessage: () => [reactToMessageHandler(iMessageTapbacks(this.imessageHost, () => this.activeIMessage))] } as Partial<Record<ChannelKind, () => ReturnType<typeof reactToMessageHandler>[]>>)[channel]?.() ?? [];
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
     // The app and iMessage carry no connect button, so there nothing is minted or sent: the model is told where the owner connects.
@@ -3667,6 +3675,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
     const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
+    // Semantic recall, behind MEMORY_SEMANTIC_RECALL. Its sweep embeds what any writer stored since the last one; it runs once
+    // here, after each stored claim and after each recall that used it.
+    const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), defer: (work) => this.ctx.waitUntil(work),
+      log: (event) => log({ trace: 'memory:semantic', hop: event.hop, ms: 0, ok: event.ok, detail: event.detail, ...(event.code ? { code: event.code } : {}) }) });
+    semantic?.kick();
     // A forget left pending by an earlier build, or a claim marked for removal, gets the purge job; an armed job keeps its time.
     if ((memory.pendingTopics().length || memory.claims('purging').length) && scheduler.lookup(FORGET_PURGE_ID).state === 'absent') this.ctx.waitUntil(this.forgetPurgeJob().track([]));
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
@@ -3921,7 +3934,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const connectors = () => connectorsLine(this.mcp().list());
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
-    const memoryHooks = memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone });
+    const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
     const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
@@ -3938,8 +3951,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
+      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, ...tapbackTools, searchEpisodesHandler(episodes), ...memoryHandlers({
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
         // itself never fails on a store.

@@ -14,6 +14,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
 import { delegateTaskHandler } from '../src/conversation/subagent';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import { reactToMessageHandler } from '../src/tools/live/react-to-message';
 import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 import config from '../wrangler.jsonc?raw';
@@ -159,9 +160,10 @@ describe('the brain tool surface', () => {
     const off = await ownerReply('tool-surface-before', 'off');
     const request = await ownerReply('tool-surface-on', 'on');
     expect(request.system).toContain(TOOL_SEARCH_LINE);
-    // One menu every round, so propose_action is offered before anything outside arrives; the switch-off loop adds it
-    // only once the turn is tainted. Otherwise the same tools, each placed by its record.
-    expect(request.tools!.map((tool) => tool.name).filter((name) => name !== 'propose_action')).toEqual(off.tools!.map((tool) => tool.name));
+    // One menu every round with the switch on or off, so propose_action is offered before anything outside arrives: the
+    // same tools either way, each placed by its record.
+    expect(off.tools!.map((tool) => tool.name)).toContain('propose_action');
+    expect(request.tools!.map((tool) => tool.name)).toEqual(off.tools!.map((tool) => tool.name));
     expect(brainTools(request.tools!.map(({ namespace: _n, defer_loading: _d, ...tool }) => tool), true)).toEqual({ tools: request.tools, tool_search: request.tool_search });
 
     const openAI = (await openAIBody(request)).tools as WireTool[];
@@ -186,6 +188,11 @@ describe('the brain tool surface', () => {
     const openAIBrowse = (await openAIBody(withBrowse)).tools as WireTool[];
     const anthropicBrowse = (await anthropicBody(withBrowse)).tools as WireTool[];
     expect(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => tool.name)).toContain('browse_page');
+    // An iMessage owner turn whose host verified tapbacks also carries react_to_message (core), on top of browsing.
+    const tapback = brainTools(toolDefinitions([reactToMessageHandler({ ready: async () => true, freeze: () => 'queued' })]), true).tools!;
+    const withTapback = { ...withBrowse, tools: [...withBrowse.tools, ...tapback] };
+    const openAITapback = (await openAIBody(withTapback)).tools as WireTool[];
+    const anthropicTapback = (await anthropicBody(withTapback)).tools as WireTool[];
     const report = {
       tools: request.tools!.length,
       before_bytes: bytes(off.tools), before_tokens_est: Math.round(bytes(off.tools) / BYTES_PER_TOKEN_EST),
@@ -194,7 +201,8 @@ describe('the brain tool surface', () => {
       anthropic_visible_bytes: bytes(anthropicVisible(anthropic)), anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropic)) / BYTES_PER_TOKEN_EST),
       browsing_openai_visible_bytes: bytes(openAIVisible(openAIBrowse)), browsing_openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAIBrowse)) / BYTES_PER_TOKEN_EST),
       browsing_anthropic_visible_bytes: bytes(anthropicVisible(anthropicBrowse)), browsing_anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropicBrowse)) / BYTES_PER_TOKEN_EST),
-      core_bytes: Object.fromEntries(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => [tool.name, bytes(tool)])), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
+      tapback_openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAITapback)) / BYTES_PER_TOKEN_EST), tapback_anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropicTapback)) / BYTES_PER_TOKEN_EST),
+      core_bytes: Object.fromEntries(openAITapback.filter((tool) => tool.type === 'function').map((tool) => [tool.name, bytes(tool)])), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
       strict: strict.filter((tool) => tool.strict === true).length, non_strict: strict.filter((tool) => tool.strict !== true).map((tool) => tool.name),
     };
     console.log(`BRAIN_TOOL_SURFACE ${JSON.stringify(report)}`);
@@ -202,6 +210,8 @@ describe('the brain tool surface', () => {
     expect(report.anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
     expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
   });
 
@@ -267,9 +277,10 @@ describe('the brain tool surface', () => {
   });
 });
 
-// The deployed switch: staging runs tool search; production keeps the full menu until its own flip. Off is the rollback.
-it('staging runs tool search and production does not', () => {
+// The deployed switch: off in both. OpenAI refused the tool-search request shape on every staging round (400 on `tools`),
+// so each round paid a refused request before the full-menu resend; on comes back once a live round is accepted.
+it('neither staging nor production runs tool search', () => {
   const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('on');
+  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
