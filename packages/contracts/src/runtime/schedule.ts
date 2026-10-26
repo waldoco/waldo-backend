@@ -15,6 +15,7 @@ export const scheduleKindSchema = z.enum([
   'watch_upkeep',
   'provider_sync',
   'forget_purge',
+  'connect_poll',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -32,6 +33,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   watch_upkeep: 10,
   provider_sync: 11,
   forget_purge: 12,
+  connect_poll: 13,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -53,6 +55,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   provider_sync: null,
   // Clearing a forgotten topic from the owner's stores is infrastructure work: no model turn and no message.
   forget_purge: null,
+  // Asking an app's sign-in service whether the owner entered a device code is infrastructure work: no model turn.
+  connect_poll: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);

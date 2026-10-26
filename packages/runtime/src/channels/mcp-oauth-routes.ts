@@ -4,7 +4,7 @@ import { MCP_ATTEMPT_TTL_MS, MCP_FINISH_PATH, readMcpState, type ConnectOutcome 
 import { checkBrowser, releaseBrowser, startRedirect } from '../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../connectors/oauth-state-secret';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { callbackPage } from './google-oauth';
+import { APP_RETURN_DEEP_LINK, callbackPage } from './google-oauth';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
 // Waldo's OAuth client identity for MCP servers (a Client ID Metadata Document): the client_id is
@@ -59,7 +59,10 @@ export const handleMcpCallback = async (request: Request, env: TelegramWebhookEn
       const response = await owners.get(owners.idFromName(state.owner)).fetch(`https://telegram-owner${MCP_FINISH_PATH}`, {
         method: 'POST', body: JSON.stringify({ nonce: state.nonce, query: url.searchParams.toString() }),
       });
-      const outcome = await response.json() as ConnectOutcome;
+      const outcome = await response.json() as ConnectOutcome & { app?: true };
+      // A sign-in the app's tile started goes back to the app on its one fixed address, whatever the outcome; the app reads
+      // the tile again rather than anything from the address.
+      if (outcome.app === true) return new Response(null, { status: 303, headers: { location: APP_RETURN_DEEP_LINK, 'cache-control': 'no-store' } });
       const linked = outcome.kind === 'linked' ? (outcome.reviewed ? GRANOLA_LINKED : officialLinked(outcome.official)) : undefined;
       return callbackPage(outcome.kind === 'linked', linked ?? COPY[outcome.kind] ?? COPY.failed);
     } catch (failure) {

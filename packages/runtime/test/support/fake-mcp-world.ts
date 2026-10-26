@@ -39,6 +39,12 @@ export type FakeOptions = {
   envelope?: boolean;
   // false: the authorization server does not list offline_access.
   offlineAccess?: boolean;
+  // RFC 8628: the authorization server advertises a device authorization endpoint. Each token poll takes the next answer
+  // from deviceAnswers ('ok' issues tokens); an empty queue answers authorization_pending.
+  device?: boolean;
+  deviceAnswers?: ('ok' | 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied')[];
+  // The device endpoint refuses our client, as a server that checks a client's registered grant types does (RFC 8628 §3.2).
+  deviceRefusal?: 'unauthorized_client' | 'unsupported_grant_type' | 'invalid_client' | 'invalid_request';
 };
 
 export const defaultTools: FakeTool[] = [
@@ -74,6 +80,8 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
   const hits: string[] = [];
   let counter = 0;
   let gone = false;
+  const devices = new Map<string, { client_id: string; scope: string }>();
+  const devicePolls: string[] = [];
   let rateLimited = false;
   const issue = (scope: string, family: string) => {
     counter += 1;
@@ -143,6 +151,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
           issuer: options.issuer, authorization_endpoint: `${options.issuer}/authorize`, token_endpoint: `${options.issuer}/token`,
           ...(options.registration === 'dcr' ? { registration_endpoint: `${options.issuer}/register` } : {}),
           ...(options.revocation ? { revocation_endpoint: `${options.issuer}/${options.revokeAt}` } : {}),
+          ...(options.device ? { device_authorization_endpoint: `${options.issuer}/device` } : {}),
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,
@@ -155,9 +164,27 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
         registered.push(id);
         return json({ client_id: id, token_endpoint_auth_method: 'none', redirect_uris: body.redirect_uris }, 201);
       }
+      if (url.pathname === '/device' && options.device) {
+        const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
+        if (form.get('resource') !== mcpUrl || !form.get('client_id')) return tokenError('invalid_request');
+        if (options.deviceRefusal) return tokenError(options.deviceRefusal, options.deviceRefusal === 'invalid_client' ? 401 : 400);
+        counter += 1;
+        devices.set(`dc_${counter}`, { client_id: form.get('client_id')!, scope: form.get('scope') ?? '' });
+        return json({ device_code: `dc_${counter}`, user_code: 'WDJB-MJHT', verification_uri: `${options.issuer}/activate`, verification_uri_complete: `${options.issuer}/activate?user_code=WDJB-MJHT`, expires_in: 900, interval: 5 });
+      }
       if (url.pathname === '/token') {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
         if (form.get('resource') !== mcpUrl) return tokenError('invalid_target');
+        if (form.get('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code') {
+          const device = devices.get(form.get('device_code') ?? '');
+          if (!device || device.client_id !== form.get('client_id') || form.get('client_secret') !== null) return tokenError('invalid_grant');
+          const answer = options.deviceAnswers?.shift() ?? 'authorization_pending';
+          devicePolls.push(answer);
+          if (answer !== 'ok') return tokenError(answer);
+          devices.delete(form.get('device_code') ?? '');
+          counter += 1;
+          return json(issue(options.grantedScope ?? device.scope, `fam_${counter}`));
+        }
         if (options.clientSecret !== undefined && form.get('client_secret') !== options.clientSecret) return tokenError('invalid_client', 401);
         if (form.get('grant_type') === 'authorization_code') {
           const code = codes.get(form.get('code') ?? '');
@@ -198,6 +225,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     calls,
     hits,
     registered,
+    devicePolls,
     // What the owner's browser does at the authorization endpoint: consent, then redirect with code and iss.
     authorize: async (authorizeUrl: string, decision: 'allow' | 'deny' = 'allow', issOverride?: string | null) => {
       const url = new URL(authorizeUrl);
