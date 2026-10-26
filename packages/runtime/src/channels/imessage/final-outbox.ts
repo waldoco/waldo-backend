@@ -1,4 +1,4 @@
-import { iMessageResultSchema, type IMessageResult } from '@waldo/contracts';
+import { iMessageResultSchema, type IMessageResult, type IMessageStandardReaction } from '@waldo/contracts';
 import type { IMessageInboxRecord } from './owner-inbox';
 
 // Owner-DO frozen reply outbox. The reply text, exact target (via binding digest + revision) and
@@ -22,10 +22,14 @@ const mayHaveSent = (commandId: string, reason: string): IMessageResult => ({ ve
 /** Telegram's final-outbox bound: only settled records are evicted, oldest first; live replies are never dropped. */
 export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
+// A tapback's exact target: the owner's message in the bound chat. The bridge refuses one whose chat is not the binding's.
+export type IMessageTapback = Readonly<{ chatGuid: string; messageGuid: string; partIndex: number; type: IMessageStandardReaction }>;
 export type IMessageOutboxRecord = {
   replyRef: string; commandId: string; text: string; bridgeDoName: string; ownerDoName: string; revision: string; bindingDigest: string;
   /** The sender this reply answers; selects that sender's own authority on a shared bridge. Absent on older records. */
   subject?: string;
+  /** Set on a tapback, whose text is empty. */
+  reaction?: IMessageTapback;
   frozenAt: number; state: 'frozen' | 'queued' | 'settled'; nextAttemptAt: number; attempts: number;
   result?: IMessageResult; conflicts?: number;
 };
@@ -71,9 +75,18 @@ export class IMessageFinalOutbox {
   freezeFailure(record: IMessageInboxRecord, text: string): IMessageOutboxRecord {
     return this.put(`failure:${record.id}`, { ...targetOf(record), commandId: `wfn_${record.commandId}` }, text);
   }
-  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. */
+  /**
+   * A tapback on the owner's message this record's turn answers, frozen under the turn's scope before any send. Its commandId
+   * is fixed by the turn and the reaction, so freezing it again freezes the same record, and a different one is a conflict.
+   */
+  freezeReaction(record: IMessageInboxRecord, type: IMessageStandardReaction): IMessageOutboxRecord {
+    if (!record.messageRef) throw new Error('imessage_reaction_untargeted');
+    return this.put(`react:${record.id}`, { ...targetOf(record), commandId: `wrx_${type}_${record.commandId}` }, '',
+      { chatGuid: record.binding.chatGuid, messageGuid: record.messageRef.messageGuid, partIndex: record.messageRef.partIndex, type });
+  }
+  /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   messageWaiting(bridgeDoName: string): boolean {
-    return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.bridgeDoName === bridgeDoName);
+    return this.records().some((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && !r.reaction && r.bridgeDoName === bridgeDoName);
   }
   /** When Waldo last put a message on this chat's way: the newest record not proved unsent. */
   lastSentAt(): number | null {
@@ -91,7 +104,7 @@ export class IMessageFinalOutbox {
     }
   }
 
-  private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string): IMessageOutboxRecord {
+  private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string, reaction?: IMessageTapback): IMessageOutboxRecord {
     const prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
@@ -105,12 +118,15 @@ export class IMessageFinalOutbox {
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
     const row: IMessageOutboxRecord = { replyRef, commandId: target.commandId, text, bridgeDoName: target.bridgeDoName, ownerDoName: target.ownerDoName, subject: target.subject,
-      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
+      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0, ...(reaction ? { reaction } : {}) };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;
   }
-  due(): IMessageOutboxRecord[] { return this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.nextAttemptAt <= this.now()); }
+  // A tapback goes behind the messages due with it: the bridge holds one command at a time, and a reply never waits on one.
+  due(): IMessageOutboxRecord[] {
+    return this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.nextAttemptAt <= this.now()).sort((a, b) => Number(!!a.reaction) - Number(!!b.reaction));
+  }
   markQueued(replyRef: string) { this.update(replyRef, (r) => { if (r.state === 'frozen') { r.state = 'queued'; r.attempts += 1; } }); }
   retryLater(replyRef: string, maxAgeMs: number, delayMs = RETRY_MS) {
     this.update(replyRef, (r) => {

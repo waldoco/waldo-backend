@@ -11,6 +11,10 @@ import type { IMessageMedia } from './photon-media';
 export const IMESSAGE_INBOX_DUE_KEY = 'imessage_owner_inbox_due_v1';
 export const IMESSAGE_UPDATE_BASE = 9_000_000_000_000;
 const PREFIX = 'imessage:inbox-record:';
+// The owner's tapbacks since their last turn, each one line that turn reads. Bounded: the newest are kept.
+const NOTE = 'imessage:reaction-note:';
+const NOTE_SEQ = 'imessage_reaction_note_seq';
+const MAX_NOTES = 8;
 const SEQ = 'imessage_seq';
 const MAX_ROWS = 4096;
 const MAX_OPEN = 256;
@@ -22,18 +26,24 @@ export type IMessageInboxRecord = {
   id: string; updateId: number; dedupKey: string; digest: string; text: string; conversationRef: string;
   binding: IMessageBinding; bindingDigest: string; revision: string; environment: string; bridgeDoName: string; ownerDoName: string;
   commandId: string; occurredAt: number; admittedAt: number;
+  /** The owner's message this turn answers: the one message a tapback from Waldo may go on. Absent on older records. */
+  messageRef?: Readonly<{ messageGuid: string; partIndex: number }>;
   /** The message's files as references: the turn fetches the bytes, and they are never stored. */
   media?: IMessageMedia;
+  /** Tapback lines taken for this turn when it started; cleared with its text. */
+  reactions?: string[];
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
 };
-export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state'>;
+export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state' | 'reactions'>;
+// key names the tapback (chat, message, part, reaction), so the owner taking it back finds it. seq is arrival order.
+export type IMessageReactionNote = Readonly<{ key: string; conversationRef: string; bindingDigest: string; line: string; seq: number }>;
 
 const finished = (r: IMessageInboxRecord) => r.state === 'completed' || r.state === 'interrupted' || r.state === 'revoked';
 const open = (r: IMessageInboxRecord) => r.state === 'admitted' || r.state === 'running';
 const due = (rows: readonly IMessageInboxRecord[], now: number) => (rows.some((r) => r.state === 'admitted') ? now + 250 : null);
-const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; };
+const clear = (r: IMessageInboxRecord) => { r.text = ''; delete r.media; delete r.reactions; };
 
 export class IMessageOwnerInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
@@ -67,6 +77,26 @@ export class IMessageOwnerInbox {
       return { kind: 'admitted' as const, record };
     });
   }
+  notes(): IMessageReactionNote[] {
+    return [...this.storage.kv.list<IMessageReactionNote>({ prefix: NOTE })].map(([, n]) => n).sort((a, b) => a.seq - b.seq);
+  }
+  /** An added tapback waits for the owner's next turn on that chat; a removed one takes its line back. Starts nothing. */
+  noteReaction(note: Omit<IMessageReactionNote, 'seq'>, action: 'add' | 'remove'): void {
+    this.storage.transactionSync(() => {
+      if (action === 'remove') { this.storage.kv.delete(NOTE + note.key); return; }
+      const seq = (this.storage.kv.get<number>(NOTE_SEQ) ?? 0) + 1;
+      this.storage.kv.put(NOTE_SEQ, seq);
+      this.storage.kv.put(NOTE + note.key, { ...note, seq });
+      for (const old of this.notes().slice(0, -MAX_NOTES)) this.storage.kv.delete(NOTE + old.key);
+    });
+  }
+  // The lines a turn on this chat reads, taken so no later turn reads them again. One left under an earlier binding of the
+  // chat is dropped unread.
+  private takeNotes(r: IMessageInboxRecord): string[] {
+    const chat = this.notes().filter((n) => n.conversationRef === r.conversationRef);
+    for (const n of chat) this.storage.kv.delete(NOTE + n.key);
+    return chat.filter((n) => n.bindingDigest === r.bindingDigest).map((n) => n.line);
+  }
   // `interrupted` runs inside the closing transaction for each turn this call closes as interrupted, and only for those.
   recover(live: ReadonlySet<string>, interrupted?: (record: IMessageInboxRecord) => void): void {
     this.storage.transactionSync(() => {
@@ -99,7 +129,11 @@ export class IMessageOwnerInbox {
     return this.storage.transactionSync(() => {
       const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + id);
       if (!r || r.state !== 'admitted') return null;
-      if (current) { r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline; }
+      if (current) {
+        r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline;
+        const reactions = this.takeNotes(r);
+        if (reactions.length) r.reactions = reactions;
+      }
       else { r.state = 'revoked'; r.closedReason = 'authority_revoked'; r.effectsUnconfirmed = false; r.closedAt = this.now(); clear(r); }
       this.storage.kv.put(PREFIX + id, r); this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
       return current ? structuredClone(r) : null;
@@ -116,7 +150,8 @@ export class IMessageOwnerInbox {
   /**
    * Literal owner forget: admitted (not yet started) turns are redacted before they run. A running turn is
    * left alone (it is usually the forget request itself) and its text is cleared when it closes; finished
-   * rows hold no text. Returns the rows rewritten and the not-running rows still holding a forgotten literal.
+   * rows hold no text. A waiting tapback line that quotes a forgotten literal is dropped. Returns the rows rewritten and
+   * the not-running rows still holding a forgotten literal.
    */
   forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
     const held = (r: IMessageInboxRecord) => (!!r.text && holds(r.text)) || !!r.media?.files.some((file) => holds(file.name));
@@ -127,6 +162,7 @@ export class IMessageOwnerInbox {
       if (r.media) r.media = { ...r.media, files: r.media.files.map((file) => ({ ...file, name: redact(file.name) })) };
       this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
     }
+    for (const n of this.notes()) if (holds(n.line)) { this.storage.kv.delete(NOTE + n.key); rewritten += 1; }
     return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && held(r)).length };
   }
   /** Called inside the scope's commit transaction together with the frozen reply. */
