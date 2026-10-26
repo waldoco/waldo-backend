@@ -35,6 +35,8 @@ export type FakeOptions = {
   // from deviceAnswers ('ok' issues tokens); an empty queue answers authorization_pending.
   device?: boolean;
   deviceAnswers?: ('ok' | 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied')[];
+  // The device endpoint refuses our client, as a server that checks a client's registered grant types does (RFC 8628 §3.2).
+  deviceRefusal?: 'unauthorized_client' | 'unsupported_grant_type' | 'invalid_client' | 'invalid_request';
 };
 
 export const defaultTools: FakeTool[] = [
@@ -152,6 +154,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
       if (url.pathname === '/device' && options.device) {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
         if (form.get('resource') !== mcpUrl || !form.get('client_id')) return tokenError('invalid_request');
+        if (options.deviceRefusal) return tokenError(options.deviceRefusal, options.deviceRefusal === 'invalid_client' ? 401 : 400);
         counter += 1;
         devices.set(`dc_${counter}`, { client_id: form.get('client_id')!, scope: form.get('scope') ?? '' });
         return json({ device_code: `dc_${counter}`, user_code: 'WDJB-MJHT', verification_uri: `${options.issuer}/activate`, verification_uri_complete: `${options.issuer}/activate?user_code=WDJB-MJHT`, expires_in: 900, interval: 5 });

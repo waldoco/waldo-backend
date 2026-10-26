@@ -140,7 +140,7 @@ const keep = async (body: Readonly<{ do_name: string; provider: string; pins: Cl
   return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
 };
 const DEVICE_REFUSAL: Readonly<Record<DeviceFlowError['kind'], OAuthProxyCode>> = {
-  pending: 'authorization_pending', slow_down: 'slow_down', expired: 'expired_token', denied: 'access_denied', transient: 'unavailable', failed: 'token_failed',
+  pending: 'authorization_pending', slow_down: 'slow_down', expired: 'expired_token', denied: 'access_denied', transient: 'unavailable', failed: 'token_failed', unsupported: 'device_unsupported',
 };
 
 const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
@@ -169,7 +169,7 @@ const handle = async (body: OAuthProxyRequest): Promise<unknown> => {
       return keep(body, tokens);
     }
     case 'device_start':
-      return requestDeviceCode(fetch, body.pins, body.device_endpoint, body.scope).catch((error: unknown) => refuse(error instanceof DeviceFlowError && error.kind === 'transient' ? 'unavailable' : 'token_failed'));
+      return requestDeviceCode(fetch, body.pins, body.device_endpoint, body.scope).catch((error: unknown) => refuse(error instanceof DeviceFlowError ? DEVICE_REFUSAL[error.kind] : 'token_failed'));
     case 'device_poll': {
       const tokens = await pollDeviceToken(fetch, body.pins, body.device_code, Date.now()).catch((error: unknown) => refuse(error instanceof DeviceFlowError ? DEVICE_REFUSAL[error.kind] : 'token_failed'));
       return keep(body, tokens);

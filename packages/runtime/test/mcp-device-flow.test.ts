@@ -91,6 +91,18 @@ describe('device code sign-in through the edge', () => {
     expect(sql.exec('SELECT COUNT(*) AS n FROM mcp_attempts').one().n).toBe(0);
   }));
 
+  // A server that checks the grant types our client registered refuses the device request: the owner is offered the link,
+  // not told the sign-in broke, and nothing is kept.
+  it.each(['unauthorized_client', 'unsupported_grant_type', 'invalid_client'] as const)('offers no code when the server refuses the device request with %s', (refusal) => withRig(`refused-${refusal}`, { device: true, deviceRefusal: refusal }, async ({ mcp, edge, sql }) => {
+    expect(await mcp.begin(NOTION.url, WALDO_ORIGIN, NOTION.id, 'device')).toEqual({ kind: 'failed', reason: 'device_unsupported' });
+    expect(edge.map((call) => call.op)).toEqual(['device_start']);
+    expect(sql.exec('SELECT COUNT(*) AS n FROM mcp_attempts').one().n).toBe(0);
+  })());
+
+  it('reports any other refusal of the device request as a failed sign-in', withRig('refused-other', { device: true, deviceRefusal: 'invalid_request' }, async ({ mcp }) => {
+    expect(await mcp.begin(NOTION.url, WALDO_ORIGIN, NOTION.id, 'device')).toEqual({ kind: 'failed', reason: 'token_failed' });
+  }));
+
   it('never accepts a browser callback for a device attempt', withRig('no-callback', { device: true }, async ({ mcp }) => {
     const begun = await startDevice(mcp);
     expect(await mcp.finish(begun.nonce, new URLSearchParams({ code: 'code_injected', iss: NOTION.issuer }))).toEqual({ kind: 'invalid' });
@@ -121,6 +133,16 @@ describe('device code wire and answers', () => {
   const good = { device_code: 'dc_1', user_code: 'WDJB-MJHT', verification_uri: 'https://auth.example.com/activate', expires_in: 900 };
   it('reads a good answer, defaulting the interval to five seconds', async () => {
     expect(await requestDeviceCode(answering(good), pins, 'https://auth.example.com/device', undefined)).toEqual({ ...good, interval: 5 });
+  });
+  it.each([
+    ['unauthorized_client', 400, 'unsupported'],
+    ['unsupported_grant_type', 400, 'unsupported'],
+    ['invalid_client', 401, 'unsupported'],
+    ['invalid_scope', 400, 'failed'],
+    ['temporarily_unavailable', 503, 'transient'],
+  ] as const)('classes a %s refusal (HTTP %i) as %s', async (error, status, kind) => {
+    const refusing = (async () => Response.json({ error }, { status })) as unknown as typeof fetch;
+    await expect(requestDeviceCode(refusing, pins, 'https://auth.example.com/device', undefined)).rejects.toMatchObject({ kind });
   });
   it.each([
     ['a user code with markup', { ...good, user_code: '<b>WDJB</b>' }],

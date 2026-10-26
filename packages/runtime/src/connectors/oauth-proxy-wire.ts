@@ -32,8 +32,8 @@ export const OAUTH_PROXY_CODES = [
   'unsigned', 'unconfigured', 'invalid_request', 'connection_unavailable', 'token_expired', 'reauth_needed', 'scope_missing',
   'not_found', 'rate_limited', 'unavailable', 'protocol', 'rpc_error', 'egress_refused', 'egress_oversize',
   'intent_pending', 'intent_conflict', 'intent_unavailable', 'registration_refused', 'token_failed', 'account_linked',
-  // A device-code poll's answers (RFC 8628 §3.5).
-  'authorization_pending', 'slow_down', 'expired_token', 'access_denied',
+  // A device-code poll's answers (RFC 8628 §3.5), and a server's refusal to issue our client a device code at all.
+  'authorization_pending', 'slow_down', 'expired_token', 'access_denied', 'device_unsupported',
 ] as const;
 export type OAuthProxyCode = (typeof OAUTH_PROXY_CODES)[number];
 export type OAuthProxyFailure = Readonly<{ code: OAuthProxyCode; retry_after?: number; scope?: string; rpc_code?: number; message?: string }>;

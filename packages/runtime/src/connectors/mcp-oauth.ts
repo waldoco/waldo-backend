@@ -284,11 +284,13 @@ export const refreshTokens = (fetcher: typeof fetch, pins: ClientPins, refreshTo
 // provider's answer cannot put arbitrary text or a non-https address in front of the owner.
 export const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 export type DeviceCode = Readonly<{ device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number }>;
-export type DevicePoll = 'pending' | 'slow_down' | 'expired' | 'denied' | 'transient' | 'failed';
+export type DevicePoll = 'pending' | 'slow_down' | 'expired' | 'denied' | 'transient' | 'failed' | 'unsupported';
 export class DeviceFlowError extends Error {
   constructor(public readonly kind: DevicePoll) { super(`device_${kind}`); this.name = 'DeviceFlowError'; }
 }
 const USER_CODE = /^[A-Za-z0-9-]{4,24}$/;
+// A server that checks the grant types a client registered refuses the device request outright (RFC 8628 §3.2, RFC 6749 §5.2).
+const CLIENT_REFUSED = new Set(['unauthorized_client', 'unsupported_grant_type', 'invalid_client']);
 export const requestDeviceCode = async (fetcher: typeof fetch, pins: ClientPins, endpoint: string, scope: string | undefined): Promise<DeviceCode> => {
   if (pins.client_auth !== 'none') throw new DeviceFlowError('failed');
   const form = new URLSearchParams({ client_id: pins.client_id, ...(scope ? { scope } : {}), ...(pins.resource ? { resource: pins.resource } : {}) });
@@ -300,7 +302,7 @@ export const requestDeviceCode = async (fetcher: typeof fetch, pins: ClientPins,
   }
   let json: Record<string, unknown> = {};
   try { json = JSON.parse(out.text) as Record<string, unknown>; } catch { /* refused below */ }
-  if (out.status < 200 || out.status >= 300) throw new DeviceFlowError(out.status === 429 || out.status >= 500 ? 'transient' : 'failed');
+  if (out.status < 200 || out.status >= 300) throw new DeviceFlowError(out.status === 429 || out.status >= 500 ? 'transient' : CLIENT_REFUSED.has(json.error as string) ? 'unsupported' : 'failed');
   const { device_code: code, user_code: user, verification_uri: uri, expires_in: expires, interval } = json;
   let verification: string;
   try { verification = typeof uri === 'string' && uri.length <= 512 ? egressTarget(uri).toString() : ''; } catch { verification = ''; }
