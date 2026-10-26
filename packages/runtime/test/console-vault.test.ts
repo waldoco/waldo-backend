@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { consoleAccess } from '../src/channels/console';
@@ -7,6 +7,8 @@ import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { MEMORY_CONTROL_PATH } from '../src/channels/dashboard-memory-actions';
 import { DASHBOARD_VAULT_PATH, projectVault, readVaultQuery } from '../src/channels/dashboard-vault';
 import { STEP_UP_ROUTES } from '../src/channels/console-step-up';
+import type { ApprovalDesk, RecordedLedgerKind } from '../src/channels/approvals';
+import { approvalKindV1Schema, type ApprovalKindV1 } from '../../contracts/src/app/parts';
 import { HEALTH_READ_LIMIT, healthSharing } from '../src/channels/dashboard-health';
 import { TRACE_KEPT } from '../src/channels/harness';
 
@@ -207,22 +209,40 @@ describe('the Vault with a fresh email code', () => {
     expect(vault.access_log.approvals.rows.map(row => [row.kind, row.decision])).toEqual([['calendar_change', 'done']]);
   });
 
-  it('pages approvals by time and id, ties included, and keeps them to the last 30 days', async () => {
+  it('a kind Waldo records without asking can never be one the owner decides', () => {
+    expectTypeOf<Extract<RecordedLedgerKind, ApprovalKindV1>>().toBeNever();
+    const record: ApprovalDesk['record'] = () => undefined;
+    // @ts-expect-error an approval kind is not a recorded kind
+    record('email_send', 'Sent', {});
+    // @ts-expect-error an approval kind is not a recorded kind
+    record('calendar_change', 'Moved', {});
+    // @ts-expect-error a kind must be named, not any string
+    record(String('email_draft'), 'Drafted', {});
+    record('email_draft', 'Drafted', {});
+    expect(approvalKindV1Schema.options).not.toContain('email_draft');
+  });
+
+  it('pages approvals by time and id, with the page break inside one timestamp, and keeps them to the last 30 days', async () => {
     const o = await owner('vault-approval-page-owner');
     await o.codeAge(60_000);
     const now = Date.now(), tie = now - HOUR;
     await o.seedApproval('pold', 'email_send', 'done', now - 40 * DAY, 'old', {});
-    for (let n = 0; n < 60; n++) await o.seedApproval(`p${String(n).padStart(3, '0')}`, 'message_send', 'skipped', n < 30 ? tie : tie - n * 60_000, 's', {});
+    // Every row shares one created_at, so the cursor falls inside the tie; each row's decided_at names it.
+    await runInDurableObject(o.stub, (_instance, state) => {
+      for (let n = 0; n < 60; n++) state.storage.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'skipped', 's', '{}', NULL, ?, ?)",
+        `p${String(n).padStart(3, '0')}`, tie, tie + n + 1);
+    });
     const first = await (await o.vault()).json() as Vault;
     expect(first.access_log.approvals.rows).toHaveLength(50);
-    expect(first.access_log.approvals.next_before).toEqual(expect.stringMatching(/^[0-9]+\.p[0-9]{3}$/));
+    expect(first.access_log.approvals.next_before).toBe(`${tie}.p010`);
     const second = await (await o.vault(`?approvals_before=${encodeURIComponent(first.access_log.approvals.next_before!)}`)).json() as Vault;
     expect(second.access_log.approvals.rows).toHaveLength(10);
     expect(second.access_log.approvals.next_before).toBeNull();
-    const times = [...first.access_log.approvals.rows, ...second.access_log.approvals.rows].map(row => Date.parse(row.at));
-    expect(times).toEqual([...times].sort((a, b) => b - a));
-    expect(times.filter(at => at === tie)).toHaveLength(30);
-    expect(times.some(at => at < now - 30 * DAY)).toBe(false);
+    const named = (rows: Vault['access_log']['approvals']['rows']) => rows.map(row => Date.parse(row.decided_at!) - tie);
+    const [one, two] = [named(first.access_log.approvals.rows), named(second.access_log.approvals.rows)];
+    expect(one.filter(n => two.includes(n))).toEqual([]);
+    expect([...one, ...two]).toEqual(Array.from({ length: 60 }, (_, n) => 60 - n));
+    expect([...first.access_log.approvals.rows, ...second.access_log.approvals.rows].every(row => Date.parse(row.at) === tie)).toBe(true);
   });
 
   it('lists each memory group newest first', async () => {
