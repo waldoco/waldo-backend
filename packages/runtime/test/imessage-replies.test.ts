@@ -200,8 +200,8 @@ it('with replies sent, verified and exact on the host, the turn\'s reply threads
   await w.activate();
   expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
   const { asked, delivery, command } = await ask(w, 'Booked the dentist for Friday!');
-  expect(command).toMatchObject({ operation: 'send', text: proof.reply, replyTo: { messageGuid: asked.messageGuid, partIndex: 0 }, target: { chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
-  expect(command.target).not.toHaveProperty('messageGuid');
+  expect(command).toMatchObject({ operation: 'send', text: proof.reply, target: { chatGuid: CHAT, messageGuid: asked.messageGuid, partIndex: 0 }, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(command).not.toHaveProperty('replyTo');
   await sent(w, delivery);
   expect(w.host.nativeSends).toEqual([{ commandId: command.commandId, text: proof.reply, replyTo: { messageGuid: asked.messageGuid, partIndex: 0 } }]);
   expect(await replyRecords(w)).toMatchObject([{ state: 'settled', commandId: command.commandId, result: { state: 'local_recorded' } }]);
@@ -214,7 +214,7 @@ it('without replies sent, verified and exact on the host, the reply goes out pla
     expect((await w.host.capabilities(true, false, flag)).status).toBe(200);
     const { delivery, command } = await ask(w, 'Hi');
     expect(command).toMatchObject({ operation: 'send', text: proof.reply });
-    expect(command).not.toHaveProperty('replyTo');
+    expect(command.target).toEqual({ bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT });
     await sent(w, delivery);
   }
   expect(w.host.nativeSends.map(send => Object.keys(send))).toEqual(Array(4).fill(['commandId', 'text']));
@@ -228,7 +228,7 @@ it('a host that stops verifying replies while the turn runs still gets the reply
   proof.before.push(async () => expect((await w.host.capabilities(true, false, { ...REPLIES, verified: false })).status).toBe(200));
   const { delivery, command } = await ask(w, 'Running late.');
   expect(command).toMatchObject({ operation: 'send', text: proof.reply });
-  expect(command).not.toHaveProperty('replyTo');
+  expect(command.target).not.toHaveProperty('messageGuid');
   await sent(w, delivery);
   expect(await replyRecords(w)).toMatchObject([{ state: 'settled', result: { state: 'local_recorded' } }]);
 });
@@ -245,7 +245,31 @@ it('the bridge refuses a reply whose thread target is outside the bound chat, an
     .toMatchObject({ kind: 'terminal', result: { state: 'rejected', disposition: 'not_started', reason: 'target_not_in_chat' } });
   expect((await w.host.pull()).delivery).toBeNull();
   expect(await w.bridgeStub().enqueueReply({ ...handoff, commandId: 'wrc_probe_inside', replyTo: { chatGuid: CHAT, messageGuid: 'sim-guid-inside', partIndex: 1 } })).toEqual({ kind: 'queued' });
-  expect(JSON.parse((await w.host.pull()).delivery!.body)).toMatchObject({ commandId: 'wrc_probe_inside', replyTo: { messageGuid: 'sim-guid-inside', partIndex: 1 } });
+  expect(JSON.parse((await w.host.pull()).delivery!.body)).toMatchObject({ commandId: 'wrc_probe_inside', target: { chatGuid: CHAT, messageGuid: 'sim-guid-inside', partIndex: 1 } });
+});
+
+// A threaded send's target names the owner's message, never the one it sent: that stays the result's own messageGuid, so the
+// bridge's record of what Waldo sent maps only Waldo's own message to the send.
+it('a threaded send is recorded under the message it sent; a result naming the owner\'s message as the one sent is refused', async () => {
+  const w = await world();
+  await w.activate();
+  expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
+  const first = await ask(w, 'What is next?');
+  expect(first.command.target.messageGuid).toBe(first.asked.messageGuid);
+  await sent(w, first.delivery);
+  const sentGuid = `sim-sent-${first.command.commandId}`;
+  const recorded = () => runInDurableObject(w.bridgeStub(), async (_i, state) => state.storage.sql.exec<{ message_guid: string }>('SELECT message_guid FROM sent_messages ORDER BY message_guid').toArray().map(row => row.message_guid));
+  expect(await recorded()).toEqual([sentGuid]);
+  // The owner replying to their own earlier message quotes nothing; replying to Waldo's threaded reply quotes it.
+  await w.exchange('And this?', first.asked.messageGuid);
+  expect(ownerInput(proof.turns.at(-1)!)).not.toContain('Replying to');
+  await w.exchange('And that?', sentGuid);
+  expect(count(ownerInput(proof.turns.at(-1)!), REPLYING)).toBe(1);
+  // A host that reports the replied-to message as the one it sent is refused, and records nothing under the owner's message.
+  const third = await ask(w, 'One more.');
+  const confused = { ...await w.host.execute(third.delivery), messageGuid: third.asked.messageGuid };
+  expect((await w.host.postResult(third.delivery, confused)).status).toBe(409);
+  expect(await recorded()).not.toContain(third.asked.messageGuid);
 });
 
 // No model argument picks a thread target: only the turn's own reply carries the owner's message it answers.

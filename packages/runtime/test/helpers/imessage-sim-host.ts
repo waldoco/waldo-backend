@@ -81,7 +81,7 @@ export class SimulatedHost {
       if (command.reaction.kind !== 'standard') throw new Error('the simulated host sends standard tapbacks only');
       this.nativeReactions.push({ commandId: command.commandId, messageGuid: command.target.messageGuid!, partIndex: command.target.partIndex!, type: command.reaction.type, action: command.action });
       result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-react-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-reaction-${this.nativeReactions.length}` } };
-    } else { this.nativeSends.push({ commandId: command.commandId, text: command.text, ...(command.replyTo ? { replyTo: command.replyTo } : {}) }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
+    } else { this.nativeSends.push({ commandId: command.commandId, text: command.text, ...(command.target.messageGuid !== undefined ? { replyTo: { messageGuid: command.target.messageGuid, partIndex: command.target.partIndex! } } : {}) }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
     this.journal.set(command.commandId, { digest, result });
     return result;
   }
