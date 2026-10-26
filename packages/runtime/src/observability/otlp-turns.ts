@@ -134,6 +134,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     ...optional('langfuse.observation.metadata.provider', entry.provider),
     ...optional('langfuse.observation.metadata.fallback_fired', entry.fallback_fired),
     ...optional('langfuse.observation.metadata.tool_search_degraded', entry.tool_search_degraded),
+    ...optional('langfuse.observation.metadata.tool_search_rejection', entry.tool_search_rejection),
     ...optional('langfuse.observation.metadata.ttft_ms', entry.ttft_ms),
     ...optional('langfuse.observation.metadata.rung', entry.rung),
     ...optional('langfuse.observation.metadata.blocked_reason', entry.blocked_reason),

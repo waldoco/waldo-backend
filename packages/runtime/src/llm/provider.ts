@@ -269,6 +269,8 @@ export type RuntimeLLMSuccess = {
   // Set when the step that answered did so after the model refused the tool search request shape and every tool was
   // resent up front: the refusal is an invalid_args attempt on the same model, so the routing fields cannot show it.
   tool_search_degraded?: true;
+  // The refused request's failure, as the adapter reported it: status, provider error code and parameter name only.
+  tool_search_rejection?: string;
   usage: LLMUsage;
   attempts: LLMAttempt[];
   routing_logs: readonly RoutingLogEvent[];
@@ -538,6 +540,7 @@ export class RuntimeLLMProvider {
 
       let gatewayResult: LLMGatewayResult;
       let searchDegraded = false;
+      let searchRejection: string | undefined;
       try {
         const failoverAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider
           && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
@@ -562,6 +565,7 @@ export class RuntimeLLMProvider {
           if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
           const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
           searchDegraded = true;
+          searchRejection = gatewayResult.error.slice(0, 160);
           gatewayResult = await send(withoutSearch);
         }
       } catch (error) {
@@ -650,7 +654,7 @@ export class RuntimeLLMProvider {
           plan.fallback_step !== 'configured_model' ||
           plan.context !== 'full_context' ||
           searchDegraded,
-        ...(searchDegraded ? { tool_search_degraded: true as const } : {}),
+        ...(searchDegraded ? { tool_search_degraded: true as const, ...(searchRejection ? { tool_search_rejection: searchRejection } : {}) } : {}),
         usage: { ...usage, ...addTokens(usage, spent) },
         attempts,
         routing_logs: routingLogs,

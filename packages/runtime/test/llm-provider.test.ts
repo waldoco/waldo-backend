@@ -957,11 +957,11 @@ describe('RuntimeLLMProvider', () => {
         ? { ok: false, code: 'invalid_args', error: 'request rejected (400 invalid_request_error)' }
         : { ok: true, data: response(request.request.model, 'answered') });
       const degraded = await new RuntimeLLMProvider({ gateway: refused }).complete(searchTurn, runtimeCtx());
-      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true });
+      expect(degraded).toMatchObject({ ok: true, degraded: true, tool_search_degraded: true, tool_search_rejection: 'request rejected (400 invalid_request_error)' });
       const accepted = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model, 'answered') }));
       const clean = await new RuntimeLLMProvider({ gateway: accepted }).complete(searchTurn, runtimeCtx());
       expect(clean).toMatchObject({ ok: true, degraded: false });
-      if (clean.ok) expect(clean.tool_search_degraded).toBeUndefined();
+      if (clean.ok) { expect(clean.tool_search_degraded).toBeUndefined(); expect(clean.tool_search_rejection).toBeUndefined(); }
     });
 
     it('fails as before when the resend is refused too, after one resend only', async () => {
