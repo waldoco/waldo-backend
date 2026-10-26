@@ -99,7 +99,7 @@ describe('trace health scrub at the gate, capture on', () => {
   });
 
   it('redacts both values of a relayed trend', () => {
-    for (const [said, kept] of [['HRV fell from 48 to 35, so rest.', ', so rest.'], ['HRV: 48 → 35 this week', ' this week']]) {
+    for (const [said, kept] of [['HRV fell from 48 to 35, so rest.', ', so rest.'], ['HRV: 48 → 35 this week', ' this week']] as const) {
       const output = gateTraceEntry({ trace: 'tg-0', hop: 'model_call', ms: 1, ok: true, text: { input: 'and my HRV?', output: said } }, true).text!.output!;
       expect(output).not.toMatch(/48|35/);
       expect(output.endsWith(kept)).toBe(true);

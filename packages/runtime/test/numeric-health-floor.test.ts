@@ -201,6 +201,7 @@ describe('the numeric health floor', () => {
     '| HRV | today | 42 ms |',
     '| Resting HR | Mon | 58 bpm |',
     'SpO₂ 96%',
+    '**Steps:** 8,432',
     'HRV declined to 35 ms',
     'HRV went from 48 to 35',
   ])('holds a relayed reading: %s', (text) => {
