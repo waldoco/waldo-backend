@@ -41,7 +41,8 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   // Bytes never cross from the bridge; files arrive as media references, and a message may be files alone.
   if (!binding.success || !media.success || binding.data.conversationKind !== 'direct' || input.envelope.surface !== 'imessage'
     || input.envelope.conversationRef !== JSON.stringify(['imessage', binding.data.bridgeId, binding.data.accountId, binding.data.chatGuid])
-    || typeof input.envelope.text !== 'string' || (!input.envelope.text.trim() && !media.data) || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length) return 'refused';
+    || typeof input.envelope.text !== 'string' || (!input.envelope.text.trim() && !media.data) || input.envelope.attachments?.length || input.envelope.attachmentRefs?.length
+    || (input.replyQuote !== undefined && typeof input.replyQuote !== 'string')) return 'refused';
   const digestOfBinding = await bindingDigest(binding.data);
   const record = { environment: input.environment, binding: binding.data, revision: input.revision, ownerDoName: input.ownerDoName, bindingDigest: digestOfBinding };
   try { await currentIMessageAuthority(host.env, record); } catch { return 'refused'; }
@@ -53,6 +54,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   const result = await new IMessageOwnerInbox(host.storage).admit({
     ...record, dedupKey: input.dedupKey, digest: input.digest, text: input.envelope.text, conversationRef: input.envelope.conversationRef,
     bridgeDoName: input.bridgeDoName, commandId, occurredAt: Math.min(input.occurredAt, Date.now()), ...(media.data ? { media: media.data } : {}), ...(messageRef ? { messageRef } : {}),
+    ...(input.replyQuote !== undefined ? { replyNote: `[Replying to your message: ${JSON.stringify(redactNumericHealth(input.replyQuote, HEALTH_SPAN_MARKER))}]` } : {}),
   });
   return result.kind;
 };
@@ -80,14 +82,15 @@ export const noteIMessageReactionHandoff = async (host: OwnerHost, input: IMessa
 };
 
 /**
- * What an iMessage turn's model reads beside its text when there is more than the text: the owner's words, the tapbacks they
- * left since their last turn, then the files opened for it. Null for a turn that is its text alone.
+ * What an iMessage turn's model reads beside its text when there is more than the text: the owner's words, the message of
+ * Waldo's they replied to, the tapbacks they left since their last turn, then the files opened for it. Null for a turn that
+ * is its text alone.
  */
-export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' | 'text' | 'reactions'>, opened: OpenedIMessageTurnMedia | null)
+export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' | 'text' | 'reactions' | 'replyNote'>, opened: OpenedIMessageTurnMedia | null)
   : Readonly<{ updateId: number; parts: readonly InboundPart[]; attachments: OpenedIMessageTurnMedia['attachments'] }> | null => {
-  const tapbacks = (record.reactions ?? []).map((text): InboundPart => ({ authorship: 'media_note', text }));
-  if (!opened && !tapbacks.length) return null;
-  return { updateId: record.updateId, parts: [...ownerWords(record.text), ...tapbacks, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
+  const notes = [...(record.replyNote ? [record.replyNote] : []), ...(record.reactions ?? [])].map((text): InboundPart => ({ authorship: 'media_note', text }));
+  if (!opened && !notes.length) return null;
+  return { updateId: record.updateId, parts: [...ownerWords(record.text), ...notes, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
 };
 
 /** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */

@@ -52,10 +52,13 @@ export type HostRoute = 'events' | 'heartbeat' | 'capabilities' | 'commands/pull
 /** JSON is serialized inside the DO so the RPC boundary carries only a status and a string. */
 export type HostReply = { status: number; json: string };
 
-/** Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only. */
+/**
+ * Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only.
+ * replyQuote: the opening of the message Waldo sent this owner in this chat that the turn replies to; absent for any other reply.
+ */
 export type IMessageTurnHandoff = Readonly<{
   dedupKey: string; digest: string; envelope: OwnerTurnEnvelope; binding: IMessageBinding; revision: string;
-  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia;
+  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia; replyQuote?: string;
 }>;
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
@@ -83,8 +86,8 @@ const SYSTEM_REPLY_PREFIX = 'system:';
 // How long a reply that met a busy slot keeps notes off it: past the owner's 1 s retry, with room for its alarm.
 const REPLY_WAITING_MS = 5_000;
 const PROGRESS = 'progress:';
-// How much of the reacted-to message the owner's next turn reads with the tapback.
-const REACTION_QUOTE_CHARS = 80;
+// How much of Waldo's message the owner's turn reads with their tapback on it or reply to it.
+const QUOTE_CHARS = 80;
 export const SYSTEM_OWNER_ID = 'waldo-system';
 /** "waldo CODE": the one-time link code from the console (same alphabet as Telegram and WhatsApp codes). */
 const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
@@ -452,6 +455,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     try {
       // No bytes cross here: a host's files go to the owner as references beside the admitted words.
       const media = event.kind === 'message' ? iMessageMediaOf(event) : undefined;
+      const replyQuote = event.kind === 'message' && event.replyToGuid ? quoteSent(store, event.replyToGuid, grant.doName, binding.chatGuid) : null;
       const handoff = await admitIMessageOwnerTurn(event.kind === 'message' ? { ...event, attachments: [] } : event, {
         authority: {
           // Unknown senders and other chats resolve to no grant: no directory lookup, no owner context.
@@ -473,7 +477,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
         digest, envelope: turn, binding, revision: grant.revision, environment,
         bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
-        ...(media ? { media } : {}),
+        ...(media ? { media } : {}), ...(replyQuote !== null ? { replyQuote } : {}),
       }));
       const admitted = await this.owner(authority.doName).admitIMessageTurn(handoff);
       if (admitted === 'admitted' || admitted === 'duplicate') return 'handed';
@@ -503,14 +507,11 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     }
     const owner = isSenderAuthority(sender) ? sender : null, binding = owner ? bindingFromAuthority(owner) : null;
     if (!owner || !binding || binding.subject !== event.actorHandle || binding.chatGuid !== event.chatGuid) return 'reaction_ignored';
-    const commandId = store.sentCommandFor(event.target.messageGuid!), sent = commandId ? store.delivery({ commandId }) : null;
-    const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
-    if (!sent || command?.operation !== 'send' || sent.ownerDoName !== owner.doName || command.target.chatGuid !== event.chatGuid) return 'reaction_untracked';
-    const words = [...redactNumericHealth(command.text, HEALTH_SPAN_MARKER)];
+    const quoted = quoteSent(store, event.target.messageGuid!, owner.doName, event.chatGuid);
+    if (quoted === null) return 'reaction_untracked';
     try {
       const noted = await this.owner(owner.doName).noteIMessageReaction({ binding, revision: owner.revision, environment, bridgeDoName: iMessageBridgeName(environment, bridgeId, accountId),
-        ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 },
-        quoted: words.length > REACTION_QUOTE_CHARS ? `${words.slice(0, REACTION_QUOTE_CHARS).join('')}…` : words.join('') });
+        ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 }, quoted });
       return noted === 'noted' ? 'reaction_noted' : 'reaction_refused';
     } catch { return 'retry'; }
   }
@@ -598,6 +599,18 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     await this.rearm(store);
   }
 }
+
+/**
+ * The opening of a message Waldo sent this owner DO in this chat, health readings withheld before the cut. Null for any other
+ * message: the owner's own, one sent to another owner or chat, a tapback, or one the bridge has no send on record for.
+ */
+const quoteSent = (store: BridgeStore, messageGuid: string, ownerDoName: string, chatGuid: string): string | null => {
+  const commandId = store.sentCommandFor(messageGuid), sent = commandId ? store.delivery({ commandId }) : null;
+  const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
+  if (!sent || command?.operation !== 'send' || sent.ownerDoName !== ownerDoName || command.target.chatGuid !== chatGuid) return null;
+  const words = [...redactNumericHealth(command.text, HEALTH_SPAN_MARKER)];
+  return words.length > QUOTE_CHARS ? `${words.slice(0, QUOTE_CHARS).join('')}…` : words.join('');
+};
 
 /** Same semantics as the relay's buildSendCommand: exact binding, nonblank text, no rich features or SMS. */
 export const buildTextReply = (binding: IMessageBinding, commandId: string, text: string): IMessageCommand => {
