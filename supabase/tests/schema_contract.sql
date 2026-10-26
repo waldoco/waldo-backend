@@ -49,10 +49,10 @@ select is_empty(
 );
 
 select is_empty(
-  $$select table_name from information_schema.tables
-    where table_schema = 'public' and table_type = 'BASE TABLE'
-      and (has_table_privilege('authenticated', 'public.' || table_name, 'SELECT')
-        or has_table_privilege('anon', 'public.' || table_name, 'SELECT'))$$,
+  $$select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r', 'p')
+      and (has_table_privilege('authenticated', c.oid, 'SELECT')
+        or has_table_privilege('anon', c.oid, 'SELECT'))$$,
   'no public table is readable by a client session'
 );
 
