@@ -258,3 +258,42 @@ describe('reading the state', () => {
     await expect(phoneSms(env, fake(() => row).fetcher, () => NOW).state('owner-a')).rejects.toThrow('phone state shape');
   });
 });
+
+describe('setting the number', () => {
+  const setLedger = (answer: () => unknown) => {
+    const f = fake(() => ({ kind: 'denied' }));
+    f.fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      f.calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown>, headers: new Headers(init?.headers) });
+      const result = answer();
+      return result instanceof Response ? result : Response.json(result);
+    });
+    return f;
+  };
+  it('signs the owner, the number and the listed country codes into one call, and returns the ledger\'s answer', async () => {
+    const f = setLedger(() => ({ kind: 'set', unlinked: [] }));
+    expect(await phoneSms({ ...env, PHONE_SMS_COUNTRIES: '+91, +44' }, f.fetcher, () => NOW).set('owner-a', '+919800000002')).toEqual({ kind: 'set', unlinked: [] });
+    const [call] = f.ledgerCalls();
+    expect(call!.url).toBe('https://directory.test/rest/v1/rpc/owner_phone_set');
+    const payload = JSON.stringify({ do_name: 'owner-a', phone: '+919800000002', countries: ['+91', '+44'] });
+    expect(call!.body).toEqual({ p_payload: payload, p_at: NOW / 1000, p_sig: await routerSignature('router-secret', NOW / 1000, `phoneset.${payload}`) });
+  });
+  it.each(['unchanged', 'taken', 'invalid', 'unsupported', 'throttled', 'denied'])('passes the ledger\'s %s through', async (kind) => {
+    expect(await phoneSms(env, setLedger(() => ({ kind })).fetcher, () => NOW).set('owner-a', '+919800000002')).toEqual({ kind });
+  });
+  it('passes on which links from the old number a set unlinked', async () => {
+    expect(await phoneSms(env, setLedger(() => ({ kind: 'set', unlinked: ['imessage', 'whatsapp'] })).fetcher, () => NOW).set('owner-a', '+919800000002'))
+      .toEqual({ kind: 'set', unlinked: ['imessage', 'whatsapp'] });
+  });
+  it('reads a lost or unexpected answer as unknown, since the number may have been saved', async () => {
+    for (const answer of [() => new Response('down', { status: 503 }), () => ({ kind: 'approved' }), () => null, () => ['set'],
+      () => ({ kind: 'set' }), () => ({ kind: 'set', unlinked: ['telegram'] }), () => ({ kind: 'set', unlinked: 'whatsapp' })]) {
+      expect(await phoneSms(env, setLedger(answer).fetcher, () => NOW).set('owner-a', '+919800000002')).toEqual({ kind: 'unknown' });
+    }
+  });
+  it('asks nothing with the switch off or for a number that is not E.164', async () => {
+    const f = setLedger(() => ({ kind: 'set', unlinked: [] }));
+    expect(await phoneSms({ ...env, PHONE_SMS_VERIFY: '0' }, f.fetcher, () => NOW).set('owner-a', '+919800000002')).toEqual({ kind: 'disabled' });
+    for (const number of ['9800000002', '+91 98000 00002', '+0919800000002', '']) expect(await phoneSms(env, f.fetcher, () => NOW).set('owner-a', number)).toEqual({ kind: 'invalid' });
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
+});

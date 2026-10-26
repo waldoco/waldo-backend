@@ -59,6 +59,13 @@ it('rejects empty sends, invalid formatting ranges and path-bearing filenames', 
     expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.audio, attachments: [{ ...syntheticIMessageEvents.audio.attachments[0], filename }] }).success).toBe(false);
   }
 });
+it('expresses a send threaded as a reply by naming the exact message and part on its target', () => {
+  const c = syntheticIMessageCommand();
+  const threaded = { ...c, target: { ...c.target, messageGuid: 'fixture-message', partIndex: 2 } };
+  expect(iMessageCommandSchema.parse(threaded)).toMatchObject({ operation: 'send', target: { chatGuid: c.target.chatGuid, messageGuid: 'fixture-message', partIndex: 2 } });
+  expect(iMessageCommandSchema.safeParse({ ...c, target: { ...c.target, partIndex: 2 } }).success).toBe(false);
+  expect(iMessageCommandSchema.safeParse({ ...threaded, replyTo: { messageGuid: 'fixture-message', partIndex: 2 } }).success).toBe(false);
+});
 it('requires a declared trusted audience without deriving it from opaque chat GUIDs', () => {
   const c = syntheticIMessageCommand();
   expect(iMessageCommandSchema.safeParse({ ...c, binding: { ...c.binding, conversationKind: undefined } }).success).toBe(false);

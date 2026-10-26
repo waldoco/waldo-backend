@@ -6,6 +6,7 @@ import { S2_HEADER } from '../../src/channels/imessage/wire';
 import { sha256Hex, signS2, verifyCommitment, verifyS2, type S2Headers } from '../../src/channels/imessage/crypto';
 
 export type Call = (request: Request) => Promise<Response>;
+type Flag = boolean | Partial<{ receive: boolean; send: boolean; exactTarget: boolean; verified: boolean }>;
 export type Delivery = { deliveryId: string; attempt: number; body: string; headers: S2Headers; commitment: { version: 1; commandDigest: string; expiresAtMs: number; signature: string } };
 
 export class SimulatedHost {
@@ -13,7 +14,7 @@ export class SimulatedHost {
   generation = 'sim-generation-1';
   /** Durable journal: commandId -> {digest, result}. A journaled command is never sent natively twice. */
   readonly journal = new Map<string, { digest: string; result: IMessageResult }>();
-  readonly nativeSends: { commandId: string; text: string }[] = [];
+  readonly nativeSends: { commandId: string; text: string; replyTo?: { messageGuid: string; partIndex: number } }[] = [];
   readonly nativeReactions: { commandId: string; messageGuid: string; partIndex: number; type: string; action: string }[] = [];
   private nonce = 0; private seq = 0;
   // Each simulated host is its own source address, as each real host is: the edge limits requests per address, and a test
@@ -36,12 +37,12 @@ export class SimulatedHost {
   }
   scope() { return { version: 1 as const, bridgeId: this.bridgeId, accountId: this.accountId }; }
   heartbeat(status: 'online' | 'offline' = 'online') { return this.signed('/heartbeat', JSON.stringify({ ...this.scope(), databaseGeneration: this.generation, status })); }
-  /** reactions: the standard_reactions flag as reported, or every field on when true. */
-  capabilities(text = true, reactions: boolean | Partial<{ receive: boolean; send: boolean; exactTarget: boolean; verified: boolean }> = false) {
+  /** reactions, replies: the standard_reactions and replies flags as reported, or every field on when true. */
+  capabilities(text = true, reactions: Flag = false, replies: Flag = false) {
     const flag = (on: boolean) => ({ receive: on, send: on, exactTarget: on, verified: on, ...(on ? { probeReference: 'sim-probe' } : {}) });
-    const tapbacks = typeof reactions === 'boolean' ? flag(reactions) : { ...flag(false), ...reactions, ...(reactions.verified ? { probeReference: 'sim-probe' } : {}) };
+    const reported = (f: Flag) => typeof f === 'boolean' ? flag(f) : { ...flag(false), ...f, ...(f.verified ? { probeReference: 'sim-probe' } : {}) };
     const features = Object.fromEntries(['text', 'files', 'replies', 'standard_reactions', 'custom_reactions', 'formatting', 'url_preview', 'effects', 'native_voice', 'typing', 'read_receipts', 'edit', 'unsend', 'stickers', 'polls', 'groups', 'group_mutations', 'name_photo_sharing']
-      .map((f) => [f, f === 'standard_reactions' ? tapbacks : flag(f === 'text' && text)]));
+      .map((f) => [f, f === 'standard_reactions' ? reported(reactions) : f === 'replies' ? reported(replies) : flag(f === 'text' && text)]));
     return this.signed('/capabilities', JSON.stringify({ ...this.scope(), transport: 'imsg', hostVersion: 'sim-host-1', transportVersion: 'sim', readiness: 'ready', features }));
   }
   message(text: string, o: Partial<{ eventId: string; senderHandle: string; chatGuid: string; isGroup: boolean; isFromMe: boolean; service: string; attachments: unknown[] }> = {}) {
@@ -80,7 +81,7 @@ export class SimulatedHost {
       if (command.reaction.kind !== 'standard') throw new Error('the simulated host sends standard tapbacks only');
       this.nativeReactions.push({ commandId: command.commandId, messageGuid: command.target.messageGuid!, partIndex: command.target.partIndex!, type: command.reaction.type, action: command.action });
       result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-react-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-reaction-${this.nativeReactions.length}` } };
-    } else { this.nativeSends.push({ commandId: command.commandId, text: command.text }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
+    } else { this.nativeSends.push({ commandId: command.commandId, text: command.text, ...(command.target.messageGuid !== undefined ? { replyTo: { messageGuid: command.target.messageGuid, partIndex: command.target.partIndex! } } : {}) }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
     this.journal.set(command.commandId, { digest, result });
     return result;
   }

@@ -14,7 +14,7 @@ import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './po
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFinish, type PhotonStatus } from './photon';
 import { iMessageMediaOf, type IMessageMedia, type PhotonMediaEnv } from './photon-media';
-import type { IMessageTapback } from './final-outbox';
+import type { IMessageMessageTarget, IMessageTapback } from './final-outbox';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 
 export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
@@ -52,15 +52,20 @@ export type HostRoute = 'events' | 'heartbeat' | 'capabilities' | 'commands/pull
 /** JSON is serialized inside the DO so the RPC boundary carries only a status and a string. */
 export type HostReply = { status: number; json: string };
 
-/** Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only. */
+/**
+ * Inbound turn handed to the owner DO. The owner inbox deduplicates on dedupKey + digest. Files cross as references only.
+ * replyQuote: the opening of the message Waldo sent this owner in this chat that the turn replies to; absent for any other reply.
+ */
 export type IMessageTurnHandoff = Readonly<{
   dedupKey: string; digest: string; envelope: OwnerTurnEnvelope; binding: IMessageBinding; revision: string;
-  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia;
+  environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number; media?: IMessageMedia; replyQuote?: string;
 }>;
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
 /** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
-// reaction: a tapback instead of text, on a message in the bound chat.
-export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string; reaction?: IMessageTapback }>;
+// reaction: a tapback instead of text, on a message in the bound chat. replyTo: the owner's message in the bound chat a
+// turn's reply answers, threaded onto only where the host verified replies.
+export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string;
+  reaction?: IMessageTapback; replyTo?: IMessageMessageTarget }>;
 // busy: the one mailbox slot holds another command; the slot frees within a host pull and a send, so retry soon.
 export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' | 'busy' } | { kind: 'terminal'; result: IMessageResult };
 /** The owner's tapback on a message Waldo sent them, with the opening of that message's text. Never a turn. */
@@ -83,8 +88,8 @@ const SYSTEM_REPLY_PREFIX = 'system:';
 // How long a reply that met a busy slot keeps notes off it: past the owner's 1 s retry, with room for its alarm.
 const REPLY_WAITING_MS = 5_000;
 const PROGRESS = 'progress:';
-// How much of the reacted-to message the owner's next turn reads with the tapback.
-const REACTION_QUOTE_CHARS = 80;
+// How much of Waldo's message the owner's turn reads with their tapback on it or reply to it.
+const QUOTE_CHARS = 80;
 export const SYSTEM_OWNER_ID = 'waldo-system';
 /** "waldo CODE": the one-time link code from the console (same alphabet as Telegram and WhatsApp codes). */
 const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
@@ -254,7 +259,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       if (authority && authority.state !== 'active' && authority.state !== 'pending' && (authority.kind === 'owner' || !authority.subject)) this.applyRevocation(store, authority.revision);
       return { kind: 'terminal', result: replyNotStarted(input.commandId, binding ?? null, 'authority_changed') };
     }
-    if (input.reaction && input.reaction.chatGuid !== binding.chatGuid) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'target_not_in_chat') };
+    // A message target names the chat it was frozen for: one outside the bound chat means the reply was meant for another chat.
+    const exact = input.reaction ?? input.replyTo;
+    if (exact && exact.chatGuid !== binding.chatGuid) return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'target_not_in_chat') };
     const caps = store.capabilities(bridgeId, accountId);
     if (!store.online() || !caps || caps.readiness !== 'ready' || (!input.reaction && !sends(caps, 'text'))) return { kind: 'retry' };
     // A host that reports itself but not verified tapbacks will not send this one later either.
@@ -262,7 +269,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const key = await this.key(authority, environment, c.wrappingKey);
     if (!key) return { kind: 'retry' };
     let command: IMessageCommand;
-    try { command = input.reaction ? buildTapback(binding, input.commandId, input.reaction) : buildTextReply(binding, input.commandId, input.text); }
+    // Threaded only where the host sends verified replies now; otherwise plain, never refused, so threading never costs a reply.
+    const thread = input.replyTo && sends(caps, 'replies') ? input.replyTo : undefined;
+    try { command = input.reaction ? buildTapback(binding, input.commandId, input.reaction) : buildTextReply(binding, input.commandId, input.text, thread); }
     catch { return { kind: 'terminal', result: replyNotStarted(input.commandId, binding, 'reply_invalid') }; }
     const body = JSON.stringify(command), commandDigest = await sha256Hex(body), now = Date.now(), deliveryId = crypto.randomUUID();
     const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
@@ -452,6 +461,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     try {
       // No bytes cross here: a host's files go to the owner as references beside the admitted words.
       const media = event.kind === 'message' ? iMessageMediaOf(event) : undefined;
+      const replyQuote = event.kind === 'message' && event.replyToGuid ? quoteSent(store, event.replyToGuid, grant.doName, binding.chatGuid) : null;
       const handoff = await admitIMessageOwnerTurn(event.kind === 'message' ? { ...event, attachments: [] } : event, {
         authority: {
           // Unknown senders and other chats resolve to no grant: no directory lookup, no owner context.
@@ -473,7 +483,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         dedupKey: JSON.stringify(['imessage', binding.bridgeId, binding.accountId, event.cursor.databaseGeneration, event.eventId]),
         digest, envelope: turn, binding, revision: grant.revision, environment,
         bridgeDoName: iMessageBridgeName(environment, binding.bridgeId, binding.accountId), ownerDoName: grant.doName, occurredAt: Date.parse(event.occurredAt),
-        ...(media ? { media } : {}),
+        ...(media ? { media } : {}), ...(replyQuote !== null ? { replyQuote } : {}),
       }));
       const admitted = await this.owner(authority.doName).admitIMessageTurn(handoff);
       if (admitted === 'admitted' || admitted === 'duplicate') return 'handed';
@@ -503,14 +513,11 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     }
     const owner = isSenderAuthority(sender) ? sender : null, binding = owner ? bindingFromAuthority(owner) : null;
     if (!owner || !binding || binding.subject !== event.actorHandle || binding.chatGuid !== event.chatGuid) return 'reaction_ignored';
-    const commandId = store.sentCommandFor(event.target.messageGuid!), sent = commandId ? store.delivery({ commandId }) : null;
-    const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
-    if (!sent || command?.operation !== 'send' || sent.ownerDoName !== owner.doName || command.target.chatGuid !== event.chatGuid) return 'reaction_untracked';
-    const words = [...redactNumericHealth(command.text, HEALTH_SPAN_MARKER)];
+    const quoted = quoteSent(store, event.target.messageGuid!, owner.doName, event.chatGuid);
+    if (quoted === null) return 'reaction_untracked';
     try {
       const noted = await this.owner(owner.doName).noteIMessageReaction({ binding, revision: owner.revision, environment, bridgeDoName: iMessageBridgeName(environment, bridgeId, accountId),
-        ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 },
-        quoted: words.length > REACTION_QUOTE_CHARS ? `${words.slice(0, REACTION_QUOTE_CHARS).join('')}…` : words.join('') });
+        ownerDoName: owner.doName, action: event.action, type: event.reaction.type, target: { messageGuid: event.target.messageGuid!, partIndex: event.target.partIndex ?? 0 }, quoted });
       return noted === 'noted' ? 'reaction_noted' : 'reaction_refused';
     } catch { return 'retry'; }
   }
@@ -599,13 +606,28 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 }
 
-/** Same semantics as the relay's buildSendCommand: exact binding, nonblank text, no rich features or SMS. */
-export const buildTextReply = (binding: IMessageBinding, commandId: string, text: string): IMessageCommand => {
+/**
+ * The opening of a message Waldo sent this owner DO in this chat, health readings withheld before the cut. Null for any other
+ * message: the owner's own, one sent to another owner or chat, a tapback, or one the bridge has no send on record for.
+ */
+const quoteSent = (store: BridgeStore, messageGuid: string, ownerDoName: string, chatGuid: string): string | null => {
+  const commandId = store.sentCommandFor(messageGuid), sent = commandId ? store.delivery({ commandId }) : null;
+  const command = sent ? iMessageCommandSchema.parse(JSON.parse(sent.body)) : null;
+  if (!sent || command?.operation !== 'send' || sent.ownerDoName !== ownerDoName || command.target.chatGuid !== chatGuid) return null;
+  const words = [...redactNumericHealth(command.text, HEALTH_SPAN_MARKER)];
+  return words.length > QUOTE_CHARS ? `${words.slice(0, QUOTE_CHARS).join('')}…` : words.join('');
+};
+
+/**
+ * Same semantics as the relay's buildSendCommand: exact binding, nonblank text, no rich features or SMS. With `thread`, the
+ * target names that message and part in the bound chat, and the send goes out as a reply to it.
+ */
+export const buildTextReply = (binding: IMessageBinding, commandId: string, text: string, thread?: Readonly<{ messageGuid: string; partIndex: number }>): IMessageCommand => {
   if (!text.trim()) throw new Error('empty_text');
   const b = iMessageBindingSchema.parse(binding);
   return iMessageCommandSchema.parse({ version: 1, commandId, ownerId: b.ownerId, binding: b,
-    target: { bridgeId: b.bridgeId, accountId: b.accountId, chatGuid: b.chatGuid }, service: 'iMessage', allowSMSFallback: false,
-    operation: 'send', text, attachments: [] });
+    target: { bridgeId: b.bridgeId, accountId: b.accountId, chatGuid: b.chatGuid, ...(thread ? { messageGuid: thread.messageGuid, partIndex: thread.partIndex } : {}) },
+    service: 'iMessage', allowSMSFallback: false, operation: 'send', text, attachments: [] });
 };
 
 /** A standard tapback on an exact message and part in the bound chat; added, never removed. */
@@ -616,7 +638,7 @@ export const buildTapback = (binding: IMessageBinding, commandId: string, tapbac
     operation: 'react', reaction: { kind: 'standard', type: tapback.type }, action: 'add' });
 };
 // A feature the host sends with probe evidence, on an exact target.
-const sends = (caps: IMessageCapabilities, feature: 'text' | 'standard_reactions') => caps.features[feature].send && caps.features[feature].verified && caps.features[feature].exactTarget;
+const sends = (caps: IMessageCapabilities, feature: 'text' | 'standard_reactions' | 'replies') => caps.features[feature].send && caps.features[feature].verified && caps.features[feature].exactTarget;
 
 const replyNotStarted = (commandId: string, binding: IMessageBinding | null, reason: string): IMessageResult => ({
   version: 1, commandId, target: { bridgeId: binding?.bridgeId ?? 'unbound', accountId: binding?.accountId ?? 'unbound', chatGuid: binding?.chatGuid ?? 'unbound' },
