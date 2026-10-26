@@ -286,6 +286,50 @@ it('once Waldo has replied to another message after the card, "1" is an ordinary
   } finally { vi.useRealTimers(); }
 }, 20_000);
 
+// An iMessage reply to the card is read by the same numbered rule as a plain "1": the reply target never picks the card.
+const replyToCard = async (w: Awaited<ReturnType<typeof world>>, card: { commandId: string }, text: string) => {
+  expect((await w.host.send({ ...w.host.message(text), replyToGuid: `sim-sent-${card.commandId}` })).status).toBe(200);
+  await w.pump();
+};
+
+it('a "1" sent as a reply to the card while it is Waldo\'s latest message moves the event once, with no model turn, as a plain "1" does', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    const card = await cardTurn(w, t0);
+    const modelCalls = proof.turns.length;
+    await replyToCard(w, card, '1');
+    expect(proof.turns).toHaveLength(modelCalls);
+    expect(proof.moved).toEqual(['ev-3pm']);
+    expect(JSON.parse((await w.host.pull()).delivery!.body).text).toMatch(/^Done: Move "Design review"/);
+  } finally { vi.useRealTimers(); }
+}, 20_000);
+
+it('a "1" sent as a reply to a card Waldo has written past is an ordinary turn: the model reads which message it answers, and the card stays open', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    const card = await cardTurn(w, t0);
+    await replyFor(w, 'Thanks. What else is on today?');
+    const reply = (await w.host.pull()).delivery!;
+    expect((await w.host.postResult(reply, await w.host.execute(reply))).status).toBe(200);
+    await w.pump(2);
+    const modelCalls = proof.turns.length;
+    await replyToCard(w, card, '1');
+    expect(proof.turns).toHaveLength(modelCalls + 1);
+    expect(proof.turns.at(-1)).toContain('[Replying to your message: ');
+    expect(proof.turns.at(-1)).toContain('Design review');
+    expect(proof.moved).toEqual([]);
+    await runInDurableObject(w.ownerStub, async (_i, state) => {
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
+    });
+  } finally { vi.useRealTimers(); }
+}, 20_000);
+
 it('a card made outside an iMessage turn waits for the owner\'s next message, and a "1" in that message is a normal turn, not its approval', async () => {
   const w = await world();
   await w.pairAndActivate();
