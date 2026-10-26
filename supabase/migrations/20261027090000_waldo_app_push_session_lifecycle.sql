@@ -3,10 +3,18 @@
 -- - app_push_targets releases a device only while the session it was registered in, or the renewal it moved to
 --   (app_session_rotate), is live by the same test every session check uses. A session that runs out without a sign-out is
 --   never deleted, and nothing sweeps it, so its expiry is read where the push is sent rather than kept by a job.
--- - app_push_register takes over the device: a signed registration on a live session revokes every other active binding of
---   the same token or the same installation, whichever owner, provider or environment holds it, before it records its
---   own. The previous owner's token copy leaves Vault, so neither owner can receive the other's pushes. Registrations of
---   one device take its token and installation locks in a fixed order, so two at once settle one after the other.
+-- - app_push_register takes over the phone from another owner only when it names both that binding's token and its
+--   installation: the same app install with a new signer. That binding is revoked and its token copy leaves Vault, so
+--   neither owner can receive the other's pushes. Naming only one of the two is refused as before: a token or an
+--   installation id alone does not show the caller holds the phone. Registrations of one device take its token and
+--   installation locks in a fixed order, so two at once settle one after the other.
+-- - waldo.app_session_live is the one session-liveness test these two functions use.
+create function waldo.app_session_live(p_session waldo.console_sessions) returns boolean
+language sql stable set search_path = '' as $$
+  select p_session.created_at > now() - p_session.lifetime and (p_session.idle_timeout is null or p_session.last_seen_at > now() - p_session.idle_timeout)
+$$;
+revoke all on function waldo.app_session_live(waldo.console_sessions) from public, anon, authenticated, service_role;
+
 -- The bodies are those of 20261025140000 with only these changes. Apply before or after the Worker: neither function's
 -- signature or answer shape changes. Forward-only.
 create or replace function waldo.app_push_register(p_do_name text,p_session_hash text,p_installation_id text,p_provider text,p_environment text,p_expected_epoch bigint,p_operation_id text,p_token text,p_at bigint,p_sig text) returns jsonb
@@ -23,7 +31,7 @@ begin
   -- Pin canonical session custody through the token mutation. Concurrent signout
   -- must either win admission or wait and revoke this settled registration.
   select o.id into v_owner from waldo.owners o join waldo.console_sessions s on s.owner_id=o.id join auth.users u on u.id=o.auth_user_id
-    where o.do_name=p_do_name and o.state='active' and s.session_hash=p_session_hash and s.created_at>now()-s.lifetime and (s.idle_timeout is null or s.last_seen_at>now()-s.idle_timeout) for update of o,s;
+    where o.do_name=p_do_name and o.state='active' and s.session_hash=p_session_hash and waldo.app_session_live(s) for update of o,s;
   if v_owner is null then return null; end if;
   select * into v_prior from waldo.app_push_operations where owner_id=v_owner and session_hash=p_session_hash and operation_id=p_operation_id;
   if found then
@@ -39,13 +47,14 @@ begin
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(greatest(v_keys[1],v_keys[2]),0));
   select * into v_device from waldo.app_push_devices where owner_id=v_owner and installation_id=p_installation_id::uuid for update;
   if coalesce(v_device.device_epoch,0)<>p_expected_epoch then return null; end if;
-  -- The device now belongs to this owner's session: every other binding of its token or installation is revoked.
+  -- The same app install with a new signer: another owner's binding of this token on this installation is revoked.
   for v_secret in select secret_id from waldo.app_push_devices
-      where state='active' and (token_hash=v_hash or installation_id=p_installation_id::uuid) and not (owner_id=v_owner and installation_id=p_installation_id::uuid) for update loop
+      where state='active' and token_hash=v_hash and installation_id=p_installation_id::uuid and owner_id<>v_owner order by owner_id, installation_id for update loop
     delete from vault.secrets where id=v_secret;
   end loop;
   update waldo.app_push_devices set secret_id=null,state='revoked',device_epoch=device_epoch+1
-    where state='active' and (token_hash=v_hash or installation_id=p_installation_id::uuid) and not (owner_id=v_owner and installation_id=p_installation_id::uuid);
+    where state='active' and token_hash=v_hash and installation_id=p_installation_id::uuid and owner_id<>v_owner;
+  if exists(select 1 from waldo.app_push_devices where provider=p_provider and environment=p_environment and state='active' and ((token_hash=v_hash and (owner_id<>v_owner or installation_id<>p_installation_id::uuid)) or (installation_id=p_installation_id::uuid and owner_id<>v_owner))) then return null; end if;
   if v_device.secret_id is not null then delete from vault.secrets where id=v_device.secret_id; end if;
   insert into waldo.app_push_devices(owner_id,installation_id,session_hash,provider,environment,device_epoch,state,secret_id,token_hash,registered_at)
     values(v_owner,p_installation_id::uuid,p_session_hash,p_provider,p_environment,p_expected_epoch+1,'active',vault.create_secret(p_token),v_hash,now())
@@ -67,8 +76,7 @@ begin
     order by d.registered_at desc), '[]'::jsonb) into result
   from (select d.* from waldo.app_push_devices d join waldo.owners o on o.id = d.owner_id
           join waldo.console_sessions s on s.owner_id = d.owner_id and s.session_hash = d.session_hash
-        where o.do_name = p_do_name and o.state = 'active' and d.state = 'active' and d.provider = 'expo'
-          and s.created_at > now() - s.lifetime and (s.idle_timeout is null or s.last_seen_at > now() - s.idle_timeout)
+        where o.do_name = p_do_name and o.state = 'active' and d.state = 'active' and d.provider = 'expo' and waldo.app_session_live(s)
         order by d.registered_at desc limit 10) d
   join vault.decrypted_secrets v on v.id = d.secret_id;
   return result;

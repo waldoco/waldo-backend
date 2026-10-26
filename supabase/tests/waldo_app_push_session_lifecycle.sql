@@ -48,7 +48,8 @@ select is(pg_temp.tokens('life-asha'),'["ExponentPushToken[asha-phone-0000000000
 select pg_temp.expire(repeat('e',64));
 select is(pg_temp.targets('life-asha'),'[]'::jsonb,'and stops them when the renewal itself runs out');
 
--- 2. The phone belongs to the latest owner who signs in on it: their registration revokes the previous owner's binding.
+-- 2. The phone belongs to the latest owner who signs in on it: a registration naming both the token and the installation
+-- of another owner's binding (the same app install, a new signer) revokes that binding.
 select waldo.console_session_open('life-asha',repeat('9',64),pg_temp.at(),pg_temp.sig('consolesess.open.life-asha.'||repeat('9',64)));
 select is(pg_temp.register('life-asha',repeat('9',64),'43000000-0000-0000-0000-000000000001','production',2,'op-life-0003','ExponentPushToken[shared-phone-00000000]')->>'result','registered','Asha registers the phone');
 create temp table asha_secret as select secret_id from pg_temp.device('life-asha','43000000-0000-0000-0000-000000000001');
@@ -66,20 +67,23 @@ select is(pg_temp.targets('life-ben'),'[]'::jsonb,'Ben''s pushes stop reaching i
 select is(pg_temp.tokens('life-asha'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'Asha''s reach it again');
 select is((select count(*) from waldo.app_push_devices where token_hash=pg_temp.token_hash('ExponentPushToken[shared-phone-00000000]') and state='active'),1::bigint,'one owner holds the token at a time');
 
--- The device is matched by its token or its installation, whatever the environment.
-select is(pg_temp.register('life-ben',repeat('b',64),'43000000-0000-0000-0000-000000000002','production',0,'op-life-0006','ExponentPushToken[shared-phone-00000000]')->>'result','registered','the same token under a reinstalled app''s new installation');
-select is(pg_temp.targets('life-asha'),'[]'::jsonb,'takes the token from Asha');
-select is(pg_temp.register('life-asha',repeat('9',64),'43000000-0000-0000-0000-000000000002','sandbox',0,'op-life-0007','ExponentPushToken[rotated-token-0000000]')->>'result','registered','the same installation with a rotated token, under the other environment');
-select is(pg_temp.targets('life-ben'),'[]'::jsonb,'takes the phone from Ben');
-select is(pg_temp.tokens('life-asha'),'["ExponentPushToken[rotated-token-0000000]"]'::jsonb,'Asha reaches it on the rotated token only');
+-- Naming only one of the two proves nothing about holding the phone: it takes nothing over.
+select is(pg_temp.register('life-ben',repeat('b',64),'43000000-0000-0000-0000-000000000002','production',0,'op-life-0006','ExponentPushToken[shared-phone-00000000]'),null,'Ben naming Asha''s token from another installation is refused');
+select is(pg_temp.register('life-ben',repeat('b',64),'43000000-0000-0000-0000-000000000001','production',2,'op-life-0007','ExponentPushToken[ben-other-token-0000]'),null,'Ben naming Asha''s installation with another token is refused');
+select is(pg_temp.tokens('life-asha'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'Asha keeps her binding');
+select is(pg_temp.targets('life-ben'),'[]'::jsonb,'and Ben got none');
+-- Both named, the phone is taken over whatever the environment it was registered under.
+select is(pg_temp.register('life-ben',repeat('b',64),'43000000-0000-0000-0000-000000000001','sandbox',2,'op-life-0008','ExponentPushToken[shared-phone-00000000]')->>'result','registered','Ben names both under the other environment');
+select is(pg_temp.targets('life-asha'),'[]'::jsonb,'and takes the phone from Asha');
+select is(pg_temp.tokens('life-ben'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'Ben reaches it');
 
 -- 3. The same owner registering the same phone again changes no one else and keeps one binding.
-select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',0,'op-life-0008','ExponentPushToken[cai-phone-00000000000]')->>'result','registered','Cai registers his own phone');
-select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',0,'op-life-0008','ExponentPushToken[cai-phone-00000000000]')->>'result','already_recorded','the same request again is the recorded receipt');
-select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',1,'op-life-0009','ExponentPushToken[cai-phone-00000000000]')->>'result','registered','a fresh registration of the unchanged phone is recorded');
+select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',0,'op-life-0009','ExponentPushToken[cai-phone-00000000000]')->>'result','registered','Cai registers his own phone');
+select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',0,'op-life-0009','ExponentPushToken[cai-phone-00000000000]')->>'result','already_recorded','the same request again is the recorded receipt');
+select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',1,'op-life-0010','ExponentPushToken[cai-phone-00000000000]')->>'result','registered','a fresh registration of the unchanged phone is recorded');
 select is((select row(state,device_epoch) from pg_temp.device('life-cai','43000000-0000-0000-0000-000000000003')),row('active'::text,2::bigint),'it stays the one active binding');
 select is(pg_temp.tokens('life-cai'),'["ExponentPushToken[cai-phone-00000000000]"]'::jsonb,'Cai still gets his pushes');
-select is(pg_temp.tokens('life-asha'),'["ExponentPushToken[rotated-token-0000000]"]'::jsonb,'and nobody else''s binding moved');
+select is(pg_temp.tokens('life-ben'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'and nobody else''s binding moved');
 select is((select count(*) from waldo.app_push_devices where state='active' and owner_id in (select id from waldo.owners where do_name like 'life-%')),2::bigint,'two phones, two active bindings');
 
 select * from finish();
