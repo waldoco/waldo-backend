@@ -39,7 +39,7 @@ function world(phone: string | null, twilioStatus = 200, linked: string[] = []) 
       const at = new Date(Date.now() - 60_000).toISOString();
       return Response.json([{ session: APP_SESSION, created_at: at, last_seen_at: at, expires_at: new Date(Date.now() + 3_600_000).toISOString(), rotated_to: null, signed_in_at: at }]);
     }
-    if (fn === 'console_auth_throttle') return Response.json(true);
+    if (fn === 'console_auth_throttle') { throttles.push(args); return Response.json(throttleAllows); }
     if (fn === 'owner_phone_set') {
       sets.push(JSON.parse(args.p_payload!) as Record<string, unknown>);
       Object.assign(ledger, { phone: sets.at(-1)!.phone, verified: false, challenge: null });
@@ -68,7 +68,9 @@ let imessageHint: string | null = null;
 // The owner's Photon enrollment as the directory reads it, where Waldo's iMessage runs on Photon.
 let photonEnrollment: { phone: string; assigned_number: string; photon_user_id: string } | null = null;
 const APP_SESSION = 'a'.repeat(64);
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; photonEnrollment = null; });
+// The directory's throttle: what it was asked, and whether it allows the next try.
+let throttles: Record<string, unknown>[] = [], throttleAllows = true;
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; photonEnrollment = null; throttles = []; throttleAllows = true; });
 
 let n = 0;
 type AppRead = { revision: string; data: { phone: string | null; verified: boolean; actions: string[]; proof?: string[] } };
@@ -253,6 +255,15 @@ describe('the console phone view', () => {
         expect((await read()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
         // Photon is not connected in this world, so the tap reaches the enrollment and is refused with its own receipt.
         expect(await appAct('imessage.enroll')).toMatchObject({ status: 409, body: { receipt: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable } });
+      });
+    });
+    it('on Photon, the set-up is held to five an hour per owner, and past that is refused as throttled, not as Photon being unavailable', async () => {
+      world('+919800000001');
+      throttleAllows = false;
+      await owner(photonOn, async ({ appAct, state }) => {
+        expect(await appAct('imessage.enroll')).toMatchObject({ status: 409, body: { receipt: APP_IMESSAGE_ENROLL_RECEIPTS_V1.throttled } });
+        expect(throttles).toHaveLength(1);
+        expect(throttles[0]).toMatchObject({ p_key: `imessage.enroll.${state.storage.kv.get('do_name')}`, p_limit: 5, p_window_seconds: 3600 });
       });
     });
     it('on Photon, an owner already enrolled for the number on file is not offered it again', async () => {

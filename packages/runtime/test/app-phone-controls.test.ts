@@ -354,6 +354,14 @@ describe('iMessage set-up where Waldo\'s iMessage runs on Photon', () => {
       expect(JSON.stringify(body)).not.toContain(PHONE.slice(1));
     }, undefined, imessage(unenrolled, null, photon(answer)));
   });
+  it('answers an enrollment that threw as unconfirmed, never as enrolled', async () => {
+    world();
+    await app('0', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const body = (await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-threw' })).body;
+      expect(appControlResultV1Schema.parse(body).receipt).toEqual(APP_IMESSAGE_ENROLL_RECEIPTS_V1.unknown);
+    }, undefined, imessage(unenrolled, null, async () => { throw new Error('photon unreachable'); }));
+  });
   it('needs a recent email code, since it sends the number to Photon', async () => {
     world();
     enrolls = [];
