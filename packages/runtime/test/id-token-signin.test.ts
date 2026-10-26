@@ -37,6 +37,8 @@ const supabase = async () => {
     tokens: new Map<string, Token>(), flows: new Map<string, { challenge: string; user: string; sub: string }>(), googleTokens: new Map<string, string>(),
     grants: [] as Record<string, unknown>[], signups: [] as Record<string, unknown>[], lookups: [] as Record<string, unknown>[],
     otp: [] as string[], denySend: false, live: new Set<string>(), outage: false, google: 'ok' as 'ok' | 'refuses' | 'down',
+    // Runs inside the next join, before it reads the owners: another sign-in committing first.
+    beforeSignup: undefined as ((a: Record<string, string>) => void) | undefined,
   };
   const token = (t: Token) => {
     const jwt = `fixture.${base64url(new TextEncoder().encode(JSON.stringify({ sub: t.sub ?? `${t.provider}:${t.email}`, n: minted += 1 })))}.signature`;
@@ -115,6 +117,7 @@ const supabase = async () => {
       console_auth_throttle: `throttle.${a.p_key}.${a.p_limit}.${a.p_window_seconds}`, signin_allowed: `signin.${a.p_email}.${a.p_code_hash}`,
       owner_for_auth: `owner.${a.p_auth_user}.${a.p_email}.${a.p_phone}.${a.p_code_hash}`, signup_owner_for_auth: `signup.owner.${a.p_auth_user}.${a.p_email}.${a.p_phone}.${a.p_code_hash}`,
       signin_identity_trusted: `signinid.trusted.${a.p_auth_user}.${a.p_email}.${a.p_provider}.${a.p_subject}`, trust_signin_identity: `signinid.trust.${a.p_auth_user}.${a.p_email}.${a.p_provider}.${a.p_subject}`,
+      signup_owner_with_signin_identity: `signinid.signup.${a.p_auth_user}.${a.p_email}.${a.p_provider}.${a.p_subject}.${a.p_phone}.${a.p_code_hash}`,
       console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`, console_session_inventory: `consolesess.inventory.${a.p_do_name}`,
       console_session_open_for: `consolesess.openfor.${a.p_do_name}.${a.p_session_hash}.${a.p_lifetime_seconds}.${a.p_idle_seconds}`,
       app_session_rotate: `appsess.rotate.${a.p_do_name}.${a.p_session_hash}.${a.p_new_session_hash}`,
@@ -132,18 +135,26 @@ const supabase = async () => {
       state.trusted.add(`${owner.doName}|${a.p_provider}|${a.p_subject}`);
       return Response.json(true);
     }
-    if (fn === 'signup_owner_for_auth') {
+    if (fn === 'signup_owner_for_auth' || fn === 'signup_owner_with_signin_identity') {
       state.signups.push(a);
+      state.beforeSignup?.(a);
+      state.beforeSignup = undefined;
+      const answer = (doName: string, created: boolean) => {
+        if (fn === 'signup_owner_for_auth') return Response.json(doName);
+        // The database trusts the identity that created the owner in the same transaction, and only that one.
+        if (created && state.identities.get(`${a.p_provider}:${a.p_subject}`)?.user === a.p_auth_user) state.trusted.add(`${doName}|${a.p_provider}|${a.p_subject}`);
+        return Response.json({ do_name: doName, created });
+      };
       const user = state.authUsers.get(a.p_auth_user);
       if (!user?.confirmed || user.email !== a.p_email) return Response.json(null);
       const owner = state.owners.get(a.p_email);
-      if (owner && owner.auth === a.p_auth_user) return Response.json(owner.doName);
+      if (owner && owner.auth === a.p_auth_user) return answer(owner.doName, false);
       if (!(state.inviteLive && a.p_email === INVITED && a.p_code_hash === inviteHash)) return Response.json(null);
       if (owner) return Response.json({ code: '23505', message: 'owner already exists' }, { status: 409 });
       state.inviteLive = false;
       const doName = `owner-${crypto.randomUUID()}`;
       state.owners.set(a.p_email, { auth: a.p_auth_user, doName });
-      return Response.json(doName);
+      return answer(doName, true);
     }
     if (fn === 'console_session_open' || fn === 'console_session_open_for') { state.live.add(`${a.p_do_name}:${a.p_session_hash}`); return Response.json(true); }
     if (fn === 'app_session_rotate') return Response.json(false);
@@ -222,6 +233,36 @@ describe('app sign-in with an Apple or Google identity token', () => {
     expect(state.trusted).toEqual(new Set());
     now.offset = 0;
     expect((await app('/auth/id_token', google(memberToken))).body).toMatchObject({ state: 'confirm_with_email_code' });
+  });
+
+  it('trusts only a link sealed for this code\'s user, email and provider, under the link\'s own purpose', async () => {
+    const { app, state, member, token, fetcher } = await supabase();
+    const doName = await member();
+    const memberUser = state.owners.get(MEMBER)!.auth;
+    await app('/auth/id_token', google(token({ provider: 'google', email: MEMBER, sub: 'google-member' })));
+    const expires = Math.floor(Date.now() / 1000) + 600;
+    const ticket = { user: memberUser, email: MEMBER, provider: 'google', subject: 'google-member', expires };
+    const trustCalls = () => fetcher.mock.calls.filter(([input]) => String(input).endsWith('/rpc/trust_signin_identity')).length;
+    for (const link of [
+      await sealValue(SECRET, 'signinlink', { ...ticket, user: crypto.randomUUID() }),
+      await sealValue(SECRET, 'signinlink', { ...ticket, email: 'other@example.test' }),
+      await sealValue(SECRET, 'signinlink', { ...ticket, provider: 'github' }),
+      await sealValue(SECRET, GOOGLE_PKCE_PURPOSE, ticket),
+    ]) expect((await app('/auth/verify', { email: MEMBER, code: CODE, link })).body).toMatchObject({ state: 'active', account_ref: await accountRef(doName) });
+    expect(trustCalls()).toBe(0);
+    expect(state.trusted).toEqual(new Set());
+    await app('/auth/verify', { email: MEMBER, code: CODE, link: await sealValue(SECRET, 'signinlink', ticket) });
+    expect(state.trusted).toEqual(new Set([`${doName}|google|google-member`]));
+  });
+
+  it('does not trust an identity whose join finds an owner the member\'s own sign-in created a moment before', async () => {
+    const { app, state, token } = await supabase();
+    // owner_for_auth found no owner; the member's email-code join commits before this join reads the owners.
+    state.beforeSignup = a => state.owners.set(INVITED, { auth: a.p_auth_user!, doName: 'owner-made-first' });
+    const raced = await app('/auth/id_token', google(token({ provider: 'google', email: INVITED, sub: 'google-second' }), { invite: INVITE }));
+    expect(raced.body).toEqual({ state: 'confirm_with_email_code', email: INVITED, link: expect.any(String) });
+    expect(state.trusted).toEqual(new Set());
+    expect(state.inviteLive).toBe(true);
   });
 
   it('resolves one owner across an invite join by Apple, a confirmed Google identity and an email code', async () => {

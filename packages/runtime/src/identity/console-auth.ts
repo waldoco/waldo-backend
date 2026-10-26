@@ -253,14 +253,22 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
   // owner_for_auth refuse new provisioning; only the join path admits a new member, through
   // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
-  // joined: this call created the owner, spending its invite.
-  const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = ''): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+  // joined: this call created the owner, spending its invite. With an identity, the same transaction trusts it, and
+  // joined comes from that transaction: an owner another sign-in created first is only found.
+  const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = '',
+    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
     const address = user.email;
     const phoneE164 = '';
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
     const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     if (owner) return { doName: owner, joined: false };
     if (!join || !codeHash) return null;
+    if (identity) {
+      const { provider, subject } = identity;
+      const result = (await rpc('signup_owner_with_signin_identity', `signinid.signup.${user.id}.${address}.${provider}.${subject}.${joinPhone}.${codeHash}`,
+        { p_auth_user: user.id, p_email: address, p_provider: provider, p_subject: subject, p_phone: joinPhone, p_code_hash: codeHash })) as { do_name?: unknown; created?: unknown } | null;
+      return typeof result?.do_name === 'string' && result.do_name.length > 0 ? { doName: result.do_name, joined: result.created === true } : null;
+    }
     const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
     return typeof joined === 'string' && joined.length > 0 ? { doName: joined, joined: true } : null;
   };
@@ -299,10 +307,9 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (grant.state === 'refused') return grant;
     const user = { id: grant.id, email: grant.email }, sub = await subject(grant);
     if (!sub) return { state: 'refused', reason: 'token' };
-    const owner = await ownerFor(user, inviteCode, join, joinPhone);
+    const owner = await ownerFor(user, inviteCode, join, joinPhone, { provider, subject: sub });
     if (!owner) return { state: 'needs_invite' };
-    if (owner.joined) await trustIdentity(user, provider, sub);
-    else if (!(await identityTrusted(user, provider, sub)))
+    if (!owner.joined && !(await identityTrusted(user, provider, sub)))
       return { state: 'confirm', email: user.email, link: await sealValue(secret, SIGNIN_LINK_PURPOSE, { user: user.id, email: user.email, provider, subject: sub, expires: Math.floor(now() / 1000) + SIGNIN_LINK_SECONDS }) };
     return { state: 'owner', doName: owner.doName };
   };
