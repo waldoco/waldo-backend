@@ -9,6 +9,7 @@ import { buildTextReply, iMessageBridgeName, type IMessageTurnHandoff } from '..
 import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import { iMessageTurnParts } from '../src/channels/imessage/owner-runtime';
+import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import { receivedView, renderForModel } from '../src/channels/owner-inbound-turn';
 import { OwnerDO } from '../src/channels/owner-do';
 import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
@@ -129,6 +130,48 @@ it('the reply line sits beside the owner\'s words as a host note, never as their
     expect(view.text.slice(0, start).trim()).toBe('Move it?');
   }
   expect(iMessageTurnParts({ updateId: 1, text: 'Move it?' }, null)).toBeNull();
+});
+
+// The reply line held on a waiting turn: kept no longer than the turn's own text, and reached by a literal forget.
+const waiting = async (state: DurableObjectState, id: string, replyNote: string) => {
+  const inbox = new IMessageOwnerInbox(state.storage);
+  const admitted = await inbox.admit({ dedupKey: id, digest: 'x', text: 'Move it?', conversationRef: 'c', bindingDigest: 'd', revision: 'r', environment: 'test', bridgeDoName: 'bridge',
+    ownerDoName: 'owner', binding: { ownerId: 'o', presenceId: 'p', subject: SUBJECT, bridgeId: 'b', accountId: 'a', chatGuid: CHAT, verified: true, conversationKind: 'direct', service: 'iMessage' },
+    commandId: `wrc_${id}`, occurredAt: Date.now(), replyNote });
+  if (admitted.kind !== 'admitted') throw new Error(admitted.kind);
+  return admitted.record;
+};
+const inboxStub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`imsg-reply-note-${crypto.randomUUID()}`));
+
+it('a turn that closes keeps no reply line, as it keeps no text: completed, interrupted, or revoked before it ran', async () => {
+  await runInDurableObject(inboxStub(), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage);
+    const completed = inbox.claim((await waiting(state, 'done', REPLYING)).id, true)!;
+    expect(completed.replyNote).toBe(REPLYING);
+    inbox.settle(completed, true);
+    const interrupted = inbox.claim((await waiting(state, 'cut', REPLYING)).id, true)!;
+    inbox.settle(interrupted, false);
+    expect(inbox.claim((await waiting(state, 'revoked', REPLYING)).id, false)).toBeNull();
+    for (const id of [completed.id, interrupted.id, inbox.records().at(-1)!.id]) {
+      expect(inbox.get(id)).toMatchObject({ text: '' });
+      expect(inbox.get(id)).not.toHaveProperty('replyNote');
+    }
+  });
+});
+
+it('a literal forget matching the quoted text drops the waiting reply line, so the turn reads no Replying to line', async () => {
+  await runInDurableObject(inboxStub(), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage);
+    const line = '[Replying to your message: "Your secret plan for Friday is set."]';
+    const kept = await waiting(state, 'kept', line);
+    expect(redactIMessageEntries(state.storage, ['dentist'], '[forgotten]')).toEqual({ rewritten: 0, remaining: 0 });
+    expect(inbox.get(kept.id)?.replyNote).toBe(line);
+    expect(redactIMessageEntries(state.storage, ['secret plan'], '[forgotten]')).toEqual({ rewritten: 1, remaining: 0 });
+    expect(inbox.get(kept.id)).not.toHaveProperty('replyNote');
+    expect(inbox.get(kept.id)?.text).toBe('Move it?');
+    const running = inbox.claim(kept.id, true)!;
+    expect(iMessageTurnParts(running, null)).toBeNull();
+  });
 });
 
 it('the owner\'s reply to Waldo\'s message reads one host-note line quoting it, beside their own words, on that turn only', async () => {
