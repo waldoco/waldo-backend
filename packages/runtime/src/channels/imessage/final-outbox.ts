@@ -123,7 +123,10 @@ export class IMessageFinalOutbox {
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;
   }
-  due(): IMessageOutboxRecord[] { return this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.nextAttemptAt <= this.now()); }
+  // A tapback goes behind the messages due with it: the bridge holds one command at a time, and a reply never waits on one.
+  due(): IMessageOutboxRecord[] {
+    return this.records().filter((r) => r.state === 'frozen' && !isProgressNote(r.replyRef) && r.nextAttemptAt <= this.now()).sort((a, b) => Number(!!a.reaction) - Number(!!b.reaction));
+  }
   markQueued(replyRef: string) { this.update(replyRef, (r) => { if (r.state === 'frozen') { r.state = 'queued'; r.attempts += 1; } }); }
   retryLater(replyRef: string, maxAgeMs: number, delayMs = RETRY_MS) {
     this.update(replyRef, (r) => {

@@ -255,9 +255,14 @@ it('the bridge refuses a frozen tapback once its host no longer verifies them: p
   proof.before.push(async () => undefined, async () => expect((await w.host.capabilities(true, { ...TAPBACKS, verified: false })).status).toBe(200));
   await w.exchange('Can you check the train?');
   expect(toolOutput(proof.turns[1]!)).toEqual([{ queued: true }]);
-  expect((await outbox(w)).find(row => row.replyRef.startsWith('react:'))).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'tapbacks_unverified' } });
+  // The tapback goes to the bridge once the reply has left the mailbox's one slot.
+  await vi.waitFor(async () => {
+    await w.pump(1);
+    expect((await outbox(w)).find(row => row.replyRef.startsWith('react:'))).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'tapbacks_unverified' } });
+  }, { timeout: 10_000, interval: 250 });
+  expect((await w.host.pull()).delivery).toBeNull();
   expect(w.host.nativeReactions).toEqual([]);
-});
+}, 30_000);
 
 it('the bridge refuses a tapback on a message outside the bound chat', async () => {
   const w = await world();
