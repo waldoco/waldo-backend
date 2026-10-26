@@ -17,6 +17,8 @@ export type FetchMethod = (typeof FETCH_METHODS)[number];
 
 export type OAuthProxyRequest =
   | Readonly<{ op: 'register'; issuer: string; registration_endpoint: string; redirect_uri: string; origin: string }>
+  // The client the operator registered by hand at an issuer that offers no dynamic registration.
+  | Readonly<{ op: 'client'; issuer: string; redirect_uri: string }>
   | Readonly<{ op: 'exchange'; do_name: string; provider: string; pins: ClientPins; code: string; verifier?: string; scope?: string }>
   | Readonly<{ op: 'call'; do_name: string; connection: string; method: McpMethod; params: Readonly<Record<string, unknown>>; era?: McpEra; headers?: Readonly<Record<string, string>>; intent_id?: string }>
   | Readonly<{ op: 'fetch'; do_name: string; connection: string; method: FetchMethod; path: string; query?: Readonly<Record<string, string>> }>
@@ -57,7 +59,7 @@ const PROVIDER = /^[a-z][a-z0-9_]{1,31}$/;
 // Relative to api_base: path segments only, so the request cannot climb out of it or carry its own query.
 const PATH = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._~!$&'()*+,;=:@%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$/;
 const SCOPE = /^[\x21\x23-\x5b\x5d-\x7e]+( [\x21\x23-\x5b\x5d-\x7e]+)*$/;
-const PIN_KEYS = ['server_url', 'resource', 'issuer', 'token_endpoint', 'revocation_endpoint', 'client_id', 'client_auth', 'redirect_uri', 'api_base', 'account_url', 'account_field', 'rotation', 'refresh_scope'];
+const PIN_KEYS = ['server_url', 'resource', 'issuer', 'token_endpoint', 'revocation_endpoint', 'client_id', 'client_auth', 'redirect_uri', 'api_base', 'account_url', 'account_field', 'rotation', 'refresh_scope', 'token_dialect'];
 
 const parsePins = (v: unknown): ClientPins | null => {
   if (!isObject(v) || !only(v, PIN_KEYS)) return null;
@@ -68,6 +70,7 @@ const parsePins = (v: unknown): ClientPins | null => {
   if (v.account_url !== undefined && !(v.api_base !== undefined && (v.account_url as string).startsWith(v.api_base as string) && typeof v.account_field === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(v.account_field))) return null;
   if (v.account_url === undefined && v.account_field !== undefined) return null;
   if (v.rotation !== undefined && v.rotation !== 'single_use') return null;
+  if (v.token_dialect !== undefined && v.token_dialect !== 'ok_envelope') return null;
   if (v.refresh_scope !== undefined && !(text(v.refresh_scope, 1024) && SCOPE.test(v.refresh_scope))) return null;
   if (v.client_auth !== 'none' && v.client_auth !== 'client_secret_post' && v.client_auth !== 'client_secret_basic') return null;
   return v as unknown as ClientPins;
@@ -79,6 +82,8 @@ export const parseOAuthProxyRequest = (raw: unknown): OAuthProxyRequest | null =
   switch (raw.op) {
     case 'register':
       return only(raw, ['op', 'issuer', 'registration_endpoint', 'redirect_uri', 'origin']) && https(raw.issuer) && https(raw.registration_endpoint) && https(raw.redirect_uri) && https(raw.origin) ? raw as OAuthProxyRequest : null;
+    case 'client':
+      return only(raw, ['op', 'issuer', 'redirect_uri']) && https(raw.issuer) && https(raw.redirect_uri) ? raw as OAuthProxyRequest : null;
     case 'exchange': {
       if (!only(raw, ['op', 'do_name', 'provider', 'pins', 'code', 'verifier', 'scope']) || !owner || !(typeof raw.provider === 'string' && PROVIDER.test(raw.provider))) return null;
       const pins = parsePins(raw.pins);
