@@ -412,13 +412,13 @@ describe('from the app\'s Connections tile', () => {
       await ineligible(await rig.act('app.connect', 'notion', 'tile-connect-0007'));
       expect(rig.tickets.size).toBe(0);
     });
-    await withRig('connect-app-tile-step-up', async (rig) => {
-      const refused = await rig.act('app.connect', 'notion', 'tile-connect-0006');
-      expect(refused.status).toBe(403);
-      expect(await refused.json()).toMatchObject({ code: 'step_up_required' });
-      expect(rig.tickets.size).toBe(0);
-      // Disconnecting removes access, so it needs no fresh sign-in.
-      expect((await rig.act('app.disconnect', 'notion', 'tile-disconnect-0004')).status).toBe(409);
-    }, {}, new Date(Date.now() - 24 * 3_600_000).toISOString());
+    // App sessions last weeks. Connecting needs no fresh Waldo sign-in: the owner signs in and approves at the app's own
+    // consent page before anything is granted, and disconnecting only removes access.
+    await withRig('connect-app-tile-long-session', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0006'));
+      expect(connect.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}\?handoff=[A-Za-z0-9_-]{22}$/);
+      expect((await signIn(rig, connect.navigation!, 'allow')).headers.get('location')).toBe('waldo://oauth/complete');
+      expect(await receiptOf(await rig.act('app.disconnect', 'notion', 'tile-disconnect-0004'))).toMatchObject({ state: 'recorded', revocation: 'revoked' });
+    }, {}, new Date(Date.now() - 3 * 3_600_000).toISOString());
   });
 });
