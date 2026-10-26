@@ -12,6 +12,8 @@ export default defineConfig({
       OPENAI_API_KEY: 'fictional-imessage-model-key', COMMON_OWNER_TASKS: '0', WALDO_TOOL_OFFLOAD: '0', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_EGRESS_ALLOWLIST: '',
       SUPABASE_PROJECT_URL: 'https://imessage-directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-imessage-publishable',
       WALDO_ROUTER_HMAC_SECRET: 'fictional-imessage-router-secret-0000000000',
+      // Deploys keep progress notes off (WALDO_IMESSAGE_PROGRESS=0); these suites test the notes themselves, so they run with them on.
+      WALDO_IMESSAGE_PROGRESS: '1',
       IMESSAGE_CONNECTOR_ENABLED: '1', // Pinned equal to PROPOSED_LOCAL_TEST_POLICY by test/imessage-bridge-do.test.ts.
       IMESSAGE_CONNECTOR_POLICY: '{"signatureMaxAgeMs":60000,"heartbeatMaxAgeMs":90000,"capabilityMaxAgeMs":90000,"maxRequestBytes":131072,"maxRetainedBytes":16777216,"maxRecords":4096,"pullMaxWaitMs":0,"deliveryDeadlineMs":20000,"mutationDeadlineMs":30000,"commitmentMaxAgeMs":30000,"setupLifetimeMs":600000,"replyHandoffMaxAgeMs":600000,"source":"handoff-2026-10-10-proposed-local-test-profile"}',
       IMESSAGE_CREDENTIAL_WRAPPING_KEY: 'f'.repeat(64),

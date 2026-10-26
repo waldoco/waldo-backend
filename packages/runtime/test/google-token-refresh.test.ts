@@ -29,3 +29,33 @@ it('local invalid grant reaches the native auth-failed result while an outage ha
   if(status===400)expect(result).toHaveProperty('connect.reason','reauth_needed');else expect(result).not.toHaveProperty('connect');
  }
 });
+// Reads that run at once on one client share the token fetch: one refresh, one health report, and a failed refresh is
+// not kept, so the next call asks again.
+it('concurrent calls on one client refresh the token once and report health once',async()=>{
+ const health=vi.fn();let refreshes=0;
+ const fetcher:typeof fetch=async input=>{
+  if(String(input)==='https://oauth2.googleapis.com/token'){refreshes++;await new Promise(resolve=>setTimeout(resolve,30));return Response.json({access_token:'fixture-access'});}
+  return Response.json({kind:'calendar#events',items:[]});
+ };
+ const client=googleClient(app,{refresh_token:'pinned-refresh'},fetcher,health);
+ const from='2026-10-01T00:00:00Z',to='2026-10-02T00:00:00Z';
+ await Promise.all([client.calendarPage('primary',from,to,5,false),client.calendarPage('primary',from,to,5,false),client.events(from,to,5,false)]);
+ expect(refreshes).toBe(1);
+ expect(health.mock.calls).toEqual([['']]);
+});
+it('a concurrent refresh that fails fails every waiter once and is not kept',async()=>{
+ const health=vi.fn();let refreshes=0,failing=true;
+ const fetcher:typeof fetch=async input=>{
+  if(String(input)==='https://oauth2.googleapis.com/token'){refreshes++;await new Promise(resolve=>setTimeout(resolve,30));return failing?Response.json({error:'invalid_grant'},{status:400}):Response.json({access_token:'fixture-access'});}
+  return Response.json({kind:'calendar#events',items:[]});
+ };
+ const client=googleClient(app,{refresh_token:'pinned-refresh'},fetcher,health);
+ const read=()=>client.events('2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1,false);
+ const results=await Promise.allSettled([read(),read()]);
+ expect(results.map(result=>result.status==='rejected'?(result.reason as {kind?:string}).kind:'fulfilled')).toEqual(['auth','auth']);
+ expect(refreshes).toBe(1);
+ expect(health.mock.calls).toEqual([['google token failed: invalid_grant']]);
+ failing=false;await read();
+ expect(refreshes).toBe(2);
+ expect(health.mock.calls.at(-1)).toEqual(['']);
+});
