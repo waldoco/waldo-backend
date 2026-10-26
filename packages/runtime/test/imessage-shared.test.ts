@@ -365,3 +365,34 @@ it('on the shared number a note yields to every owner\'s reply, and turn ids tha
   ]);
   expect(forbiddenEgress).toEqual([]);
 }, 30_000);
+
+// On the shared number, Alice's tapback quotes only a message Waldo sent Alice. One naming a send to Bob is untracked, and
+// Bob's message never reaches Alice's turn.
+it('a tapback on the shared number never quotes another owner\'s message into this owner\'s turn', async () => {
+  const w = await world();
+  await w.sharedLive();
+  await w.linkVia(w.alice, ALICE);
+  await w.linkVia(w.bob, BOB);
+  const sentGuid = async (handle: string, text: string) => {
+    expect((await w.host.send(w.host.message(text, { senderHandle: handle }))).status).toBe(200);
+    await w.pump();
+    const sent = (await w.deliverNext())!;
+    expect(sent.chatGuid).toBe(`iMessage;-;${handle}`);
+    return `sim-sent-${JSON.parse(sent.delivery.body).commandId}`;
+  };
+  const toAlice = await sentGuid(ALICE, 'Alice asks something');
+  const toBob = await sentGuid(BOB, 'Bob asks something');
+  const tapbacks = () => w.events().then(rows => rows.map(row => row.reason).filter(reason => reason?.startsWith('reaction_')));
+  expect((await w.host.send(w.host.reaction(toBob, 'love', { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump();
+  expect(await tapbacks()).toEqual(['reaction_untracked']);
+  // Her tapback on Waldo's message to her is kept: the refusal above is about whose message it names.
+  expect((await w.host.send(w.host.reaction(toAlice, 'like', { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump();
+  expect(await tapbacks()).toEqual(['reaction_untracked', 'reaction_noted']);
+  await sentGuid(ALICE, 'One more thing');
+  const said = proof.turns.at(-1)!;
+  expect(said.split('Owner reacted').length - 1).toBe(1);
+  expect(said).toContain('Owner reacted 👍');
+  expect(said).not.toContain('Owner reacted ❤️');
+});

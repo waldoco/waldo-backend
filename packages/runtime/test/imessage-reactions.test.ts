@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
-import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
+import { buildTextReply, iMessageBridgeName, type OwnerIMessagePort } from '../src/channels/imessage/bridge-do';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
@@ -93,7 +93,7 @@ async function world() {
   // How the bridge settled each tapback it was handed, in order.
   const settled = () => runInDurableObject(bridgeStub(), async (_i, state) =>
     state.storage.sql.exec<{ reason: string }>("SELECT reason FROM events WHERE kind = 'reaction' ORDER BY seq").toArray().map(row => row.reason));
-  return { ownerStub, bridgeStub, host, pump, activate, exchange, react, settled };
+  return { ownerStub, bridgeStub, host, pump, activate, exchange, react, settled, action };
 }
 
 // The owner's message the model read last, as the model saw it.
@@ -293,4 +293,48 @@ it('tapback lines are bounded, taken once by their chat\'s next turn, and never 
     expect(inbox.claim(admitted.record.id, true)?.reactions).toEqual(['line now']);
     expect(inbox.notes().map(note => note.line)).toEqual(['other chat']);
   });
+});
+
+// The owner DO takes a tapback only under the binding's current authority: a stale revision or a revoked bridge stores nothing.
+it('the owner DO refuses a tapback under a stale or revoked authority and keeps no line', async () => {
+  const w = await world();
+  await w.activate();
+  await w.exchange('Hello');
+  const record = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
+  const notes = () => runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).notes().map(note => note.line));
+  const port = w.ownerStub as unknown as OwnerIMessagePort;
+  const note = (revision: string, action: 'add' | 'remove' = 'add') => port.noteIMessageReaction({ binding: record.binding, revision, environment: record.environment, bridgeDoName: record.bridgeDoName,
+    ownerDoName: record.ownerDoName, action, type: 'love', target: { messageGuid: 'sim-sent-x', partIndex: 0 }, quoted: 'Scripted owner reply.' });
+  expect(await note(`${record.revision}.stale`)).toBe('refused');
+  expect(await notes()).toEqual([]);
+  // The same tapback under the current revision is kept, which is what the refusals above are measured against.
+  expect(await note(record.revision)).toBe('noted');
+  expect(await notes()).toEqual([LOVED]);
+  expect(await note(record.revision, 'remove')).toBe('noted');
+  expect((await w.action('imessage.revoke', { id: w.host.bridgeId })).status).toBe(303);
+  expect(await note(record.revision)).toBe('refused');
+  expect(await notes()).toEqual([]);
+});
+
+// The bridge quotes only a message Waldo sent this owner, in this chat. Each check holds alone: a send recorded for another
+// owner in this chat, and one recorded for this owner in another chat, are both untracked and leave no line.
+it('a tapback on a send recorded for another owner, or for another chat, is untracked and quotes nothing', async () => {
+  const w = await world();
+  await w.activate();
+  await w.exchange('Hello');
+  const record = await runInDurableObject(w.ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
+  const seed = (guid: string, ownerDoName: string, chatGuid: string) => runInDurableObject(w.bridgeStub(), async (_i, state) => {
+    const commandId = `seeded-${guid}`, command = buildTextReply({ ...record.binding, chatGuid }, commandId, 'A message that went elsewhere.');
+    const result = { version: 1, commandId, target: command.target, state: 'local_recorded', messageGuid: guid, evidence: { kind: 'local_database', reference: 'seeded' } };
+    state.storage.sql.exec("INSERT INTO deliveries(delivery_id,command_id,command_digest,body,headers,commitment,state,attempt,result,created_at,owner_do,reply_ref,reported) VALUES(?,?,?,?,?,?,'resulted',1,?,?,?,?,1)",
+      `delivery-${guid}`, commandId, 'seeded-digest', JSON.stringify(command), '{}', '{}', JSON.stringify(result), Date.now(), ownerDoName, `reply:seeded-${guid}`);
+    state.storage.sql.exec("INSERT INTO sent_messages(message_guid,command_id,state) VALUES(?,?,'local_recorded')", guid, commandId);
+  });
+  await seed('sent-to-another-owner', 'imsg-another-owner', CHAT);
+  await seed('sent-to-another-chat', record.ownerDoName, 'iMessage;-;alias@example.invalid');
+  await w.react(w.host.reaction('sent-to-another-owner', 'love'));
+  await w.react(w.host.reaction('sent-to-another-chat', 'love'));
+  expect(await w.settled()).toEqual(['reaction_untracked', 'reaction_untracked']);
+  await w.exchange('Anything else?');
+  expect(ownerInput(proof.turns.at(-1)!)).not.toContain('Owner reacted');
 });
