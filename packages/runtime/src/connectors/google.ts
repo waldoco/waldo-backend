@@ -455,10 +455,10 @@ const b64urlDecode = (data: string): string => {
   return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
 };
 
-// Continuation bodies are lowercase base32, not base64. The scribe decodes base64 views up to a fixed depth before it
-// refuses a payload as hidden nesting; a base64 body wrapping a provider token (itself often base64 around base64 ids)
-// spent that depth on our own wrapper and refused whole result pages. Lowercase base32 is never read as base64, so
-// the provider token keeps the full depth, and it stays shorter than hex inside the receipt length bounds.
+// Continuation bodies are lowercase base32, not base64. The scribe decodes base64 views up to a fixed depth and refuses
+// a payload with anything still encoded below it; a base64 body around a provider token that may itself be base64
+// would spend that depth on our own wrapper and refuse the whole result page. Lowercase base32 is never read as base64,
+// so the provider token keeps the full depth, and it stays shorter than hex inside the receipt length bounds.
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const cursorBody = (value: unknown): string => {
   let bits = 0, buffer = 0, out = '';

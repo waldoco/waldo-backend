@@ -139,13 +139,16 @@ describe('offloaded Google pages with continuations', () => {
 describe('the offload guard still refuses hidden content in a stored page', () => {
   it('a secret base64-encoded three times in one task note is refused, and the trace names the stage', async () => {
     const hidden = b64(b64(b64(`token sk-proj-${'A1b2C3d4'.repeat(4)}`)));
-    const { result, store } = await dispatch(getTasks(tasksFetcher(hidden)), { limit: 100 });
+    const inner = inMemoryToolOutputStore();
+    let puts = 0;
+    const store = { ...inner, put: (output: string, provenance?: { call_id?: string }) => { puts += 1; return inner.put(output, provenance); } };
+    const { result } = await dispatch(getTasks(tasksFetcher(hidden)), { limit: 100 }, store);
     expect(result).toMatchObject({
       ok: false, code: 'forbidden', reason: 'sanitise_denied',
       error: 'tool result failed the offload guard: size_cap:invalid_payload:decode:nesting:base64:3',
       guard: { check: 'size_cap', reason: 'invalid_payload', diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'base64', depth: 3 } } },
     });
-    expect(store.read('x', 0, 1)).toBeNull();
+    expect(puts).toBe(0);
   });
 
   it('the loop result hands the trace hop the denial stage as one enum label', async () => {
