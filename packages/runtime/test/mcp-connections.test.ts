@@ -660,6 +660,23 @@ describe('Official servers from the catalogue', () => {
     expect(tiles.find((tile) => tile.id === 'granola')!.about).not.toContain('labels read-only');
   });
 
+  it('names the consent part of each tile on its own, so the console can keep it visible, and keeps about whole', () => {
+    const tiles = catalogueTiles([]);
+    const notion = tiles.find((tile) => tile.id === 'notion')!;
+    expect(notion.consent).toBe('Connecting here lets the tools Notion labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.');
+    expect(notion.about).toBe(`Search and read your pages and databases. ${notion.consent}`);
+    for (const tile of tiles.filter((entry) => entry.id !== 'granola')) expect(tile.about.endsWith(` ${tile.consent}`)).toBe(true);
+    expect(tiles.find((tile) => tile.id === 'granola')!.consent).toBeNull();
+  });
+
+  it('keeps what Slack sends as the owner in its consent, beside the reads it allows, and only the description in front', () => {
+    const slack = catalogueTiles([]).find((tile) => tile.id === 'slack')!;
+    const sends = 'Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol.';
+    expect(slack.consent).toBe(`${sends} Connecting here lets the Slack reads Waldo knows run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`);
+    expect(slack.about).toBe(`Search messages and read channels and threads. ${slack.consent}`);
+    expect(MCP_CATALOGUE.find((entry) => entry.id === 'slack')!.about).toBe('Search messages and read channels and threads.');
+  });
+
   it('grants nothing when the official address is typed into the connect form instead of chosen from its tile', withRig('official-typed', notion, async (rig) => {
     const { outcome } = await connect(rig, NOTION.url);
     expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'notion' });
