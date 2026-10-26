@@ -137,7 +137,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
             <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
-        <McpServers servers={record.data.mcp} busy={busy} onAction={onAction}/>
+        <McpServers servers={record.data.mcp} catalogue={record.data.mcp_catalogue} busy={busy} onAction={onAction}/>
         <p className="tree-group label">Devices</p>
         <ul><li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">Your Mac</span></summary>
           <div className="disclosure-body"><p>Pair Kennel on your Mac so Waldo can check on it and send it notifications you choose.</p>
@@ -159,14 +159,19 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
   return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
-// Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
-// server's read-only label is shown as its claim, and allowing those tools is the owner's click.
-function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['data']['mcp'] } & ActionProps) {
+// Remote MCP servers the owner connected. A tool asks first until the owner allows it: here, or for an official server's
+// labelled reads by connecting from its tile, which says so first. The read-only label is the server's claim.
+function McpServers({ servers, catalogue, busy, onAction }: { servers: ConnectionsRecord['data']['mcp']; catalogue: ConnectionsRecord['data']['mcp_catalogue'] } & ActionProps) {
   const [address, setAddress] = useState('');
   if (servers === undefined) return null;
+  const offered = (catalogue ?? []).filter(tile => !tile.connected);
   return <>
     <p className="tree-group label">Apps over MCP</p>
-    <ul>{servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
+    <ul>{offered.map(tile => <li key={tile.id} className="branch">
+      <span className="value">{tile.label}</span><p className="meta">{tile.about}</p>
+      <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url, id: tile.id })}>Connect {tile.label}</button></div>
+    </li>)}
+    {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
       <details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">{server.name} · {server.host}</span>
         <span className={`access-label${needs ? ' reconnect' : ''}`}>{server.status === 'reauth_needed' ? 'Reconnect needed' : server.wants_scopes.length ? 'Needs more access' : `${server.tools} tools · ${server.runs_without_asking} run without asking`}</span></summary>
         <div className="disclosure-body">
@@ -175,7 +180,8 @@ function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['d
           {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
           {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow, or a description was too large to keep.</p>}
           {server.tools_capped && <p className="meta">This server lists more tools than Waldo keeps for one server, so only the first {server.tools} are available.</p>}
-          <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}
+          <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}{tool.allowed_on_connect ? ' · allowed when you connected: runs without asking only when you ask Waldo yourself' : ''}
+            {tool.allowed_on_connect && <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: `${tool.tool}|on|${tool.digest}` })}>Run without asking in every chat</button>}
             <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: tool.runs === 'without_asking' ? `${tool.tool}|off` : `${tool.tool}|on|${tool.digest}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
           {!server.tool_list.length && <p className="empty-line">No tools returned yet.</p>}
           <div className="control-actions">

@@ -22,9 +22,23 @@ describe('modern owner controls read', () => {
     const withServer = (record: unknown) => ({ ...connections, data: { ...connections.data, mcp: [record] } });
     expect(readControls(withServer(server), 'connections').data.mcp).toEqual([server]);
     expect(readControls(withServer({ ...server, tools_capped: true }), 'connections').data.mcp?.[0]?.tools_capped).toBe(true);
-    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }]) {
+    const onConnect = { ...server, tool_list: [{ ...server.tool_list[0], runs: 'without_asking', allowed_on_connect: true }] };
+    expect(readControls(withServer(onConnect), 'connections').data.mcp?.[0]?.tool_list[0]?.allowed_on_connect).toBe(true);
+    for (const broken of [{ ...server, read_only_digest: undefined }, { ...server, tool_list: [{ ...server.tool_list[0], digest: 'short' }] }, { ...server, tools_capped: 'no' }, { ...server, tool_list: [{ ...server.tool_list[0], allowed_on_connect: false }] }, { ...server, tool_list: [{ ...server.tool_list[0], allowed_on_connect: 'yes' }] }]) {
       expect(() => readControls(withServer(broken), 'connections')).toThrow();
     }
+  });
+
+  it('keeps the official MCP catalogue tiles and refuses a malformed tile', () => {
+    const tile = { id: 'notion', label: 'Notion', about: 'Search and read your pages.', url: 'https://mcp.notion.com/mcp', connected: false };
+    const withTile = (value: unknown) => ({ ...connections, data: { ...connections.data, mcp_catalogue: [value] } });
+    expect(readControls(withTile(tile), 'connections').data.mcp_catalogue).toEqual([tile]);
+    expect(readControls(withTile({ ...tile, extra: 'dropped' }), 'connections').data.mcp_catalogue).toEqual([tile]);
+    expect(readControls(connections, 'connections').data.mcp_catalogue).toBeUndefined();
+    for (const broken of [{ ...tile, url: 'http://mcp.notion.com/mcp' }, { ...tile, url: 'javascript:alert(1)' }, { ...tile, connected: 'no' }, { ...tile, label: undefined }]) {
+      expect(() => readControls(withTile(broken), 'connections')).toThrow();
+    }
+    expect(() => readControls({ ...connections, data: { ...connections.data, mcp_catalogue: tile } }, 'connections')).toThrow();
   });
 
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {

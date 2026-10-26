@@ -77,7 +77,8 @@ export const sha256 = async (text: string) => hex(await crypto.subtle.digest('SH
 export const toolDigest = (def: McpToolDef) => sha256(canonical({ name: def.name, title: def.title ?? null, description: def.description ?? null, inputSchema: def.inputSchema, annotations: def.annotations ?? null }));
 export const argsDigest = (args: unknown) => sha256(canonical(args));
 
-// The server's own hint, shown to the owner next to the choice. It never decides anything.
+// The server's own hint, shown to the owner next to the choice. It decides nothing by itself: the owner's click allows the
+// tools carrying it, either in Connections or by connecting an official server from its tile (mcp-catalogue).
 export const marksReadOnly = (def: McpToolDef) => def.annotations?.readOnlyHint === true && def.annotations?.destructiveHint !== true;
 
 export const toolHeaders = (def: McpToolDef, args: Readonly<Record<string, unknown>>): Record<string, string> => {
