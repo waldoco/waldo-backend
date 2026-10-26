@@ -43,6 +43,7 @@ import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
+import type { SemanticRecall } from '../memory/semantic-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
@@ -102,10 +103,10 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; taken
 // once that reply is saved.
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean }>;
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; semanticRecall?: Pick<SemanticRecall, 'near'> }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; taken(): void }> | null; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; semanticRecall?: Pick<SemanticRecall, 'near'> }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -372,8 +373,8 @@ export const createOwnerResponder = (
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
-    const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
-    const recalled = await recallForTurn({ claims, question: text, room, holds: barrier().holds, ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit, near) => source.recall(query, limit, near).filter((claim) => claim.kind !== 'health') } : source;
+    const recalled = await recallForTurn({ claims, question: text, room, holds: barrier().holds, ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
@@ -969,7 +970,7 @@ export const createOwnerResponder = (
           const clockLine = ownerClockLine(clock);
           // Memory rides the decision's message, so it gets what the message budget leaves after the job's text.
           const room = messageChars - [said, TURN_CONTEXT_HEADER, clockLine].join('\n\n').length - 2_048;
-          const view: ClaimStore | undefined = source && { ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) };
+          const view: ClaimStore | undefined = source && { ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit, near) => source.recall(query, limit, near).filter(eligible) };
           const blocks = view ? turnMemoryPrompt(view, said, room) : '';
           // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than
           // one with less. The profile is short owner sentences; the owner-direction is full context.

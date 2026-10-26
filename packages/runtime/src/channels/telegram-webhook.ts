@@ -1,3 +1,4 @@
+import type { EmbeddingRunner } from '../memory/semantic-recall';
 import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
@@ -71,6 +72,9 @@ export type TelegramWebhookEnv = Readonly<{
   GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
+  MEMORY_SEMANTIC_RECALL?: string;
+  AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.

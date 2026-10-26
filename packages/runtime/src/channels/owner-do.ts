@@ -115,6 +115,7 @@ import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forge
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
+import { semanticRecallFromEnv } from '../memory/semantic-recall';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
@@ -3643,6 +3644,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
     const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
+    // Semantic recall, behind MEMORY_SEMANTIC_RECALL. Its sweep embeds what any writer stored since the last one; it runs once
+    // here, after each stored claim and after each recall that used it.
+    const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), defer: (work) => this.ctx.waitUntil(work),
+      log: (event) => log({ trace: 'memory:semantic', hop: event.hop, ms: 0, ok: event.ok, detail: event.detail, ...(event.code ? { code: event.code } : {}) }) });
+    semantic?.kick();
     // A forget left pending by an earlier build, or a claim marked for removal, gets the purge job; an armed job keeps its time.
     if ((memory.pendingTopics().length || memory.claims('purging').length) && scheduler.lookup(FORGET_PURGE_ID).state === 'absent') this.ctx.waitUntil(this.forgetPurgeJob().track([]));
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
@@ -3896,7 +3902,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const connectors = () => connectorsLine(this.mcp().list());
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
-    const memoryHooks = memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone });
+    const memoryHooks = { ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
     const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
@@ -3914,7 +3920,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
         // itself never fails on a store.

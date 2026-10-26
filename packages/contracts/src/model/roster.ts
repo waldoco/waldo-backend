@@ -5,6 +5,9 @@ export const OPENAI_GPT_6_1_SOL_MODEL = 'gpt-6.1-sol' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
 export const ANTHROPIC_CLAUDE_OPUS_5_5_MODEL = 'claude-opus-5-5' as const;
 export const ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL = 'claude-haiku-5-5' as const;
+// Text embeddings for semantic memory recall, through the Workers AI binding. Not a chat model, so it is outside
+// modelNameSchema and the roster roles: nothing routes a conversation to it.
+export const WORKERS_AI_BGE_M3_EMBEDDING_MODEL = '@cf/baai/bge-m3' as const;
 export const OPENAI_PROVIDER = 'openai' as const;
 export const ANTHROPIC_PROVIDER = 'anthropic' as const;
 
