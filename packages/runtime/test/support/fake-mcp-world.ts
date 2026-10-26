@@ -18,12 +18,20 @@ export type FakeOptions = {
   grantedScope?: string;
   revocation: boolean;
   results: (name: string, args: Record<string, unknown>) => unknown;
-  // Where the MCP server answers; the server path stays /mcp.
+  // Where the MCP server answers.
   origin: string;
   // The authorization server's issuer and origin; it may be the MCP server's own origin.
   issuer: string;
   // Where the authorization server says it revokes: its own path, or its token endpoint as some vendors advertise.
   revokeAt: 'revoke' | 'token';
+  // The MCP endpoint's path, and whether its protected-resource document sits at the origin's root rather than the
+  // path-inserted address.
+  path: string;
+  rootMetadata: boolean;
+  // The scope the 401 challenge names, and the scopes the protected resource and the authorization server list.
+  challengeScope: string;
+  resourceScopes: string[];
+  serverScopes: string[];
 };
 
 export const defaultTools: FakeTool[] = [
@@ -40,9 +48,14 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     origin: new URL(MCP_URL).origin,
     issuer: ISSUER,
     revokeAt: 'revoke',
+    path: '/mcp',
+    rootMetadata: false,
+    challengeScope: 'pages:read pages:write',
+    resourceScopes: ['pages:read', 'pages:write'],
+    serverScopes: ['pages:read', 'pages:write', 'offline_access'],
     ...overrides,
   };
-  const mcpUrl = `${options.origin}/mcp`, metadata = `${options.origin}/.well-known/oauth-protected-resource/mcp`;
+  const mcpUrl = `${options.origin}${options.path}`, metadataPath = `/.well-known/oauth-protected-resource${options.rootMetadata ? '' : options.path}`, metadata = `${options.origin}${metadataPath}`;
   let now = Date.parse('2026-10-21T12:00:00Z');
   const codes = new Map<string, { verifier_challenge: string; resource: string; scope: string; client_id: string; redirect_uri: string }>();
   const access = new Map<string, { expires: number; scope: string }>();
@@ -76,7 +89,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     calls.push({ method: body.method, name: body.params?.name as string | undefined, headers, ...(bearer ? { bearer } : {}), body });
     if (options.auth) {
       const token = bearer ? access.get(bearer) : undefined;
-      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metadata}", scope="pages:read pages:write"` } });
+      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metadata}", scope="${options.challengeScope}"` } });
       const toolName = body.params?.name as string | undefined;
       if (body.method === 'tools/call' && toolName === 'create_page' && !token.scope.split(' ').includes('pages:write')) {
         return new Response('forbidden', { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="pages:write", resource_metadata="${metadata}"` } });
@@ -111,8 +124,8 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const url = new URL(request.url);
     hits.push(`${request.method} ${url.origin}${url.pathname}`);
     if (url.origin === options.origin) {
-      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
-      if (url.pathname === '/mcp') return mcp(request);
+      if (url.pathname === metadataPath) return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: options.resourceScopes }) : new Response('no', { status: 404 });
+      if (url.pathname === options.path) return mcp(request);
       if (url.origin !== options.issuer) return new Response('not found', { status: 404 });
     }
     if (url.origin === options.issuer) {
@@ -124,7 +137,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,
-          scopes_supported: ['pages:read', 'pages:write', 'offline_access'],
+          scopes_supported: options.serverScopes,
         });
       }
       if (url.pathname === '/register') {
