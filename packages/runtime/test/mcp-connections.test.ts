@@ -517,7 +517,7 @@ describe('Official servers from the catalogue', () => {
     { name: 'notion-update-page', description: 'Update a page.', inputSchema: query },
   ];
   const notion = { origin: new URL(NOTION.url).origin, issuer: NOTION.issuer, tools: notionTools };
-  const runs = async (mcp: McpConnections) => (await mcp.search({ server: 'notion' })).tools.map((tool) => [tool.tool, tool.runs]);
+  const runs = async (mcp: McpConnections, ownerTurn = true) => (await mcp.search({ server: 'notion', ownerTurn })).tools.map((tool) => [tool.tool, tool.runs]);
 
   it('connects in one click: the reads the vendor labels read-only run without asking, everything else needs a card', withRig('official-notion', notion, async (rig) => {
     const { mcp, world, edge, logs } = rig;
@@ -526,7 +526,7 @@ describe('Official servers from the catalogue', () => {
     expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'notion', official: 'notion' });
     expect(mcp.list()[0]).toMatchObject({ name: 'notion', host: 'mcp.notion.com', issuer: NOTION.issuer, tools: 5, marked_read_only: 2, runs_without_asking: 2 });
     expect(await runs(mcp)).toEqual([['notion-create-pages', 'asks_first'], ['notion-fetch', 'without_asking'], ['notion-move-pages', 'asks_first'], ['notion-search', 'without_asking'], ['notion-update-page', 'asks_first']]);
-    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-search', args: { query: 'roadmap' } }))).toMatchObject({ content: [{ text: 'notion-search ran with {"query":"roadmap"}' }] });
+    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-search', args: { query: 'roadmap' }, ownerTurn: true }))).toMatchObject({ content: [{ text: 'notion-search ran with {"query":"roadmap"}' }] });
     // A tool whose description claims it is safe, while its annotations say it writes, still asks first.
     for (const tool of ['notion-create-pages', 'notion-move-pages', 'notion-update-page']) {
       expect((await refusal(mcp.invoke({ mode: 'read', server: 'notion', tool, args: {} }))).code).toBe('forbidden');
@@ -536,6 +536,23 @@ describe('Official servers from the catalogue', () => {
     // The prompt's host fact names the server by Waldo's own name, never the server's text.
     expect(connectorsLine(mcp.list())).not.toMatch(/safe|without asking the owner|Search the workspace/);
     expect(JSON.stringify([edge.filter((body) => body.op !== 'exchange'), logs, mcp.list(), catalogueTiles(mcp.list())])).not.toMatch(/\b(at|rt)_\d+\b/);
+  }));
+
+  it('runs reads allowed on connect only in the owner\'s own untainted turns; reads the owner allowed in Connections run in any turn', withRig('official-turns', notion, async (rig) => {
+    const { mcp, world } = rig;
+    await connect(rig, NOTION.url, 'allow', 'notion');
+    expect(await runs(mcp, false)).toEqual([['notion-create-pages', 'asks_first'], ['notion-fetch', 'asks_first'], ['notion-move-pages', 'asks_first'], ['notion-search', 'asks_first'], ['notion-update-page', 'asks_first']]);
+    const refused = await refusal(mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-search', args: { query: 'q' } }));
+    expect([refused.code, refused.notApplied]).toEqual(['forbidden', true]);
+    expect(refused.message).toMatch(/call_mcp_tool/);
+    expect(world.calls.filter((call) => call.method === 'tools/call')).toEqual([]);
+    // The console still shows both as allowed: the owner sees what connecting allowed.
+    expect(mcp.list()[0]).toMatchObject({ runs_without_asking: 2 });
+    // The owner's own click in Connections makes it a standing permission for every turn.
+    expect(await mcp.setRuns(mcp.list()[0]!.id, 'notion-fetch', true)).toBe(true);
+    expect(await runs(mcp, false)).toContainEqual(['notion-fetch', 'without_asking']);
+    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-fetch', args: { query: 'p' } }))).toMatchObject({ content: [{ text: 'notion-fetch ran with {"query":"p"}' }] });
+    expect(await runs(mcp, false)).toContainEqual(['notion-search', 'asks_first']);
   }));
 
   it('asks first again when a granted read changes its definition', withRig('official-changed', notion, async (rig) => {

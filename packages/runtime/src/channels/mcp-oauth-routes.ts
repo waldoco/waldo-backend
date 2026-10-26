@@ -26,7 +26,7 @@ const GRANOLA_LINKED = { status: 200, title: 'Granola connected', body: 'Waldo c
 // An official server's page, worded from the catalogue entry the owner object names, never from text the outcome carries.
 const officialLinked = (id: string | undefined) => {
   const entry = MCP_CATALOGUE.find((candidate) => candidate.id === id);
-  return entry && { status: 200, title: `${entry.label} connected`, body: `Waldo can now use ${entry.label}. Tools ${entry.label} labels read-only run without asking; everything else asks you first. You can change either in Connections. You can close this tab.` };
+  return entry && { status: 200, title: `${entry.label} connected`, body: `Waldo can now use ${entry.label}. Tools ${entry.label} labels read-only run without asking when you ask Waldo yourself; everything else asks you first. You can change either in Connections. You can close this tab.` };
 };
 
 const UNBOUND = { status: 403, title: 'Start the connection again', body: 'This sign-in came back to a different browser from the one that started it, or it took too long, so nothing was connected. Connect the server again from Connections in this browser.' };

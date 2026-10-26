@@ -5,7 +5,8 @@
 //
 // When the owner connects a catalogue server from its console tile, the tools the vendor labels read-only are allowed to
 // run without asking on that first link (typing the same address into the connect form allows nothing), each
-// at the definition digest it had then; a changed definition asks first again. Every other tool asks first until the
+// at the definition digest it had then, and only in the owner's own turns that read nothing from outside; a changed
+// definition asks first again. Every other tool asks first until the
 // owner allows it in Connections. Tool names and descriptions stay the server's own words, never Waldo's.
 //
 // Only servers that sign Waldo in without a registered client (a client metadata document or open dynamic registration)
@@ -47,6 +48,6 @@ export const tileTarget = (id: string, serverUrl: string): McpCatalogueEntry | u
 // connecting is the owner's consent to it. connected means the owner has a server at that address, whatever its sign-in.
 export type McpCatalogueTile = Readonly<{ id: string; label: string; about: string; url: string; connected: boolean }>;
 const tileAbout = (entry: McpCatalogueEntry) => isReviewedGranola(entry.url, entry.issuer) ? entry.about
-  : `${entry.about} Connecting here lets the tools ${entry.label} labels read-only run without asking; anything else asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
+  : `${entry.about} Connecting here lets the tools ${entry.label} labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
 export const catalogueTiles = (connected: readonly Readonly<{ server_url: string }>[]): readonly McpCatalogueTile[] =>
   MCP_CATALOGUE.map((entry) => ({ id: entry.id, label: entry.label, about: tileAbout(entry), url: entry.url, connected: connected.some((server) => same(server.server_url, entry.url)) }));

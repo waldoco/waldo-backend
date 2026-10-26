@@ -151,6 +151,8 @@ export type McpDesk = Readonly<{
 // The owner's own connected servers (connectors/mcp-connections), held by the owner object.
 export type McpOwnerServers = Pick<McpConnections, 'list' | 'search' | 'describe' | 'invoke' | 'checkAnswers'>;
 const ownerHas = (owner: McpOwnerServers | undefined, server: string) => owner?.list().some((connection) => connection.name === server) ?? false;
+// The owner's own request that read nothing from outside: the only turn in which reads allowed on connect run without a card.
+const ownerTurn = (ctx: ToolDispatcherContext | undefined) => ctx?.ownerInitiated === true && ctx.trigger === 'user_message' && ctx.sourceTaint !== 'external' && ctx.toolArgSourceTaint !== 'external';
 const refused = (error: unknown): ToolResult<unknown> => error instanceof McpRefusal
   ? { ok: false, code: error.code, error: error.message, source_taint: 'external' }
   : { ok: false, code: 'transient', error: 'The connected server could not be used right now.', source_taint: 'external' };
@@ -174,7 +176,7 @@ export const searchMcpToolsHandler = (owner: McpOwnerServers | undefined): ToolH
     if (!owner) return { ok: false, code: 'not_found', error: 'MCP connections are not set up on this Waldo.', source_taint: 'external' };
     try {
       await ctx?.assertTaskSourceCurrent?.();
-      const found = await owner.search(args);
+      const found = await owner.search({ ...args, ownerTurn: ownerTurn(ctx) });
       await ctx?.assertTaskSourceCurrent?.();
       return { ok: true, data: { ...found, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) { return refused(error); }
@@ -262,7 +264,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
       if (answers) return { ok: false, code: 'invalid_args', error: 'Answers to a server\'s questions go through call_mcp_tool, so the owner confirms them on a card.', source_taint: 'external' };
       try {
         await ctx?.assertTaskSourceCurrent?.();
-        const out = await owner!.invoke({ mode: 'read', server, tool, args });
+        const out = await owner!.invoke({ mode: 'read', server, tool, args, ownerTurn: ownerTurn(ctx) });
         await ctx?.assertTaskSourceCurrent?.();
         if ('input_required' in out) return askOwner(out.server, tool, args, out.input_required);
         return { ok: true, data: { output: out.result, protocol: 'mcp', source_taint: 'external' as const }, source_taint: 'external' };

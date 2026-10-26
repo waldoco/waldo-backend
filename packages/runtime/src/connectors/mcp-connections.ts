@@ -38,6 +38,8 @@ const DIRECT = { call: { maxBytes: 16 * 1024 * 1024, timeoutMs: 120_000 }, list:
 const EXPIRY_SKEW_MS = 120_000;
 
 export type McpStatus = 'active' | 'reauth_needed';
+type GrantSource = 'owner' | 'catalogue';
+type Grant = Readonly<{ digest: string; source: GrantSource }>;
 export type McpConnectionView = Readonly<{
   id: string;
   name: string;
@@ -216,8 +218,11 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     hidden_tools INTEGER NOT NULL DEFAULT 0, connected_at INTEGER NOT NULL)`);
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'tools_capped')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN tools_capped INTEGER NOT NULL DEFAULT 0');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tools (connection TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, def TEXT NOT NULL, PRIMARY KEY (connection, name))');
-  // A permission is for one tool definition: a changed definition no longer matches and asks again.
+  // A permission is for one tool definition: a changed definition no longer matches and asks again. source says who allowed
+  // it: the owner in Connections ('owner'), or connecting an official server from its tile ('catalogue'), which allows
+  // only the owner's own untainted turns to run it without a card.
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tool_reads (connection TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL, granted_at INTEGER NOT NULL, PRIMARY KEY (connection, name))');
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_tool_reads)').toArray().some((column) => column.name === 'source')) sql.exec("ALTER TABLE mcp_tool_reads ADD COLUMN source TEXT NOT NULL DEFAULT 'owner'");
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_attempts (nonce TEXT PRIMARY KEY, record TEXT NOT NULL, expires INTEGER NOT NULL, started INTEGER NOT NULL DEFAULT 0, settled TEXT, settled_at INTEGER)');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, args_digest TEXT NOT NULL, questions TEXT NOT NULL, request_state TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL)');
   const refreshing = REFRESHING.get(sql) ?? new Map<string, Promise<void>>();
@@ -228,10 +233,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const row = (id: string) => sql.exec<Row>('SELECT * FROM mcp_connections WHERE id = ?', id).toArray()[0];
   const byName = (name: string) => sql.exec<Row>('SELECT * FROM mcp_connections WHERE name = ?', name).toArray()[0];
   const toolRows = (connection: string) => sql.exec<{ name: string; digest: string; def: string }>('SELECT name, digest, def FROM mcp_tools WHERE connection = ? ORDER BY position', connection).toArray();
-  const reads = (connection: string) => new Map(sql.exec<{ name: string; digest: string }>('SELECT name, digest FROM mcp_tool_reads WHERE connection = ?', connection).toArray().map((r) => [r.name, r.digest]));
-  // The reviewed server's reads run without a card; on any other server only the owner's grant for this exact definition does.
-  const runsWithoutAsking = (r: Row, name: string, digest: string, granted: ReadonlyMap<string, string>) =>
-    (isReviewedGranola(r.server_url, r.issuer) && isGranolaRead(name)) || granted.get(name) === digest;
+  const reads = (connection: string) => new Map(sql.exec<{ name: string; digest: string; source: string }>('SELECT name, digest, source FROM mcp_tool_reads WHERE connection = ?', connection).toArray().map((r) => [r.name, { digest: r.digest, source: r.source as GrantSource }]));
+  // The reviewed server's reads run without a card; on any other server only a grant for this exact definition does, and a
+  // grant made by connecting from a tile only in the owner's own untainted turn (ownerTurn).
+  const runsWithoutAsking = (r: Row, name: string, digest: string, granted: ReadonlyMap<string, Grant>, ownerTurn: boolean) => {
+    if (isReviewedGranola(r.server_url, r.issuer) && isGranolaRead(name)) return true;
+    const grant = granted.get(name);
+    return grant?.digest === digest && (grant.source === 'owner' || ownerTurn);
+  };
   const update = (id: string, fields: Partial<Row>) => {
     const keys = Object.keys(fields);
     if (keys.length) sql.exec(`UPDATE mcp_connections SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields as Record<string, unknown>)[k] as string | number | null), id);
@@ -243,8 +252,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     return {
       id: r.id, name: r.name, host: new URL(r.server_url).hostname, server_url: r.server_url, auth: r.auth as 'oauth' | 'none', registration: r.registration as RegistrationMode | 'none',
       risk: isReviewedGranola(r.server_url, r.issuer) ? 'reviewed' : 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
-      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.name, t.digest, granted)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
-      tools_changed: [...granted].some(([name, digest]) => !tools.some((t) => t.name === name && t.digest === digest)), connected_at: r.connected_at,
+      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => runsWithoutAsking(r, t.name, t.digest, granted, true)).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
+      tools_changed: [...granted].some(([name, grant]) => !tools.some((t) => t.name === name && t.digest === grant.digest)), connected_at: r.connected_at,
     };
   };
 
@@ -443,7 +452,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
   // The owner's choice. A grant carries the digest the owner saw (seen) and lands only if the definitions still match it;
   // 'changed' means they moved since the owner looked, and nothing was granted.
-  const setRuns = async (id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> => {
+  const grantRuns = async (id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen: string | undefined, source: GrantSource): Promise<boolean | 'changed'> => {
     const r = row(id);
     // The reviewed server's permissions are Waldo's review, not a per-tool choice.
     if (!r || isReviewedGranola(r.server_url, r.issuer)) return false;
@@ -453,13 +462,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     if (withoutAsking && seen !== undefined && seen !== (tool === EVERY_READ_ONLY_HINT ? await readOnlyDigest(targets) : targets[0]!.digest)) return 'changed';
     deps.transaction(() => {
       for (const t of targets) {
-        if (withoutAsking) sql.exec('INSERT INTO mcp_tool_reads (connection, name, digest, granted_at) VALUES (?, ?, ?, ?) ON CONFLICT (connection, name) DO UPDATE SET digest = excluded.digest, granted_at = excluded.granted_at', r.id, t.name, t.digest, deps.now());
+        if (withoutAsking) sql.exec('INSERT INTO mcp_tool_reads (connection, name, digest, granted_at, source) VALUES (?, ?, ?, ?, ?) ON CONFLICT (connection, name) DO UPDATE SET digest = excluded.digest, granted_at = excluded.granted_at, source = excluded.source', r.id, t.name, t.digest, deps.now(), source);
         else sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ? AND name = ?', r.id, t.name);
       }
       if (!withoutAsking && tool === EVERY_READ_ONLY_HINT) sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ?', r.id);
     });
     return true;
   };
+  const setRuns = (id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string) => grantRuns(id, tool, withoutAsking, seen, 'owner');
 
   return {
     list: (): readonly McpConnectionView[] => rows().map(view),
@@ -561,7 +571,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         // definition it has now, when the sign-in came from that vendor's own issuer. A reconnect keeps the owner's choices.
         const tile = attempt.official === undefined || previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
         const catalogue = tile?.id === attempt.official ? tile : undefined;
-        if (catalogue) await setRuns(r.id, EVERY_READ_ONLY_HINT, true);
+        if (catalogue) await grantRuns(r.id, EVERY_READ_ONLY_HINT, true, undefined, 'catalogue');
         // Named on the page only when something was allowed: a tool list that failed to load grants nothing.
         const official = catalogue && reads(r.id).size > 0 ? catalogue : undefined;
         const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}), ...(official ? { official: official.id } : {}) };
@@ -602,13 +612,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const granted = reads(r.id);
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       return {
-        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
+        tools: tools.map((t) => ({ tool: t.name, runs: runsWithoutAsking(r, t.name, t.digest, granted, true) ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
         read_only_digest: await readOnlyDigest(tools.filter((t) => marksReadOnly(t.def))),
       };
     },
 
-    // The model's search over the owner's tools: words, or one server's full list, a page at a time.
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
+    // The model's search over the owner's tools: words, or one server's full list, a page at a time. ownerTurn: the turn is
+    // the owner's own and read nothing from outside, so reads allowed on connect show as running without asking.
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -619,7 +630,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const page = pool.slice(offset, offset + SEARCH_PAGE);
       const asked = waiting().filter((q) => !input.server || q.server === input.server);
       return {
-        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted))),
+        tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def.name, item.digest, item.granted, input.ownerTurn === true))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
         servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
@@ -636,14 +647,15 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       let found = toolOf(r, tool);
       if (!found) { await refreshTools(r).catch(() => undefined); found = toolOf(r, tool); }
       if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`, true);
-      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, tool, found.digest, reads(r.id)) ? 'without_asking' : 'asks_first' };
+      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, tool, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first' };
     },
 
-    // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed.
+    // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed; one allowed by
+    // connecting from a tile only when ownerTurn says this is the owner's own untainted turn.
     // approved: a card the owner approved, at the definition the card froze, once per intent.
     // A server that needs the owner's answer first returns input_required: its questions are kept under a
     // handle, and the retry carries the owner's answers only from an approved card (answers).
-    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read' } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
+    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read'; ownerTurn?: boolean } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
       const started = deps.now();
       const r = input.mode === 'read' ? live(input.server) : row(input.connection);
       if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
@@ -653,8 +665,11 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         let found = toolOf(r, input.tool);
         if (!found && input.mode === 'read') { await refreshTools(r).catch(() => undefined); found = toolOf(r, input.tool); }
         if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`, true);
-        if (input.mode === 'read' && !runsWithoutAsking(r, input.tool, found.digest, reads(r.id))) {
-          throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${reads(r.id).has(input.tool) ? ' (its definition changed since the owner allowed it)' : ''}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
+        if (input.mode === 'read' && !runsWithoutAsking(r, input.tool, found.digest, reads(r.id), input.ownerTurn === true)) {
+          const grant = reads(r.id).get(input.tool);
+          const why = !grant ? '' : grant.digest !== found.digest ? ' (its definition changed since the owner allowed it)'
+            : ' (it was allowed when the owner connected the server, which covers only their own requests, not turns that read outside content or that they did not start)';
+          throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${why}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
         }
         if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
         const problem = checkArgs(found.def, input.args);
