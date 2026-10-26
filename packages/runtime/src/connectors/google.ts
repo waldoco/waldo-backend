@@ -600,16 +600,21 @@ export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; 
   ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
+  // Calls that run at once (parallel reads, a thread's attachments, both contact searches) wait on one refresh, so a grant
+  // is refreshed and its health reported once however many calls need the token. A failed refresh is not kept.
+  let refreshing: Promise<string> | null = null;
   const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
-  const bearer = async () => {
-    if (access && access.until > Date.now()) return access.token;
-    const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
+  const bearer = (): Promise<string> => {
+    if (access && access.until > Date.now()) return Promise.resolve(access.token);
+    refreshing ??= token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).then((result) => {
+      health?.('');
+      access = { token: result.access_token, until: Date.now() + 50 * 60_000 };
+      return access.token;
+    }, (error: unknown) => {
       if (error instanceof GoogleTokenError && error.kind === 'auth') health?.(error.message);
       throw error;
-    });
-    health?.('');
-    access = { token: result.access_token, until: Date.now() + 50 * 60_000 };
-    return access.token;
+    }).finally(() => { refreshing = null; });
+    return refreshing;
   };
   const call = async (url: string, init: RequestInit = {}) => {
     const response = await fetcher(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${await bearer()}` } });

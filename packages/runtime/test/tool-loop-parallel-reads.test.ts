@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolCall, type LLMToolTurn, type ToolName } from '@waldo/contracts';
-import { MAX_CONCURRENT_READS, runToolLoop, type ToolLoopEvent } from '../src/conversation/tool-loop';
+import { CONCURRENT_READ_TOOLS, MAX_CONCURRENT_READS, runToolLoop, type ToolLoopEvent } from '../src/conversation/tool-loop';
+import { googleClient } from '../src/connectors/google';
+import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -26,6 +28,14 @@ const argsSchema = z.object({ query: z.string().optional(), id: z.string().optio
 const allowlist = (name: string) => triggerTypeSchema.options.filter((trigger) => (TOOL_PERMISSIONS[trigger] as readonly ToolName[]).includes(name as ToolName));
 
 type Timeline = string[];
+const GOOGLE_READS = ['query_calendar', 'get_communication', 'search_communication', 'search_contacts', 'read_thread', 'get_tasks', 'query_availability', 'read_drive'] as const satisfies readonly ToolName[];
+// Two distinct calls of each that pass its contract schema.
+const VALID_ARGS: Readonly<Record<(typeof GOOGLE_READS)[number], (n: number) => Record<string, unknown>>> = {
+  query_calendar: (n) => ({ limit: n }), get_communication: (n) => ({ limit: n }), get_tasks: (n) => ({ limit: n }),
+  search_communication: (n) => ({ query: `invoice ${n}` }), search_contacts: (n) => ({ query: `ann ${n}` }), read_thread: (n) => ({ thread_id: `t${n}` }),
+  query_availability: (n) => ({ date_range: { from: '2026-10-26T09:00:00Z', to: '2026-10-27T09:00:00Z' }, duration_minutes: 30 * n }),
+  read_drive: (n) => ({ action: 'recent', page_size: n }),
+};
 // A read that records when it starts and ends, takes `ms`, and may return external content.
 const read = (name: string, timeline: Timeline, inFlight: { now: number; max: number }, ms: (topic: string) => number, external = new Set<string>()) => ({
   name, description: `fixture ${name}`, schema: argsSchema, autonomy_gated: false, trigger_allowlist: allowlist(name),
@@ -143,12 +153,29 @@ describe('parallel read calls', () => {
     expect(steps).toBe(2);
   });
 
-  it.each(['read_tool_output', 'search_communication', 'read_thread'])('%s is not on the concurrent read list, so it runs alone, in order', async (name) => {
+  // read_tool_output reads a store sibling calls evict from; the MCP reads stamp connection and tool-list rows across awaits.
+  it.each(['read_tool_output', 'search_mcp_tools'])('%s is not on the concurrent read list, so it runs alone, in order', async (name) => {
     const timeline: Timeline = [], inFlight = { now: 0, max: 0 };
     const handlers = [read(name, timeline, inFlight, () => 20), read('read_memory', timeline, inFlight, () => 20)];
     const { events } = await turn(handlers, [call(name, 'a'), call(name, 'b'), call('read_memory', 'c')]);
     expect(timeline).toEqual([`start:${name}:a`, `end:${name}:a`, `start:${name}:b`, `end:${name}:b`, 'start:read_memory:c', 'end:read_memory:c']);
     expect(events.map((event) => event.parallel_batches)).toEqual([1, 1, 1]);
+  });
+
+  it.each(GOOGLE_READS)('%s runs beside other reads from the same response', async (name) => {
+    const timeline: Timeline = [], inFlight = { now: 0, max: 0 };
+    const handlers = [read(name, timeline, inFlight, () => 20), read('read_memory', timeline, inFlight, () => 20)];
+    const calls = [1, 2].map((n): LLMToolCall => ({ call_id: `${name}-${n}`, name, arguments: JSON.stringify(VALID_ARGS[name](n)) }));
+    const { events } = await turn(handlers, [...calls, call('read_memory', 'c')]);
+    expect(inFlight.max).toBe(3);
+    // The fixture's untainted result is refused for these outside-content tools; the order and the batch are the point here.
+    expect(events.map((event) => [event.call.call_id, event.parallel_batches])).toEqual([[`${name}-1`, 1], [`${name}-2`, 0], ['read_memory-c', 0]]);
+  });
+
+  it('the concurrent set holds the Google and Drive reads and none of the Google writes or MCP tools', () => {
+    expect(GOOGLE_READS.filter((name) => !CONCURRENT_READ_TOOLS.has(name))).toEqual([]);
+    const serial: readonly ToolName[] = ['draft_email', 'send_email', 'propose_calendar_change', 'propose_google_task_change', 'connect_service', 'read_mcp_tool', 'search_mcp_tools', 'call_mcp_tool', 'read_tool_output'];
+    expect(serial.filter((name) => CONCURRENT_READ_TOOLS.has(name))).toEqual([]);
   });
 });
 
@@ -173,5 +200,110 @@ describe('parallel read calls on an owner turn', () => {
       ['tool_read_memory', 'calendar', 1], ['tool_read_memory', 'mail', 0], ['tool_read_memory', 'gym', 0],
     ]);
     expect(requests[1]!.request.tool_turns?.map((replayed) => JSON.parse(replayed.output).data.topic)).toEqual(['calendar', 'mail', 'gym']);
+  });
+});
+
+// The real Google handlers and client against a fake Google whose every request takes DATA_MS. Each grant is a refresh
+// token; its behaviour is 'ok', 'invalid_grant' (the token refresh fails) or 429 (every data request is rate limited).
+const DATA_MS = 250;
+const fakeGoogle = (grants: Readonly<Record<string, 'ok' | 'invalid_grant' | 429>>) => {
+  const inFlight = { now: 0, max: 0 };
+  const health: [string, string][] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.href === 'https://oauth2.googleapis.com/token') {
+      const grant = new URLSearchParams(String(init?.body)).get('refresh_token')!;
+      return grants[grant] === 'invalid_grant' ? Response.json({ error: 'invalid_grant' }, { status: 400 }) : Response.json({ access_token: `access-${grant}` });
+    }
+    const grant = String(new Headers(init?.headers).get('authorization')).replace('Bearer access-', '');
+    inFlight.now += 1; inFlight.max = Math.max(inFlight.max, inFlight.now);
+    await sleep(DATA_MS);
+    inFlight.now -= 1;
+    if (grants[grant] === 429) return Response.json({ error: { message: 'Quota exceeded' } }, { status: 429 });
+    if (url.pathname.includes('/calendar/v3/')) return Response.json({ kind: 'calendar#events', items: [] });
+    if (url.pathname.includes('/threads/')) return Response.json({ id: decodeURIComponent(url.pathname.split('/').at(-1)!), messages: [] });
+    return Response.json({ messages: [], resultSizeEstimate: 0 });
+  };
+  // One client per call, as the owner object builds them; the named account is the grant.
+  const google: GoogleAccess = { client: async (_feature, _intent, _assert, account) => {
+    const grant = account?.split('@')[0] ?? 'owner';
+    return googleClient({ clientId: 'fixture-client', clientSecret: 'fixture-secret', redirectUri: '' }, { refresh_token: grant }, fetcher, (error) => health.push([grant, error]), { connection_id: grant, email: account ?? 'owner@example.test' });
+  } };
+  const desk = { propose: async () => '', proposeSendEmail: async () => '', record: () => {} };
+  const handlers = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date('2026-10-26T09:00:00Z') });
+  return { handlers, inFlight, health };
+};
+const googleCall = (name: string, args: Record<string, unknown>): LLMToolCall => ({ call_id: `${name}-${JSON.stringify(args).length}`, name, arguments: JSON.stringify(args) });
+const INBOX_AND_WEEK = [googleCall('query_calendar', {}), googleCall('search_communication', { query: 'invoice' }), googleCall('read_thread', { thread_id: 't1' })];
+
+describe('Google reads through the real handlers and client', () => {
+  it('three reads overlap: the round takes about one provider wait, results and events keep call order, and the outside text taints the next round', async () => {
+    const { handlers, inFlight } = fakeGoogle({ owner: 'ok' });
+    const timeline: Timeline = [];
+    const events: ToolLoopEvent[] = [];
+    const replays: (readonly LLMToolTurn[])[] = [];
+    const ctx = freshCtx();
+    let steps = 0, roundMs = 0;
+    await runToolLoop({
+      handlers: [...handlers, write(timeline)] as never, ctx, maxSteps: 4, onTool: (event) => events.push(event),
+      step: async (_tools, turns) => {
+        replays.push([...turns]); steps += 1;
+        if (steps === 1) { roundMs = Date.now(); return { text: '', tool_calls: INBOX_AND_WEEK }; }
+        if (steps === 2) { roundMs = Date.now() - roundMs; return { text: '', tool_calls: [sendCall] }; }
+        return { text: 'Done.' };
+      },
+    });
+    expect(inFlight.max).toBe(3);
+    // One after another these take 3 x DATA_MS; together, about one.
+    expect(roundMs).toBeLessThan(2 * DATA_MS);
+    expect(events.slice(0, 3).map((event) => [event.call.name, event.ok, event.parallel_batches, event.taint])).toEqual([
+      ['query_calendar', true, 1, 'external'], ['search_communication', true, 0, 'external'], ['read_thread', true, 0, 'external'],
+    ]);
+    expect(replays[1]!.map((turn) => turn.call.name)).toEqual(['query_calendar', 'search_communication', 'read_thread']);
+    expect(JSON.parse(replays[1]![2]!.output)).toMatchObject({ ok: true, data: { thread_id: 't1' } });
+    // The read outside text taints the turn: the write in the next round is refused direct execution.
+    expect(events[3]).toMatchObject({ call: { name: 'send_message' }, ok: false, error_code: 'taint_needs_approval', taint: 'external' });
+    expect(timeline).not.toContain('start:send_message');
+  });
+
+  it('a dead grant, a rate limit and a good read in one round: each gets its own honest result and health is reported per grant', async () => {
+    const { handlers, inFlight, health } = fakeGoogle({ dead: 'invalid_grant', busy: 429, good: 'ok' });
+    const calls = [
+      googleCall('query_calendar', { account: 'dead@example.test' }),
+      googleCall('search_communication', { account: 'busy@example.test', query: 'invoice' }),
+      googleCall('read_thread', { account: 'good@example.test', thread_id: 't1' }),
+    ];
+    const { events } = await turn(handlers, calls);
+    expect(inFlight.max).toBe(2);
+    expect(events.map((event) => event.parallel_batches)).toEqual([1, 0, 0]);
+    expect(events.map((event) => [event.call.name, event.ok, event.code])).toEqual([
+      ['query_calendar', false, 'auth_failed'], ['search_communication', false, 'transient'], ['read_thread', true, undefined],
+    ]);
+    expect(JSON.parse(events[0]!.output)).toMatchObject({ ok: false });
+    expect(events[1]!.retryable).toBe(true);
+    // Only the dead grant is reported failing; the rate-limited one refreshed its token and reports healthy.
+    expect(health.filter(([, error]) => error !== '')).toEqual([['dead', 'google token failed: invalid_grant']]);
+    expect(new Set(health.filter(([, error]) => error === '').map(([grant]) => grant))).toEqual(new Set(['busy', 'good']));
+  });
+});
+
+describe('Google reads on an owner turn', () => {
+  it('the trace shows the three reads in one batch, in model order', async () => {
+    const { handlers, inFlight } = fakeGoogle({ owner: 'ok' });
+    const requests: LLMGatewayRequest[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (request) => {
+      requests.push(request);
+      const base = { model: request.request.model, input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 };
+      return { ok: true, data: { ...base, text: requests.length > 1 ? 'Here is your week.' : '', ...(requests.length > 1 ? {} : { tool_calls: INBOX_AND_WEEK }) } };
+    } };
+    const hops: TurnLogEntry[] = [];
+    const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai' }];
+    args[3] = (entry) => { if (entry.hop.startsWith('tool_')) hops.push(entry); };
+    args[5] = handlers as never; args[10] = gateway;
+    const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'parallel-google', conversationRef: 'telegram-1', surface: 'telegram', text: 'what in my inbox needs a reply, and what is on my calendar this week', memoryWrites: false }), async (_hop, work) => work());
+    expect(reply).toBe('Here is your week.');
+    expect(inFlight.max).toBe(3);
+    expect(hops.map((hop) => [hop.hop, hop.ok, hop.parallel_batches])).toEqual([['tool_query_calendar', true, 1], ['tool_search_communication', true, 0], ['tool_read_thread', true, 0]]);
+    expect(requests[1]!.request.tool_turns?.map((replayed) => replayed.call.name)).toEqual(['query_calendar', 'search_communication', 'read_thread']);
   });
 });
