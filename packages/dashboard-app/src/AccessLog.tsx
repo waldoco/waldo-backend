@@ -29,6 +29,7 @@ export function AccessLogPanel() {
   const [state, setState] = useState<LogState>({ kind: 'loading' });
   const [cursors, setCursors] = useState<AccessLogCursors>({});
   const [retry, setRetry] = useState(0);
+  const readAgain = () => setRetry(n => n + 1);
   useEffect(() => {
     const abort = new AbortController();
     fetchAccessLog(abort.signal, cursors).then(data => { if (!abort.signal.aborted) setState({ kind: 'ready', data }); }).catch((error: unknown) => {
@@ -38,6 +39,6 @@ export function AccessLogPanel() {
   }, [cursors, retry]);
   if (state.kind === 'loading') return <p role="status">Reading the access log…</p>;
   if (state.kind === 'error') return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Couldn’t read the access log.'}</h2>
-    {state.signedOut ? <a className="button-link" href={signInHref()}>Sign in</a> : <button onClick={() => setRetry(n => n + 1)}>Try again</button>}</section>;
+    {state.signedOut ? <a className="button-link" href={signInHref()}>Sign in</a> : <button onClick={readAgain}>Try again</button>}</section>;
   return <AccessLogView log={state.data} onPage={next => setCursors(previous => ({ ...previous, ...next }))} {...(Object.keys(cursors).length ? { onNewest: () => setCursors({}) } : {})}/>;
 }
