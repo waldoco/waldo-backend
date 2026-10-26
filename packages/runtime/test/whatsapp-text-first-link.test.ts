@@ -291,6 +291,8 @@ describe('the confirm page and the bind', () => {
     for (const [answer, status] of [['rejected', 404], ['claimed', 409]] as const) {
       expect((await whatsappLinkConfirmAction(confirmForm({ csrf: 'csrf-1', token, subject: SENDER }), 'csrf-1', 'do-a', dir({ consume: vi.fn(async () => answer) }), onLinked)).status).toBe(status);
     }
+    const claimed = await whatsappLinkConfirmAction(confirmForm({ csrf: 'csrf-1', token, subject: SENDER }), 'csrf-1', 'do-a', dir({ consume: vi.fn(async () => 'claimed' as const) }), onLinked);
+    expect(await claimed.text()).toContain('is already in use on another Waldo account');
     expect(onLinked).not.toHaveBeenCalled();
     const malformed = dir();
     expect((await whatsappLinkConfirmAction(confirmForm({ csrf: 'csrf-1', token: 'short', subject: SENDER }), 'csrf-1', 'do-a', malformed, onLinked)).status).toBe(404);
