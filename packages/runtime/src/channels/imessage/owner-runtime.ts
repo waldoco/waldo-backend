@@ -132,7 +132,7 @@ const handOff = (host: OwnerHost, row: IMessageOutboxRecord) => {
   if (!ns) return Promise.resolve({ kind: 'retry' } as const);
   return ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
     ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}),
-    ...(row.reaction ? { reaction: row.reaction } : {}) });
+    ...(row.reaction ? { reaction: row.reaction } : {}), ...(row.replyTo ? { replyTo: row.replyTo } : {}) });
 };
 
 /**
