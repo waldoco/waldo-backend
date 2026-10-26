@@ -1,4 +1,5 @@
 import type { TaskResult } from '@waldo/contracts';
+import { NO_REPLAYS } from './no-replays';
 import type { HeartbeatDeps } from '../../src/channels/heartbeat';
 import { heartbeatApplier, heartbeatJobSpec, type HeartbeatApplyDeps } from '../../src/channels/heartbeat-job';
 import type { Loop, LoopBook } from '../../src/channels/loops';
@@ -42,7 +43,7 @@ export const heartbeatJobs = (storage: DurableObjectStorage, options: Readonly<{
       book, host: { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost,
       now: options.now, timezone: options.timezone, surface: 'app', quiet: () => false, log: () => undefined, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a heartbeat job reached applyTools()'); }, deliver: refuse,
-      room: () => true, heldTopics: () => [], machine: { heartbeat: applier },
+      room: () => true, heldTopics: () => [], ...NO_REPLAYS, machine: { heartbeat: applier },
     });
   };
   return { book, tickDeps, runJobs };

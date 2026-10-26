@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { NO_REPLAYS } from './helpers/no-replays';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
@@ -231,7 +232,7 @@ const applying = (h: Harness): Apply => {
   return {
     turns, delivered, reply, log,
     lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
-      turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [],
+      turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { update_sweep: handler } }).then(() => undefined),
   };
 };

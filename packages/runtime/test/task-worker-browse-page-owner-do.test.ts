@@ -5,6 +5,7 @@ import {registerCommonBrowserSdk} from '../src/channels/common-staging-registrat
 import {jobBook,type TaskTicket} from '../src/tasks/jobs';
 import {appSubjectFor} from '../src/channels/app-api';
 import {toolOutputLedger} from '../src/conversation/tool-output-ledger';
+import {textFingerprint} from '../src/memory/claims';
 const proof=vi.hoisted(()=>({calls:[] as string[]}));
 // A real article's body text runs to tens of thousands of characters (the HTTP article, RFC 9110 far more).
 const ARTICLE=vi.hoisted(()=>'HTTP is an application layer protocol. '+'It carries requests and responses between clients and servers. '.repeat(1_000));
@@ -128,5 +129,19 @@ it('an owner forget empties a running worker\'s stored outputs',async()=>{
   const after=await host.taskTool(ticket,call('read_tool_output',{id:stored},'after'),CANARIES);
   expect(after).toMatchObject({ok:false,error_code:'not_found'});
   expect(JSON.stringify(after)).not.toContain('application layer');
+ });
+},20000);
+
+// The same, reached the way an owner's forget reaches it: one pass of the forget purge job, over a topic the task never saw.
+it('a forget purge pass empties a running worker\'s stored outputs and leaves the task running',async()=>{
+ await withOwner('app',async(host,state,job)=>{
+  const ticket=job('forget-2');
+  await host.taskClaim(ticket);
+  const stored=(await host.taskTool(ticket,browse,CANARIES)).data.stored_output as string;
+  state.storage.sql.exec("INSERT INTO topic_purge_pending (fingerprint, topic, created_at, scope) VALUES (?, ?, ?, 'everywhere')",textFingerprint('Lisbon trip'),'Lisbon trip',new Date().toISOString());
+  await (host as unknown as {forgetPurgeJob():{run():Promise<unknown>}}).forgetPurgeJob().run();
+  expect(state.storage.sql.exec<{status:string}>('SELECT status FROM task_jobs WHERE id = ?',ticket.jobId).one().status).toBe('running');
+  const after=await host.taskTool(ticket,call('read_tool_output',{id:stored},'after'),CANARIES);
+  expect(after).toMatchObject({ok:false,error_code:'not_found'});
  });
 },20000);

@@ -3,7 +3,8 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { applyInterrupted, isMachine, MACHINE_MAX_RUNNING, jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { applyInterrupted, isMachine, MACHINE_MAX_RUNNING, jobCheckpoint, jobResult, replayBrief, replayKey, replayOutcome, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import type { ReplayCardStatus } from '../channels/approvals';
 import { applyMachineJob, APPLY_RETRY_MS, type MachineAppliers } from './machine';
 import { fixedReport, interruptedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
 import { retryTurnText } from './retry-turn';
@@ -39,9 +40,28 @@ export type JobsLaneDeps = Readonly<{
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
   heldTopics(): readonly string[];
+  // Starts an approved card's replay outside this lane: its browser step takes the serial lane this pass holds.
+  startReplay(ticket: TaskTicket): void;
+  // The approval cards whose call runs here (the desk's replays, receipt and settle).
+  approvals: Readonly<{
+    replays(): readonly string[];
+    replayReceipt(id: string, status: ReplayCardStatus, message: string): string;
+    settleReplay(id: string, status: ReplayCardStatus): boolean;
+  }>;
   // Each machine job's apply, which names its own tools and delivery; a job with none settles silently.
   machine?: MachineAppliers;
 }>;
+
+// What a replay job's end means for its card. A job parked with its call in flight may have acted; one parked before the
+// call began did nothing.
+const replayCard = (row: JobRow): Readonly<{ status: ReplayCardStatus; message: string }> => {
+  if (row.park_reason === 'uncertain_effect') return { status: 'uncertain', message: 'It was interrupted while it ran.' };
+  if (row.park_reason !== null) return { status: 'failed', message: 'It could not start in time, so it did not run. Ask me again if you still want it.' };
+  const outcome = replayOutcome(row);
+  return outcome ? { status: outcome.status, message: outcome.message } : { status: 'uncertain', message: 'Its result was not recorded.' };
+};
+const REPLAY_CARD_OF_OUTCOME: Readonly<Record<string, ReplayCardStatus>> = { done: 'done', blocked: 'rejected', failed: 'uncertain' };
+const STOPPED_MIDWAY = 'An approved action you stopped had already started, so its outcome is unknown. Check the result before asking again; nothing was run again.';
 
 const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
 export const resultApplyText = (row: JobRow): string => {
@@ -71,7 +91,7 @@ const QUIET_RECHECK_MS = 10 * 60_000;
 export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const { book } = deps;
   const hop = (row: Pick<JobRow, 'id' | 'profile' | 'kind'>, name: string, fields: Partial<TurnLogEntry> = {}) =>
-    deps.log({ trace: `${row.kind === 'task' ? 'task' : 'retry'}:${row.id}`, hop: name, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
+    deps.log({ trace: `${row.kind === 'task' ? 'task' : row.kind === 'retry_turn' ? 'retry' : 'approval'}:${row.id}`, hop: name, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
 
   for (const lapsed of book.lapse(deps.host.busy())) {
     deps.host.fence(lapsed.id);
@@ -139,6 +159,33 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     logSettled();
   };
 
+  // The owner hears how an approved action ended once: the receipt is queued in the same commit that settles the job and
+  // moves its card.
+  const applyReplay = async (row: JobRow) => {
+    const { approval_id: id } = replayBrief(row);
+    const card = replayCard(row);
+    await deps.deliver(replayKey(id), `approval:${id}`, deps.approvals.replayReceipt(id, card.status, card.message), () => {
+      if (book.settle(row.id)) { deps.approvals.settleReplay(id, card.status); settled.push(row); }
+    });
+    logSettled();
+  };
+  // A replay cancelled by the owner or by a forget settles its card here. One stopped before its call began did nothing,
+  // and the owner who stopped it already knows; one stopped mid-call may have acted, so the owner is told.
+  const settleStopped = async () => {
+    for (const id of deps.approvals.replays()) {
+      const job = book.byKey(replayKey(id));
+      if (job !== null && job.status !== 'cancelled') continue;
+      // A forget that cancelled a replay after it reported: the card keeps what happened, without a receipt that would
+      // repeat what the owner asked to forget. The cancel dropped the result, so the card reads the job's outcome, where an
+      // uncertain replay and a failed one are both 'failed': either may have acted, so the card says the outcome is unknown.
+      const reported = job === null || job.park_reason !== null ? null : REPLAY_CARD_OF_OUTCOME[job.outcome ?? 'none'];
+      if (reported) { deps.approvals.settleReplay(id, reported); continue; }
+      if (job !== null && job.inflight_json === null) { deps.approvals.settleReplay(id, 'skipped'); continue; }
+      await deps.deliver(`${replayKey(id)}:stopped`, `approval:${id}`, STOPPED_MIDWAY, () => { deps.approvals.settleReplay(id, 'uncertain'); });
+      hop({ id: job?.id ?? id, profile: null, kind: 'approval_replay' }, 'approval_replay_stopped', { ok: false, code: 'uncertain' });
+    }
+  };
+
   const retry = async (row: JobRow) => {
     const brief = retryBrief(row);
     const ticket = book.startAttempt(row.id);
@@ -194,9 +241,22 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   };
   for (const row of topics.length ? book.running() : []) forgotten(row);
 
-  let leftOver = false, slotsFull = false, machineFull = false;
+  let leftOver = false, slotsFull = false, machineFull = false, replayWaits = false;
   for (const row of book.due()) {
     if (forgotten(row)) continue;
+    // An approved action's replay takes no model turn, no task slot and no machine slot, and is never applied as a task.
+    if (row.kind === 'approval_replay') {
+      if (row.status === 'reported') { await applyReplay(row); continue; }
+      if (deps.now() >= row.deadline_at) { if (book.park(row.id, 'deadline')) await applyReplay(book.get(row.id)!); continue; }
+      // One approved action at a time: each takes the serial lane for a browser step, so the owner's next message waits
+      // behind at most one. The next starts when this one reports.
+      if (book.replaying()) { replayWaits = true; continue; }
+      const ticket = book.startAttempt(row.id);
+      if (!ticket) continue;
+      deps.startReplay(ticket);
+      hop(row, 'approval_replay_started', { detail: `attempt=${ticket.attempt}` });
+      continue;
+    }
     // A task's report and a retried message each take a model turn; a parked retry's notice and a worker start do not.
     const needsTurn = row.kind === 'retry_turn' ? row.status !== 'reported' : row.status === 'reported';
     if (needsTurn && !deps.room()) { leftOver = true; continue; }
@@ -220,6 +280,8 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     }
   }
 
+  await settleStopped();
+
   let nextNote: number | null = null;
   for (const row of book.running()) {
     const due = noteDue(row);
@@ -236,6 +298,6 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }
   book.trim();
-  const next = leftOver ? deps.now() : book.nextDue(slotsFull, deps.host.busy(), machineFull);
+  const next = leftOver ? deps.now() : book.nextDue(slotsFull, deps.host.busy(), machineFull, replayWaits);
   return next === null ? nextNote : nextNote === null ? next : Math.min(next, nextNote);
 }
