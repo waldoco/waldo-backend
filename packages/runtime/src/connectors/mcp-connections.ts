@@ -230,8 +230,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_tool_reads)').toArray().some((column) => column.name === 'source')) sql.exec("ALTER TABLE mcp_tool_reads ADD COLUMN source TEXT NOT NULL DEFAULT 'owner'");
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_attempts (nonce TEXT PRIMARY KEY, record TEXT NOT NULL, expires INTEGER NOT NULL, started INTEGER NOT NULL DEFAULT 0, settled TEXT, settled_at INTEGER)');
   // Writes on a server whose writes speak as the owner (mcp-catalogue sends_as_owner): when, which tool, how it was allowed
-  // and whether it ran. Never its arguments or result. Patrol's access log reads it.
-  sql.exec('CREATE TABLE IF NOT EXISTS mcp_sends (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, server TEXT NOT NULL, tool TEXT NOT NULL, via TEXT NOT NULL, ok INTEGER NOT NULL)');
+  // and whether it ran, once per intent. Never its arguments or result. Patrol's access log reads it.
+  sql.exec('CREATE TABLE IF NOT EXISTS mcp_sends (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, server TEXT NOT NULL, tool TEXT NOT NULL, via TEXT NOT NULL, ok INTEGER NOT NULL, intent TEXT NOT NULL UNIQUE)');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, args_digest TEXT NOT NULL, questions TEXT NOT NULL, request_state TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL)');
   const refreshing = REFRESHING.get(sql) ?? new Map<string, Promise<void>>();
   REFRESHING.set(sql, refreshing);
@@ -251,8 +251,16 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const grant = granted.get(def.name);
     return grant?.digest === digest && (ownerTurn || (grant.source === 'owner' && !sendsAsOwner(r, def)));
   };
-  const keepSend = (r: Row, tool: string, via: 'without_asking' | 'approved', ok: boolean) => {
-    sql.exec('INSERT INTO mcp_sends (at, server, tool, via, ok) VALUES (?, ?, ?, ?, ?)', deps.now(), r.name, tool, via, ok ? 1 : 0);
+  // Whether a write that speaks as the owner may run now without a card: the owner allowed this exact definition in
+  // Connections. The caller adds the turn: only the owner's own request, untainted by any outside content.
+  const sendsNow = (server: string, tool: string): boolean => {
+    const r = live(server), found = r ? toolOf(r, tool) : undefined;
+    const grant = r && found ? reads(r.id).get(tool) : undefined;
+    return !!r && !!found && r.status === 'active' && sendsAsOwner(r, found.def) && grant?.source === 'owner' && grant.digest === found.digest;
+  };
+  // A replayed intent returns the edge's stored result without sending again, so it adds no row.
+  const keepSend = (r: Row, tool: string, via: 'without_asking' | 'approved', ok: boolean, intent: string) => {
+    sql.exec('INSERT OR IGNORE INTO mcp_sends (at, server, tool, via, ok, intent) VALUES (?, ?, ?, ?, ?, ?)', deps.now(), r.name, tool, via, ok ? 1 : 0, intent);
     sql.exec('DELETE FROM mcp_sends WHERE id <= (SELECT MAX(id) FROM mcp_sends) - ?', MCP_SENDS_KEPT);
   };
   const update = (id: string, fields: Partial<Row>) => {
@@ -670,26 +678,31 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, found.def, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first' };
     },
 
+    sendsNow,
+
     // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed; one allowed by
-    // connecting from a tile only when ownerTurn says this is the owner's own untainted turn.
+    // connecting from a tile only when ownerTurn says this is the owner's own untainted turn. A write that speaks as the
+    // owner never runs as a read.
+    // standing: such a write the owner allowed (sendsNow), once per host-derived intent.
     // approved: a card the owner approved, at the definition the card froze, once per intent.
     // A server that needs the owner's answer first returns input_required: its questions are kept under a
     // handle, and the retry carries the owner's answers only from an approved card (answers).
-    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read'; ownerTurn?: boolean } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
+    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read'; ownerTurn?: boolean } | { server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'standing'; intentId: string } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
       const started = deps.now();
-      const r = input.mode === 'read' ? live(input.server) : row(input.connection);
+      const r = input.mode === 'approved' ? row(input.connection) : live(input.server);
       if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
       if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
       if (isGranolaHost(r.server_url) && !isGranolaRead(input.tool)) throw notGranolaRead(r.name, input.tool);
-      let speaking: 'without_asking' | 'approved' | undefined;
+      let speaking: Readonly<{ via: 'without_asking' | 'approved'; intent: string }> | undefined;
       try {
         let found = toolOf(r, input.tool);
         if (!found && input.mode === 'read') { await refreshTools(r).catch(() => undefined); found = toolOf(r, input.tool); }
         if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`, true);
+        if (input.mode === 'read' && sendsAsOwner(r, found.def)) throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} sends as the owner, so it never runs as a read. Call call_mcp_tool with the same server, tool and args: it runs at once when the owner allowed it and asked for it themselves, and otherwise shows them a card.`, true);
+        if (input.mode === 'standing' && !sendsNow(r.name, input.tool)) throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first. Call call_mcp_tool; the owner gets a card.`, true);
         if (input.mode === 'read' && !runsWithoutAsking(r, found.def, found.digest, reads(r.id), input.ownerTurn === true)) {
           const grant = reads(r.id).get(input.tool);
           const why = !grant ? '' : grant.digest !== found.digest ? ' (its definition changed since the owner allowed it)'
-            : sendsAsOwner(r, found.def) ? ' (it speaks as the owner, so it runs without a card only in requests they make themselves that read nothing from outside)'
             : ' (it was allowed when the owner connected the server, which covers only their own requests, not turns that read content from anywhere but this server or that they did not start)';
           throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${why}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
         }
@@ -697,18 +710,18 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const problem = checkArgs(found.def, input.args);
         if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`, true);
         const answered = input.mode === 'approved' && input.answers ? (await answerParams(r, input.tool, input.args, input.answers)).params : {};
-        if (sendsAsOwner(r, found.def)) speaking = input.mode === 'approved' ? 'approved' : 'without_asking';
-        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
+        if (input.mode !== 'read' && sendsAsOwner(r, found.def)) speaking = { via: input.mode === 'approved' ? 'approved' : 'without_asking', intent: input.intentId };
+        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'read' ? {} : { intentId: input.intentId }) });
         if (input.mode === 'approved' && input.answers) sql.exec('DELETE FROM mcp_questions WHERE handle = ?', input.answers.handle);
         if (isRecord(result) && result.isError === true) throw new McpToolFailed(`${r.name}'s ${input.tool} ran and reported an error. ${serverSaid(r.name, toolErrorText(result))}`);
         const asked = await questionsOf(r, input.tool, input.args, result);
-        if (speaking && !asked) keepSend(r, input.tool, speaking, true);
+        if (speaking && !asked) keepSend(r, input.tool, speaking.via, true, speaking.intent);
         log('mcp_call', started, asked ? 'input_required' : undefined);
         return asked ? { server: r.name, input_required: asked } : { server: r.name, result };
       } catch (error) {
         const refusal = directCause(error, r.name);
         // A write that may have left is kept as not confirmed; one the server provably never ran is not a send.
-        if (speaking && !refusal.notApplied) keepSend(r, input.tool, speaking, false);
+        if (speaking && !refusal.notApplied) keepSend(r, input.tool, speaking.via, false, speaking.intent);
         log('mcp_call', started, refusal.code);
         throw refusal;
       }

@@ -771,23 +771,35 @@ describe('Slack, an official server that signs in only with a pre-registered cli
     expect(rig.world.calls.find((call) => call.method === 'tools/call')!.bearer).toMatch(/^at_/);
   }));
 
-  it('lets the owner allow sending: it runs without a card only in their own untainted turns, and Patrol logs each send without its text', withRig('slack-sends', slack, async (rig) => {
+  // A turn's context as the handlers see it: the owner's own untainted request unless over says otherwise.
+  const ownerCtx = (over: Partial<ToolDispatcherContext> = {}): ToolDispatcherContext => {
+    const canaries = ['1111111111111111', '2222222222222222', '3333333333333333'];
+    return { authenticatedUserId: 'owner-a', trigger: 'user_message', ownerInitiated: true, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, hasApproval: () => true,
+      turnId: 'turn-1', toolCallId: 'call-1', session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 1 }), ...over };
+  };
+  const send = { server: 'slack', tool: 'slack_send_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' } };
+  const posts = (world: FakeMcpWorld) => world.calls.filter((call) => call.method === 'tools/call' && call.name === 'slack_send_message').length;
+
+  it('lets the owner allow sending: call_mcp_tool sends at once in their own untainted request, once per call, and Patrol logs it without its text', withRig('slack-sends', slack, async (rig) => {
     seed(rig.vault);
     await connect(rig, SLACK.url, 'allow', 'slack');
-    const id = rig.mcp.list()[0]!.id;
-    expect(await rig.mcp.setRuns(id, 'slack_send_message', true)).toBe(true);
-    expect(await runs(rig.mcp)).toContainEqual(['slack_send_message', 'without_asking']);
-    expect(await runs(rig.mcp, false)).toContainEqual(['slack_send_message', 'asks_first']);
-    const tainted = await refusal(rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_send_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, ownerTurn: false }));
-    expect(tainted.code).toBe('forbidden');
-    expect(tainted.message).toContain('call_mcp_tool');
-    expect(rig.world.calls.filter((call) => call.method === 'tools/call')).toEqual([]);
+    const proposals: McpCallProposal[] = [];
+    const call = callMcpToolHandler(undefined, { proposeMcpCall: async (proposal) => { proposals.push(proposal); return 'p1'; } }, undefined, rig.mcp);
+    expect(await call.handle(send, ownerCtx())).toMatchObject({ ok: true, data: { proposal_id: 'p1', applied: false } });
+    expect(posts(rig.world)).toBe(0);
 
-    await rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_send_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, ownerTurn: true });
+    expect(await rig.mcp.setRuns(rig.mcp.list()[0]!.id, 'slack_send_message', true)).toBe(true);
+    expect(await call.handle(send, ownerCtx())).toMatchObject({ ok: true, data: { applied: true, status: expect.stringContaining('Ran without a card') } });
+    expect(posts(rig.world)).toBe(1);
+    expect(rig.edge.filter((body) => body.op === 'call' && body.intent_id).map((body) => body.intent_id)).toEqual([expect.stringMatching(/^mcpsend:[0-9a-f]{64}$/)]);
+    // The same call again (a replay of that tool call) is answered from the edge's record: nothing posts twice.
+    expect(await call.handle(send, ownerCtx())).toMatchObject({ ok: true, data: { applied: true } });
+    expect(posts(rig.world)).toBe(1);
+    expect(proposals).toHaveLength(1);
+
     const frozen = await rig.mcp.describe('slack', 'slack_schedule_message');
-    await rig.mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'slack_schedule_message', args: { channel: 'C0PRIVATE', text: 'PRIVATE_BODY' }, digest: frozen.digest, intentId: 'approval:00000000-0000-4000-8000-0000000000dd:apply' });
+    await rig.mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'slack_schedule_message', args: send.args, digest: frozen.digest, intentId: 'approval:00000000-0000-4000-8000-0000000000dd:apply' });
     await rig.mcp.invoke({ mode: 'read', server: 'slack', tool: 'slack_read_thread', args: { channel: 'C0PRIVATE' }, ownerTurn: true });
-
     const log = readAccessLog(rig.sql, Date.now(), {});
     expect(log.sends.rows).toEqual([
       { at: expect.any(String), server: 'slack', tool: 'slack_schedule_message', via: 'approved', ok: true },
@@ -795,6 +807,44 @@ describe('Slack, an official server that signs in only with a pre-registered cli
     ]);
     expect(log.sends.next_before).toBeNull();
     expect(JSON.stringify(log)).not.toMatch(/PRIVATE_BODY|C0PRIVATE/);
+  }));
+
+  it('cards an allowed send in any turn that read outside content, even from Slack, or that the owner did not start', withRig('slack-sends-tainted', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    await rig.mcp.setRuns(rig.mcp.list()[0]!.id, 'slack_send_message', true);
+    const proposals: McpCallProposal[] = [];
+    const call = callMcpToolHandler(undefined, { proposeMcpCall: async (proposal) => { proposals.push(proposal); return 'p1'; } }, undefined, rig.mcp);
+    for (const over of [{ toolArgSourceTaint: 'external' as const, taintOrigins: ['mcp:slack'] }, { toolArgSourceTaint: 'external' as const }, { sourceTaint: 'external' as const }, { ownerInitiated: false }, { trigger: 'scheduled' as never }, { turnId: undefined }]) {
+      expect(await call.handle(send, ownerCtx(over)), JSON.stringify(over)).toMatchObject({ ok: true, data: { proposal_id: 'p1', applied: false } });
+    }
+    expect(proposals).toHaveLength(6);
+    expect(posts(rig.world)).toBe(0);
+    expect(readAccessLog(rig.sql, Date.now(), {}).sends.rows).toEqual([]);
+  }));
+
+  it('never sends through read_mcp_tool, so a child task, a task worker or a check-back turn holding only reads cannot post as the owner', withRig('slack-sends-read', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    await rig.mcp.setRuns(rig.mcp.list()[0]!.id, 'slack_send_message', true);
+    const read = readMcpToolHandler(undefined, undefined, false, rig.mcp);
+    // The owner's own untainted turn (a child shares it), and a task worker's (no owner, arguments treated as outside).
+    for (const ctx of [ownerCtx(), ownerCtx({ ownerInitiated: undefined, toolArgSourceTaint: 'external' })]) {
+      const refused = await read.handle(send, ctx);
+      expect(refused).toMatchObject({ ok: false, code: 'forbidden' });
+      expect(JSON.stringify(refused)).toContain('call_mcp_tool');
+    }
+    expect(posts(rig.world)).toBe(0);
+  }));
+
+  it('logs an allowed send whose outcome is unknown as not confirmed', withRig('slack-sends-unknown', slack, async (rig) => {
+    seed(rig.vault);
+    await connect(rig, SLACK.url, 'allow', 'slack');
+    await rig.mcp.setRuns(rig.mcp.list()[0]!.id, 'slack_send_message', true);
+    const call = callMcpToolHandler(undefined, { proposeMcpCall: async () => 'p1' }, undefined, rig.mcp);
+    rig.world.options.results = () => new Response('upstream broke', { status: 502 });
+    expect(await call.handle(send, ownerCtx())).toMatchObject({ ok: false });
+    expect(readAccessLog(rig.sql, Date.now(), {}).sends.rows).toEqual([{ at: expect.any(String), server: 'slack', tool: 'slack_send_message', via: 'without_asking', ok: false }]);
   }));
 
   it('keeps a write the owner allowed on a server without the sends-as-owner rule running in any turn, and logs no send for it', withRig('notion-write-anywhere', { origin: 'https://mcp.notion.com', issuer: 'https://mcp.notion.com', tools: [{ name: 'notion-create-pages', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false } }] }, async (rig) => {

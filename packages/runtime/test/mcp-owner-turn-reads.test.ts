@@ -12,6 +12,7 @@ const recorder = () => {
     invoke: async (input) => { seen.push('ownerTurn' in input ? input.ownerTurn : 'approved'); return { server: 'notion', result: {} }; },
     describe: async () => { throw new Error('not used'); },
     checkAnswers: async () => [],
+    sendsNow: () => false,
   };
   return { owner, seen };
 };
