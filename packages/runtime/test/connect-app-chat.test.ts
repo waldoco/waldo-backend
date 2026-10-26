@@ -1,12 +1,13 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { handleConnectTicket, ticketHash } from '../src/channels/connect-link';
 import { handleMcpCallback } from '../src/channels/mcp-oauth-routes';
 import { routerSignature } from '../src/identity/owner-directory';
-import { MCP_CATALOGUE } from '../src/connectors/mcp-catalogue';
+import { catalogueTiles, MCP_CATALOGUE } from '../src/connectors/mcp-catalogue';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -42,17 +43,19 @@ let serve: (request: Request) => Promise<Response>;
 beforeAll(async () => { serve = await loadEdge(); });
 afterEach(() => { vi.restoreAllMocks(); });
 
-type Ticket = { provider: string; channel: string; do_name: string; begun: boolean; status: 'issued' | 'completed' | 'revoked' };
+type Ticket = { provider: string; channel: string; do_name: string; begun: boolean; status: 'issued' | 'completed' | 'revoked'; handoff?: string };
+type Tile = { id: string; label: string; about: string; consent: string | null; connectAvailable: boolean; connection: { status: string; connected_at: number } | null };
 type Rig = Readonly<{
   world: FakeMcpWorld; vault: VaultFake; tickets: Map<string, Ticket>; rpcs: string[]; state: DurableObjectState; owner: InstanceType<typeof OwnerDO>;
   thread(): Promise<string>; say(path: string, client: string, text: string): Promise<string>; read(path: string): Promise<{ id: string; role: string; text: string; parent_id: string | null }[]>;
   hop(link: string, init?: RequestInit): Promise<Response>; callback(back: URL, cookie?: string): Promise<Response>; drain(path: string, text: string): Promise<void>;
+  apps(): Promise<{ revision: string; apps: Tile[] }>; act(action: string, id: string, request: string): Promise<Response>;
 }>;
 
-const withRig = (name: string, run: (rig: Rig) => Promise<void>, options: Partial<FakeOptions> = {}) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const withRig = (name: string, run: (rig: Rig) => Promise<void>, options: Partial<FakeOptions> = {}, signedInAt = new Date().toISOString()) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   model.requests = []; model.all = [];
   const world = fakeMcpWorld({ origin: NOTION_ORIGIN, issuer: NOTION.issuer, ...options }), vault = vaultFake([name]);
-  const tickets = new Map<string, Ticket>(), rpcs: string[] = [];
+  const tickets = new Map<string, Ticket>(), rpcs: string[] = [], sessionExpires = new Date(Date.now() + 3_600_000).toISOString();
   const directory = async (fn: string, a: Record<string, string>): Promise<Response> => {
     rpcs.push(fn);
     const signed = async (message: string) => expect(a.p_sig).toBe(await routerSignature(WORKER_ENV.WALDO_ROUTER_HMAC_SECRET, Number(a.p_at), message));
@@ -68,10 +71,24 @@ const withRig = (name: string, run: (rig: Rig) => Promise<void>, options: Partia
       tickets.set(a.p_ticket_hash!, { provider: a.p_provider!, channel: a.p_channel!, do_name: a.p_do_name!, begun: false, status: 'issued' });
       return Response.json('30000000-0000-0000-0000-000000000009');
     }
+    // The app's own tickets carry a one-time handoff code the directory redeems once, for its ticket only.
+    if (fn === 'connect_session_issue_handoff') {
+      await signed(`connsess.issue_handoff.${a.p_do_name}.${a.p_provider}.${a.p_channel}.${a.p_ticket_hash}.${a.p_handoff_hash}`);
+      for (const ticket of tickets.values()) if (ticket.provider === a.p_provider && ticket.status === 'issued') ticket.status = 'revoked';
+      tickets.set(a.p_ticket_hash!, { provider: a.p_provider!, channel: a.p_channel!, do_name: a.p_do_name!, begun: false, status: 'issued', handoff: a.p_handoff_hash! });
+      return Response.json('30000000-0000-0000-0000-000000000010');
+    }
+    if (fn === 'connect_session_hand_off') {
+      const ticket = tickets.get(a.p_ticket_hash!);
+      if (!ticket?.handoff || ticket.handoff !== a.p_handoff_hash) return Response.json(false);
+      ticket.handoff = 'redeemed';
+      return Response.json(true);
+    }
+    if (fn === 'console_session_inventory') return Response.json([{ session: 'a'.repeat(64), created_at: signedInAt, last_seen_at: signedInAt, expires_at: sessionExpires, rotated_to: null, signed_in_at: signedInAt }]);
     if (fn === 'connect_session_resolve') {
       const ticket = tickets.get(a.p_ticket_hash!);
       if (!ticket) return Response.json(null);
-      return Response.json(ticket.status !== 'issued' ? { status: ticket.status } : { status: 'ok', do_name: ticket.do_name, provider: ticket.provider, session: 's', begun: ticket.begun, handoff: false, owner_hint: 'o•••@example.test' });
+      return Response.json(ticket.status !== 'issued' ? { status: ticket.status } : { status: 'ok', do_name: ticket.do_name, provider: ticket.provider, session: 's', begun: ticket.begun, handoff: ticket.handoff !== undefined, owner_hint: 'o•••@example.test' });
     }
     if (fn === 'connect_session_begin') {
       const ticket = tickets.get(a.p_ticket_hash!);
@@ -126,6 +143,11 @@ const withRig = (name: string, run: (rig: Rig) => Promise<void>, options: Partia
     },
     hop: (link, init) => handleConnectTicket(new Request(link, init), routed),
     callback: (back, cookie) => handleMcpCallback(new Request(back, cookie ? { headers: { cookie } } : {}), routed),
+    apps: async () => {
+      const read = await (await owner.fetch(new Request('https://telegram-owner/app/v1/controls?view=connections', { headers }))).json() as { revision: string; data: { apps?: Tile[] } };
+      return { revision: read.revision, apps: read.data.apps ?? [] };
+    },
+    act: async (action, id, request) => owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers, body: JSON.stringify({ view: 'connections', action, id, revision: (await rig.apps()).revision, request_id: request }) })),
     drain: async (path, text) => {
       // A record the outbox holds is due a moment after it is queued; each pass stands in for the alarm that fires then.
       for (let pass = 0; pass < 40 && !(await rig.read(path)).some((message) => message.text === text); pass += 1) {
@@ -275,5 +297,128 @@ it('tells the chat when the owner refuses at the device page, and offers no code
     await rig.say('/chat/main', 'connect-client-08', 'Please connect my Notion with a code');
     expect(model.requests.join('\n').replaceAll('\\"', '"')).toContain('"status":"not_sent","reason":"code_unavailable"');
     expect(rig.world.hits.some((hit) => hit.endsWith('/device'))).toBe(false);
+  });
+});
+
+describe('from the app\'s Connections tile', () => {
+  // The app opens the receipt's /c/<ticket>?handoff=<code> in its sign-in sheet: the page binds that browser, Continue goes to
+  // the provider, and the callback sends the sheet back to the app, which re-reads Connections.
+  const signIn = async (rig: Rig, navigation: string, consent: 'allow' | 'deny') => {
+    const link = `${ORIGIN}${navigation}`;
+    const page = await rig.hop(link);
+    expect(page.status).toBe(200);
+    const handed = bindingOf(page);
+    const go = await rig.hop(link, { method: 'POST', headers: { origin: ORIGIN, cookie: handed } });
+    expect(go.status).toBe(303);
+    return rig.callback(await rig.world.authorize(go.headers.get('location')!, consent), bindingOf(go));
+  };
+  const receiptOf = async (response: Response) => {
+    expect(response.status).toBe(200);
+    return appControlResultV1Schema.parse(await response.json()).receipt;
+  };
+
+  it('lists every catalogue app, connects Notion through the handoff ticket, returns to the app, and disconnects with a revocation', async () => {
+    await withRig('connect-app-tile-golden', async (rig) => {
+      const before = await rig.apps();
+      expect(before.apps.map((tile) => tile.id)).toEqual(MCP_CATALOGUE.map((entry) => entry.id));
+      const tiles = catalogueTiles([]);
+      for (const tile of before.apps) {
+        const entry = MCP_CATALOGUE.find((candidate) => candidate.id === tile.id)!;
+        expect(tile).toEqual({ id: entry.id, label: entry.label, about: entry.about, consent: tiles.find((t) => t.id === entry.id)!.consent, connectAvailable: true, connection: null });
+      }
+
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0001'));
+      expect(connect).toEqual({ state: 'recorded', message: 'Notion connect is ready to begin. Access has not been granted or tested.', navigation: expect.stringMatching(/^\/c\/[A-Za-z0-9_-]{22}\?handoff=[A-Za-z0-9_-]{22}$/) });
+      const hash = await ticketHash(new URL(connect.navigation!, ORIGIN).pathname.slice(3));
+      expect(rig.tickets.get(hash)).toMatchObject({ provider: 'mcp:notion', channel: 'app', begun: false });
+
+      const done = await signIn(rig, connect.navigation!, 'allow');
+      // Back to the app, whatever the outcome; nothing rides in the address.
+      expect(done.status).toBe(303);
+      expect(done.headers.get('location')).toBe('waldo://oauth/complete');
+      expect(rig.vault.rows).toHaveLength(1);
+      expect(rig.tickets.get(hash)!.status).toBe('completed');
+      expect((await rig.apps()).apps.find((tile) => tile.id === 'notion')!.connection).toEqual({ status: 'active', connected_at: expect.any(Number) });
+      // The tile is where the owner sees it connected: no chat line is sent for it.
+      await rig.drain('/chat/main', 'Notion is connected.');
+      expect((await rig.read('/chat/main')).some((message) => message.text === 'Notion is connected.')).toBe(false);
+
+      expect(await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0002'))).toEqual({ state: 'recorded', message: 'Notion is already connected.' });
+      expect(await receiptOf(await rig.act('app.disconnect', 'notion', 'tile-disconnect-0001'))).toEqual({ state: 'recorded', message: "Disconnected, and the server revoked Waldo's access.", revocation: 'revoked' });
+      expect((await rig.apps()).apps.find((tile) => tile.id === 'notion')!.connection).toBeNull();
+    });
+  });
+
+  it('returns to the app when the owner refuses consent, and stores nothing', async () => {
+    await withRig('connect-app-tile-denied', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0003'));
+      const done = await signIn(rig, connect.navigation!, 'deny');
+      expect(done.status).toBe(303);
+      expect(done.headers.get('location')).toBe('waldo://oauth/complete');
+      expect(rig.vault.rows).toHaveLength(0);
+      expect((await rig.apps()).apps.find((tile) => tile.id === 'notion')!.connection).toBeNull();
+    });
+  });
+
+  it('says a server that cannot revoke was only forgotten', async () => {
+    await withRig('connect-app-tile-unsupported', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0004'));
+      await signIn(rig, connect.navigation!, 'allow');
+      expect(await receiptOf(await rig.act('app.disconnect', 'notion', 'tile-disconnect-0002'))).toMatchObject({ state: 'recorded', revocation: 'unsupported' });
+    }, { revocation: false });
+  });
+
+  // A page reached from the app's sheet names the Waldo app and returns there, never to the console or a chat request.
+  const toApp = async (page: Response, status: number, says: string) => {
+    expect(page.status).toBe(status);
+    const html = await page.text();
+    expect(html).toContain(says);
+    expect(html).toContain('href="waldo://oauth/complete"');
+    expect(html).not.toMatch(/\/console|Ask Waldo|Google/);
+  };
+
+  it('ends every page the app\'s sheet can reach before the provider back in the app, naming the app', async () => {
+    await withRig('connect-app-tile-pages', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0008'));
+      const link = `${ORIGIN}${connect.navigation!}`;
+      // Cancel on the confirm page.
+      const page = await rig.hop(link), cancel = /href="([^"]*cancelled[^"]*)"/.exec(await page.text())![1]!.replaceAll('&amp;', '&');
+      await toApp(await rig.hop(`${ORIGIN}${cancel}`), 200, 'Nothing was connected');
+      // A used link, opened again from the app.
+      const go = await rig.hop(link, { method: 'POST', headers: { origin: ORIGIN, cookie: bindingOf(page) } });
+      expect(go.status).toBe(303);
+      await toApp(await rig.hop(link, { headers: { cookie: bindingOf(page) } }), 410, 'Connect Notion again from Connections in the Waldo app.');
+      // The same, reloaded without its handoff code in the address: the directory still knows the app issued it.
+      await toApp(await rig.hop(link.split('?')[0]!), 410, 'Connect Notion again from Connections in the Waldo app.');
+      // A link the directory does not know, opened from the app.
+      await toApp(await rig.hop(`${ORIGIN}/c/${'A'.repeat(22)}?handoff=${'B'.repeat(22)}`), 400, 'Start the connection again from Connections in the Waldo app.');
+    });
+    await withRig('connect-app-tile-expired-page', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0009'));
+      rig.state.storage.sql.exec('UPDATE mcp_attempts SET expires = ?', Date.now() - 1);
+      await toApp(await rig.hop(`${ORIGIN}${connect.navigation!}`), 410, 'Connect Notion again from Connections in the Waldo app.');
+    });
+  });
+
+  it('refuses an app that is not a tile, a disconnect with nothing connected, and a connect after a stale sign-in', async () => {
+    await withRig('connect-app-tile-refused', async (rig) => {
+      // Refused before anything starts: the answer is the eligibility refusal, not a receipt.
+      const ineligible = async (response: Response) => { expect(response.status).toBe(409); expect(await response.json()).toMatchObject({ error: 'no_longer_eligible' }); };
+      await ineligible(await rig.act('app.connect', 'evernote', 'tile-connect-0005'));
+      await ineligible(await rig.act('app.disconnect', 'notion', 'tile-disconnect-0003'));
+      // A Waldo that cannot sign in to apps offers no Connect, and refuses one.
+      rig.state.storage.kv.delete('origin');
+      expect((await rig.apps()).apps.every((tile) => !tile.connectAvailable)).toBe(true);
+      await ineligible(await rig.act('app.connect', 'notion', 'tile-connect-0007'));
+      expect(rig.tickets.size).toBe(0);
+    });
+    // App sessions last weeks. Connecting needs no fresh Waldo sign-in: the owner signs in and approves at the app's own
+    // consent page before anything is granted, and disconnecting only removes access.
+    await withRig('connect-app-tile-long-session', async (rig) => {
+      const connect = await receiptOf(await rig.act('app.connect', 'notion', 'tile-connect-0006'));
+      expect(connect.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}\?handoff=[A-Za-z0-9_-]{22}$/);
+      expect((await signIn(rig, connect.navigation!, 'allow')).headers.get('location')).toBe('waldo://oauth/complete');
+      expect(await receiptOf(await rig.act('app.disconnect', 'notion', 'tile-disconnect-0004'))).toMatchObject({ state: 'recorded', revocation: 'revoked' });
+    }, {}, new Date(Date.now() - 3 * 3_600_000).toISOString());
   });
 });
