@@ -44,6 +44,8 @@ const named = (claims: ClaimStore) => claims.claims().some(candidate => candidat
 type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
 const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = { name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable' };
 const SETUP_PIN_ORDER: Readonly<Record<SetupAnswer, number>> = { name: 0, day: 1, slips: 2, wearable: 3 };
+// Whether a claim is a setup answer, by the ref this module writes it under.
+export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && Object.values(SETUP_REFS).includes(ref);
 const DAY_TEXT = {
   meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
   fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
