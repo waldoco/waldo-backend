@@ -34,9 +34,9 @@ const supabase = async () => {
     authUsers: new Map<string, { email: string; confirmed: boolean }>(), linked: new Map<string, string>(),
     identities: new Map<string, { user: string; provider: string; sub: string; at: number }>(),
     owners: new Map<string, { auth: string; doName: string }>(), trusted: new Set<string>(),
-    tokens: new Map<string, Token>(), flows: new Map<string, { challenge: string; token: Token }>(),
+    tokens: new Map<string, Token>(), flows: new Map<string, { challenge: string; user: string; sub: string }>(), googleTokens: new Map<string, string>(),
     grants: [] as Record<string, unknown>[], signups: [] as Record<string, unknown>[], lookups: [] as Record<string, unknown>[],
-    otp: [] as string[], denySend: false, live: new Set<string>(), outage: false,
+    otp: [] as string[], denySend: false, live: new Set<string>(), outage: false, google: 'ok' as 'ok' | 'refuses' | 'down',
   };
   const token = (t: Token) => {
     const jwt = `fixture.${base64url(new TextEncoder().encode(JSON.stringify({ sub: t.sub ?? `${t.provider}:${t.email}`, n: minted += 1 })))}.signature`;
@@ -49,9 +49,9 @@ const supabase = async () => {
     const { email, confirmed } = state.authUsers.get(id)!;
     return { id, email, email_confirmed_at: confirmed ? new Date().toISOString() : null, identities: identitiesOf(id, leaveOut) };
   };
-  const signIn = (provider: string, sub: string, email: string, verified: boolean, unlinked = false) => {
+  const signIn = (provider: string, sub: string, email: string, verified: boolean, unlinked = false, sameSecond = false) => {
     const key = `${provider}:${sub}`, known = state.identities.get(key);
-    clock += 1000;
+    if (!sameSecond) clock += 1000;
     if (known) { known.at = clock; return { user: known.user, linkedNow: false, key }; }
     const holder = verified && !unlinked && email ? state.linked.get(email) : undefined;
     const id = holder ?? crypto.randomUUID();
@@ -60,13 +60,25 @@ const supabase = async () => {
     state.identities.set(key, { user: id, provider, sub, at: clock });
     return { user: id, linkedNow: holder !== undefined, key };
   };
+  // Supabase's Google callback: it signs the identity in when the browser comes back, and keeps the flow for the code.
+  const authorize = (code: string, challenge: string, t: Token, sameSecond = false) => {
+    const sub = t.sub ?? `${t.provider}:${t.email}`;
+    state.flows.set(code, { challenge, user: signIn(t.provider, sub, t.email, t.verified ?? true, t.unlinked, sameSecond).user, sub });
+  };
   const member = async (email = MEMBER) => {
     const { user } = signIn('email', email, email, true);
     state.owners.set(email, { auth: user, doName: `owner-${crypto.randomUUID()}` });
     return state.owners.get(email)!.doName;
   };
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input)), a = JSON.parse(String(init?.body));
+    const url = new URL(String(input));
+    if (url.origin === 'https://www.googleapis.com') {
+      expect(url.pathname).toBe('/userinfo/v2/me');
+      if (state.google === 'down') return new Response('', { status: 503 });
+      const sub = state.google === 'ok' ? state.googleTokens.get((new Headers(init?.headers).get('authorization') ?? '').replace(/^Bearer /, '')) : undefined;
+      return sub ? Response.json({ id: sub, email: 'kept@example.test', verified_email: true }) : new Response('', { status: 401 });
+    }
+    const a = JSON.parse(String(init?.body));
     expect(url.origin).toBe(DIRECTORY);
     expect(new Headers(init?.headers).get('apikey')).toBe(KEY);
     if (url.pathname === '/auth/v1/otp') { state.otp.push(a.email); return Response.json({}); }
@@ -93,9 +105,10 @@ const supabase = async () => {
       const flow = state.flows.get(a.auth_code);
       if (!flow || base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(a.code_verifier))) !== flow.challenge) return Response.json({ code: 404, msg: 'invalid flow state' }, { status: 404 });
       state.flows.delete(a.auth_code);
-      const t = flow.token;
-      // The browser's callback already signed this identity in; the code exchange loads the user afresh.
-      return Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh', user: asUser(signIn(t.provider, t.sub ?? `${t.provider}:${t.email}`, t.email, t.verified ?? true, t.unlinked).user) });
+      // The exchange loads the user afresh and hands back the Google access token kept from this flow.
+      const providerToken = `google-access-${crypto.randomUUID()}`;
+      state.googleTokens.set(providerToken, flow.sub);
+      return Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh', provider_token: providerToken, user: asUser(flow.user) });
     }
     const fn = url.pathname.split('/').at(-1)!;
     const signed: Record<string, string> = {
@@ -150,7 +163,7 @@ const supabase = async () => {
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   };
   const console_ = async (path: string, init: RequestInit = {}) => (await handleConsole(new Request(`https://console.fixture.invalid${path}`, init), settings as never, auth))!;
-  return { app, console: console_, state, fetcher, member, token, limited, now, grantFetch, settings, auth };
+  return { app, console: console_, state, fetcher, member, token, authorize, limited, now, grantFetch, settings, auth };
 };
 
 const google = (id_token: string, extra: Record<string, unknown> = {}) => ({ provider: 'google', id_token, nonce: NONCE, request_id: 'signin-request-1', ...extra });
@@ -375,7 +388,7 @@ describe('console sign-in with Google', () => {
   const callback = async (sandbox: Sandbox, token: Token, path = '/console/signin/google') => {
     const { location, pair } = await start(sandbox, path);
     const code = `code-${crypto.randomUUID()}`;
-    sandbox.state.flows.set(code, { challenge: location.searchParams.get('code_challenge')!, token });
+    sandbox.authorize(code, location.searchParams.get('code_challenge')!, token);
     return sandbox.console(`/console/signin/google/callback?code=${code}`, { headers: { cookie: pair, 'sec-fetch-site': 'cross-site' } });
   };
   const cookiesOf = (response: Response) => (response.headers as unknown as SetCookies).getSetCookie();
@@ -420,6 +433,58 @@ describe('console sign-in with Google', () => {
     expect(sandbox.state.otp).toHaveLength(1);
   });
 
+  it('signs in the Google account behind this flow\'s token, not the one that signed in last, even within the same second', async () => {
+    const sandbox = await supabase();
+    const doName = await sandbox.member();
+    // The owner's own Google account is trusted; a second Google account with the same verified address is not.
+    const ownerFlow = await start(sandbox);
+    sandbox.authorize('owner-1', ownerFlow.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER, sub: 'google-owner' });
+    sandbox.state.trusted.add(`${doName}|google|google-owner`);
+    // The other account comes back from Google first and holds its code; the owner signs in after it, in the same second.
+    const held = await start(sandbox);
+    sandbox.authorize('held', held.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER, sub: 'google-other' });
+    const later = await start(sandbox);
+    sandbox.authorize('owner-2', later.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER, sub: 'google-owner' }, true);
+    const owner = await sandbox.console('/console/signin/google/callback?code=owner-2', { headers: { cookie: later.pair } });
+    expect(signedIn(owner)).toBe(true);
+    const other = await sandbox.console('/console/signin/google/callback?code=held', { headers: { cookie: held.pair } });
+    expect(signedIn(other)).toBe(false);
+    expect(await other.text()).toContain('first time this Google account signs in');
+    expect(sandbox.state.trusted).toEqual(new Set([`${doName}|google|google-owner`]));
+  });
+
+  it('signs no one in when Google will not name the account behind the token, or is down', async () => {
+    const sandbox = await supabase();
+    const doName = await sandbox.member();
+    sandbox.state.trusted.add(`${doName}|google|google-x`);
+    const logs = captureLogs();
+    const attempt = async (code: string) => {
+      const flow = await start(sandbox);
+      sandbox.authorize(code, flow.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER, sub: 'google-x' });
+      return sandbox.console(`/console/signin/google/callback?code=${code}`, { headers: { cookie: flow.pair } });
+    };
+    expect(signedIn(await attempt('code-ok'))).toBe(true);
+    // A token naming a Google account that is not one of this user's identities signs no one in.
+    const stray = await start(sandbox);
+    sandbox.authorize('code-stray', stray.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER, sub: 'google-x' });
+    sandbox.state.flows.get('code-stray')!.sub = 'google-not-linked';
+    const strayDone = await sandbox.console('/console/signin/google/callback?code=code-stray', { headers: { cookie: stray.pair } });
+    expect(signedIn(strayDone)).toBe(false);
+    expect(await strayDone.text()).toContain('Google did not confirm that sign-in');
+    sandbox.state.google = 'refuses';
+    const refused = await attempt('code-refused');
+    expect(signedIn(refused)).toBe(false);
+    expect(await refused.text()).toContain('Google did not confirm that sign-in');
+    sandbox.state.google = 'down';
+    const down = await attempt('code-down');
+    expect(signedIn(down)).toBe(false);
+    expect(await down.text()).toContain('temporarily unavailable');
+    expect(sandbox.state.otp).toEqual([]);
+    logs.restore();
+    // Google's access token is a credential: it never reaches a log line.
+    expect(logs.lines.join('\n')).not.toMatch(/google-access-/);
+  });
+
   it('admits members only: a Google address with no account is told to use the invited email and nothing is created', async () => {
     const sandbox = await supabase();
     const done = await callback(sandbox, { provider: 'google', email: INVITED });
@@ -433,7 +498,7 @@ describe('console sign-in with Google', () => {
     const sandbox = await supabase();
     await sandbox.member();
     const mine = await start(sandbox), theirs = await start(sandbox);
-    sandbox.state.flows.set('their-code', { challenge: theirs.location.searchParams.get('code_challenge')!, token: { provider: 'google', email: MEMBER } });
+    sandbox.authorize('their-code', theirs.location.searchParams.get('code_challenge')!, { provider: 'google', email: MEMBER });
     const [name, value] = mine.pair.split('=') as [string, string];
     const forged = `${name}=${value.slice(0, -1)}${value.endsWith('0') ? '1' : '0'}`;
     for (const cookie of ['', forged, mine.pair]) {

@@ -128,6 +128,8 @@ const tokenSubject = (token: string): string | null => {
   } catch { return null; } // Not a JWT payload: the sign-in is refused as an unusable token.
 };
 
+const GOOGLE_USERINFO = 'https://www.googleapis.com/userinfo/v2/me';
+
 const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newLinkCode = () => [...crypto.getRandomValues(new Uint8Array(10))].map((byte) => LINK_ALPHABET[byte % LINK_ALPHABET.length]).join('');
 const newSessionId = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -275,16 +277,27 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const granted = (grant: 'id_token' | 'pkce', body: object) => auth(`token?grant_type=${grant}`, body, async response => {
     if (response.status === 429 || response.status >= 500) throw new Error(`token grant ${response.status}`);
     if (!response.ok) return { state: 'refused', reason: 'token' } as const;
-    type GrantedIdentity = { id?: unknown; provider?: unknown; last_sign_in_at?: unknown };
-    const { user } = (await response.json()) as { user?: { id?: string; email?: string | null; email_confirmed_at?: string | null; identities?: GrantedIdentity[] | null } };
+    type GrantedIdentity = { id?: unknown; provider?: unknown };
+    const { user, provider_token: providerToken } = (await response.json()) as { provider_token?: unknown; user?: { id?: string; email?: string | null; email_confirmed_at?: string | null; identities?: GrantedIdentity[] | null } };
     if (!user?.id) return { state: 'refused', reason: 'token' } as const;
     if (!user.email || !user.email_confirmed_at) return { state: 'refused', reason: 'no_email' } as const;
-    return { state: 'user', id: user.id, email: user.email.toLowerCase(), identities: Array.isArray(user.identities) ? user.identities : [] } as const;
+    return { state: 'user', id: user.id, email: user.email.toLowerCase(), identities: Array.isArray(user.identities) ? user.identities : [],
+      providerToken: typeof providerToken === 'string' && providerToken.length > 0 ? providerToken : null } as const;
   });
-  const signInIdentity = async (grant: Awaited<ReturnType<typeof granted>>, provider: 'apple' | 'google', subject: (identities: readonly { id?: unknown; provider?: unknown; last_sign_in_at?: unknown }[]) => string | null,
+  // The Google account behind a console sign-in: Google's answer for the access token Supabase kept from this very flow.
+  // Supabase derives a Google identity's subject from the same endpoint and the same token (provider/google.go), so this
+  // names the identity the flow signed in, where the user's identity list can only say which signed in last.
+  const googleSubject = (token: string | null) => token ? withRequestTimeout(async signal => {
+    const response = await fetcher(GOOGLE_USERINFO, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, signal });
+    if (response.status === 429 || response.status >= 500) throw new Error(`google userinfo ${response.status}`);
+    if (!response.ok) return null;
+    const { id } = (await response.json()) as { id?: unknown };
+    return typeof id === 'string' && id.length > 0 && id.length <= 255 ? id : null;
+  }) : Promise.resolve(null);
+  const signInIdentity = async (grant: Awaited<ReturnType<typeof granted>>, provider: 'apple' | 'google', subject: (granted: Extract<typeof grant, { state: 'user' }>) => Promise<string | null>,
     inviteCode: string, join: boolean, joinPhone = ''): Promise<IdentitySignIn> => {
     if (grant.state === 'refused') return grant;
-    const user = { id: grant.id, email: grant.email }, sub = subject(grant.identities);
+    const user = { id: grant.id, email: grant.email }, sub = await subject(grant);
     if (!sub) return { state: 'refused', reason: 'token' };
     const owner = await ownerFor(user, inviteCode, join, joinPhone);
     if (!owner) return { state: 'needs_invite' };
@@ -313,13 +326,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     // The identity is the token's own subject. Supabase accepted these exact bytes, so the claim is authentic; the grant's
     // identity list cannot name it, because Supabase leaves an identity it links in this call out of that list.
     signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '') =>
-      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, () => tokenSubject(idToken), inviteCode, true, phone),
-    // The console's code carries no token, so the identity is the Google one Supabase signed in last: the callback that
-    // issued this code set its last_sign_in_at. Two at the same instant are refused rather than guessed.
-    signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', identities => {
-      const google = identities.filter(identity => identity.provider === 'google' && typeof identity.id === 'string' && typeof identity.last_sign_in_at === 'string' && Number.isFinite(Date.parse(identity.last_sign_in_at)))
-        .map(identity => ({ id: identity.id as string, at: Date.parse(identity.last_sign_in_at as string) })).sort((a, b) => b.at - a.at);
-      return google[0] && google[0].at !== google[1]?.at ? google[0].id : null;
+      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone),
+    // Google names the account behind this flow's token; it must be one of this user's Google identities.
+    signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', async grant => {
+      const sub = await googleSubject(grant.providerToken);
+      return sub && grant.identities.some(identity => identity.provider === 'google' && identity.id === sub) ? sub : null;
     }, '', false),
     async issueLinkCode(doName) {
       const code = newLinkCode();
