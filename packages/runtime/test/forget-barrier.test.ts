@@ -114,6 +114,15 @@ describe('tool turns', () => {
   });
 
 
+  // The harness loader's use_tool call is the tool it names: the barrier reads its result by that tool, not by use_tool.
+  it('reads a result that came through use_tool by the tool it ran', () => {
+    const routed = (name: string, output: string): LLMToolTurn => ({ call: { call_id: `u-${name}`, name: 'use_tool', arguments: JSON.stringify({ name, arguments: {} }) }, output });
+    const forgot = [routed('forget_memory', '{"ok":true,"data":{"topic":"tea"}}')];
+    expect(barrier.turns(forgot)).toEqual(forgot);
+    const raw = JSON.stringify({ ok: true, data: { claims: [{ text: 'tea' }, { text: 'runs' }] } });
+    expect(barrier.turns([routed('read_memory', raw)])[0]!.output).toBe(barrier.turns([turn('read_memory', raw)])[0]!.output);
+  });
+
   it('classifies only the owner-memory reads as owner store', () => {
     expect(['read_memory', 'search_episodes'].map(resultOrigin)).toEqual(['owner_store', 'owner_store']);
     expect(['read_tool_output', 'web_search', 'get_communication', 'browse_page'].map(resultOrigin)).toEqual(['external', 'external', 'external', 'external']);
