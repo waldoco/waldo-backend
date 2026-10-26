@@ -13,29 +13,39 @@ const TOKEN = 'fixture-header.fixture-payload.fixture-signature', NONCE = 'raw-n
 const hex = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(b => b.toString(16).padStart(2, '0')).join('');
 const base64url = (bytes: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 
-// What a provider token says, as Supabase would read it after checking the signature. audience 'web' is a client id the
-// provider lists; 'other' is not. unlinked: Supabase did not link this identity to the existing user with the same email.
-type Token = Readonly<{ provider: 'apple' | 'google'; email: string; verified?: boolean; audience?: 'web' | 'other'; nonce?: string; unlinked?: boolean }>;
+// What a provider token says, as Supabase would read it after checking the signature. sub defaults to the email. audience
+// 'web' is a client id the provider lists; 'other' is not. unlinked: Supabase did not link this identity to the existing
+// user with the same email.
+type Token = Readonly<{ provider: 'apple' | 'google'; email: string; sub?: string; verified?: boolean; audience?: 'web' | 'other'; nonce?: string; unlinked?: boolean }>;
 
-// A fictional Supabase: Auth (email codes, the id_token and PKCE grants, automatic linking of verified identities with one
-// email) and the owner directory, whose owner_for_auth matches the Auth user and the email together, as the SQL does.
+// A fictional Supabase: Auth (email codes, the id_token and PKCE grants) and the owner directory, whose owner_for_auth
+// matches the Auth user and the email together, as the SQL does. Like Supabase's DetermineAccountLinking, an identity is
+// found by (provider, sub) first and answers with its user's stored email, whatever email the token now carries; a new
+// identity links to the user holding the same email only when the email is verified, and otherwise gets a user of its own.
 const supabase = async () => {
   const inviteHash = await linkCodeHash(INVITE);
   const state = {
     inviteLive: true,
-    authUsers: new Map<string, { email: string; confirmed: boolean }>(), linked: new Map<string, string>(),
+    authUsers: new Map<string, { email: string; confirmed: boolean }>(), linked: new Map<string, string>(), identities: new Map<string, string>(),
     owners: new Map<string, { auth: string; doName: string }>(),
     tokens: new Map<string, Token>(), flows: new Map<string, { challenge: string; token: Token }>(),
     grants: [] as Record<string, unknown>[], signups: [] as Record<string, unknown>[], lookups: [] as Record<string, unknown>[],
     live: new Set<string>(), outage: false,
   };
+  const asUser = (id: string) => {
+    const { email, confirmed } = state.authUsers.get(id)!;
+    return { id, email, email_confirmed_at: confirmed ? new Date().toISOString() : null };
+  };
   const userFor = (token: Token) => {
+    const identity = `${token.provider}:${token.sub ?? token.email}`;
+    const known = state.identities.get(identity);
+    if (known) return asUser(known);
     const verified = token.verified ?? true;
-    const existing = verified && !token.unlinked ? state.linked.get(token.email) : undefined;
-    const id = existing ?? crypto.randomUUID();
-    state.authUsers.set(id, { email: token.email, confirmed: verified && token.email !== '' });
+    const id = (verified && !token.unlinked && token.email ? state.linked.get(token.email) : undefined) ?? crypto.randomUUID();
+    if (!state.authUsers.has(id)) state.authUsers.set(id, { email: token.email, confirmed: verified && token.email !== '' });
     if (verified && !token.unlinked && token.email) state.linked.set(token.email, id);
-    return { id, email: token.email, email_confirmed_at: verified && token.email ? new Date().toISOString() : null };
+    state.identities.set(identity, id);
+    return asUser(id);
   };
   const member = async () => {
     const auth = userFor({ provider: 'google', email: MEMBER });
@@ -46,7 +56,7 @@ const supabase = async () => {
     const url = new URL(String(input)), a = JSON.parse(String(init?.body));
     expect(url.origin).toBe(DIRECTORY);
     expect(new Headers(init?.headers).get('apikey')).toBe(KEY);
-    if (url.pathname === '/auth/v1/verify') return Response.json({ user: userFor({ provider: 'google', email: a.email }) });
+    if (url.pathname === '/auth/v1/verify') return Response.json({ user: userFor({ provider: 'email' as never, email: a.email }) });
     if (url.pathname === '/auth/v1/token') {
       state.grants.push({ grant_type: url.searchParams.get('grant_type'), ...a });
       if (state.outage) return new Response('', { status: 502 });
@@ -182,7 +192,7 @@ describe('app sign-in with an Apple or Google identity token', () => {
   it('never resolves a member for the same email under an Auth user Supabase did not link', async () => {
     const { app, state, member } = await supabase();
     const doName = await member();
-    state.tokens.set(TOKEN, { provider: 'google', email: MEMBER, unlinked: true });
+    state.tokens.set(TOKEN, { provider: 'google', sub: 'second-google-sub', email: MEMBER, unlinked: true });
     expect(await app('/auth/id_token', google(TOKEN))).toEqual({ status: 200, body: { state: 'needs_invite' } });
     expect(state.owners.get(MEMBER)!.doName).toBe(doName);
     expect(state.owners.size).toBe(1);
@@ -222,6 +232,34 @@ describe('app sign-in with an Apple or Google identity token', () => {
     expect(state.signups).toEqual([]);
   });
 
+  it('keys a returning identity on its provider subject: Apple with no email, or Google with a changed email, is the same owner', async () => {
+    const { app, state, member } = await supabase();
+    state.tokens.set('apple.first.token', { provider: 'apple', sub: 'apple-sub-1', email: INVITED, nonce: await hex(NONCE) });
+    state.tokens.set('apple.again.token', { provider: 'apple', sub: 'apple-sub-1', email: '', nonce: await hex(NONCE) });
+    const first = await app('/auth/id_token', apple('apple.first.token', { invite: INVITE }));
+    const again = await app('/auth/id_token', apple('apple.again.token'));
+    expect(again.body).toMatchObject({ state: 'active', account_ref: (first.body as { account_ref: string }).account_ref });
+    const doName = await member();
+    state.tokens.set('google.first.token', { provider: 'google', sub: 'google-sub-1', email: MEMBER });
+    state.tokens.set('google.renamed.token', { provider: 'google', sub: 'google-sub-1', email: 'renamed@example.test' });
+    for (const token of ['google.first.token', 'google.renamed.token'])
+      expect((await app('/auth/id_token', google(token))).body).toMatchObject({ state: 'active', account_ref: `acct_${await linkCodeHash(doName)}` });
+    expect(state.owners.size).toBe(2);
+    expect(state.signups.filter(call => call.p_code_hash)).toHaveLength(1);
+  });
+
+  it('never attaches a token carrying a member\'s email unverified, with or without an invite', async () => {
+    const { app, state, member } = await supabase();
+    const doName = await member();
+    const memberAuth = state.owners.get(MEMBER)!.auth;
+    state.tokens.set('attacker.google.token', { provider: 'google', sub: 'attacker-sub', email: MEMBER, verified: false });
+    for (const body of [google('attacker.google.token'), google('attacker.google.token', { invite: INVITE })])
+      expect(await app('/auth/id_token', body)).toEqual({ status: 403, body: { error: 'unavailable' } });
+    expect(state.owners.get(MEMBER)).toEqual({ auth: memberAuth, doName });
+    expect(state.identities.get('google:attacker-sub')).not.toBe(memberAuth);
+    expect(state.lookups).toEqual([]);
+  });
+
   it('on a repeated request id resolves the same owner, with no second owner and no second invite spend', async () => {
     const { app, state } = await supabase();
     state.tokens.set(TOKEN, { provider: 'google', email: INVITED });
@@ -241,8 +279,12 @@ describe('app sign-in with an Apple or Google identity token', () => {
     }
     expect(fetcher).not.toHaveBeenCalled();
     state.tokens.set(TOKEN, { provider: 'apple', email: INVITED, nonce: await hex(NONCE) });
-    await app('/auth/id_token', apple(TOKEN, { invite: INVITE }));
+    const logs = captureLogs();
+    try { await app('/auth/id_token', apple(TOKEN, { invite: INVITE, authorization_code: 'c0ffee0123456789abcdef.0.fixture.code-value_01' })); }
+    finally { logs.restore(); }
+    // Apple's authorization code is accepted and unused until the Sign in with Apple key exists: never sent on, never logged.
     expect(state.grants).toEqual([{ grant_type: 'id_token', provider: 'apple', id_token: TOKEN, nonce: NONCE }]);
+    expect(logs.lines.filter(line => line.includes('c0ffee'))).toEqual([]);
     await app('/auth/id_token', google('g.no.nonce'));
     expect(state.grants.at(-1)).toEqual({ grant_type: 'id_token', provider: 'google', id_token: 'g.no.nonce' });
   });
@@ -268,7 +310,7 @@ describe('app sign-in with an Apple or Google identity token', () => {
     state.outage = false;
     await member();
     state.owners.set(INVITED, state.owners.get(MEMBER)!);
-    state.tokens.set('unlinked.google.token', { provider: 'google', email: INVITED, unlinked: true });
+    state.tokens.set('unlinked.google.token', { provider: 'google', sub: 'second-google-sub', email: INVITED, unlinked: true });
     expect(await app('/auth/id_token', google('unlinked.google.token', { invite: INVITE }))).toEqual({ status: 503, body: { error: 'unavailable' } });
     expect(state.inviteLive).toBe(true);
   });

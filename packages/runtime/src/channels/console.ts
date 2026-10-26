@@ -38,7 +38,7 @@ export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CO
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
 // expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
-// signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
+// signed_in plus the lifetime. verified_at is when this browser last signed in with an email code or Google; a link sign-in proves none.
 export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number; ends?: number }>;
 
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device

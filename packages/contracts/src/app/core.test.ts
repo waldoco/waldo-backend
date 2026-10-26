@@ -104,6 +104,7 @@ describe('app sign-in with an Apple or Google identity token', () => {
     const fixture = (await import('./fixtures/app-auth-id-token.v1.json')).default;
     for (const request of fixture.requests) expect(appIdTokenRequestV1Schema.safeParse(request).success).toBe(true);
     for (const response of fixture.responses) expect(appIdTokenResultV1Schema.safeParse(response).success).toBe(true);
+    for (const refusal of fixture.refusals) expect(appProblemV1Schema.safeParse(refusal.body).success && refusal.body.error === 'unavailable').toBe(true);
     expect(appIdTokenResultV1Schema).toBe(appVerifyResultV1Schema);
     const route = appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/id_token');
     expect(route).toMatchObject({ method: 'POST', request: appIdTokenRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 });
@@ -112,6 +113,13 @@ describe('app sign-in with an Apple or Google identity token', () => {
   it('takes an invite and an E.164 phone exactly as /auth/verify does', () => {
     expect(appIdTokenRequestV1Schema.safeParse({ ...google, nonce: 'raw-nonce-0123456789abcdef', invite: 'ABCDEFGHJKMNPQRSTUVW', phone: '+919876543210' }).success).toBe(true);
     for (const invalid of [{ ...google, invite: 'abcdefghjkmnpqrstuvw' }, { ...google, phone: '919876543210' }, { ...apple, phone: '' }])
+      expect(appIdTokenRequestV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('takes Apple\'s one-time authorization code from Apple only', () => {
+    const code = 'c0ffee0123456789abcdef.0.fixture.code-value_01';
+    expect(appIdTokenRequestV1Schema.safeParse({ ...apple, authorization_code: code }).success).toBe(true);
+    for (const invalid of [{ ...google, authorization_code: code }, { ...apple, authorization_code: 'short' }, { ...apple, authorization_code: 'has spaces in the code value' }, { ...apple, authorization_code: 'c'.repeat(1025) }])
       expect(appIdTokenRequestV1Schema.safeParse(invalid).success).toBe(false);
   });
 

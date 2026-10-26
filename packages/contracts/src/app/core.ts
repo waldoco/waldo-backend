@@ -48,12 +48,14 @@ export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(25
 // that the audience is a client id the provider lists. The owner is resolved from the email Supabase confirms, never one
 // the app sends, then exactly as /auth/verify resolves it, with the same invite and phone. A token Supabase refuses, or one
 // with no confirmed email, gets the generic 403. Repeating a request_id never creates a second owner or spends an invite
-// twice; it may open another session.
+// twice; it may open another session. authorization_code is Apple's one-time code from the same sign-in: accepted and
+// unused until the backend holds Apple's Sign in with Apple key, after which it is exchanged for the refresh token that
+// account deletion revokes with Apple.
 const idToken = z.string().max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 const idTokenNonce = z.string().regex(/^[A-Za-z0-9._~-]{16,128}$/);
 const idTokenRequestId = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 export const appIdTokenRequestV1Schema = z.discriminatedUnion('provider', [
-  z.strictObject({ provider: z.literal('apple'), id_token: idToken, nonce: idTokenNonce, request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
+  z.strictObject({ provider: z.literal('apple'), id_token: idToken, nonce: idTokenNonce, request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional(), authorization_code: z.string().regex(/^[A-Za-z0-9._-]{16,1024}$/).optional() }),
   z.strictObject({ provider: z.literal('google'), id_token: idToken, nonce: idTokenNonce.optional(), request_id: idTokenRequestId, invite: invite.optional(), phone: joinPhone.optional() }),
 ]);
 // absolute_expires_at is when this credential stops working. renew_after, when sent, is when the app should call
@@ -116,7 +118,7 @@ export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingReq
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
 // pre-authentication answer cannot say whether an address is invited. step_up_required (403): the action needs a sign-in
-// from the last two hours; the app signs in again with an email code and retries it.
+// from the last two hours; the app signs in again (an email code, Apple or Google) and retries it.
 export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity', 'step_up_required']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
