@@ -37,7 +37,6 @@ import {
   type RoutingLogEvent,
   type RoutingPolicy,
   type SanitiseDestination,
-  type SanitiseDenialDiagnostic,
   type SanitiseFailureReason,
   type SourceTaint,
   type TrustedRunV2ProviderExecutionWitness,
@@ -58,6 +57,7 @@ import {
 } from '../skills/budget';
 import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS, PROVIDER_WAIT_MAX_MS, RATE_LIMIT_BACKOFF_MS } from './time-budget';
 import { toolOfCall } from '../tools/loader';
+import { sanitiseDenialLabel } from '../scribe/sanitiser';
 
 export type LLMContextMode = 'full_context' | 'reduced_context';
 export type RuntimeFallbackStep = (typeof FALLBACK_LADDER)[number] | 'defer';
@@ -1485,10 +1485,6 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
   );
 }
 
-// 'decode:nesting:percent:3' or 'health': the diagnostic's enums and integer joined, nothing from the payload.
-const scribeStageLabel = ({ stage, decode }: SanitiseDenialDiagnostic): string =>
-  decode === undefined ? stage : `${stage}:${decode.cause}:${decode.kind}:${decode.depth}`;
-
 const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'canary_leak',
   'secret_leak',
@@ -1560,7 +1556,7 @@ async function sanitiseRequest(
             'scribe_sanitise',
             `scribe:${result.reason}`,
             result.reason === 'oversize' ? 'oversize' : 'forbidden',
-            result.diagnostic === undefined ? undefined : scribeStageLabel(result.diagnostic),
+            result.diagnostic === undefined ? undefined : sanitiseDenialLabel(result.diagnostic),
           ),
         };
       }
