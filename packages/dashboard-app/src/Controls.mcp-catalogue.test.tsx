@@ -20,7 +20,7 @@ let root: Root | undefined;
 afterEach(() => { act(() => root?.unmount()); root = undefined; document.body.innerHTML = ''; });
 
 describe('official MCP servers in Connections', () => {
-  it('connects an official server in one click with its exact address, and offers only servers not yet connected', () => {
+  it('connects an official server in one click with its exact address and catalogue id, and offers only servers not yet connected', () => {
     const onAction = vi.fn();
     const host = document.body.appendChild(document.createElement('div'));
     root = createRoot(host);
@@ -30,6 +30,6 @@ describe('official MCP servers in Connections', () => {
     expect(buttons).toContain('Connect Notion');
     expect(buttons).not.toContain('Connect Linear');
     act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Connect Notion')!.click());
-    expect(onAction).toHaveBeenCalledWith('mcp.connect', { value: 'https://mcp.notion.com/mcp' });
+    expect(onAction).toHaveBeenCalledWith('mcp.connect', { value: 'https://mcp.notion.com/mcp', id: 'notion' });
   });
 });

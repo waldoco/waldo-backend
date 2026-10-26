@@ -159,8 +159,8 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
   return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href={signInHref()}>Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
-// Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
-// server's read-only label is shown as its claim, and allowing those tools is the owner's click.
+// Remote MCP servers the owner connected. A tool asks first until the owner allows it: here, or for an official server's
+// labelled reads by connecting from its tile, which says so first. The read-only label is the server's claim.
 function McpServers({ servers, catalogue, busy, onAction }: { servers: ConnectionsRecord['data']['mcp']; catalogue: ConnectionsRecord['data']['mcp_catalogue'] } & ActionProps) {
   const [address, setAddress] = useState('');
   if (servers === undefined) return null;
@@ -169,7 +169,7 @@ function McpServers({ servers, catalogue, busy, onAction }: { servers: Connectio
     <p className="tree-group label">Apps over MCP</p>
     <ul>{offered.map(tile => <li key={tile.id} className="branch">
       <span className="value">{tile.label}</span><p className="meta">{tile.about}</p>
-      <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url })}>Connect {tile.label}</button></div>
+      <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url, id: tile.id })}>Connect {tile.label}</button></div>
     </li>)}
     {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
       <details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">{server.name} · {server.host}</span>

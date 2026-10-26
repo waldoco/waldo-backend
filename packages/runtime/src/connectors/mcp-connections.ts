@@ -9,7 +9,7 @@ import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } fr
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
 import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
 import { isGranolaHost, isGranolaRead, isReviewedGranola } from './granola-mcp';
-import { catalogueEntry } from './mcp-catalogue';
+import { catalogueEntry, tileTarget } from './mcp-catalogue';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
@@ -100,6 +100,8 @@ type Attempt = Readonly<{
   client_auth: ClientPins['client_auth'];
   registration: RegistrationMode;
   scope?: string;
+  // The catalogue id of the console tile the owner connected from: their consent to its labelled reads.
+  official?: string;
 }>;
 // reviewed: a server Waldo reviewed (Granola), whose reads run without asking; its sign-in page says so.
 // official: the catalogue id of an official server whose labelled reads were just allowed (mcp-catalogue).
@@ -470,12 +472,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     hasActive: (): boolean => rows().some((r) => r.status === 'active'),
 
     // Discovery for a server URL the owner typed on the connect page. Nothing here holds a secret.
-    async begin(raw: string, origin: string): Promise<BeginResult> {
+    // official: the catalogue id when the owner pressed that server's tile; it must name this exact address.
+    async begin(raw: string, origin: string, official?: string): Promise<BeginResult> {
       const started = deps.now();
       let url: URL;
       try { url = egressTarget(raw.trim()); } catch (error) { return { kind: 'failed', reason: error instanceof EgressError ? error.code : 'egress_malformed' }; }
       if (url.search) return { kind: 'failed', reason: 'query_string' };
       const serverUrl = url.toString();
+      if (official !== undefined && !tileTarget(official, serverUrl)) return { kind: 'failed', reason: 'catalogue_mismatch' };
       const kept = rows().find((r) => r.server_url === serverUrl && r.status === 'active' && !r.step_up);
       if (kept) return { kind: 'already', id: kept.id, name: kept.name };
       if (!/^https:\/\/[^/?#]+$/.test(origin)) return { kind: 'failed', reason: 'origin_unknown' };
@@ -505,7 +509,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const attempt: Attempt = {
           origin, server_url: serverUrl, verifier: pkceVerifier(), resource: resource.resource, issuer, iss_supported: server.iss_parameter_supported,
           authorization_endpoint: server.authorization_endpoint, token_endpoint: server.token_endpoint, ...(server.revocation_endpoint ? { revocation_endpoint: server.revocation_endpoint } : {}),
-          client_id: client.client_id, client_auth: client.client_auth, registration: mode, ...(scope ? { scope } : {}),
+          client_id: client.client_id, client_auth: client.client_auth, registration: mode, ...(scope ? { scope } : {}), ...(official === undefined ? {} : { official }),
         };
         sweep();
         sql.exec('INSERT INTO mcp_attempts (nonce, record, expires) VALUES (?, ?, ?)', nonce, JSON.stringify(attempt), deps.now() + MCP_ATTEMPT_TTL_MS);
@@ -553,9 +557,10 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
         if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
         await refreshTools(r).catch(() => undefined);
-        // An official server's first link allows the tools its vendor labels read-only, each at the definition it has now.
-        // A reconnect keeps whatever the owner chose since.
-        const catalogue = previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
+        // Connected from an official server's tile, the first link allows the tools its vendor labels read-only, each at the
+        // definition it has now, when the sign-in came from that vendor's own issuer. A reconnect keeps the owner's choices.
+        const tile = attempt.official === undefined || previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
+        const catalogue = tile?.id === attempt.official ? tile : undefined;
         if (catalogue) await setRuns(r.id, EVERY_READ_ONLY_HINT, true);
         // Named on the page only when something was allowed: a tool list that failed to load grants nothing.
         const official = catalogue && reads(r.id).size > 0 ? catalogue : undefined;
