@@ -83,7 +83,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | `LANGFUSE_CAPTURE_TEXT` | `true` | `false` | `false` (code forces it off in any case) |
 | `WHATSAPP_DEBUG_LOG` | `true` (#1398 commits `false`) | `false` | `false` |
 | `WALDO_COST_LEDGER_SYNC` | not set | not set | `on` (S9). The guard mirrors var keys, so committing it adds the key to staging too; #1400 recommends `on` there as well. |
-| `WALDO_COMPACTION` | `off` | `off` | `off`. Only `on` turns it on, and only for the app chat. It waits for the compaction eval (`WALDO_EVAL_COMPACTION=on`, ADR draft §6) and a post-reply trigger; `off` is the rollback. |
+| `WALDO_COMPACTION` | `on` | `off` | `off`. Only `on` turns it on, and only for the app chat: after the app drain settles a reply, the owner object compacts that chain under its own scope and deadline (`compactApp`, `owner-do.ts`), on the auxiliary model, costed as a turn. Production waits for the compaction eval (`WALDO_EVAL_COMPACTION=on`, ADR draft §6); `off` is the rollback. |
 | `CALENDAR_GROUNDED_PREP`, `MAIL_SOURCE_FOLLOWUPS` | `1` | `0` | Decision D6. Unset means on; only `0` disables (`channels/proactive-gate.ts:14`). |
 | `DRIVE_READS`, `MCP_READ_INTENTS` | `1` | `0` | Decision D6. Off unless `1`. |
 | `APP_AGREEMENTS` | `0` | `0` | `0` until the owner approves the version 1 terms and privacy notice (`docs/app/ONBOARDING_AND_CONSENT_2026-10-21.md`). Off unless `1`. While it is off, the app shows no agreements step and no first run. |

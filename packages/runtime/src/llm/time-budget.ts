@@ -44,6 +44,9 @@ export const PROMPT_CACHE_TTL_MS: Readonly<Partial<Record<Provider, number>>> = 
 // Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
 // every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
 export const THREAD_TITLE_BUDGET_MS = 15_000;
+// A chain's compaction runs in the same queue after the app drain, so a message sent meanwhile waits for it: its memory
+// flush and its summary get one call's limit each, and past that the attempt ends with nothing written.
+export const COMPACTION_BUDGET_MS = 2 * MODEL_CALL_TIMEOUT_MS;
 // No tool round starts unless one full model call is left for the final answer.
 export const FINAL_ANSWER_RESERVE_MS = MODEL_CALL_TIMEOUT_MS;
 // The longest wait a provider may ask for before a failed call is sent again; the OpenAI SDK honours a retry-after

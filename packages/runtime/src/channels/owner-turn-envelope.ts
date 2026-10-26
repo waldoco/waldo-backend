@@ -4,6 +4,7 @@ import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/cont
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
 import type { ReplyStream } from '../conversation/reply-stream';
+import type { OwnerContextCapability } from '../context-composer/owner-turn';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
@@ -66,6 +67,9 @@ export type OwnerResponder = Readonly<{
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
   compactIfDue?(conversationRef: string): Promise<void>;
+  // The same compaction as a post-run job, once the turn's run has settled: its own scope (deadline and fence) and an
+  // admitted context naming the chain, so it never holds a turn open. Reads the chain from the store the context names.
+  compactChain?(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>;
   // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract. The scope
   // is the call's own: its deadline bounds every attempt and its signal aborts the request in flight.
   threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
