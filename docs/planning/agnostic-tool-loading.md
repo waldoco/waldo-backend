@@ -53,7 +53,13 @@ Neither provider's client-side search is provider-agnostic: Anthropic's returns 
 - `onTool` and `onToolStart`;
 - `dispatchTool`: ACL, held tools (spend ceiling), the approval token, the PreToolUse taint law, `proposal_only`, and schema parse.
 
-The provider history keeps the outer `use_tool` call, so it matches the tools array. Whatever reads a recorded turn by its tool resolves the call through `toolOfCall` (`tools/loader.ts`): the provider's external-origin taint and the `[external data from …]` label (`llm/provider.ts`), and the forget barrier's origin and `forget_memory` exemption (`context-composer/forget-barrier.ts`). `LLMToolTurn` is unchanged. Only admitted handlers are catalogued and callable. The admitted set is what is left after eligibility, the owner-only, probe-strip and background filters (`EGRESS_READ_TOOLS` and outside-text jobs included). A name outside the set gets `handler_unavailable`. `use_tool` cannot name a meta tool. `find_tools` events produce no receipt and no earlier-result row.
+The provider history keeps the outer `use_tool` call, so it matches the tools array. Whatever reads a recorded turn by its tool resolves the call through `toolOfCall` (`tools/loader.ts`), which accepts only a real tool name:
+
+- In the provider (`llm/provider.ts`), the tool is resolved once per turn, by position, from the calls as the model made them. External-origin taint, the `[external data from …]` label, batch taint, health withholding, the owner-health hiding beside outside content, reduction and omission receipts all read that position. So a turn the scribe rebuilt with stripped arguments keeps its tool. A rebuilt `use_tool` call keeps `{"name": <tool>}`.
+- The forget barrier's origin and `forget_memory` exemption (`context-composer/forget-barrier.ts`).
+- The loop's notes for cleared and no-longer-shown results.
+
+`LLMToolTurn` is unchanged. Only admitted handlers are catalogued and callable. The admitted set is what is left after eligibility, the owner-only, probe-strip and background filters (`EGRESS_READ_TOOLS` and outside-text jobs included). Any other name inside `use_tool` is refused `unknown_tool` and the call stays `use_tool`. That covers meta tools, respellings and free text, so the model's text never names a hop, a span, a receipt or a ledger row. `find_tools` events produce no receipt and no earlier-result row.
 
 Tests that prove it:
 
@@ -63,7 +69,7 @@ Tests that prove it:
 Unverified:
 
 - Whether every provider accepts a replayed call to a name outside the tools array. This happens when a model calls a deferred tool directly. The loop dispatches it, because the gates apply either way, and the existing unknown-name path already replays such calls.
-- Subagent (`runChildLoop`) and task-worker loops keep their own menus. That is deliberate.
+- The loader runs wherever the owner object's `runToolLoop` runs: the owner's reply and machine jobs (reminders, jobs, cards), not only the owner's turn. That is safe because the loader is built from the turn's already-filtered handlers (`owner-turn.ts` ~403). A test shows a job without egress reads cannot reach them through `use_tool` or `find_tools`. Subagent (`runChildLoop`) and task-worker loops keep their own menus.
 
 ## Measured, first slice
 

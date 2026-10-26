@@ -8,7 +8,7 @@ import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, tu
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
 import { numericHealthIn } from '../scribe/sanitiser';
-import { META_TOOLS, type RoutedCall, type ToolLoader } from '../tools/loader';
+import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -208,7 +208,7 @@ export async function runToolLoop(input: Readonly<{
     if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
     const start = roundStarts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? roundStarts.at(-1)!;
     const [first, ...rest] = turns.slice(start);
-    const names = [...new Set(turns.slice(0, start).map((turn) => turn.call.name))].join(', ');
+    const names = [...new Set(turns.slice(0, start).map((turn) => toolOfCall(turn.call)))].join(', ');
     return [{ ...first!, output: `${first!.output}\n[earlier in this turn: ${start} older tool results are no longer shown (${names}); run a read again if you still need its result]` }, ...rest];
   };
   // Results cleared so far, oldest first; clearing only moves forward, so what was sent stays as it was sent.
@@ -225,7 +225,7 @@ export async function runToolLoop(input: Readonly<{
     const turn = turns[cleared]!, result = results[cleared];
     if (result) {
       const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
-      turns[cleared] = { ...turn, output: `${result.lead}${clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) })}` };
+      turns[cleared] = { ...turn, output: `${result.lead}${clearedToolResult(toolOfCall(turn.call), { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) })}` };
       // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
       if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
     }

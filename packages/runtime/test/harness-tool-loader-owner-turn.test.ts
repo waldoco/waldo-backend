@@ -189,6 +189,38 @@ describe('the harness tool loader on the owner turn', () => {
     expect(outputs[0]).toBe(outputs[1]);
   });
 
+  // Hostile: the name inside use_tool is the model's free text and can carry anything, a health reading included. It must
+  // never become a span or hop name, a receipt, or a tool-ledger row: only a tool the turn admitted names a call.
+  it('an injected use_tool name never reaches a hop, the trace store, a receipt or the tool ledger', async () => {
+    const PROBE = 'owner@example.test HRV 52 ms';
+    model.respond = (request) => {
+      if (!isReply(request)) return undefined;
+      if (request.tool_turns?.length) return { text: 'Done.' };
+      return { text: '', tool_calls: [{ call_id: 'u1', name: USE_TOOL, arguments: JSON.stringify({ name: PROBE, arguments: {} }) }] };
+    };
+    const lines: string[] = [];
+    const capture = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((level) => vi.spyOn(console, level).mockImplementation(capture));
+    const named: string[] = [];
+    let refused: unknown;
+    try {
+      const rounds = (await ownerTurns('harness-injected-name', { WALDO_TOOL_LOADER: 'harness' }, [ASKED], (state) => {
+        for (const { name } of state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray() as { name: string }[]) {
+          let rows: Record<string, unknown>[];
+          try { rows = state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray() as Record<string, unknown>[]; } catch { continue; }
+          for (const row of rows) for (const [column, value] of Object.entries(row)) if (/hop|tool|name|receipt/i.test(column)) named.push(`${name}.${column}=${String(value)}`);
+        }
+      }))[0];
+      refused = JSON.parse(rounds!.at(-1)!.tool_turns![0]!.output.split('\n[')[0]!);
+    } finally { for (const spy of spies) spy.mockRestore(); }
+    expect(refused).toMatchObject({ ok: false, error_code: 'unknown_tool' });
+    const hops = lines.flatMap((line) => { try { const entry = JSON.parse(line) as { hop?: unknown; tools_called_names?: unknown }; return [String(entry.hop ?? ''), JSON.stringify(entry.tools_called_names ?? '')]; } catch { return []; } });
+    expect(hops.length).toBeGreaterThan(0);
+    expect(hops.filter((hop) => hop.includes(PROBE))).toEqual([]);
+    expect(hops).toContain(`tool_${USE_TOOL}`);
+    expect(named.filter((cell) => cell.includes(PROBE))).toEqual([]);
+  });
+
   it('measures the tools per round: under 4k tokens on both wires, the catalogue counted', async () => {
     const off = (await ownerTurns('harness-measure-off', { WALDO_TOOL_SEARCH: 'off' }, ['what is on today?']))[0]![0];
     const on = (await ownerTurns('harness-measure-on', { WALDO_TOOL_LOADER: 'harness' }, ['what is on today?']))[0]![0];

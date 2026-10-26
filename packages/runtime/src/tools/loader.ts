@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { toolError, type LLMTool, type LLMToolCall, type ToolError } from '@waldo/contracts';
+import { toolError, toolNameSchema, type LLMTool, type LLMToolCall, type ToolError } from '@waldo/contracts';
 import type { LoopToolResult } from '../conversation/tool-loop';
 import { BRAIN_NAMESPACES, TOOL_RECORDS, type BrainNamespace, type ToolRecord } from './records';
 
@@ -33,10 +33,11 @@ const refused = (error: ToolError, code: string): LoopToolResult =>
   ({ ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, code, reason: code });
 // The tool a recorded call ran: the one a use_tool call names, else the call's own name. The history keeps the model's
 // use_tool call, so whatever reads a tool turn by its tool (taint, the outside-data label, the forget barrier) reads this.
+// Only a real tool name counts; the name inside use_tool is the model's free text.
 export const toolOfCall = (call: Pick<LLMToolCall, 'name' | 'arguments'>): string => {
   if (call.name !== USE_TOOL) return call.name;
   const args = useArgsSchema.safeParse(parse(call.arguments));
-  return args.success && !META_TOOLS.has(args.data.name) ? args.data.name : call.name;
+  return args.success && toolNameSchema.safeParse(args.data.name).success ? args.data.name : call.name;
 };
 const placement = (name: string): 'core' | BrainNamespace => (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
 
@@ -91,7 +92,9 @@ export function harnessToolLoader(tools: readonly LLMTool[]): ToolLoader {
       if (raw === undefined) return { call, answer: refused(toolError('invalid_json_args'), 'invalid_args') };
       const args = useArgsSchema.safeParse(raw);
       if (!args.success) return { call, answer: refused(toolError('invalid_args', 'use_tool needs the exact tool name and its arguments.'), 'invalid_args') };
-      if (META_TOOLS.has(args.data.name)) return { call, answer: refused(toolError('unknown_tool', `${args.data.name} cannot be called through use_tool.`), 'unknown_tool') };
+      // Only a tool this turn admitted becomes the call's name: the call stays use_tool otherwise, so the model's free text
+      // never names a hop, a receipt or a ledger row, and the refusal does not echo it.
+      if (META_TOOLS.has(args.data.name) || !byName.has(args.data.name)) return { call, answer: refused(toolError('unknown_tool'), 'unknown_tool') };
       return { call: { call_id: call.call_id, name: args.data.name, arguments: JSON.stringify(args.data.arguments ?? {}) }, via: USE_TOOL };
     },
   };
