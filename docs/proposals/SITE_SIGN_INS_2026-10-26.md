@@ -147,7 +147,7 @@ create unique index site_sign_ins_one_per_account on waldo.site_sign_ins (owner_
 
 create table waldo.site_sign_in_uses (
   id bigint generated always as identity primary key,
-  sign_in_id uuid not null references waldo.site_sign_ins (id) on delete cascade,
+  sign_in_id uuid references waldo.site_sign_ins (id) on delete set null,  -- the row outlives its sign-in, content-free
   owner_id uuid not null references waldo.owners (id) on delete cascade,
   used_at timestamptz not null default now(),
   authority text not null check (authority in ('approval', 'site_allowed')),
@@ -194,7 +194,7 @@ create table waldo.site_sign_in_uses (
   the same call as the new username. A rewrap is logged, but it is not counted as a use and is never shown as one.
   [proposed]
 - **Deletion.**
-  - `sign_in_delete` and the row trigger remove the secret with the row.
+  - `sign_in_delete` and the row trigger remove the secret with the row. Its use rows stay, with `sign_in_id` nulled.
   - Account deletion is covered by a `before delete on waldo.owners` trigger, `site_sign_in_owner_delete`, in the style
     of `app_push_owner_delete`. It deletes every owner sign-in's `vault.secrets` row; the rows then cascade.
   - `delete_owner` is not redefined a sixth time. Its pgTAP test gains a sign-in fixture and asserts that the Vault row
@@ -328,7 +328,8 @@ interpolates a value, an envelope, a URL or a database error.
 | Router HMAC leaks without the Worker key | `sign_in_release` returns only envelopes | None for values |
 | **Worker compromise** (holds both the router HMAC and the Worker key) | Per-owner and global daily caps, plus the use log the owner sees | **Every stored value of every owner.** Accepted by the owner 26 Oct as the custody trade-off |
 | Console session hijacked | Values are write-only: never displayed, returned or exported; "Allow on this site" is step-up gated (ADR rule 5) | Attacker can delete or replace sign-ins (a denial of service, not a leak) |
-| Account deletion or sign-in deletion | Owner-delete trigger; per-row delete trigger; uses cascade | Cloudflare Browser Rendering saw the typed value in transit |
+| Account deletion or sign-in deletion | Owner-delete trigger; per-row delete trigger; use rows lose their sign-in reference (sign-in delete) or cascade (account delete) | Cloudflare Browser Rendering saw the typed value in transit |
+| Database backup or point-in-time restore holds a deleted envelope | The envelope needs the Worker key; rotating the key and retiring the old key id makes backed-up copies undecryptable | Until rotation, someone holding both a backup and the current key can recover a deleted value |
 | Cloudflare Browser Rendering (sub-processor) | `recording:false`; the session ends with the task | Cloudflare processes the value when it is typed |
 
 ## 6. Privacy
@@ -341,19 +342,26 @@ before any owner can save a sign-in.
 > **Passwords you save in Waldo**
 > If you save a website sign-in in Waldo's Vault, Waldo keeps the site, your username, a name you choose and the
 > password, so its browser can sign in to that exact website for you. The password is encrypted before it is stored,
-> and Waldo's AI models never see it: Waldo types it into the page itself, only on the exact website you saved it for,
-> and only after you allow it, once or for that site. Nobody, including you, can read it back from Waldo; you can replace
-> or delete it at any time. When Waldo types it, the website receives it as it would from you, and Cloudflare, which
-> runs Waldo's browser, processes it while it is typed. Waldo keeps a record of each time it used a sign-in, which you
-> can see in the Vault, for one year. Deleting a sign-in, or your account, deletes the password at once.
+> and Waldo is built so its AI models never receive it: Waldo types it into the page itself, only on the exact website
+> you saved it for, and only after you allow it, once or for that site. No Waldo screen, export or reply shows it, to
+> you or anyone else; you can replace or delete it at any time. When Waldo types it, the website receives it as it
+> would from you, and Cloudflare, which runs Waldo's browser, processes it while it is typed. Waldo records each time it
+> used a sign-in, which you can see in the Vault. Deleting a sign-in deletes the password from Waldo's database at once;
+> encrypted copies in database backups expire with the backups. After you delete a sign-in, Waldo keeps a record of when
+> it was used, without the website, username or name, for one year from each use. Deleting your account deletes all of
+> it, records included.
 
 ### Retention
 
 | Data | Kept until |
 |---|---|
-| Value and metadata | The owner deletes the sign-in, or the account is deleted |
-| Use log | 365 days, then a sweep deletes it |
+| Value and metadata | The owner deletes the sign-in, or the account is deleted. Encrypted copies stay in Supabase backups and point-in-time restore for that plan's window; rotating `WALDO_SIGN_IN_KEY` and retiring the old key id ends their decryptability early |
+| Use log | 365 days from each use, then a sweep deletes it. Deleting a sign-in nulls `sign_in_id`, so the remaining rows hold only owner, time, authority and purpose (no origin, username or label). Account deletion cascades them at once |
 | In-memory value | The end of the browser session |
+
+[inference, verify with counsel] Account deletion erasing the use log follows the erasure duty. If counsel reads the
+DPDP log-retention rule as overriding erasure for security logs, the owner-delete trigger keeps content-free rows
+detached from the owner instead; that is a one-line change in PR 2.
 
 ### India DPDP
 
@@ -479,5 +487,5 @@ the local substitute) and the full `verify`.
 | D2 | Time scope of "Allow on this site" | **90 days, renewable in one tap.** CLAUDE.md requires grants to be time-scoped; the console shows the end date |
 | D3 | Step-up on "Allow on this site" | **Yes**, matching `mcp.runs`. Page reads stay unlocked |
 | D4 | Daily release caps | **100 per owner and 1000 across the server**, as env values with committed defaults like `PHONE_SMS_DAILY_LIMIT`. Hitting a cap returns `unavailable` with a "try tomorrow or sign in yourself" handoff |
-| D5 | Use-log retention | **365 days** (DPDP Rules log retention, subject to counsel) |
+| D5 | Use-log retention | **365 days from each use, content-free after the sign-in is deleted, erased with the account** (DPDP Rules log retention as read from secondary sources, subject to counsel) |
 | D6 | When the app gets the `sign_in_use` card | **At the app lane's next contract revision.** The console carries the card until then |

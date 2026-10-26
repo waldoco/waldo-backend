@@ -78,7 +78,10 @@ database rechecks at release. Every outbound sink fails closed on the value.**
 7. **Bounded release.** There are daily release caps per owner and across the server, with committed defaults.
    Reaching one hands off to the owner and does not fail silently.
 8. **Deletion.** Deleting a sign-in deletes its Vault secret in the same transaction. Account deletion deletes every
-   one through a `before delete on waldo.owners` trigger. The use log cascades.
+   one through a `before delete on waldo.owners` trigger.
+   - A deleted sign-in leaves content-free use rows for 365 days.
+   - Account deletion erases them.
+   - Backed-up envelopes stop being decryptable when the Worker key rotates.
 9. **Second factors stay with the owner.** One-time codes, passkeys, CAPTCHAs and cross-origin login frames hand off to
    the owner's live view. They are never stored.
 
@@ -116,14 +119,15 @@ Insert this under the browser and errands capability.
 > **Saved website sign-ins.**
 > - The owner may save website sign-ins in the console Vault.
 > - Waldo's browser signs in with them only on the exact website saved, after the owner allows it once or for that
->   site, and Waldo's models never see the password.
+>   site, and Waldo is built so its models never receive the password.
 > - Values are write-only, encrypted under a Worker key, and deleted with the sign-in or the account.
 > - One-time codes, passkeys and embedded identity-provider frames hand off to the owner.
 > - App parity, beyond the approval card at a later contract revision, is out of launch scope.
 > - Payments are not part of this capability.
 
-Strike the clause, wherever the contract or the Vault copy carries it, that Waldo never stores or sees passwords. Keep
-"never sees". Replace "never stores" with "stores encrypted, and never shows it to Waldo's models or to anyone".
+Strike the clause, wherever the contract or the Vault copy carries it, that Waldo never stores or sees passwords. Replace
+it with: "stores them encrypted; no Waldo screen, export or reply shows them, and Waldo is built so its models never
+receive them".
 
 ## ADR registry entry (draft for `accepted-adrs.json` after acceptance)
 
