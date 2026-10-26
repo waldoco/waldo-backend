@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
+import { HEALTH_MEMORY_KEY } from '../src/channels/health-memory';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -24,11 +25,11 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c1f0d0e-2b7a-4c43-9a51-0d8f5e3b2a77';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const rpc = vi.hoisted(() => ({ called: [] as string[] }));
+const rpc = vi.hoisted(() => ({ called: [] as string[], series: [] as unknown[] }));
 const sample = (day: string, value: number) => ({ signal: 'sleep_midpoint', day, value, method: null, start_at: null, end_at: `${day}T07:00:00.000Z`, timezone: 'UTC' });
 
 beforeEach(() => {
-  model.welcome = []; rpc.called = [];
+  model.welcome = []; rpc.called = []; rpc.series = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -36,6 +37,7 @@ beforeEach(() => {
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_consent_list') return Response.json({ consents: ['storage_compute', 'model_processing'].map(purpose => ({ source: 'apple', purpose, status: 'granted', epoch: 1 })) });
+    if (fn === 'health_series_read') rpc.series.push(JSON.parse(asked.p_payload!));
     if (fn === 'health_series_read') return Response.json({ access: 'granted', read_at: new Date().toISOString(), sources: [{ source: 'apple', consent_epoch: 1, samples: [sample('2026-10-18', 230), sample('2026-10-19', 300)] }] });
     if (fn === 'health_context_read') return Response.json(null);
     return new Response('unexpected', { status: 500 });
@@ -67,6 +69,9 @@ it('setup done in the app starts one welcome build for an app-only owner who has
         .toEqual({ health: 'done', calendar: 'skipped', mail: 'skipped', web: 'skipped' });
       expect(model.welcome).toHaveLength(1);
       expect(model.welcome[0]).toContain('sleep_midpoint (apple_health');
+      // The gift is the owner's last thirty days of health: today in their zone and the twenty-nine days before it.
+      const today = new Date().toISOString().slice(0, 10), from = new Date(Date.parse(`${today}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10);
+      expect(rpc.series).toEqual([expect.objectContaining({ from, to: today })]);
       const node = state.storage.sql.exec<{ label: string; supporting_spots: string }>('SELECT label, supporting_spots FROM constellation_nodes').toArray();
       expect(node.map(row => row.label)).toEqual(['Late weekend sleeper']);
       const [support] = JSON.parse(node[0]!.supporting_spots) as number[];
@@ -95,6 +100,28 @@ it('setup done in the app starts one welcome build for an app-only owner who has
       await new Promise(resolve => setTimeout(resolve, 200));
       expect(model.welcome).toHaveLength(1);
       expect(build()).toHaveLength(1);
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('an owner who keeps health out of memory gets a build that reads no health and writes no health node', async () => {
+  const name = `welcome-owner-off-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    state.storage.kv.put(HEALTH_MEMORY_KEY, false);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const build = () => state.storage.sql.exec<{ finished_at: number | null; stages_json: string; nodes: number }>('SELECT finished_at, stages_json, nodes FROM welcome_builds').toArray();
+    try {
+      const saved = await owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+        headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ request_id: 'welcome-answers-off', name: 'Asha' }) }));
+      expect(saved.status).toBe(200);
+      await vi.waitFor(() => expect(build()[0]?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      expect(JSON.parse(build()[0]!.stages_json).health.state).toBe('skipped');
+      expect([build()[0]!.nodes, model.welcome.length]).toEqual([0, 0]);
+      expect(rpc.called.filter((fn) => fn.startsWith('health_'))).toEqual([]);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

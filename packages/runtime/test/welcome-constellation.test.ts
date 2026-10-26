@@ -7,7 +7,7 @@ import { nodeConfirmation, nodeSources } from '../src/memory/node-sources';
 import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import {
-  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
+  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 
@@ -29,6 +29,7 @@ const deps = (sql: SqlStorage, transaction: <R>(work: () => R) => R, over: Parti
   const claims = claimStore(sql, transaction);
   const build = welcomeBuild(sql, () => T0);
   const asked: WelcomeStage[] = [];
+  const inputs: Partial<Record<WelcomeStage, string>> = {};
   const base: WelcomeDeps = {
     build, claims, transaction, now: () => T0,
     read: {
@@ -37,9 +38,9 @@ const deps = (sql: SqlStorage, transaction: <R>(work: () => R) => R, over: Parti
       mail: async () => input(['gmail'], ['thr_1', 'thr_2']),
       web: async () => ({ kind: 'settled', state: 'skipped' }),
     },
-    ask: async (stage) => { asked.push(stage); return over.answers?.[stage] ?? answer(); },
+    ask: async (stage, text) => { asked.push(stage); inputs[stage] = text; return over.answers?.[stage] ?? answer(); },
   };
-  return { claims, build, asked, deps: { ...base, ...over } as WelcomeDeps };
+  return { claims, build, asked, inputs, deps: { ...base, ...over } as WelcomeDeps };
 };
 
 describe('welcome build: trigger', () => {
@@ -142,6 +143,55 @@ describe('welcome build: sources', () => {
       expect(claims.nodes()).toEqual([]);
       expect(claims.allClaims()).toEqual([]);
       expect(build.view()).toMatchObject({ nodes: 0, stages: { health: 'unavailable' } });
+    });
+  });
+});
+
+describe('welcome build: health leads', () => {
+  it('reads health first, and the other sources build around what it found', async () => {
+    await withSql(async (sql, transaction) => {
+      const seen: string[] = [];
+      const { build, claims, inputs, asked, deps: d } = deps(sql, transaction, { answers: { health: answer(healthNode()), calendar: answer(calendarNode()), mail: answer(mailNode()) } });
+      const ask = d.ask;
+      build.start();
+      await runWelcome({ ...d, ask: async (stage, text) => { seen.push(`${stage}:${build.view().stages.health}`); return ask(stage, text); } });
+      expect(asked[0]).toBe('health');
+      expect(seen.filter((entry) => !entry.startsWith('health'))).toEqual(expect.arrayContaining(['calendar:done', 'mail:done']));
+      for (const stage of ['calendar', 'mail'] as const) {
+        expect(inputs[stage]).toContain('Late weekend sleeper: Sleeps in on weekends, then starts slowly.');
+        expect(inputs[stage]).not.toContain(WELCOME_HEALTH_NOT_SHARED);
+      }
+      expect(claims.nodes().map((node) => node.label).sort()).toEqual(['Close with the design team', 'Late weekend sleeper', 'Monday planning ritual']);
+    });
+  });
+
+  it('with no health shared, the other sources still build and are told to say nothing of the body or readiness', async () => {
+    for (const state of ['skipped', 'revoked', 'unavailable', 'empty'] as const) {
+      await withSql(async (sql, transaction) => {
+        const { build, claims, inputs, asked, deps: d } = deps(sql, transaction, {
+          answers: { calendar: answer(calendarNode()) },
+          read: { health: async () => ({ kind: 'settled', state }), calendar: async () => input(['calendar'], ['evt_a']), mail: async () => input(['gmail'], ['thr_1']), web: async () => ({ kind: 'settled', state: 'skipped' }) },
+        });
+        build.start();
+        await runWelcome(d);
+        expect(asked.sort()).toEqual(['calendar', 'mail']);
+        expect(inputs.calendar).toContain(WELCOME_HEALTH_NOT_SHARED);
+        expect(inputs.mail).toContain(WELCOME_HEALTH_NOT_SHARED);
+        expect(build.view()).toMatchObject({ state: 'done', nodes: 1, stages: { health: state, calendar: 'done', mail: 'empty' } });
+        expect(claims.nodes().map((node) => node.domain)).toEqual(['work']);
+      });
+    }
+  });
+
+  it('with nothing connected, the build finishes honestly empty and asks the model nothing', async () => {
+    await withSql(async (sql, transaction) => {
+      const skipped = async () => ({ kind: 'settled', state: 'skipped' }) as const;
+      const { build, claims, asked, deps: d } = deps(sql, transaction, { read: { health: skipped, calendar: skipped, mail: skipped, web: skipped } });
+      build.start();
+      await runWelcome(d);
+      expect(asked).toEqual([]);
+      expect(build.view()).toMatchObject({ state: 'done', nodes: 0, stages: { health: 'skipped', calendar: 'skipped', mail: 'skipped', web: 'skipped' } });
+      expect(claims.nodes()).toEqual([]);
     });
   });
 });

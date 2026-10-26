@@ -37,8 +37,10 @@ export const appControlQueryV1Schema = z.strictObject({
 });
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
+// A catalogue app's id, as its connections tile and the app actions name it.
+export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'imessage.enroll']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -55,6 +57,11 @@ export const appControlActionV1Schema = z.strictObject({
   // /c/<ticket>?handoff=<code> path; disconnect revokes at Granola where it can and says when it could not.
   const granola = action.action === 'granola.connect' || action.action === 'granola.disconnect';
   if (granola && (action.view !== 'connections' || (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['view'], message: 'granola actions start from the connections view and carry nothing else' });
+  // A catalogue app names its tile by id and nothing else: the backend owns the server address and its sign-in service.
+  // A connect receipt's navigation is the first-party /c/<ticket>?handoff=<code> path; the sign-in it opens returns to
+  // waldo://oauth/complete. A disconnect receipt says in revocation whether the app revoked Waldo's access.
+  const app = action.action === 'app.connect' || action.action === 'app.disconnect';
+  if (app && (action.view !== 'connections' || !APP_CONNECTOR_ID_V1.test(action.id ?? '') || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'app actions start from the connections view and name one catalogue id in id, nothing else' });
   // Signs another device out. The current session signs out through /auth/signout, which revokes push first.
   if (action.action === 'session.revoke' && (action.view !== 'connections' || !sessionRef.safeParse(action.value).success
     || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'session.revoke starts from the connections view and names one session_ref in value' });
@@ -137,11 +144,18 @@ export const appControlDayDataV1Schema = z.strictObject({
 export const appChannelStatusV1Schema = z.strictObject({
   channel: messagingSurfaceV1Schema, state: z.enum(['linked', 'blocked', 'pending', 'unlinked']), masked_label: text.min(1).max(64).nullable(),
 }).refine(status => (status.masked_label !== null) === (status.state === 'linked' || status.state === 'blocked'), { error: 'masked_label is present exactly while linked or blocked', path: ['masked_label'] });
+// A catalogue app as its connections tile shows it. about is the app's own line; consent is what connecting allows, shown
+// beside Connect, and null when connecting grants nothing. The app bundles each logo by id.
+export const appConnectorTileV1Schema = z.strictObject({
+  id: z.string().regex(APP_CONNECTOR_ID_V1), label: text.min(1).max(60), about: text.min(1).max(500), consent: text.min(1).max(1000).nullable(),
+  connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable(),
+});
 export const appControlConnectionsDataV1Schema = z.strictObject({
   google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })) }),
   // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo
   // can no longer read it and connecting again fixes that. connected_at is epoch ms.
   granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
+  apps: z.array(appConnectorTileV1Schema).max(64).optional(),
   telegram: z.strictObject({ linked: z.boolean(), unlinkAvailable: z.boolean() }),
   sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean(), session_ref: sessionRef.optional() })) }),
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
@@ -263,7 +277,11 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
 ]);
-export const appControlReceiptV1Schema = z.strictObject({ state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional() });
+// revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
+export const appControlReceiptV1Schema = z.strictObject({
+  state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional(),
+  revocation: z.enum(['revoked', 'unsupported', 'failed']).optional(),
+}).refine((receipt) => receipt.revocation === undefined || receipt.state === 'recorded', { path: ['revocation'], message: 'Only a recorded disconnect says how revocation went' });
 export const appControlResultV1Schema = z.strictObject({ request_id: appControlRequestIdV1Schema, receipt: appControlReceiptV1Schema, duplicate: z.boolean() });
 export const appControlRoutesV1 = [
   { method: 'GET', path: '/app/v1/controls', query: appControlQueryV1Schema, response: appControlProjectionV1Schema, authenticated: true, success_status: 200 },

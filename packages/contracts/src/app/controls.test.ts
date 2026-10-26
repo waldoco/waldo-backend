@@ -395,6 +395,67 @@ describe('Granola from the app', () => {
   });
 });
 
+describe('catalogue apps from the app', () => {
+  const connect = { view: 'connections', action: 'app.connect', id: 'notion', revision, request_id: 'app-connect-0001' };
+  const tile = { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', consent: 'Connecting here lets the tools Notion labels read-only run without asking.', connectAvailable: true, connection: null };
+  const withApps = (apps: object[]) => projection({ ...connections, apps });
+
+  it('connects and disconnects one tile by its catalogue id, from the connections view', () => {
+    expect(appControlActionV1Schema.safeParse(connect).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'app.disconnect', id: 'slack' }).success).toBe(true);
+  });
+
+  it.each([
+    ['no id', { id: undefined }],
+    ['an id that is not a catalogue id', { id: 'Notion' }],
+    ['a server address in place of an id', { id: 'https://mcp.notion.com/mcp' }],
+    ['a server address in value', { value: 'https://mcp.notion.com/mcp' }],
+    ['another view', { view: 'day' }],
+    ['a field it does not take', { volume: 'low' }],
+    ['a confirmation', { confirmation: 'DELETE' }],
+  ])('refuses an app action with %s', (_label, change) => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, ...change }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'app.disconnect', ...change }).success).toBe(false);
+  });
+
+  it('reads connections with or without apps, so older Workers still parse', () => {
+    expect(appControlProjectionV1Schema.safeParse(withApps([])).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(withApps([tile, { ...tile, id: 'granola', label: 'Granola', consent: null, connection: { status: 'reauth_needed', connected_at: 1_761_400_000_000 } }])).success).toBe(true);
+  });
+
+  it.each([
+    ['an unknown status', { connection: { status: 'connected', connected_at: 1 } }],
+    ['an empty label', { label: '' }],
+    ['an empty consent (null means none)', { consent: '' }],
+    ['a logo address', { logo: 'https://example.test/notion.png' }],
+    ['the server address', { url: 'https://mcp.notion.com/mcp' }],
+    ['no connection field', { connection: undefined }],
+    ['an uppercase id', { id: 'Notion' }],
+  ])('refuses a tile with %s', (_label, change) => {
+    expect(appControlProjectionV1Schema.safeParse(withApps([{ ...tile, ...change }])).success).toBe(false);
+  });
+
+  it('carries revocation only on a recorded receipt', () => {
+    for (const revocation of ['revoked', 'unsupported', 'failed']) expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Disconnected.', revocation }).success).toBe(true);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'rejected', message: 'No.', revocation: 'failed' }).success).toBe(false);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Disconnected.', revocation: 'not_needed' }).success).toBe(false);
+  });
+
+  it('parses every example the app builds against', async () => {
+    const fixture = (await import('./fixtures/connections-apps.v1.json')).default;
+    const projections = [fixture.none_connected, fixture.one_active, fixture.one_reauth_needed];
+    for (const example of projections) expect(appControlProjectionV1Schema.safeParse(example).success).toBe(true);
+    expect(fixture.one_reauth_needed.data.apps.some((app) => app.connection?.status === 'reauth_needed')).toBe(true);
+    expect(fixture.none_connected.data.apps.map((app) => app.id)).toEqual(['granola', 'notion', 'todoist', 'linear', 'slack']);
+    for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
+    const results = [fixture.connect_result, fixture.already_connected_result, fixture.disconnect_revoked_result, fixture.disconnect_unsupported_result, fixture.disconnect_failed_result];
+    for (const result of results) expect(appControlResultV1Schema.safeParse(result).success).toBe(true);
+    expect(fixture.connect_result.receipt.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}\?handoff=[A-Za-z0-9_-]{22}$/);
+    expect(fixture.already_connected_result.receipt).not.toHaveProperty('navigation');
+    expect([fixture.disconnect_revoked_result, fixture.disconnect_unsupported_result, fixture.disconnect_failed_result].map((result) => result.receipt.revocation)).toEqual(['revoked', 'unsupported', 'failed']);
+  });
+});
+
 describe('welcome constellation fixture', () => {
   it('parses every example the app builds against', async () => {
     const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;

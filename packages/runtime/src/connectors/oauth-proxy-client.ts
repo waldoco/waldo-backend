@@ -5,7 +5,7 @@
 import { routerSignature, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { ClientPins } from './mcp-oauth';
 import type { McpEra } from './mcp-protocol';
-import { OAUTH_PROXY_FUNCTION, OAUTH_PROXY_SIGNATURE_TAG, parseOAuthProxyReply, type CallData, type ExchangeData, type FetchData, type FetchMethod, type McpMethod, type OAuthProxyFailure, type OAuthProxyRequest, type RefreshData, type RegisterData, type RevokeData } from './oauth-proxy-wire';
+import { OAUTH_PROXY_FUNCTION, OAUTH_PROXY_SIGNATURE_TAG, parseOAuthProxyReply, type CallData, type DeviceStartData, type ExchangeData, type FetchData, type FetchMethod, type McpMethod, type OAuthProxyFailure, type OAuthProxyRequest, type RefreshData, type RegisterData, type RevokeData } from './oauth-proxy-wire';
 
 export class OAuthProxyError extends Error {
   constructor(public readonly failure: OAuthProxyFailure) { super(failure.code); this.name = 'OAuthProxyError'; }
@@ -13,6 +13,8 @@ export class OAuthProxyError extends Error {
 
 export type OAuthProxy = Readonly<{
   register(input: Readonly<{ issuer: string; registrationEndpoint: string; redirectUri: string; origin: string }>): Promise<RegisterData>;
+  deviceStart(pins: ClientPins, deviceEndpoint: string, scope?: string): Promise<DeviceStartData>;
+  devicePoll(doName: string, provider: string, pins: ClientPins, deviceCode: string, scope?: string): Promise<ExchangeData>;
   client(input: Readonly<{ issuer: string; redirectUri: string }>): Promise<RegisterData>;
   exchange(doName: string, provider: string, pins: ClientPins, code: string, options?: Readonly<{ verifier?: string; scope?: string }>): Promise<ExchangeData>;
   call(doName: string, connection: string, method: McpMethod, params: Readonly<Record<string, unknown>>, options?: Readonly<{ era?: McpEra; headers?: Readonly<Record<string, string>>; intentId?: string }>): Promise<CallData>;
@@ -46,6 +48,8 @@ export const oauthProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
   };
   return {
     register: (input) => send({ op: 'register', issuer: input.issuer, registration_endpoint: input.registrationEndpoint, redirect_uri: input.redirectUri, origin: input.origin }),
+    deviceStart: (pins, deviceEndpoint, scope) => send({ op: 'device_start', pins, device_endpoint: deviceEndpoint, ...(scope ? { scope } : {}) }),
+    devicePoll: (doName, provider, pins, deviceCode, scope) => send({ op: 'device_poll', do_name: doName, provider, pins, device_code: deviceCode, ...(scope ? { scope } : {}) }),
     client: (input) => send({ op: 'client', issuer: input.issuer, redirect_uri: input.redirectUri }),
     exchange: (doName, provider, pins, code, options = {}) => send({ op: 'exchange', do_name: doName, provider, pins, code, ...(options.verifier ? { verifier: options.verifier } : {}), ...(options.scope ? { scope: options.scope } : {}) }),
     call: (doName, connection, method, params, options = {}) => send({ op: 'call', do_name: doName, connection, method, params, ...(options.era ? { era: options.era } : {}), ...(options.headers && Object.keys(options.headers).length ? { headers: options.headers } : {}), ...(options.intentId ? { intent_id: options.intentId } : {}) }),
