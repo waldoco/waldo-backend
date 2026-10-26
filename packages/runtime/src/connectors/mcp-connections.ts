@@ -555,8 +555,10 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         await refreshTools(r).catch(() => undefined);
         // An official server's first link allows the tools its vendor labels read-only, each at the definition it has now.
         // A reconnect keeps whatever the owner chose since.
-        const official = previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
-        if (official) await setRuns(r.id, EVERY_READ_ONLY_HINT, true);
+        const catalogue = previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
+        if (catalogue) await setRuns(r.id, EVERY_READ_ONLY_HINT, true);
+        // Named on the page only when something was allowed: a tool list that failed to load grants nothing.
+        const official = catalogue && reads(r.id).size > 0 ? catalogue : undefined;
         const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}), ...(official ? { official: official.id } : {}) };
         settle(nonce, outcome);
         log('mcp_consent', started);

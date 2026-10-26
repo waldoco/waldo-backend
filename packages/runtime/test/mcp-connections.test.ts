@@ -556,6 +556,26 @@ describe('Official servers from the catalogue', () => {
     expect(await runs(mcp)).toEqual(expect.arrayContaining([['notion-search', 'asks_first'], ['notion-fetch', 'without_asking']]));
   }));
 
+  it('names nothing as allowed when the first tool list fails: no grant, and the tools ask first once they load', withRig('official-no-tools', notion, async (rig) => {
+    const { mcp, world } = rig;
+    const begun = await mcp.begin(NOTION.url, WALDO_ORIGIN);
+    if (begun.kind !== 'redirect') throw new Error('expected a redirect');
+    const back = await world.authorize((await mcp.start(begun.path.split('/').at(-1)!))!);
+    world.throttle(true);
+    const outcome = await mcp.finish((await readMcpState(SECRET, back.searchParams.get('state')!))!.nonce, back.searchParams);
+    world.throttle(false);
+    expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'notion' });
+    expect(await runs(mcp)).toContainEqual(['notion-search', 'asks_first']);
+    expect(mcp.list()[0]).toMatchObject({ tools: 5, runs_without_asking: 0 });
+  }));
+
+  it('tells the owner on the tile, before connecting, which tools will run without asking', () => {
+    const tiles = catalogueTiles([]);
+    expect(tiles.find((tile) => tile.id === 'notion')!.about).toContain('Tools Notion labels read-only will run without asking');
+    expect(tiles.filter((tile) => tile.id !== 'granola').every((tile) => tile.about.includes('will run without asking'))).toBe(true);
+    expect(tiles.find((tile) => tile.id === 'granola')!.about).not.toContain('labels read-only');
+  });
+
   it('grants nothing on a look-alike host', withRig('official-lookalike', { ...notion, origin: 'https://mcp.notion.example.com', issuer: 'https://mcp.notion.example.com' }, async (rig) => {
     const { outcome } = await connect(rig, 'https://mcp.notion.example.com/mcp');
     expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'example' });
@@ -571,7 +591,9 @@ describe('Official servers from the catalogue', () => {
   it('forgets the server on disconnect even when the vendor names its token endpoint for revocation', withRig('official-revoke-at-token', { ...notion, revokeAt: 'token' }, async (rig) => {
     const { mcp } = rig;
     await connect(rig, NOTION.url);
-    expect((await mcp.disconnect(mcp.list()[0]!.id)).ok).toBe(true);
+    // The vendor did not confirm the revoke, so Waldo says so; the edge still drops the grant from Vault.
+    expect(await mcp.disconnect(mcp.list()[0]!.id)).toEqual({ ok: true, provider: 'failed' });
+    expect(rig.vault.rows.every((row) => row.status === 'revoked' && row.secret === '')).toBe(true);
     expect(mcp.list()).toEqual([]);
     expect((await refusal(mcp.invoke({ mode: 'read', server: 'notion', tool: 'notion-search', args: { query: 'q' } }))).code).toBe('not_found');
     expect(catalogueTiles(mcp.list()).find((tile) => tile.id === 'notion')!.connected).toBe(false);

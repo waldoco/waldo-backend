@@ -25,6 +25,7 @@ describe('official MCP servers in Connections', () => {
     const host = document.body.appendChild(document.createElement('div'));
     root = createRoot(host);
     act(() => root!.render(<ConnectionsControls record={record} busy={false} onAction={onAction}/>));
+    expect(host.textContent).toContain('Search and read your pages.');
     const buttons = [...host.querySelectorAll('button')].map((button) => button.textContent);
     expect(buttons).toContain('Connect Notion');
     expect(buttons).not.toContain('Connect Linear');
