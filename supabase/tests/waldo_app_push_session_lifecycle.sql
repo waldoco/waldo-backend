@@ -76,6 +76,9 @@ select is(pg_temp.targets('life-ben'),'[]'::jsonb,'and Ben got none');
 select is(pg_temp.register('life-ben',repeat('b',64),'43000000-0000-0000-0000-000000000001','sandbox',2,'op-life-0008','ExponentPushToken[shared-phone-00000000]')->>'result','registered','Ben names both under the other environment');
 select is(pg_temp.targets('life-asha'),'[]'::jsonb,'and takes the phone from Asha');
 select is(pg_temp.tokens('life-ben'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'Ben reaches it');
+select is(pg_temp.register('life-asha',repeat('9',64),'43000000-0000-0000-0000-000000000002','production',0,'op-life-0011','ExponentPushToken[shared-phone-00000000]'),null,'Asha naming Ben''s token from another installation under the other environment is refused');
+select is(pg_temp.targets('life-asha'),'[]'::jsonb,'Asha reaches nothing through it');
+select is(pg_temp.tokens('life-ben'),'["ExponentPushToken[shared-phone-00000000]"]'::jsonb,'and Ben keeps the phone');
 
 -- 3. The same owner registering the same phone again changes no one else and keeps one binding.
 select is(pg_temp.register('life-cai',repeat('c',64),'43000000-0000-0000-0000-000000000003','production',0,'op-life-0009','ExponentPushToken[cai-phone-00000000000]')->>'result','registered','Cai registers his own phone');

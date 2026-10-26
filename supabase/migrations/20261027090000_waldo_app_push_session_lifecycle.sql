@@ -5,8 +5,9 @@
 --   never deleted, and nothing sweeps it, so its expiry is read where the push is sent rather than kept by a job.
 -- - app_push_register takes over the phone from another owner only when it names both that binding's token and its
 --   installation: the same app install with a new signer. That binding is revoked and its token copy leaves Vault, so
---   neither owner can receive the other's pushes. Naming only one of the two is refused as before: a token or an
---   installation id alone does not show the caller holds the phone. Registrations of one device take its token and
+--   neither owner can receive the other's pushes. Naming only one of the two is refused: a token or an installation id
+--   alone does not show the caller holds the phone. The refusal now holds whatever provider or environment either
+--   binding was registered under, since targets ignore both. Registrations of one device take its token and
 --   installation locks in a fixed order, so two at once settle one after the other.
 -- - waldo.app_session_live is the one session-liveness test these two functions use.
 create function waldo.app_session_live(p_session waldo.console_sessions) returns boolean
@@ -54,7 +55,7 @@ begin
   end loop;
   update waldo.app_push_devices set secret_id=null,state='revoked',device_epoch=device_epoch+1
     where state='active' and token_hash=v_hash and installation_id=p_installation_id::uuid and owner_id<>v_owner;
-  if exists(select 1 from waldo.app_push_devices where provider=p_provider and environment=p_environment and state='active' and ((token_hash=v_hash and (owner_id<>v_owner or installation_id<>p_installation_id::uuid)) or (installation_id=p_installation_id::uuid and owner_id<>v_owner))) then return null; end if;
+  if exists(select 1 from waldo.app_push_devices where state='active' and ((token_hash=v_hash and (owner_id<>v_owner or installation_id<>p_installation_id::uuid)) or (installation_id=p_installation_id::uuid and owner_id<>v_owner))) then return null; end if;
   if v_device.secret_id is not null then delete from vault.secrets where id=v_device.secret_id; end if;
   insert into waldo.app_push_devices(owner_id,installation_id,session_hash,provider,environment,device_epoch,state,secret_id,token_hash,registered_at)
     values(v_owner,p_installation_id::uuid,p_session_hash,p_provider,p_environment,p_expected_epoch+1,'active',vault.create_secret(p_token),v_hash,now())
