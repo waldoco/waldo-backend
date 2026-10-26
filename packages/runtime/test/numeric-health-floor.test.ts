@@ -83,6 +83,13 @@ describe('the numeric health floor', () => {
     'Q3 — 45 deals closed',
     'Cardio fitness class 45 min on Tuesdays',
     'Cardio fitness 45 min on Tuesdays',
+    '| HR | 12 |',
+    'HR | 25 hires',
+    'HR jumped to 30 candidates',
+    'HR — 45 Main St',
+    'Pulse — 15 min standup',
+    'Steps — 1500 words',
+    'Recovery — 80% of the budget',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
@@ -187,6 +194,15 @@ describe('the numeric health floor', () => {
     'Cardio fitness 41.2',
     'Cardio Fitness (VO2 max) 40.5 ml/kg/min',
     'VO₂ max 42',
+    'HRV - 42 ms',
+    '_HRV_: 42 ms',
+    '`HRV`: 42 ms',
+    '| HRV | 42 | 45 |',
+    '| HRV | today | 42 ms |',
+    '| Resting HR | Mon | 58 bpm |',
+    'SpO₂ 96%',
+    'HRV declined to 35 ms',
+    'HRV went from 48 to 35',
   ])('holds a relayed reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
   });
