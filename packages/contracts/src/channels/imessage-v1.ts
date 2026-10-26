@@ -51,9 +51,7 @@ export const iMessageBindingSchema = z.strictObject({
 export type IMessageBinding = z.infer<typeof iMessageBindingSchema>;
 const bound = { version: z.literal(1), commandId: id, ownerId: id, binding: iMessageBindingSchema, target: iMessageTargetSchema, service: z.literal('iMessage'), allowSMSFallback: z.literal(false) };
 export const iMessageCommandSchema = z.discriminatedUnion('operation', [
-  // replyTo: the exact message and part in the target chat this send replies to (the `replies` feature). Absent, a plain send.
-  z.strictObject({ ...bound, operation: z.literal('send'), text: z.string(), attachments: z.array(iMessageAttachmentSchema), formatting: z.array(z.strictObject({ start: z.int().nonnegative(), length: z.int().positive(), style: z.enum(['bold', 'italic', 'underline', 'strikethrough']) })).optional(), effect: id.optional(),
-    replyTo: z.strictObject({ messageGuid: id, partIndex: z.int().nonnegative() }).optional() }),
+  z.strictObject({ ...bound, operation: z.literal('send'), text: z.string(), attachments: z.array(iMessageAttachmentSchema), formatting: z.array(z.strictObject({ start: z.int().nonnegative(), length: z.int().positive(), style: z.enum(['bold', 'italic', 'underline', 'strikethrough']) })).optional(), effect: id.optional() }),
   z.strictObject({ ...bound, operation: z.literal('react'), reaction: z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('standard'), type: iMessageStandardReactionSchema }), z.strictObject({ kind: z.literal('custom'), emoji: id })]), action: z.enum(['add', 'remove']) }),
   z.strictObject({ ...bound, operation: z.literal('edit'), text: z.string() }),
   z.strictObject({ ...bound, operation: z.literal('unsend') }),
@@ -61,7 +59,6 @@ export const iMessageCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ ...bound, operation: z.literal('read') }),
 ]).superRefine((c, ctx) => {
   if (c.operation === 'send' && (!c.text.trim() && c.attachments.length === 0 || c.formatting?.some((range) => range.start + range.length > c.text.length))) ctx.addIssue({ code: 'custom', message: 'empty content or formatting outside text' });
-  if (c.operation === 'send' && c.replyTo && c.target.messageGuid !== undefined) ctx.addIssue({ code: 'custom', message: 'one reply target per send' });
   if (c.ownerId !== c.binding.ownerId || c.target.bridgeId !== c.binding.bridgeId || c.target.accountId !== c.binding.accountId || c.target.chatGuid !== c.binding.chatGuid) ctx.addIssue({ code: 'custom', message: 'owner/account/chat binding mismatch' });
   if (['react', 'edit', 'unsend'].includes(c.operation) && (c.target.messageGuid === undefined || c.target.partIndex === undefined)) ctx.addIssue({ code: 'custom', message: 'mutation requires exact message and part' });
 });

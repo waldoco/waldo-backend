@@ -79,20 +79,3 @@ describe('iMessage v1 Photon attachment metadata', () => {
     expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.customReaction, photonAttachments: [photo] }).success).toBe(false);
   });
 });
-describe('iMessage v1 send threaded as a reply', () => {
-  const c = syntheticIMessageCommand();
-  it('takes an exact message and part to reply to, and a send without one still parses unchanged', () => {
-    expect(iMessageCommandSchema.parse({ ...c, replyTo: { messageGuid: 'fixture-message', partIndex: 0 } })).toMatchObject({ operation: 'send', replyTo: { messageGuid: 'fixture-message', partIndex: 0 } });
-    expect(iMessageCommandSchema.parse(c)).toEqual(c);
-    expect(iMessageCommandSchema.parse(c)).not.toHaveProperty('replyTo');
-  });
-  it('rejects an inexact or ambiguous reply target, and one on anything but a send', () => {
-    const bad = [{ messageGuid: 'fixture-message' }, { partIndex: 0 }, { messageGuid: '', partIndex: 0 }, { messageGuid: 'fixture-message', partIndex: -1 },
-      { messageGuid: 'fixture-message', partIndex: 0.5 }, { messageGuid: 'fixture-message', partIndex: 0, chatGuid: 'iMessage;-;other' }];
-    for (const replyTo of bad) expect(iMessageCommandSchema.safeParse({ ...c, replyTo }).success, JSON.stringify(replyTo)).toBe(false);
-    // One reply target per send: never the field and a message on the send's own target together.
-    expect(iMessageCommandSchema.safeParse({ ...c, target: { ...c.target, messageGuid: 'fixture-message', partIndex: 0 }, replyTo: { messageGuid: 'fixture-message', partIndex: 0 } }).success).toBe(false);
-    const edit = { ...c, operation: 'edit', target: { ...c.target, messageGuid: 'fixture-message', partIndex: 0 } };
-    expect(iMessageCommandSchema.safeParse({ ...edit, replyTo: { messageGuid: 'fixture-message', partIndex: 0 } }).success).toBe(false);
-  });
-});
