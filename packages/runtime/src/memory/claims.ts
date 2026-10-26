@@ -26,7 +26,7 @@ export const FACTS_BLOCK_MAX_CHARS = 2_500;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
 // A claim Waldo inferred or confirmed waits for the owner's own confirm.
 export const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];
-const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
+export const profileEligible = (claim: Pick<Claim, 'kind' | 'source' | 'origin' | 'verification_status'>): boolean =>
   PROFILE_KINDS.includes(claim.kind) && !awaitsOwnerConfirm(claim) && claim.origin === 'owner' && claim.verification_status === 'owner-grounded';
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
@@ -1070,7 +1070,7 @@ export const claimTag = (claim: Pick<Claim, 'id' | 'verification_status'>) => `c
 const profileLine = (claim: Claim) => `- [${claimTag(claim)}] ${fence(claim.text)}`;
 const pinnedIn = (claims: readonly Claim[], block: PinBlock) =>
   claims.filter((claim) => claim.pinned === block).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0) || a.id - b.id);
-const fittingLines = (lines: readonly string[], budget: number): readonly string[] => {
+export const fittingLines = (lines: readonly string[], budget: number): readonly string[] => {
   const kept: string[] = [];
   let used = 0;
   for (const line of lines) {
@@ -1110,10 +1110,15 @@ export const turnMemoryPrompt = (store: ClaimStore, _question: string, maxChars 
     parts.push(text);
     room -= text.length + 1;
   }
-  const open = '<owner_constellation>', close = '</owner_constellation>';
-  const nodes = fittingLines(constellationLines(store), Math.min(CONSTELLATION_BLOCK_MAX_CHARS, room - 1) - open.length - close.length - CONSTELLATION_HEADER.length - 3);
-  if (nodes.length) parts.push([open, CONSTELLATION_HEADER, ...nodes, close].join('\n'));
+  const constellation = constellationBlock(store, room - 1);
+  if (constellation) parts.push(constellation);
   return parts.join('\n');
+};
+// The <owner_constellation> block within room, or '' when no live node fits.
+export const constellationBlock = (store: ClaimStore, room: number): string => {
+  const open = '<owner_constellation>', close = '</owner_constellation>';
+  const nodes = fittingLines(constellationLines(store), Math.min(CONSTELLATION_BLOCK_MAX_CHARS, room) - open.length - close.length - CONSTELLATION_HEADER.length - 3);
+  return nodes.length ? [open, CONSTELLATION_HEADER, ...nodes, close].join('\n') : '';
 };
 
 export const barrierPrompt = (store: ClaimStore): string => {

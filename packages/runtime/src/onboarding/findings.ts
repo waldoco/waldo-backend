@@ -42,6 +42,9 @@ const newId = () => `fnd_${crypto.randomUUID().replaceAll('-', '')}`;
 const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.category, text: row.text, source: { url: row.source_url, title: row.source_title.slice(0, 300) }, state: row.state, found_at: row.found_at, decided_at: row.decided_at });
 
 const UNCONFIRMED_MS = APP_FINDING_UNCONFIRMED_DAYS_V1 * 86_400_000;
+// A kept or corrected finding's claim carries this ref, so a reader can tell what the owner kept from the look-up.
+const LOOKUP_REF_PREFIX = 'owner, look-up ';
+export const isLookupRef = (ref: string | null | undefined): boolean => typeof ref === 'string' && ref.startsWith(LOOKUP_REF_PREFIX);
 
 // Findings about the owner from the public web. They are external content: kept apart from owner memory and never put in a
 // prompt, until the owner keeps or corrects one, which turns it into an owner claim through the claim store. Forgetting one,
@@ -66,7 +69,7 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     sql.exec(`DELETE FROM owner_findings WHERE claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted'))`);
   };
   const byId = (id: string) => sql.exec<Row>('SELECT * FROM owner_findings WHERE id = ?', id).toArray()[0] ?? null;
-  const lookupRef = (row: Pick<Row, 'id'>) => `owner, look-up ${row.id}`;
+  const lookupRef = (row: Pick<Row, 'id'>) => `${LOOKUP_REF_PREFIX}${row.id}`;
   const textsOf = (rows: readonly Row[]) => [...new Set(rows.flatMap(row => [row.text, row.evidence]))];
   // A kept finding's claim goes the way forget_memory sends one: through the purge of every derived store, then settled; a purge
   // that cannot verify clean stays pending for the claim store's own retry. A claim the owner had already stated, which a kept

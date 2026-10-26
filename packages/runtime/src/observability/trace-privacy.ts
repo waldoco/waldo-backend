@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   executionRungSchema, providerSchema, rungBlockedReasonSchema, sanitiseCheckSchema, sanitiseFailureReasonSchema,
-  turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
+  toolSearchRejectionSchema, turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
 } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 import { scrubTraceHealth } from './trace-health-scrub';
@@ -59,6 +59,7 @@ const TYPED_FIELDS = {
   tools_called: z.number().int().min(0), parallel_batches: z.number().int().min(0),
   browser_ms: z.number().finite().min(0), sandbox_ms: z.number().finite().min(0), ttft_ms: z.number().finite().min(0),
   fallback_fired: z.boolean(), tool_search_degraded: z.boolean(),
+  tool_search_rejection: toolSearchRejectionSchema,
 } as const;
 const typedFieldsOnly = (entry: TurnLogEntry): TurnLogEntry => {
   const copy: Record<string, unknown> = { ...entry };
