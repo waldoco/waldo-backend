@@ -276,6 +276,17 @@ describe('on the iMessage outbox, the card must still be Waldo\'s latest message
     });
   });
 
+  it('a tapback the card\'s own turn sends does not write past it: "1" still approves it', async () => {
+    await owner('imsg-latest-own-tapback', async state => {
+      const f = thread(state);
+      const record = { ...inbound(), binding: { subject: OWNER_CHAT, chatGuid: `iMessage;-;${OWNER_CHAT}` }, messageRef: { messageGuid: 'owner-message', partIndex: 0 } } as IMessageInboxRecord;
+      let id = '';
+      await f.turn(record, async () => { id = await f.desk.propose(hold('Focus')); f.outbox.freezeReaction(record, 'like'); });
+      expect(await f.number(inbound(), '1')).toMatchObject({ toast: 'Done' });
+      expect(f.status(id)).toBe('done');
+    });
+  });
+
   const writtenPast: readonly (readonly [string, (f: Thread) => unknown])[] = [
     ["a later turn's reply", f => f.turn(inbound())],
     ['a later reply that offers its own numbered choices', f => f.outbox.freeze(inbound(), 'Which day?\n1. Tuesday\n2. Wednesday')],
