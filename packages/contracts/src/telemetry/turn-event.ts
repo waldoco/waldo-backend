@@ -13,7 +13,11 @@ import { providerSchema } from '../model/roster';
 // v14: `tool_search_rejection` names why the model refused the tool search request: the adapter's failure line, made of
 // the status, the provider's error code and the parameter name only.
 export const TURN_EVENT_SCHEMA_VERSION = '14';
-export const toolSearchRejectionSchema = z.string().max(160).regex(/^[A-Za-z]+ request failed(?: \([A-Za-z0-9_.\-\[\] ]+\))?$/);
+// A provider adapter's line is its status and at most two identifiers (error code, parameter path); a gateway failure is
+// one fixed token. Words, quotes and commas fail, so prose cannot ride this field even when a producer slips.
+export const toolSearchRejectionSchema = z.string().max(160).regex(
+  /^(?:(?:OpenAI|Anthropic) request failed(?: \(\d{3}(?: [A-Za-z0-9_.\-\[\]]{1,80}){0,2}\))?|gateway_[a-z0-9_]{1,60})$/,
+);
 
 // Every v9 addition is a number, a boolean or a member of a closed vocabulary. Free text lives only in the
 // fields named by TURN_EVENT_TEXT_FIELDS, which the privacy gate strips whenever text capture is off.
