@@ -159,9 +159,10 @@ describe('the brain tool surface', () => {
     const off = await ownerReply('tool-surface-before', 'off');
     const request = await ownerReply('tool-surface-on', 'on');
     expect(request.system).toContain(TOOL_SEARCH_LINE);
-    // One menu every round, so propose_action is offered before anything outside arrives; the switch-off loop adds it
-    // only once the turn is tainted. Otherwise the same tools, each placed by its record.
-    expect(request.tools!.map((tool) => tool.name).filter((name) => name !== 'propose_action')).toEqual(off.tools!.map((tool) => tool.name));
+    // One menu every round with the switch on or off, so propose_action is offered before anything outside arrives: the
+    // same tools either way, each placed by its record.
+    expect(off.tools!.map((tool) => tool.name)).toContain('propose_action');
+    expect(request.tools!.map((tool) => tool.name)).toEqual(off.tools!.map((tool) => tool.name));
     expect(brainTools(request.tools!.map(({ namespace: _n, defer_loading: _d, ...tool }) => tool), true)).toEqual({ tools: request.tools, tool_search: request.tool_search });
 
     const openAI = (await openAIBody(request)).tools as WireTool[];
@@ -267,9 +268,10 @@ describe('the brain tool surface', () => {
   });
 });
 
-// The deployed switch: staging runs tool search; production keeps the full menu until its own flip. Off is the rollback.
-it('staging runs tool search and production does not', () => {
+// The deployed switch: off in both. OpenAI refused the tool-search request shape on every staging round (400 on `tools`),
+// so each round paid a refused request before the full-menu resend; on comes back once a live round is accepted.
+it('neither staging nor production runs tool search', () => {
   const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('on');
+  expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });

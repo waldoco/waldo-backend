@@ -226,6 +226,13 @@ describe('use_tool is no second way in', () => {
     expect(ran).toEqual(['search_communication']);
   });
 
+  it('toolOfCall takes only a real tool name from inside use_tool', () => {
+    for (const name of ['owner@example.test HRV 52 ms', 'Set_Proactivity', ' list_reminders', 'find_tools', 'use_tool']) {
+      expect(toolOfCall({ name: USE_TOOL, arguments: JSON.stringify({ name, arguments: {} }) }), name).toBe(USE_TOOL);
+    }
+    expect(toolOfCall({ name: USE_TOOL, arguments: '{"name":"list_reminders","arguments":{}}' })).toBe('list_reminders');
+  });
+
   it('toolOfCall names what route runs for every hostile shape of an admitted tool', () => {
     const loader = harnessToolLoader([{ name: 'web_search', description: 'd', parameters: { type: 'object' } }, { name: 'list_reminders', description: 'd', parameters: { type: 'object' } }]);
     for (const args of ['{"name":"web_search","arguments":{}}', '{"name":"web_search"}', '{"name":"use_tool","arguments":{"name":"web_search"}}', '{"name":"find_tools"}', '{"name":"web_search","arguments":"{}"}', '{"name":"web_search","extra":1}', 'not json', '', '{"name":"web_search","arguments":{"__proto__":{"x":1}}}']) {

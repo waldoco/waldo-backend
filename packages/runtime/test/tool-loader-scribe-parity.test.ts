@@ -58,6 +58,16 @@ describe('a use_tool turn at the scribe is the tool it ran', () => {
     expect(outputs(routed.sent)).toEqual(outputs(direct.sent));
   });
 
+  // A rebuilt copy drops the call's arguments but keeps the tool a use_tool call ran, so later reads of the turn still know it.
+  it('a withheld or hidden routed turn keeps the name of the tool it ran in its stripped arguments', async () => {
+    const withheld = await send([{ call: routedCall('query_calendar', { range: 'today' }), output: ownerReadings }]);
+    expect(JSON.stringify(withheld.sent)).not.toMatch(/67\.4|431/);
+    expect(withheld.sent![0]!.call).toEqual({ call_id: 'c1', name: 'use_tool', arguments: '{"name":"query_calendar","arguments":{}}' });
+    const hidden = await send([{ call: directCall('query_calendar', {}, 'c2'), output: outside }, { call: routedCall('get_health', { signals: ['hrv', 'sleep'] }, 'h1'), output: ownerReadings }]);
+    expect(JSON.stringify(hidden.sent)).not.toMatch(/67\.4|431/);
+    expect(hidden.sent![1]!.call).toEqual({ call_id: 'h1', name: 'use_tool', arguments: '{"name":"get_health","arguments":{}}' });
+  });
+
   it('a withheld routed outside read still taints the batch: the owner\'s health beside it is hidden', async () => {
     const owner: LLMToolTurn = { call: { call_id: 'h1', name: 'list_health_logs', arguments: '{}' }, output: JSON.stringify({ ok: true, data: { summary: 'Your HRV was 52 ms and resting heart rate 61 bpm last night.' } }) };
     const args = { query: 'hrv', limit: 52 };

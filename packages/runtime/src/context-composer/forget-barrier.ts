@@ -212,6 +212,6 @@ export const barrierMemory = (store: ClaimStore, held: () => readonly string[]):
     },
     // The held set is read once per call, not once per claim.
     claims: (status) => { const holds = claimHolds(holdsIn(held())); return store.claims(status).filter((claim) => !holds(claim)); },
-    recall: (query, limit) => { const holds = claimHolds(holdsIn(held())); return store.recall(query, limit).filter((claim) => !holds(claim)); },
+    recall: (query, limit, near) => { const holds = claimHolds(holdsIn(held())); return store.recall(query, limit, near).filter((claim) => !holds(claim)); },
   };
 };

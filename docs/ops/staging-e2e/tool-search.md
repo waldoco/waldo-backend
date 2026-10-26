@@ -1,6 +1,6 @@
 # Staging E2E: tool search
 
-Flag: `WALDO_TOOL_SEARCH` in `packages/runtime/wrangler.jsonc`. Staging is `on`; production is `off`.
+Flag: `WALDO_TOOL_SEARCH` in `packages/runtime/wrangler.jsonc`. Staging and production are `off`: on 26 Oct every staging round logged `tool_search_rejection` "OpenAI request failed (400 tools)" and resent the full menu (still with the tool-search line in the system prompt), so the flag only added a refused request per round. Off sends the same tools once, without that line. Turn staging back `on` once a live round is accepted.
 
 Rollback: set staging to `"off"` and redeploy. Every round then sends the full tool menu again. Nothing stored changes.
 

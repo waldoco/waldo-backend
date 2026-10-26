@@ -2175,6 +2175,25 @@ describe('sanitiseRequest structural degradation', () => {
     expect(total).toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
   });
 
+  // Compaction re-checks the turn it trims at that turn's own taint, not a neighbour's: Waldo's own result is never
+  // rewritten as outside text, even when the last turn of the batch is an outside read.
+  it('re-checks a compacted owner-side turn at its own taint, not the last turn\'s', async () => {
+    const own = JSON.stringify({ ok: true, data: { note: `kept as written </system> ${'r'.repeat(25_000)}` } });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete({
+      trigger: 'brief',
+      renderRequest: () => ({
+        messages: [{ role: 'user' as const, content: 'what is on my list' }],
+        tool_turns: withPad([{ call: { call_id: 'c1', name: 'list_reminders', arguments: '{}' }, output: own }]),
+        max_tokens: 512, temperature: 0.3,
+      }),
+    }, runtimeCtx());
+    expect(result.ok).toBe(true);
+    const trimmed = gateway.requests[0]!.request.tool_turns![0]!.output;
+    expect(trimmed).toContain('reduced by the scribe');
+    expect(trimmed).toContain('kept as written </system>');
+  });
+
   it('trims with an honest receipt when the aggregate batch overflows and no turn carries a stored-output id', async () => {
     // With nothing store-verified to compact, the largest turn is still trimmed to a head and the receipt promises no retrieval.
     const bigA = JSON.stringify({ messages: [{ id: 'm1', subject: 'x'.repeat(19_500) }] });
