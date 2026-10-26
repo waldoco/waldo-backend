@@ -159,7 +159,7 @@ export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string;
 export type WaitingApproval = Readonly<{ approval_id: string; kind: string; summary: string; state: 'open' | 'review_only'; put_off: boolean }>;
 export type ReraiseOutcome = Readonly<{ outcome: 'raised'; shown_on: readonly string[]; on_this_reply: boolean } | { outcome: 'expired' | 'not_put_off' | 'not_waiting' | 'unshown' }>;
 // What Waldo writes to the ledger as done without asking the owner. It can never be a kind the owner decides: readers such as
-// the console Vault list those kinds as approvals, so a recorded one would read as approved.
+// Patrol's access log list those kinds as approvals, so a recorded one would read as approved.
 export type RecordedLedgerKind = 'email_draft' | 'browser_action' | 'browser_submit_proposed';
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
