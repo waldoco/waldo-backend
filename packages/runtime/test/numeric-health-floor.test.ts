@@ -75,6 +75,21 @@ describe('the numeric health floor', () => {
     'Cellular respiration 101',
     'respiration 12 slides to review',
     'ETA 20 min rem',
+    '10 min mindfulness break at 3pm',
+    'A 15 min mindfulness session on Mondays',
+    'Send HR to 45 Main St',
+    '**Meeting with HR** — 10:30',
+    '| Step | Owner |\n| 3 | Priya |',
+    'Q3 — 45 deals closed',
+    'Cardio fitness class 45 min on Tuesdays',
+    'Cardio fitness 45 min on Tuesdays',
+    '| HR | 12 |',
+    'HR | 25 hires',
+    'HR jumped to 30 candidates',
+    'HR — 45 Main St',
+    'Pulse — 15 min standup',
+    'Steps — 1500 words',
+    'Recovery — 80% of the budget',
   ])('lets an ordinary fact through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
@@ -153,6 +168,43 @@ describe('the numeric health floor', () => {
     expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());
   });
   it.each(Object.entries(GET_HEALTH_READINGS).flatMap(([signal, texts]) => texts.map((text) => [signal, text])))('holds a %s reading: %s', (_signal, text) => {
+    expect(numericHealthIn(text)).toBe(true);
+  });
+  // The shapes a relay takes in a reply or a summary: markdown labels, table rows, dashes, a trend, Apple's own names.
+  it.each([
+    '**HRV:** 42 ms',
+    '**HRV**: 42 ms',
+    '**Sleep:** 6h 40m',
+    '**SpO2:** 96%',
+    '- **Deep sleep:** 1h 10m',
+    '*REM:* 1h 35m',
+    '| HRV | 42 ms |',
+    '| Resting HR | 58 |',
+    'HRV — 42 ms',
+    'HRV – 42',
+    'Resting HR — 58',
+    'SpO2 — 96%',
+    'Respiratory rate — 14.5',
+    'HRV dropped to 35 ms',
+    'HRV fell from 48 to 35',
+    'your HRV rose to 51',
+    'Resting heart rate climbed to 61',
+    'heart rate recovery dropped to 18',
+    'Weight went down to 72 kg',
+    'Cardio fitness 41.2',
+    'Cardio Fitness (VO2 max) 40.5 ml/kg/min',
+    'VO₂ max 42',
+    'HRV - 42 ms',
+    '_HRV_: 42 ms',
+    '`HRV`: 42 ms',
+    '| HRV | 42 | 45 |',
+    '| HRV | today | 42 ms |',
+    '| Resting HR | Mon | 58 bpm |',
+    'SpO₂ 96%',
+    '**Steps:** 8,432',
+    'HRV declined to 35 ms',
+    'HRV went from 48 to 35',
+  ])('holds a relayed reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
   });
   it('holds a VO2 max reading', () => {

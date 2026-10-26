@@ -90,6 +90,22 @@ describe('trace health scrub at the gate, capture on', () => {
     expect(otlp).toContain('Noted the dentist.');
   });
 
+  it('redacts a reading relayed in a reply as a trend, a markdown label or a table row, and keeps the text around it', () => {
+    const output = gateTraceEntry({ trace: 'tg-0', hop: 'model_call', ms: 1, ok: true, text: {
+      input: 'how did I sleep?',
+      output: 'Your HRV dropped to 35 ms, so keep it light.\n**Sleep:** 6h 40m\n| Resting HR | 58 |',
+    } }, true).text!.output!;
+    expect(output).toBe(`Your ${HEALTH_WITHHELD}, so keep it light.\n**${HEALTH_WITHHELD}\n| ${HEALTH_WITHHELD} |`);
+  });
+
+  it('redacts both values of a relayed trend', () => {
+    for (const [said, kept] of [['HRV fell from 48 to 35, so rest.', ', so rest.'], ['HRV: 48 → 35 this week', ' this week']] as const) {
+      const output = gateTraceEntry({ trace: 'tg-0', hop: 'model_call', ms: 1, ok: true, text: { input: 'and my HRV?', output: said } }, true).text!.output!;
+      expect(output).not.toMatch(/48|35/);
+      expect(output.endsWith(kept)).toBe(true);
+    }
+  });
+
   it('withholds a health tool hop whole, its arguments too, and keeps a non-health tool hop', async () => {
     const entries: TurnLogEntry[] = [
       { trace: 'tg-2', hop: 'tool_get_health', ms: 1, ok: true, text: { input: '{"signals":["hrv"]}', output: getHealthOutput } },
