@@ -9,6 +9,7 @@ import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } fr
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
 import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
 import { isGranolaHost, isGranolaRead, isReviewedGranola } from './granola-mcp';
+import { catalogueEntry } from './mcp-catalogue';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
@@ -101,7 +102,8 @@ type Attempt = Readonly<{
   scope?: string;
 }>;
 // reviewed: a server Waldo reviewed (Granola), whose reads run without asking; its sign-in page says so.
-export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string; reviewed?: true } | { kind: 'denied' } | { kind: 'expired' } | { kind: 'invalid' } | { kind: 'failed'; reason: string }>;
+// official: the catalogue id of an official server whose labelled reads were just allowed (mcp-catalogue).
+export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string; reviewed?: true; official?: string } | { kind: 'denied' } | { kind: 'expired' } | { kind: 'invalid' } | { kind: 'failed'; reason: string }>;
 export type BeginResult = Readonly<{ kind: 'redirect'; path: string } | { kind: 'connected'; id: string; name: string } | { kind: 'already'; id: string; name: string } | { kind: 'failed'; reason: string }>;
 
 // The one shape handlers turn into a tool refusal. cause is safe to show the model; nothing here is a
@@ -437,6 +439,26 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     sql.exec('DELETE FROM mcp_connections WHERE id = ?', id);
   });
 
+  // The owner's choice. A grant carries the digest the owner saw (seen) and lands only if the definitions still match it;
+  // 'changed' means they moved since the owner looked, and nothing was granted.
+  const setRuns = async (id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> => {
+    const r = row(id);
+    // The reviewed server's permissions are Waldo's review, not a per-tool choice.
+    if (!r || isReviewedGranola(r.server_url, r.issuer)) return false;
+    const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
+    const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
+    if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;
+    if (withoutAsking && seen !== undefined && seen !== (tool === EVERY_READ_ONLY_HINT ? await readOnlyDigest(targets) : targets[0]!.digest)) return 'changed';
+    deps.transaction(() => {
+      for (const t of targets) {
+        if (withoutAsking) sql.exec('INSERT INTO mcp_tool_reads (connection, name, digest, granted_at) VALUES (?, ?, ?, ?) ON CONFLICT (connection, name) DO UPDATE SET digest = excluded.digest, granted_at = excluded.granted_at', r.id, t.name, t.digest, deps.now());
+        else sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ? AND name = ?', r.id, t.name);
+      }
+      if (!withoutAsking && tool === EVERY_READ_ONLY_HINT) sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ?', r.id);
+    });
+    return true;
+  };
+
   return {
     list: (): readonly McpConnectionView[] => rows().map(view),
     // Servers waiting on an owner's answer; the prompt names only the server, the questions come back through search.
@@ -531,7 +553,11 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
         if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
         await refreshTools(r).catch(() => undefined);
-        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}) };
+        // An official server's first link allows the tools its vendor labels read-only, each at the definition it has now.
+        // A reconnect keeps whatever the owner chose since.
+        const official = previous || isReviewedGranola(r.server_url, r.issuer) ? undefined : catalogueEntry(r.server_url, r.issuer);
+        if (official) await setRuns(r.id, EVERY_READ_ONLY_HINT, true);
+        const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name, ...(isReviewedGranola(r.server_url, r.issuer) ? { reviewed: true as const } : {}), ...(official ? { official: official.id } : {}) };
         settle(nonce, outcome);
         log('mcp_consent', started);
         return outcome;
@@ -561,25 +587,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       }
     },
 
-    // The owner's choice. A grant carries the digest the owner saw (seen) and lands only if the definitions still match it;
-    // 'changed' means they moved since the owner looked, and nothing was granted.
-    async setRuns(id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> {
-      const r = row(id);
-      // The reviewed server's permissions are Waldo's review, not a per-tool choice.
-      if (!r || isReviewedGranola(r.server_url, r.issuer)) return false;
-      const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
-      const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
-      if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;
-      if (withoutAsking && seen !== undefined && seen !== (tool === EVERY_READ_ONLY_HINT ? await readOnlyDigest(targets) : targets[0]!.digest)) return 'changed';
-      deps.transaction(() => {
-        for (const t of targets) {
-          if (withoutAsking) sql.exec('INSERT INTO mcp_tool_reads (connection, name, digest, granted_at) VALUES (?, ?, ?, ?) ON CONFLICT (connection, name) DO UPDATE SET digest = excluded.digest, granted_at = excluded.granted_at', r.id, t.name, t.digest, deps.now());
-          else sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ? AND name = ?', r.id, t.name);
-        }
-        if (!withoutAsking && tool === EVERY_READ_ONLY_HINT) sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ?', r.id);
-      });
-      return true;
-    },
+    setRuns,
 
     async consoleTools(id: string): Promise<McpConsoleTools> {
       const r = row(id);

@@ -145,3 +145,14 @@ it('the classic console form signs the app out too, and keeps this browser signe
     expect((await app('/controls?view=day', undefined, credential)).status).toBe(200);
   });
 });
+
+it('the console connections read offers the official MCP servers, none connected yet', async () => {
+  await fixture('revoked', async (_app, console, seen) => {
+    const response = await console(`${CONTROLS_PATH}?view=connections`, await seen.grant());
+    expect(response.status).toBe(200);
+    const read = await response.json() as { data: { mcp: unknown[]; mcp_catalogue: { id: string; url: string; connected: boolean }[] } };
+    expect(read.data.mcp).toEqual([]);
+    expect(read.data.mcp_catalogue.map((tile) => tile.id)).toEqual(['notion', 'linear', 'todoist', 'granola', 'sentry']);
+    expect(read.data.mcp_catalogue.every((tile) => !tile.connected && tile.url.startsWith('https://'))).toBe(true);
+  });
+});

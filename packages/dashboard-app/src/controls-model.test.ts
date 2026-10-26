@@ -27,6 +27,18 @@ describe('modern owner controls read', () => {
     }
   });
 
+  it('keeps the official MCP catalogue tiles and refuses a malformed tile', () => {
+    const tile = { id: 'notion', label: 'Notion', about: 'Search and read your pages.', url: 'https://mcp.notion.com/mcp', connected: false };
+    const withTile = (value: unknown) => ({ ...connections, data: { ...connections.data, mcp_catalogue: [value] } });
+    expect(readControls(withTile(tile), 'connections').data.mcp_catalogue).toEqual([tile]);
+    expect(readControls(withTile({ ...tile, extra: 'dropped' }), 'connections').data.mcp_catalogue).toEqual([tile]);
+    expect(readControls(connections, 'connections').data.mcp_catalogue).toBeUndefined();
+    for (const broken of [{ ...tile, url: 'http://mcp.notion.com/mcp' }, { ...tile, url: 'javascript:alert(1)' }, { ...tile, connected: 'no' }, { ...tile, label: undefined }]) {
+      expect(() => readControls(withTile(broken), 'connections')).toThrow();
+    }
+    expect(() => readControls({ ...connections, data: { ...connections.data, mcp_catalogue: tile } }, 'connections')).toThrow();
+  });
+
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json(day)).mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(new Response('{', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);

@@ -20,8 +20,10 @@ export type FakeOptions = {
   results: (name: string, args: Record<string, unknown>) => unknown;
   // Where the MCP server answers; the server path stays /mcp.
   origin: string;
-  // The authorization server's issuer and origin.
+  // The authorization server's issuer and origin; it may be the MCP server's own origin.
   issuer: string;
+  // Where the authorization server says it revokes: its own path, or its token endpoint as some vendors advertise.
+  revokeAt: 'revoke' | 'token';
 };
 
 export const defaultTools: FakeTool[] = [
@@ -37,6 +39,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     results: (name, args) => ({ content: [{ type: 'text', text: `${name} ran with ${JSON.stringify(args)}` }] }),
     origin: new URL(MCP_URL).origin,
     issuer: ISSUER,
+    revokeAt: 'revoke',
     ...overrides,
   };
   const mcpUrl = `${options.origin}/mcp`, metadata = `${options.origin}/.well-known/oauth-protected-resource/mcp`;
@@ -110,14 +113,14 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     if (url.origin === options.origin) {
       if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
       if (url.pathname === '/mcp') return mcp(request);
-      return new Response('not found', { status: 404 });
+      if (url.origin !== options.issuer) return new Response('not found', { status: 404 });
     }
     if (url.origin === options.issuer) {
       if (url.pathname === '/.well-known/oauth-authorization-server') {
         return json({
           issuer: options.issuer, authorization_endpoint: `${options.issuer}/authorize`, token_endpoint: `${options.issuer}/token`,
           ...(options.registration === 'dcr' ? { registration_endpoint: `${options.issuer}/register` } : {}),
-          ...(options.revocation ? { revocation_endpoint: `${options.issuer}/revoke` } : {}),
+          ...(options.revocation ? { revocation_endpoint: `${options.issuer}/${options.revokeAt}` } : {}),
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,

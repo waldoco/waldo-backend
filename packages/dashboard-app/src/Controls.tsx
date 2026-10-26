@@ -137,7 +137,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
             <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
-        <McpServers servers={record.data.mcp} busy={busy} onAction={onAction}/>
+        <McpServers servers={record.data.mcp} catalogue={record.data.mcp_catalogue} busy={busy} onAction={onAction}/>
         <p className="tree-group label">Devices</p>
         <ul><li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">Your Mac</span></summary>
           <div className="disclosure-body"><p>Pair Kennel on your Mac so Waldo can check on it and send it notifications you choose.</p>
@@ -161,12 +161,17 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
 
 // Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
 // server's read-only label is shown as its claim, and allowing those tools is the owner's click.
-function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['data']['mcp'] } & ActionProps) {
+function McpServers({ servers, catalogue, busy, onAction }: { servers: ConnectionsRecord['data']['mcp']; catalogue: ConnectionsRecord['data']['mcp_catalogue'] } & ActionProps) {
   const [address, setAddress] = useState('');
   if (servers === undefined) return null;
+  const offered = (catalogue ?? []).filter(tile => !tile.connected);
   return <>
     <p className="tree-group label">Apps over MCP</p>
-    <ul>{servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
+    <ul>{offered.map(tile => <li key={tile.id} className="branch">
+      <span className="value">{tile.label}</span><p className="meta">{tile.about}</p>
+      <div className="control-actions"><button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: tile.url })}>Connect {tile.label}</button></div>
+    </li>)}
+    {servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
       <details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">{server.name} · {server.host}</span>
         <span className={`access-label${needs ? ' reconnect' : ''}`}>{server.status === 'reauth_needed' ? 'Reconnect needed' : server.wants_scopes.length ? 'Needs more access' : `${server.tools} tools · ${server.runs_without_asking} run without asking`}</span></summary>
         <div className="disclosure-body">

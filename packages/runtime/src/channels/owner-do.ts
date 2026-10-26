@@ -201,6 +201,7 @@ import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, f
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
+import { catalogueTiles } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { approvalJobReplay, approvalReplayContext, proposeActionHandler, replayHost, taintedActionReplay } from '../tools/live/propose-action';
@@ -1372,8 +1373,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const projection = projectControls(source, view);
     if (view === 'connections') {
       const mcp = this.mcp();
-      const servers = await Promise.all(mcp.list().map(async (connection) => { const shown = await mcp.consoleTools(connection.id); return { ...connection, tool_list: shown.tools, read_only_digest: shown.read_only_digest }; }));
-      return { ...projection, data: { ...projection.data, mcp: servers } };
+      const listed = mcp.list();
+      const servers = await Promise.all(listed.map(async (connection) => { const shown = await mcp.consoleTools(connection.id); return { ...connection, tool_list: shown.tools, read_only_digest: shown.read_only_digest }; }));
+      return { ...projection, data: { ...projection.data, mcp: servers, mcp_catalogue: catalogueTiles(listed) } };
     }
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv, auth = consoleAuth(this.env);
