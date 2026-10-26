@@ -10,7 +10,7 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
-import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
+import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
@@ -24,7 +24,7 @@ export type GoogleAccess = Readonly<{
 export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
-  record(kind: string, summary: string, payload: unknown): void;
+  record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   placement?(id: string): CardPlacement;
 }>;
 

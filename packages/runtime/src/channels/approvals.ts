@@ -158,6 +158,9 @@ export const proposalStatus = (placement: CardPlacement | undefined, shownHere: 
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type WaitingApproval = Readonly<{ approval_id: string; kind: string; summary: string; state: 'open' | 'review_only'; put_off: boolean }>;
 export type ReraiseOutcome = Readonly<{ outcome: 'raised'; shown_on: readonly string[]; on_this_reply: boolean } | { outcome: 'expired' | 'not_put_off' | 'not_waiting' | 'unshown' }>;
+// What Waldo writes to the ledger as done without asking the owner. It can never be a kind the owner decides: readers such as
+// the console Vault list those kinds as approvals, so a recorded one would read as approved.
+export type RecordedLedgerKind = 'email_draft' | 'browser_action' | 'browser_submit_proposed';
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
   proposeGoogleTaskChange(args: ProposeGoogleTaskChangeArgs, operationRef?: string, ctx?: ToolDispatcherContext): Promise<string>;
@@ -168,7 +171,7 @@ export type ApprovalDesk = Readonly<{
   proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
-  record(kind: string, summary: string, payload: unknown): void;
+  record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: DeskAction, trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
   pending(now: number): readonly ApprovalItem[];

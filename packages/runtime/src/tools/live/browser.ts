@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
 import type { ToolDispatcherContext } from '../dispatcher';
-import type { BrowserSubmitProposal } from '../../channels/approvals';
+import type { BrowserSubmitProposal, RecordedLedgerKind } from '../../channels/approvals';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../../hooks/egress-policy';
 
 // Stagehand v3 hosted HTTP API (openapi v3.1.0, browserbase/stagehand packages/server-v3).
@@ -189,7 +189,7 @@ export const browseActHandler = (
   apiKey: string | undefined,
   projectId: string | undefined,
   modelApiKey: string | undefined,
-  record: (kind: string, summary: string, payload: unknown) => void = () => undefined,
+  record: (kind: RecordedLedgerKind, summary: string, payload: unknown) => void = () => undefined,
   proposeSubmit?: (payload: BrowserSubmitProposal) => Promise<string>,
   fetcher: typeof fetch = fetch,
 ): ToolHandler<BrowseActArgs, BrowseActResult, ToolDispatcherContext> => ({
