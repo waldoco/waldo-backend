@@ -192,8 +192,10 @@ export const runDayCard = async (input: Readonly<{
   if (card === null) return;
   const day = localIso(input.entry.occurrence_at, input.timezone).slice(0, 10);
   const waited = input.book.read(day).some((row) => row.card === card.id && row.state === 'waiting_on_model');
-  // A Try again is the owner asking for the card now, so it runs whatever the hour.
-  if (waited && input.entry.payload_refs.retry_id === undefined && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
+  // A Try again is the owner asking for the card now, so its own run goes ahead whatever the hour. A try that met the outage
+  // was parked to a later probe (due after its occurrence) and is judged like any waiting card.
+  const asked = input.entry.payload_refs.retry_id !== undefined && input.entry.due_at === input.entry.occurrence_at;
+  if (waited && !asked && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
     input.book.skipped(day, card.id, MODEL_OUTAGE_SKIP[card.id]);
     return;
   }

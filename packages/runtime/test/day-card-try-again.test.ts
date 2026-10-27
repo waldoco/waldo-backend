@@ -198,3 +198,18 @@ it('the app reads the failed Brief at controls=3, an older build reads it as pen
     expect(await day.chatRows()).toBe(1);
   });
 });
+
+it('a Try again that meets the outage waits like any card, and is skipped once it is too late, never sent stale', async () => {
+  await withBriefDue('try-again-stale', async (day) => {
+    model.down = true;
+    await day.alarm();
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe(true);
+    await day.alarm();
+    expect(day.brief()?.state).toBe('waiting_on_model');
+    model.down = false;
+    day.at(Date.parse('2026-10-03T13:00:00Z'));
+    await day.alarm();
+    expect(day.brief()).toMatchObject({ state: 'skipped', reason: "Waldo couldn't reach its model this morning" });
+    expect(await day.chatRows()).toBe(0);
+  });
+});
