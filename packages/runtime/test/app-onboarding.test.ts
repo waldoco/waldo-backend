@@ -32,7 +32,7 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
     };
     const send = (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', contract?: string) =>
       appOnboardingRequest(new Request(`https://telegram-owner${path}`, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(contract ? { [APP_CONTRACT_HEADER]: contract } : {}) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), ownerOnboardingHost(deps));
+        ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }) }), ownerOnboardingHost(deps));
     let request = 0;
     const act = (body: Record<string, unknown>) => send('/app/v1/onboarding/actions', { request_id: `onboarding-${request++}`, ...body });
     return fn({ storage: state.storage, calls, send, act });
@@ -240,8 +240,10 @@ describe('setup answers, onboarding revision 2', () => {
   const store = (storage: DurableObjectStorage) => claimStore(storage.sql, work => storage.transactionSync(work));
   const facts = (storage: DurableObjectStorage) => store(storage).claims().filter(claim => claim.source_ref?.startsWith('owner, first run:'));
   const TEXTS = [
-    'Wants Waldo\'s help most with: their sleep, the things they said they\'d do. In their own words at setup on 1970-01-01: "Mostly the evenings"',
-    'Where it is hardest for them: waking in the night, small favours slipping, things they said they would look into.',
+    'Wants Waldo\'s help most with: their sleep.',
+    'Wants Waldo\'s help most with: the things they said they\'d do. In their own words at setup on 1970-01-01: "Mostly the evenings"',
+    'Where it is hardest for them: waking in the night.',
+    'Where it is hardest for them: small favours slipping, things they said they would look into.',
     'Never to be moved or booked over: their workouts, family time.',
     'When Waldo spots something, wants to hear what Waldo would change, and decides themselves.',
     'At setup on 1970-01-01: travelling soon. In their own words: "Two weeks in Pune"',
@@ -253,8 +255,33 @@ describe('setup answers, onboarding revision 2', () => {
     expect(await saved.json()).toEqual({ request_id: `setup-more-${request - 1}`, held: { ...NONE, matters: true, spots: true, protect: true, rope: true, season: true, low: true }, replayed: false });
     expect(facts(storage).map(claim => ({ text: claim.text, origin: claim.origin, source: claim.source, grounded: claim.verification_status, pinned: claim.pinned !== null })))
       .toEqual(expect.arrayContaining(TEXTS.map(text => ({ text, origin: 'owner', source: 'stated', grounded: 'owner-grounded', pinned: true }))));
-    expect(facts(storage)).toHaveLength(6);
+    expect(facts(storage)).toHaveLength(8);
     for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) for (const text of TEXTS) expect(prompt).toContain(text);
+  }, { agreementsOffered: false }));
+
+  it('keeps the picks about the owner\'s body apart, as health, so a path that leaves health out leaves them out', () => owner(async ({ storage, send }) => {
+    await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE, low: { picked: ['sleep', 'cancel'], own_words: 'I get short with people' } }, 'POST', REVISION_2);
+    const kinds = Object.fromEntries(facts(storage).map(claim => [claim.text, claim.kind]));
+    expect(kinds).toEqual({
+      'Wants Waldo\'s help most with: their sleep.': 'health',
+      'Wants Waldo\'s help most with: the things they said they\'d do. In their own words at setup on 1970-01-01: "Mostly the evenings"': 'goal',
+      'Where it is hardest for them: waking in the night.': 'health',
+      'Where it is hardest for them: small favours slipping, things they said they would look into.': 'fact',
+      'Never to be moved or booked over: their workouts, family time.': 'preference',
+      'When Waldo spots something, wants to hear what Waldo would change, and decides themselves.': 'preference',
+      'At setup on 1970-01-01: travelling soon. In their own words: "Two weeks in Pune"': 'fact',
+      'When running low: sleep goes first.': 'health',
+      'When running low: they start cancelling things. In their own words at setup on 1970-01-01: "I get short with people"': 'fact',
+    });
+    // The background decision's view: owner claims that are not health.
+    const memory = store(storage), noHealth = (claim: { origin: string | null; kind: string }) => claim.origin === 'owner' && claim.kind !== 'health';
+    const view = { ...memory, claims: (status?: string) => memory.claims(status).filter(noHealth), recall: (...args: Parameters<typeof memory.recall>) => memory.recall(...args).filter(noHealth) };
+    const decision = turnMemoryPrompt(view, 'anything');
+    for (const text of ['their sleep', 'waking in the night', 'sleep goes first']) expect(decision).not.toContain(text);
+    for (const text of ['the things they said they\'d do', 'small favours slipping', 'they start cancelling things']) expect(decision).toContain(text);
+    // Clearing an answer clears both of its parts, and one part alone still reads as held.
+    expect((await (await send(ANSWERS, { request_id: `setup-more-${request++}`, spots: ['sleep-onset'], low: null }, 'POST', REVISION_2)).json() as { held: Record<string, boolean> }).held).toMatchObject({ spots: true, low: false });
+    expect(facts(storage).filter(claim => claim.source_ref?.includes('spots') || claim.source_ref?.includes('low')).map(claim => claim.text)).toEqual(['Where it is hardest for them: getting to sleep.']);
   }, { agreementsOffered: false }));
 
   it('keeps every answer in both pinned views at its longest', () => owner(async ({ storage, send }) => {
@@ -266,7 +293,7 @@ describe('setup answers, onboarding revision 2', () => {
       low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words('low') },
     };
     expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, ...longest }, 'POST', REVISION_2)).status).toBe(200);
-    expect(facts(storage)).toHaveLength(10);
+    expect(facts(storage)).toHaveLength(13);
     for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) {
       for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
       expect(prompt).not.toContain('not shown here');
@@ -291,6 +318,15 @@ describe('setup answers, onboarding revision 2', () => {
     expect(facts(storage)).toEqual([]);
   }, { agreementsOffered: false }));
 
+  it('keeps the onboarding cap for a build below revision 2, and the larger one for a build that declares it', () => owner(async ({ send }) => {
+    const padded = (id: string) => `{"request_id":"${id}","name":"Asha"${' '.repeat(5000)}}`;
+    for (const contract of [undefined, 'onboarding=1']) {
+      const refused = await send(ANSWERS, padded(`setup-more-${request++}`), 'POST', contract);
+      expect([refused.status, await refused.json()]).toEqual([400, { error: 'invalid_request' }]);
+    }
+    expect((await send(ANSWERS, padded(`setup-more-${request++}`), 'POST', REVISION_2)).status).toBe(200);
+  }, { agreementsOffered: false }));
+
   it('answers a build that reads revision 1 with the first four only, and replays one request to each build at its own revision', () => owner(async ({ send }) => {
     const body = { request_id: 'setup-more-replay', name: 'Asha' };
     const first = await send(ANSWERS, body, 'POST', REVISION_2);
@@ -309,7 +345,7 @@ describe('setup answers, onboarding revision 2', () => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
     const old = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha', day: { shape: 'meetings', own_words: '' } });
     expect([old.status, (await old.json() as { held: unknown }).held]).toEqual([200, { name: true, day: true, slips: false, wearable: false }]);
-    expect(facts(storage)).toHaveLength(8);
+    expect(facts(storage)).toHaveLength(10);
   }, { agreementsOffered: false }));
 
   it('clears an answer sent as null or an empty choice, and corrects one in place', () => owner(async ({ storage, send }) => {
@@ -323,9 +359,9 @@ describe('setup answers, onboarding revision 2', () => {
     const said = 'resting HR 52 by Friday';
     const saved = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha', low: { picked: ['sleep'], own_words: said } }, 'POST', REVISION_2);
     expect((await saved.json() as { held: { low: boolean } }).held.low).toBe(true);
-    const claim = facts(storage).find(fact => fact.source_ref === 'owner, first run: low');
+    const claim = facts(storage).find(fact => fact.text.includes(said));
     expect(numericHealthIn(claim!.text)).toBe(true);
-    expect([claim!.text, claim!.pinned]).toEqual([`When running low: sleep goes first. In their own words at setup on 1970-01-01: "${said}"`, null]);
+    expect([claim!.text, claim!.pinned]).toEqual([`What happens when they run low, in their own words at setup on 1970-01-01: "${said}"`, null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
     expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
   }, { agreementsOffered: false }));
