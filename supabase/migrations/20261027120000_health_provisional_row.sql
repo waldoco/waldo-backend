@@ -5,6 +5,12 @@
 --   state must follow the count: personal exactly when personal_days reaches 14.
 -- - used: exactly signals (one to twelve names from the closed list the producer uses, each once) and days (one to
 --   thirty-one distinct day strings), so no reading can ride the provenance.
+-- - need_basis of a sleep debt also admits blended_average: the owner's own nights shrunk toward a prior, which is not their
+--   own average.
+-- - waldo.health_series_read returns each reading's writer as origin_package, the package name of the app that wrote it,
+--   when the stored sample recorded one as a string. Nothing else of the origin leaves the database. A Health Connect row
+--   is accepted only when every reading it is computed from was written by Samsung Health, which the producer cannot tell
+--   without it.
 -- Today's energy windows are not admitted here: they need a column of their own and the migration that adds it.
 -- waldo.health_context_write is re-created whole from its last definition (20261023140000); signature, security definer,
 -- search_path and grants are unchanged, and every earlier check is as it was. Apply this before turning the producer's
@@ -108,7 +114,7 @@ begin
         or jsonb_typeof(v_p->'activation') is distinct from 'string' or (v_p->>'activation') not in ('candidate_unaccepted','accepted')))
       or (v_p->>'state' = 'partial' and (jsonb_typeof(v_p->'confidence') is distinct from 'number' or (v_p->>'confidence')::numeric not between 0 and 1))
       or (v_p->>'state' = 'available' and (jsonb_typeof(v_p->'debt_minutes') is distinct from 'number' or (v_p->>'debt_minutes')::numeric not between 0 and 20160
-        or jsonb_typeof(v_p->'need_basis') is distinct from 'string' or (v_p->>'need_basis') not in ('owner_confirmed','own_average'))) then return '{"error":"invalid_request"}'; end if;
+        or jsonb_typeof(v_p->'need_basis') is distinct from 'string' or (v_p->>'need_basis') not in ('owner_confirmed','own_average','blended_average'))) then return '{"error":"invalid_request"}'; end if;
   end if;
   for v_entry in select value from jsonb_array_elements(v_body->'basis') loop
     select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_entry->>'source' and purpose = 'storage_compute';
@@ -148,6 +154,70 @@ begin
   insert into waldo.health_context_basis(owner_id, day, consent_basis, timezone, read_at) values (v_owner, v_day, v_body->'basis', v_tz, v_read_at)
     on conflict (owner_id, day) do update set consent_basis = excluded.consent_basis, timezone = excluded.timezone, read_at = excluded.read_at;
   return jsonb_build_object('written', true, 'changed', v_changed);
+exception
+  when data_exception then return '{"error":"invalid_request"}';
+end $$;
+
+-- The series read is re-created whole from its last definition (20261023130000); signature, security definer, search_path
+-- and grants are unchanged.
+create or replace function waldo.health_series_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_owner uuid; v_body jsonb; v_from date; v_to date; v_signals text[];
+  v_all constant text[] := array['sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate','daylight_duration','movement_duration','heart_rate_window','hrv_window','spo2','respiratory_rate','steps_window','active_energy_window','workout',
+    'wrist_temperature','walking_heart_rate_average','vo2_max','heart_rate_recovery','mindful_duration'];
+  v_cap constant integer := 8000;
+begin
+  if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
+    or waldo.router_signed('health.series_read.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select o.id into v_owner from waldo.owners o join auth.users u on u.id = o.auth_user_id where o.do_name = p_do_name and o.state = 'active';
+  if v_owner is null then return '{"error":"not_linked"}'; end if;
+  if octet_length(p_payload) > 1024 then return '{"error":"invalid_request"}'; end if;
+  begin v_body := p_payload::jsonb; exception when others then return '{"error":"invalid_request"}'; end;
+  if jsonb_typeof(v_body) is distinct from 'object' or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('from','to','signals')) then return '{"error":"invalid_request"}'; end if;
+  if jsonb_typeof(v_body->'from') is distinct from 'string' or (v_body->>'from') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    or jsonb_typeof(v_body->'to') is distinct from 'string' or (v_body->>'to') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then return '{"error":"invalid_request"}'; end if;
+  v_from := (v_body->>'from')::date; v_to := (v_body->>'to')::date;
+  if v_to < v_from or v_to - v_from > 30 then return '{"error":"invalid_request"}'; end if;
+  if v_body ? 'signals' then
+    if jsonb_typeof(v_body->'signals') is distinct from 'array' or jsonb_array_length(v_body->'signals') not between 1 and cardinality(v_all)
+      or exists (select 1 from jsonb_array_elements(v_body->'signals') s where jsonb_typeof(s) is distinct from 'string' or not ((s #>> '{}') = any (v_all))) then return '{"error":"invalid_request"}'; end if;
+    select array_agg(distinct s #>> '{}') into v_signals from jsonb_array_elements(v_body->'signals') s;
+  else
+    v_signals := v_all;
+  end if;
+  -- One statement, one snapshot: the consent each source holds and the readings it returned cannot disagree.
+  return (
+    with live as (
+      select s.source, s.epoch from waldo.health_scopes s join waldo.health_consents c on c.id = s.consent_id
+      where s.owner_id = v_owner and s.purpose = 'storage_compute' and c.withdrawn_at is null
+    ), picked as (
+      select l.source, h.signal, h.sample_id, h.day, h.start_at, h.end_at, h.utc_offset_minutes, h.timezone, h.payload,
+        row_number() over (partition by l.source order by h.day desc, h.start_at desc, h.signal, h.sample_id) as n
+      from live l join waldo.health_samples h on h.owner_id = v_owner and h.source = l.source
+      where h.payload is not null and h.day between v_from and v_to and h.signal = any (v_signals)
+    )
+    select jsonb_build_object(
+      'access', case
+        when exists (select 1 from live) then 'granted'
+        when exists (select 1 from waldo.health_consents c where c.owner_id = v_owner and c.purpose = 'storage_compute') then 'consent_withdrawn'
+        else 'consent_required' end,
+      'read_at', to_char(statement_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+      'sources', coalesce((select jsonb_agg(jsonb_build_object(
+          'source', l.source, 'consent_epoch', l.epoch,
+          'truncated', exists (select 1 from picked p where p.source = l.source and p.n > v_cap),
+          'samples', coalesce((select jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+              'signal', p.signal, 'day', p.day,
+              'start_at', to_char(p.start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              'end_at', to_char(p.end_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              'utc_offset_minutes', p.utc_offset_minutes, 'timezone', p.timezone,
+              'value', p.payload->'value', 'method', p.payload->'method', 'activity', p.payload->'activity',
+              'origin_package', case when jsonb_typeof(p.payload #> '{origin,source_package_name}') = 'string' then left(p.payload #>> '{origin,source_package_name}', 200) end,
+              'stages', case when p.signal = 'sleep_duration' then p.payload->'stages' end)) order by p.day, p.start_at, p.signal, p.sample_id)
+            from picked p where p.source = l.source and p.n <= v_cap), '[]'::jsonb)) order by l.source) from live l), '[]'::jsonb))
+  );
 exception
   when data_exception then return '{"error":"invalid_request"}';
 end $$;

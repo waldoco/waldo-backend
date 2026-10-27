@@ -41,7 +41,7 @@ const provisionalSleepDebt = (targetDay: string, byDay: ReadonlyMap<string, DayR
     state: figure ? 'available' : 'partial', algorithm_version: PROVISIONAL_ALGORITHM.sleepDebt, activation: 'accepted',
     debt_minutes: figure ? round3(shortfall * totalRecency / observedShare) : null, observed_weighted_shortfall_minutes: round3(shortfall),
     observed_nights: observed, coverage: round3(observedShare / totalRecency), missing_nights: missing,
-    sleep_need_minutes: round3(need), need_basis: sleepNeedMinutes === null ? 'own_average' : 'owner_confirmed',
+    sleep_need_minutes: round3(need), need_basis: sleepNeedMinutes === null ? 'blended_average' : 'owner_confirmed',
   };
 };
 

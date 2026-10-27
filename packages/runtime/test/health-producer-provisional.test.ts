@@ -13,6 +13,8 @@ const rowsOff = (spec: GoldenProducerCase) => rowsWith(spec, undefined);
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const SOURCE_CONFIDENCE = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 } as const;
 const PILLARS = ['recovery', 'form', 'weight'] as const;
+// Health Connect is a transport: its readings count as a source's only from Samsung Health.
+const writerFor = (source: string) => (source === 'health_connect' ? { writer: 'com.sec.android.app.shealth' } : {});
 
 describe('provisional rows: pillars', () => {
   it('carry the baseline label and the signals and days each used, in new trailing keys', async () => {
@@ -35,7 +37,7 @@ describe('provisional rows: pillars', () => {
     for (const [source, factor] of Object.entries(SOURCE_CONFIDENCE)) {
       const computed = new Map<string, DailyScores>();
       const base = dailyScoresFor('1');
-      const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, { nights: 25, source, calendar: true });
+      const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, { nights: 25, source, calendar: true, ...writerFor(source) });
       expect(payloads.length).toBeGreaterThan(0);
       for (const row of payloads.map(payload => JSON.parse(payload) as Row)) {
         expect(row.basis[0]!.source).toBe(source);
@@ -49,7 +51,7 @@ describe('provisional rows: pillars', () => {
   });
   it('write Recovery\'s full coverage as exactly the source confidence', async () => {
     for (const [source, factor] of Object.entries(SOURCE_CONFIDENCE)) {
-      const row = (await rows({ nights: 25, source, calendar: false })).at(-1)!;
+      const row = (await rows({ nights: 25, source, calendar: false, ...writerFor(source) })).at(-1)!;
       expect(row.recovery!.confidence).toBe(factor);
       expect((row as unknown as { confidence: number }).confidence).toBe(factor);
     }
@@ -118,7 +120,8 @@ describe('provisional rows: which sources may be accepted', () => {
     }
   });
   it('never accepts a source the writer does not know', async () => {
-    const { rows: written } = await captured({ nights: 25, source: 'oura', calendar: true });
+    const { rows: written } = await captured({ nights: 25, source: 'fitbit', calendar: true });
+    expect(written.length).toBeGreaterThan(0);
     for (const row of written) for (const pillar of pillarsOf(row)) expect(pillar.activation).toBe('candidate_unaccepted');
   });
 });

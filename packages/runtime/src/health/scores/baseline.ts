@@ -16,6 +16,8 @@ export interface Prior { readonly mu0: number; readonly tau: number; readonly si
 // little of the between-person spread there, so one prior serves everyone. Beats per minute.
 export const PULSE_PRIOR: Prior = { mu0: 65.5, tau: 7.7, sigma0: 3.03, nu0: 7 };
 
+// Pinned for recovery.v5 and the versions on it: any change to these constants, or to the prior's source, is a new version,
+// and rows written under the old one are never reinterpreted.
 // Natarajan et al., bioRxiv 10.1101/772285 (v1), Table S2, 6 to 7 am window, ages 20 to 60, female and male rows: 18 bands,
 // each given as a median with its quartiles. On the natural-log scale, mu0 is the mean over the bands of ln(median), taking
 // the bands as equal because the table gives no counts, which puts the centre near 39 ms. tau is the root of the mean

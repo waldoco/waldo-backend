@@ -111,7 +111,8 @@ export interface SleepDebtResult {
   readonly coverage: number;
   readonly missing_nights: readonly string[];
   readonly sleep_need_minutes: number;
-  readonly need_basis: 'owner_confirmed' | 'own_average';
+  // blended_average is the owner's own mean shrunk toward a prior, which is not their own average.
+  readonly need_basis: 'owner_confirmed' | 'own_average' | 'blended_average';
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
