@@ -59,8 +59,9 @@ describe('the producer logs a written row', () => {
       expect((await run('1', 5, answer)).logged, JSON.stringify(answer)).toEqual([]);
     }
   });
-  it('carries no owner, day, value, zone or count: the whole line is those three keys', async () => {
+  it('carries no day, value or count: the whole line has no digit', async () => {
     const { logged } = await run('1', 5);
-    expect(JSON.stringify(logged)).not.toMatch(/\d{4}-\d{2}-\d{2}|zone|score|owner/);
+    expect(logged.length).toBeGreaterThan(0);
+    expect(JSON.stringify(logged)).not.toMatch(/\d/);
   });
 });
