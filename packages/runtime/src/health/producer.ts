@@ -21,7 +21,12 @@ export type ProducerDeps = Readonly<{
   // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
   // zone is the score's own band.
   readScores?: (day: string) => Promise<unknown>;
+  // How many past days one run may backfill; the rest wait for the next run.
+  backfillLimit?: number;
 }>;
+
+// Days older than yesterday that hold no row yet are recomputed, oldest first, this many at a time.
+export const BACKFILL_DAYS_PER_RUN = 30;
 
 const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
@@ -393,11 +398,35 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       }
       return { readingDays, travelled, days };
     };
+    // Recovery and sleep debt for each past day with no row, labelled backfilled: no Form or Weight (they are not reconstructed
+    // for past days), no windows, and no zone notice, since a late row is not a change the owner lived through. A day that
+    // already holds a row of any kind is left alone, and the database refuses a backfilled row over a live one regardless.
+    const recordsBySource = new Map<string, ReturnType<typeof recordsOf>>();
+    const backfill = async (): Promise<void> => {
+      const newestBackfilled = shiftDay(today, -2);
+      const candidates = [...new Set(present.flatMap(s => s.readings.filter(r => r.signal === 'sleep_duration' && r.day <= newestBackfilled).map(r => r.day)))].sort();
+      const held = await Promise.all(candidates.map(day => storedBefore(deps.readScores, day)));
+      const missing = candidates.filter((_, i) => held[i] === null).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
+      for (const day of missing) {
+        const chosen = chooseFor(day);
+        const records = recordsBySource.get(chosen.source) ?? recordsOf(chosen);
+        recordsBySource.set(chosen.source, records);
+        const scores = deps.compute({ access: 'granted', targetDay: day, days: records.days, sleepNeedMinutes: null, asOf: series.readAt });
+        if (scores.recovery.state === 'unavailable' && scores.sleep_debt.state === 'unavailable') continue;
+        const unavailable = (reason: 'intraday_inputs_unavailable' | 'calendar_demand_unavailable') => ({ state: 'unavailable' as const, reason });
+        const late = { ...scores, form: unavailable('intraday_inputs_unavailable'), weight: unavailable('calendar_demand_unavailable') };
+        const row = { ...rowOf(day, late, { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, [], false), backfilled: true };
+        await deps.writeContext(JSON.stringify(row));
+      }
+    };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
+    // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
+    let provisional = false;
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: series.readAt });
+      provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
@@ -406,6 +435,10 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+    }
+    if (provisional && deps.readScores) {
+      // Late days never decide the outcome of the live rows, and a failure here is only a tag.
+      try { await backfill(); } catch { console.error('health backfill failed'); }
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
     return 'no_readings';
