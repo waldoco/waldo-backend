@@ -30,6 +30,7 @@ const ROW = {
 
 const fixture = vi.hoisted(() => ({
   event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, writes: 0,
+  pushes: [] as unknown[][], targetsAsked: 0,
 }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -60,7 +61,7 @@ const move = (start: string, end: string) => JSON.stringify({ kind: 'propose', a
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; printed.length = 0;
+  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.pushes = []; fixture.targetsAsked = 0; printed.length = 0;
   fixture.decision = move('2026-10-21T16:00', '2026-10-21T17:30');
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
   for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
@@ -70,6 +71,8 @@ beforeEach(() => {
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_context_read') return Response.json(fixture.health);
+    if (fn === 'app_push_targets') { fixture.targetsAsked += 1; return Response.json([{ installation_id: '41000000-0000-4000-8000-000000000001', device_epoch: 1, token: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]' }]); }
+    if (String(input instanceof Request ? input.url : input) === 'https://exp.host/--/api/v2/push/send') { fixture.pushes.push(JSON.parse(String(init?.body))); return Response.json({ data: [{ status: 'ok', id: 'ticket' }] }); }
     if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
     return fn ? Response.json(null) : new Response('unexpected', { status: 500 });
   });
@@ -81,14 +84,14 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   [...state.storage.kv.list()],
 ]);
 
-const withOwner = (work: (o: { owner: { fetch(request: Request): Promise<Response>; alarm(): Promise<void> }; state: DurableObjectState; doName: string; pass(): Promise<void>; notify(day?: string): Promise<void> }) => Promise<void>) => {
+const withOwner = (work: (o: { owner: { fetch(request: Request): Promise<Response>; alarm(): Promise<void> }; state: DurableObjectState; doName: string; pass(): Promise<void>; notify(day?: string): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
   const doName = `health-trigger-do-${sequence++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    const owner = new OwnerDO(state, CONFIG as never) as unknown as { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
+    const owner = new OwnerDO(state, config as never) as unknown as { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
     const notify = async (day = '2026-10-21') => notifyOwnerZoneChange({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName, day);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     try { await work({ owner, state, doName, pass, notify }); } finally { await state.storage.deleteAlarm(); }
@@ -154,5 +157,51 @@ describe('the health trigger on the owner object', () => {
       await pass();
       expect(evaluations()).toHaveLength(1);
     });
+  });
+});
+
+describe('the push that tells the app a health card is up', () => {
+  const PUSH = { ...CONFIG, EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+
+  it('sends one push once the card is up: fixed text and the approval id, nothing the card or the reading says', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      const [run] = runs(state);
+      expect(run).toMatchObject({ outcome: 'proposed' });
+      expect(fixture.pushes).toHaveLength(1);
+      expect(fixture.pushes[0]).toEqual([{ to: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: run!.approval_id }, sound: 'default' }]);
+      const wire = JSON.stringify(fixture.pushes);
+      for (const text of [...LEAKS, 'Recovery', 'compromised', 'slower morning', 'Quarterly', 'low', 'depleted']) expect(wire, text).not.toContain(text);
+      await pass();
+      expect(fixture.pushes).toHaveLength(1);
+    }, PUSH);
+  });
+
+  it('sends nothing when health sharing is off: no health, no card, no push, and the device list is never read', async () => {
+    fixture.health = null;
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect(runs(state)).toEqual([]);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
+    }, PUSH);
+  });
+
+  it('sends nothing for a change held through quiet hours, nor when the model judges it does not matter', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '07:00', quiet_end: '12:00', volume: 'normal' });
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(0);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
+    }, PUSH);
+    fixture.decision = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, notify_guests: null, reason: '' });
+    await withOwner(async ({ pass, notify }) => {
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      expect(fixture.pushes).toEqual([]);
+    }, PUSH);
   });
 });

@@ -14,7 +14,7 @@ import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './s
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
-import { appApprovalExactV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { appApprovalStepUp } from './approval-step-up';
 import type { ApprovalActionV1 } from '../../../contracts/src/app/parts';
 
@@ -316,6 +316,17 @@ const exactFor = (entry: LedgerRow, everyDetail = false): AppApprovalV1['exact']
     ...(p.time_zone ? { time_zone: p.time_zone } : {}) } };
   return everyDetail || appApprovalExactV1Schema.safeParse(detailed).success ? detailed : { changes: first };
 };
+// A proposal the health trigger raised is the one whose operation_ref it minted with this prefix (tool calls mint tool:).
+// Its stored reason is the model's own line, shown to the app beside the card; a reason the contract cannot carry is left
+// out rather than costing the card.
+const HEALTH_REF_PREFIX = 'health:';
+const healthOf = (entry: LedgerRow): Pick<AppApprovalV1, 'health'> => {
+  if (entry.kind !== 'calendar_change') return {};
+  const stored = JSON.parse(entry.payload_json) as { operation_ref?: unknown; reason?: unknown };
+  if (typeof stored.operation_ref !== 'string' || !stored.operation_ref.startsWith(HEALTH_REF_PREFIX)) return {};
+  const health = appApprovalHealthV1Schema.safeParse({ reason: stored.reason });
+  return health.success ? { health: health.data } : {};
+};
 // The chat surfaces where a send to another person, and every other kind the app gates behind the recent email check, is
 // handed to the app rather than approved. Which kinds is the app's own rule; a request that cannot be classified is handed over.
 const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessage']);
@@ -531,7 +542,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const approvable = appReview(entry).full;
         const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
-        appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions });
+        appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions, ...healthOf(entry) });
         inApp = { approvable };
       } catch (error) {
         journalFailure = error;
@@ -612,7 +623,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
-      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}) };
+      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry) };
   };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'task_sources') return 'Task sources (expired)';

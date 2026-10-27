@@ -1,11 +1,13 @@
-import type { PushNotification } from '../../../contracts/src/ui/notification';
+import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-// Each push is fixed per trigger: one line of text and the ids the app opens, never health, email content or names.
+// Each push is fixed per trigger: one line of text and the ids the app opens, never health, email content or names. An
+// approval push names the approval it opens, which the caller adds; the text never says what it suggests or why.
 export const PUSHES = {
   brief: { body: 'Your Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
-} as const satisfies Record<string, Readonly<{ body: string; data: PushNotification }>>;
+  approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
+} as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 export const PUSH_DAILY_LIMIT = 3;
 const BUDGET_KEY = 'app_push_budget_v1';
@@ -44,8 +46,11 @@ const unregistered = (ticket: unknown) => {
 // Sends one fixed push to the owner's Expo devices, at most PUSH_DAILY_LIMIT a day and never in quiet hours. A push is
 // counted before it is sent, so an unknown outcome never lets a retry pass the limit. Failures are logged as a code and
 // never thrown, so the work that triggered the push is not affected.
-export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind): Promise<void> => {
+export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string): Promise<void> => {
   if (!deps.accessToken) return deps.log('not_configured', 0);
+  const { body, data: fixed } = PUSHES[kind];
+  const data = pushNotificationSchema.safeParse({ ...fixed, ...(approvalId === undefined ? {} : { approval_id: approvalId }) });
+  if (!data.success) return deps.log('invalid_payload', 0);
   if (deps.quiet()) return deps.log('quiet', 0);
   const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(BUDGET_KEY);
   const sent = budget?.day === day ? budget.sent : 0;
@@ -54,12 +59,11 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind): Promis
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
   if (!devices.length) return deps.log('no_devices', 0);
   deps.kv.put(BUDGET_KEY, { day, sent: sent + 1 });
-  const { body, data } = PUSHES[kind];
   let response: Response;
   try {
     response = await deps.send(EXPO_PUSH_URL, { method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${deps.accessToken}` },
-      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data, sound: 'default' }))) });
+      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' }))) });
   } catch { return deps.log('send_failed', 0); }
   if (!response.ok) return deps.log('send_refused', 0);
   let answer: unknown;

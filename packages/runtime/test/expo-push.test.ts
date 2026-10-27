@@ -63,7 +63,7 @@ describe('pushing the owner\'s app', () => {
     await held.push('approval', 'p0001');
     expect([held.send.mock.calls.length, held.logged]).toEqual([0, [{ code: 'quiet', count: 0 }]]);
     const { push, send, logged } = fixture();
-    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await push(i % 2 ? 'brief' : 'approval', `p000${i}`);
+    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await (i % 2 ? push('brief') : push('approval', `p000${i}`));
     await push('approval', 'p0009');
     expect(send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
     expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });

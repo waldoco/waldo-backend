@@ -348,6 +348,8 @@ export type HealthTriggerDeps = Readonly<{
   charge(eventId: string): void;
   decide(id: string, prompt: string): Promise<string>;
   propose(args: ProposeCalendarChangeArgs, operationRef: string): Promise<string>;
+  // Tells the app a card is up, once, after it is proposed and its budget booked. It carries only the approval's id.
+  notify?(approvalId: string): Promise<void>;
   reschedule(at: number): Promise<void>;
   log(line: Readonly<{ hop: 'health_trigger'; ok: boolean; code: HealthTriggerOutcome; mode?: HealthTriggerMode }>): void;
 }>;
@@ -406,6 +408,7 @@ export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthT
     const args = asking ? { ...decision.args, reason: `${decision.args.reason} ${HEALTH_KEEP_ASKING}` } : decision.args;
     const approvalId = await deps.propose(args, id);
     deps.charge(budgetKey);
+    await deps.notify?.(approvalId).catch(() => undefined);
     return finish('proposed', { approvalId, asked: asking });
   } catch {
     // The mark stays, so the next floor tries again while the change is still news; the TTL drops it after that.
