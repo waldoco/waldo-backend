@@ -26,7 +26,7 @@ const row = (overrides: Partial<HealthContextRow> = {}): HealthContextRow => ({
 });
 
 const formZoneOf = (material: { view: DerivedHealthDestinationView }): string | undefined =>
-  material.view.algorithm_version === 'form.safte-fast.v1' ? material.view.form_zone : undefined;
+  'form_zone' in material.view ? material.view.form_zone : undefined;
 
 describe('toContextHealthMaterial', () => {
   it('redacts a full row to the zone-word material (ADR-0024)', () => {
