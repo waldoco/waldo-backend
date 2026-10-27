@@ -6,6 +6,7 @@ import {
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
 import { CURRENT_CONSENT_VERSION } from './consent-ledger';
+import { numericHealthIn } from '../scribe/sanitiser';
 import { bodyDigest } from './request-book';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -39,11 +40,21 @@ const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: pri
 const calledText = (name: string) => `Wants to be called ${name}`;
 const named = (claims: ClaimStore) => claims.claims().some(candidate => candidate.source_ref === NAME_REF);
 
-// The setup answers, each one owner fact under its own ref, pinned after the name in this order. The text is the app's own
-// choice put in the third person, with the owner's words quoted as they typed them.
+// The setup answers, each one owner fact under its own ref and pinned where every turn reads it: the first four and how Waldo
+// should bring things up in the profile after the name, the rest of the conversation in the facts block. The text is the app's
+// own choice put in the third person, with the owner's words quoted as they typed them; the later answers date those words,
+// since they describe a stretch of the owner's life and may carry a reading the owner stated.
 type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
-const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = { name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable' };
-const SETUP_PIN_ORDER: Readonly<Record<SetupAnswer, number>> = { name: 0, day: 1, slips: 2, wearable: 3 };
+const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = {
+  name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable',
+  matters: 'owner, first run: matters', spots: 'owner, first run: spots', protect: 'owner, first run: protect', rope: 'owner, first run: rope',
+  season: 'owner, first run: season', low: 'owner, first run: low',
+};
+const SETUP_PINS: Readonly<Record<SetupAnswer, Readonly<{ block: 'profile' | 'facts'; order: number }>>> = {
+  name: { block: 'profile', order: 0 }, day: { block: 'profile', order: 1 }, slips: { block: 'profile', order: 2 }, wearable: { block: 'profile', order: 3 },
+  rope: { block: 'profile', order: 4 }, matters: { block: 'facts', order: 0 }, spots: { block: 'facts', order: 1 }, protect: { block: 'facts', order: 2 },
+  season: { block: 'facts', order: 3 }, low: { block: 'facts', order: 4 },
+};
 // Whether a claim is a setup answer, by the ref this module writes it under.
 export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && Object.values(SETUP_REFS).includes(ref);
 const DAY_TEXT = {
@@ -52,10 +63,35 @@ const DAY_TEXT = {
 } as const;
 const SLIP_TEXT = { replies: 'replies and follow-ups', overlaps: 'meetings running into each other', promises: "things they said they'd do", breaks: 'breaks and meals', evenings: 'work running into the evening' } as const;
 const WEARABLE_TEXT = { apple: 'an Apple Watch', samsung: 'a Samsung Galaxy Watch', oura: 'an Oura Ring', whoop: 'a WHOOP', garmin: 'a Garmin watch' } as const;
+const MATTER_TEXT = { sleep: 'their sleep', energy: 'their energy', stress: 'stress', schedule: 'their schedule', mail: 'mail and follow-ups', promises: "the things they said they'd do" } as const;
+const SPOT_TEXT = {
+  'sleep-onset': 'getting to sleep', 'sleep-waking': 'waking in the night', 'sleep-hours': 'not getting enough hours of sleep',
+  'energy-mornings': 'energy dips in the mornings', 'energy-lunch': 'energy dips after lunch', 'energy-afternoon': 'energy dips in the late afternoon', 'energy-varies': 'energy dips at different times',
+  'stress-much': 'stress from too much at once', 'stress-work': 'stress from the work itself', 'stress-people': 'stress from people',
+  'schedule-b2b': 'back-to-back days', 'schedule-moving': 'things moving at the last minute', 'schedule-think': 'no time to think',
+  'mail-replying': 'replying to mail', 'mail-chasing': 'chasing others on mail', 'mail-finding': 'finding things in mail',
+  'promises-work': 'promises at work slipping', 'promises-home': 'promises at home slipping', 'promises-people': 'promises to friends and family slipping',
+  'promises-favours': 'small favours slipping', 'promises-replies': 'replies they owe', 'promises-lookinto': 'things they said they would look into',
+} as const;
+const PROTECT_TEXT = { workouts: 'their workouts', family: 'family time', meals: 'meals', mornings: 'their mornings before work', focus: 'their focus time' } as const;
+const ROPE_TEXT = {
+  tell: 'When Waldo spots something, wants simply to be told.',
+  suggest: 'When Waldo spots something, wants to hear what Waldo would change, and decides themselves.',
+  draft: 'When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.',
+} as const;
+const SEASON_TEXT = { busy: 'a busy stretch at work', travel: 'travelling soon', none: 'nothing unusual coming up' } as const;
+const LOW_TEXT = { focus: 'focus goes first', patience: 'patience with people goes first', sleep: 'sleep goes first', push: 'they push through anyway', cancel: 'they start cancelling things' } as const;
 const quoted = (words: string) => `"${words}"`;
 type SetupFact = Readonly<{ kind: string; text: string; evidence: string }>;
-// An empty choice with no words of the owner's own says nothing to keep, so it clears the answer as null does.
-const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null } = {
+// A list of choices with the owner's words after it, dated; an empty choice with no words of the owner's own says nothing to
+// keep, so it clears the answer as null does.
+const pickedFact = <Choice extends string>(kind: string, lead: string, alone: string, names: Readonly<Record<Choice, string>>) =>
+  ({ picked, own_words: own }: { picked: readonly Choice[]; own_words: string }, day: string): SetupFact | null => !picked.length && !own ? null : {
+    kind, evidence: `Setup answer on ${day}: ${[...picked, own].filter(Boolean).join('; ')}`,
+    text: picked.length ? `${lead}: ${picked.map(choice => names[choice]).join(', ')}.${own ? ` In their own words at setup on ${day}: ${quoted(own)}` : ''}`
+      : `${alone}, in their own words at setup on ${day}: ${quoted(own)}`,
+  };
+const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string) => SetupFact | null } = {
   name: name => ({ kind: 'preference', text: calledText(name), evidence: name }),
   day: ({ shape, own_words: own }) => !shape && !own ? null : {
     kind: 'routine', evidence: `Setup answer: ${[shape, own].filter(Boolean).join('; ')}`,
@@ -67,9 +103,19 @@ const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSe
       : `Things that tend to slip, in their own words: ${quoted(own)}`,
   },
   wearable: wearable => ({ kind: 'fact', text: `Wears ${WEARABLE_TEXT[wearable]}.`, evidence: `Setup answer: ${wearable}` }),
+  matters: pickedFact('goal', "Wants Waldo's help most with", "What they want Waldo's help with most", MATTER_TEXT),
+  spots: (spots, day) => !spots.length ? null
+    : { kind: 'fact', text: `Where it is hardest for them: ${spots.map(spot => SPOT_TEXT[spot]).join(', ')}.`, evidence: `Setup answer on ${day}: ${spots.join('; ')}` },
+  protect: pickedFact('preference', 'Never to be moved or booked over', 'What is never to be moved or booked over', PROTECT_TEXT),
+  rope: (rope, day) => ({ kind: 'preference', text: ROPE_TEXT[rope], evidence: `Setup answer on ${day}: ${rope}` }),
+  season: ({ choice, own_words: own }, day) => !choice && !own ? null : {
+    kind: 'fact', evidence: `Setup answer on ${day}: ${[choice, own].filter(Boolean).join('; ')}`,
+    text: choice ? `At setup on ${day}: ${SEASON_TEXT[choice]}.${own ? ` In their own words: ${quoted(own)}` : ''}` : `At setup on ${day}, about the stretch they are in, in their own words: ${quoted(own)}`,
+  },
+  low: pickedFact('fact', 'When running low', 'What happens when they run low', LOW_TEXT),
 };
-const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>): SetupFact | null =>
-  (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>) => SetupFact | null)(value);
+const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string): SetupFact | null =>
+  (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string) => SetupFact | null)(value, day);
 
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.
@@ -218,16 +264,21 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
   // The setup answers a request names, each set, corrected in place or cleared, and then which of them Waldo holds. A cleared
   // answer is retired, not forgotten: it leaves the profile and recall, and the owner can still ask Waldo to forget it.
   const live = (ref: string) => [...claims.claims(), ...claims.claims('promoted')].filter(candidate => candidate.source_ref === ref);
-  const saveAnswers = (request: AppSetupAnswersRequestV1): AppSetupAnswersResultV1['held'] => {
+  const saveAnswers = (request: AppSetupAnswersRequestV1): Required<AppSetupAnswersResultV1['held']> => {
+    const day = new Date(now()).toISOString().slice(0, 10);
     for (const name of Object.keys(SETUP_REFS) as SetupAnswer[]) {
       const value = request[name];
       if (value === undefined) continue;
-      const fact = value === null ? null : setupFact(name, value);
+      const fact = value === null ? null : setupFact(name, value, day);
       if (!fact) { for (const retired of live(SETUP_REFS[name])) claims.setStatus(retired.id, 'dismissed'); continue; }
       const saved = answer(SETUP_REFS[name], fact.kind, fact.text, fact.evidence);
-      if (!saved || !claims.pin(saved.id, 'profile', SETUP_PIN_ORDER[name])) throw new Error('setup answer not pinned');
+      if (!saved) throw new Error('setup answer not saved');
+      // A reading the owner stated is kept as they said it, but, as in the profile view, left to recall rather than shown on
+      // every turn: get_health is current.
+      if (numericHealthIn(fact.text)) claims.unpin(saved.id);
+      else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
     }
-    return { name: live(NAME_REF).length > 0, day: live(SETUP_REFS.day).length > 0, slips: live(SETUP_REFS.slips).length > 0, wearable: live(SETUP_REFS.wearable).length > 0 };
+    return Object.fromEntries(Object.entries(SETUP_REFS).map(([name, ref]) => [name, live(ref).length > 0])) as Required<AppSetupAnswersResultV1['held']>;
   };
   // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
   const agreementsAccepted = (): void => {

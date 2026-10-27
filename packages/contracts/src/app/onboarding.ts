@@ -16,6 +16,9 @@ export const APP_PRIVACY_NOTICE_VERSION_V1 = 1;
 export const APP_TERMS_URL_V1 = 'https://www.heywaldo.in/terms';
 export const APP_PRIVACY_NOTICE_URL_V1 = 'https://www.heywaldo.in/privacy';
 export const APP_ONBOARDING_MAX_REQUEST_BYTES_V1 = 4096;
+// The setup answers carry up to seven answers in the owner's own words, so their route takes more: the longest valid body,
+// in characters JSON spells out as six bytes each, fits.
+export const APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1 = 16384;
 
 const epoch = z.int().nonnegative();
 const count = z.int().nonnegative();
@@ -185,32 +188,65 @@ export const appFindingResultV1Schema = z.strictObject({
 });
 
 // Setup answers: what the app's setup conversation asks besides the steps above, kept as owner facts Waldo reads on every
-// turn, on every surface. Each answer a request names is set, null clears it, and one left out stays as it is. day and slips
-// pair a choice with the owner's own words; an empty choice with no words clears it too. wearable is the watch the owner
-// says they wear, never a paired device or its data. Not part of the run: these can be sent before it starts and after it
-// finishes, as often as setup is run again. Refused agreements_required while the agreements are offered and not accepted.
+// turn, on every surface. Each answer a request names is set, null clears it, and one left out stays as it is. A choice pairs
+// with the owner's own words; an empty choice with no words clears it too. wearable is the watch the owner says they wear,
+// never a paired device or its data. Not part of the run: these can be sent before it starts and after it finishes, as often
+// as setup is run again. Refused agreements_required while the agreements are offered and not accepted.
+// Onboarding revision 2 (`onboarding=2`) adds the rest of the conversation: matters (what the owner wants a hand with), spots
+// (where each of those is hardest; an empty list is "hard to say"), protect (what is never to be moved or booked over), rope
+// (how Waldo should bring up what it spots: a preference Waldo reads, never a grant), season (what stretch they are in) and low
+// (what goes first when they run low). A server takes these fields from any build; held names them only for a build that
+// declares revision 2.
+export const APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 = 2;
 export const APP_SETUP_OWN_WORDS_MAX_V1 = 280;
 export const appSetupDayShapeV1Schema = z.enum(['meetings', 'focus', 'fixed', 'varies']);
 export const appSetupSlipV1Schema = z.enum(['replies', 'overlaps', 'promises', 'breaks', 'evenings']);
 export const appSetupWearableV1Schema = z.enum(['samsung', 'apple', 'oura', 'whoop', 'garmin']);
+export const appSetupMatterV1Schema = z.enum(['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises']);
+export const appSetupSpotV1Schema = z.enum([
+  'sleep-onset', 'sleep-waking', 'sleep-hours',
+  'energy-mornings', 'energy-lunch', 'energy-afternoon', 'energy-varies',
+  'stress-much', 'stress-work', 'stress-people',
+  'schedule-b2b', 'schedule-moving', 'schedule-think',
+  'mail-replying', 'mail-chasing', 'mail-finding',
+  'promises-work', 'promises-home', 'promises-people', 'promises-favours', 'promises-replies', 'promises-lookinto',
+]);
+export const appSetupProtectV1Schema = z.enum(['workouts', 'family', 'meals', 'mornings', 'focus']);
+export const appSetupRopeV1Schema = z.enum(['tell', 'suggest', 'draft']);
+export const appSetupSeasonV1Schema = z.enum(['busy', 'travel', 'none']);
+export const appSetupLowV1Schema = z.enum(['focus', 'patience', 'sleep', 'push', 'cancel']);
 const ownWords = z.string().trim().max(APP_SETUP_OWN_WORDS_MAX_V1);
-const SETUP_ANSWERS = ['name', 'day', 'slips', 'wearable'] as const;
+const pickedOnce = <Choice extends z.ZodEnum>(choice: Choice) =>
+  z.array(choice).max(choice.options.length).refine(picked => new Set(picked).size === picked.length, 'a choice is picked once');
+const picks = <Choice extends z.ZodEnum>(choice: Choice) => z.strictObject({ picked: pickedOnce(choice), own_words: ownWords });
+const SETUP_ANSWERS = ['name', 'day', 'slips', 'wearable', 'matters', 'spots', 'protect', 'rope', 'season', 'low'] as const;
 export const appSetupAnswersRequestV1Schema = z.strictObject({
   request_id: requestId,
   name: z.string().trim().min(1).max(80).nullable().optional(),
   day: z.strictObject({ shape: appSetupDayShapeV1Schema.nullable(), own_words: ownWords }).nullable().optional(),
-  slips: z.strictObject({
-    picked: z.array(appSetupSlipV1Schema).max(appSetupSlipV1Schema.options.length).refine(picked => new Set(picked).size === picked.length, 'a slip is picked once'),
-    own_words: ownWords,
-  }).nullable().optional(),
+  slips: picks(appSetupSlipV1Schema).nullable().optional(),
   wearable: appSetupWearableV1Schema.nullable().optional(),
+  matters: picks(appSetupMatterV1Schema).nullable().optional(),
+  spots: pickedOnce(appSetupSpotV1Schema).nullable().optional(),
+  protect: picks(appSetupProtectV1Schema).nullable().optional(),
+  rope: appSetupRopeV1Schema.nullable().optional(),
+  season: z.strictObject({ choice: appSetupSeasonV1Schema.nullable(), own_words: ownWords }).nullable().optional(),
+  low: picks(appSetupLowV1Schema).nullable().optional(),
 }).refine(request => SETUP_ANSWERS.some(answer => request[answer] !== undefined), 'name at least one answer');
-// held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write.
+// held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write. The revision 2 answers
+// are present exactly for a build that declares it, except in a replay of an answer recorded before them.
+const revisionTwoHeld = { matters: z.boolean(), spots: z.boolean(), protect: z.boolean(), rope: z.boolean(), season: z.boolean(), low: z.boolean() };
 export const appSetupAnswersResultV1Schema = z.strictObject({
   request_id: requestId,
-  held: z.strictObject({ name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean() }),
+  held: z.strictObject({ name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean(), ...z.strictObject(revisionTwoHeld).partial().shape }),
   replayed: z.boolean(),
 });
+// A result as a build reading `revision` parses it: below revision 2, held names the first four answers only.
+export const appSetupAnswersResultAtRevision = (result: AppSetupAnswersResultV1, revision: number): AppSetupAnswersResultV1 => {
+  if (revision >= APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 || Object.keys(result.held).every(key => !Object.hasOwn(revisionTwoHeld, key))) return result;
+  const { name, day, slips, wearable } = result.held;
+  return { ...result, held: { name, day, slips, wearable } };
+};
 
 // channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
@@ -227,7 +263,7 @@ export const appOnboardingErrorV1Schema = z.strictObject({
 export const appOnboardingRoutesV1 = [
   { method: 'GET', path: '/app/v1/onboarding', response: appOnboardingV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/actions', request: appOnboardingActionV1Schema, response: appOnboardingResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
-  { method: 'POST', path: '/app/v1/onboarding/answers', request: appSetupAnswersRequestV1Schema, response: appSetupAnswersResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/onboarding/answers', request: appSetupAnswersRequestV1Schema, response: appSetupAnswersResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/onboarding/channels', response: appOnboardingChannelsV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/channel-link', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema, authenticated: true, success_status: 200, max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/consents', response: appConsentListV1Schema, authenticated: true, success_status: 200 },

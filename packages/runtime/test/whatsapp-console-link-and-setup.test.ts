@@ -79,7 +79,7 @@ it('setup answers saved from the app reach a WhatsApp turn as owner facts in its
     // The writer POST /app/v1/onboarding/answers uses (its app route is tested end to end in setup-answers-app.test.ts).
     const host = ownerOnboardingHost({ storage: state.storage, doName: NAME, now: Date.now, agreementsOffered: false, lookupOffered: false } as unknown as OwnerOnboardingDeps);
     expect(host.transaction(() => host.firstRun.saveAnswers({ request_id: 'setup-answers-wa-1', name: 'Asha', day: { shape: 'meetings', own_words: '' }, wearable: 'apple' })))
-      .toEqual({ name: true, day: true, slips: false, wearable: true });
+      .toEqual({ name: true, day: true, slips: false, wearable: true, matters: false, spots: false, protect: false, rope: false, season: false, low: false });
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messaging_product: 'whatsapp', contacts: [{ wa_id: SUBJECT }], messages: [{ id: 'wamid.out' }] }));
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {

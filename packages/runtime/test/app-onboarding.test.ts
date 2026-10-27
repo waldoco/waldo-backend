@@ -305,9 +305,9 @@ describe('setup answers, onboarding revision 2', () => {
 
   it('keeps a reading in the owner\'s own words as they said it, dated, and out of the blocks every turn reads', () => owner(async ({ storage, send }) => {
     const said = 'resting HR 52 by Friday';
-    const saved = await send(ANSWERS, { request_id: `setup-more-${request++}`, low: { picked: ['sleep'], own_words: said } }, 'POST', REVISION_2);
+    const saved = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha', low: { picked: ['sleep'], own_words: said } }, 'POST', REVISION_2);
     expect((await saved.json() as { held: { low: boolean } }).held.low).toBe(true);
-    const [claim] = facts(storage);
+    const claim = facts(storage).find(fact => fact.source_ref === 'owner, first run: low');
     expect(numericHealthIn(claim!.text)).toBe(true);
     expect([claim!.text, claim!.pinned]).toEqual([`When running low: sleep goes first. In their own words at setup on 1970-01-01: "${said}"`, null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
