@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
-  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
-  OPENAI_GPT_6_1_SOL_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
+  OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   TOOL_PERMISSIONS,
   browsePageArgsSchema,
@@ -66,7 +66,7 @@ it('the ceiling is a code value of 25 USD per owner per month', () => {
 it('under the ceiling an owner turn runs on the chat model, as before', async () => {
   const { gateway, models } = scripted([{ text: 'Your day is clear.' }]);
   expect(await responder(gateway, at(4)).respond(turn('cap-under'), time)).toBe('Your day is clear.');
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
 });
 
 it('a capped owner turn still answers, on the auxiliary model', async () => {
@@ -75,18 +75,18 @@ it('a capped owner turn still answers, on the auxiliary model', async () => {
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
 });
 
-it('a capped owner turn whose auxiliary model is down falls back to Haiku, never Sol or Opus', async () => {
+it('a capped owner turn whose auxiliary model is down falls back to Haiku, never Terra or Sonnet', async () => {
   const { gateway, models } = scripted(['fail']);
   await responder(gateway, at(30)).respond(turn('cap-over'), time);
   expect(models()[0]).toBe(OPENAI_GPT_6_LUNA_MODEL);
   expect(models()).toContain(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL);
-  expect(models()).not.toContain(OPENAI_GPT_6_1_SOL_MODEL);
-  expect(models()).not.toContain(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL);
+  expect(models()).not.toContain(OPENAI_GPT_6_1_TERRA_MODEL);
+  expect(models()).not.toContain(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL);
 });
 
-it('crossing the ceiling mid-month: the recorded spend crosses it during a turn, that turn finishes on Sol, the next degrades', async () => {
+it('crossing the ceiling mid-month: the recorded spend crosses it during a turn, that turn finishes on Terra, the next degrades', async () => {
   // Each call costs a bit over half the ceiling, so the second turn starts under it and ends past it.
-  const perMillion = modelCost({ model: OPENAI_GPT_6_1_SOL_MODEL, input: 1_000_000, output: 0, cached: 0 })!.total;
+  const perMillion = modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 1_000_000, output: 0, cached: 0 })!.total;
   const inputTokens = Math.ceil(((MONTHLY_SPEND_CEILING_USD * 0.6) / perMillion) * 1_000_000);
   const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
   let reads = 0;
@@ -96,7 +96,7 @@ it('crossing the ceiling mid-month: the recorded spend crosses it during a turn,
 
   expect(await owner.respond(turn('mid-1'), time)).toBe('Done.');
   expect(costs.monthSpendUsd(NOW)).toBeGreaterThan(MONTHLY_SPEND_CEILING_USD);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
   expect(reads).toBe(1);
 
   expect(await owner.respond(turn('mid-2'), time)).toBe('Second.');
@@ -117,7 +117,7 @@ it('a retried owner turn (R-4) runs on the owner turn\'s model, and past the cei
   const capped = scripted([{ text: 'Late answer: light cottons.' }]);
   await responder(capped.gateway, at(40)).prompt('retry:job_1', 'telegram-1', text, time, undefined, undefined, undefined, undefined, undefined, undefined, true);
   // Under the ceiling the late answer gets the model the owner's own turn would have; past it, the cheap route.
-  expect(under.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(under.models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
   expect(capped.models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
   // A job Waldo starts itself stays on the auxiliary model either way.
   const own = scripted([{ text: 'Brief.' }]);
@@ -169,5 +169,5 @@ it('past the ceiling a delegated child runs on the auxiliary model too', async (
 it('without a spend reader nothing changes', async () => {
   const { gateway, models } = scripted([{ text: 'ok' }]);
   await responder(gateway).respond(turn('cap-none'), time);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
 });
