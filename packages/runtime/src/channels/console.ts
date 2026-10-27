@@ -2,7 +2,7 @@ import type { AppTile } from './connect-app';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { PROFILE_KINDS } from '../memory/claims';
 import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
-import type { CardLatest, CardState } from './day-cards';
+import type { CardLatest, CardViewState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import { awaitsOwnerConfirm, type Claim, type ConstellationEdge, type ConstellationNode, type profile } from '../memory/claims';
@@ -213,7 +213,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
 
 // latest is the Main chat row today's card was delivered to; only the app's day view reads it.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null; state?: CardState }>;
+  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number }>;
 
 export type ConsoleView = Readonly<{
   release: string;
@@ -454,9 +454,11 @@ const forgetting = (view: ConsoleView) => view.forgettingTopics.length === 0 ? '
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Not scheduled today';
-  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'waiting_on_model' ? chip('Waiting for the model') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'generating' ? chip('Making it now')
+    : card.state === 'failed' ? chip(`Couldn't make it`) : card.state === 'paused' ? chip('Paused') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
+  const retry = (card.state === 'failed' || card.state === 'skipped' || card.state === 'paused') && (card.retriesLeft ?? 0) > 0 ? form(view.csrf, 'card.retry', 'Try again', { id: card.id }) : '';
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.stateReason ?? card.reason)}</div>${retry}${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];

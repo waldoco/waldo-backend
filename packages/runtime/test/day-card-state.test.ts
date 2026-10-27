@@ -166,9 +166,14 @@ it('a Brief no model can write waits for the model: the app reads it as pending,
   expect(brief).toEqual({ status: 'armed', attempts: 0 });
 });
 
-it('the console calls a card waiting for the model what it is', () => {
-  const view = { ...SAMPLE_CONSOLE_VIEW, cards: [{ ...SAMPLE_CONSOLE_VIEW.cards[0]!, sent: false, state: 'waiting_on_model' as const }] };
-  expect(renderConsole(view, 'day')).toContain('Waiting for the model');
+it('the console says a card could not be made, why, and offers Try again while tries are left', () => {
+  const failed = { ...SAMPLE_CONSOLE_VIEW.cards[0]!, sent: false, state: 'failed' as const, stateReason: "Waldo couldn't reach its model this morning", retriesLeft: 2 };
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [failed] }, 'day');
+  expect(html).toContain("Couldn&#39;t make it");
+  expect(html).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(html).toContain('value="card.retry"');
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, retriesLeft: 0 }] }, 'day')).not.toContain('value="card.retry"');
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, state: 'sent' as const, sent: true }] }, 'day')).not.toContain('value="card.retry"');
 });
 
 it('the console offers Resume on each paused job, by its schedule id', () => {

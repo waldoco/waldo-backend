@@ -134,7 +134,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, type PrepGate } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -5012,8 +5012,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           nodes: shown.nodes(), edges: shown.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
+            const status = cardStatus({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now: Date.now() }, card);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
-              ...(row ? (row.state ? { state: row.state } : {}) : { state: 'pending' as const }) };
+              ...(status.state ? { state: status.state } : {}), ...(status.reason ? { stateReason: status.reason } : {}), retriesLeft: status.retriesLeft };
           }),
           ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: (row.status === 'running' ? waitingNotes.get(row.id) : undefined) ?? row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),

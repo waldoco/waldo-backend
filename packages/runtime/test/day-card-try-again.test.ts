@@ -40,6 +40,7 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
+    if (fn === 'console_session_inventory') return Response.json([{ session: HASH, created_at: new Date(AT - 60_000).toISOString(), last_seen_at: new Date(AT).toISOString(), expires_at: new Date(AT - 60_000 + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: new Date(AT - 60_000).toISOString() }]);
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(false);
@@ -50,7 +51,9 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Act = (action: { action: string; id?: string; value?: string }) => Promise<unknown>;
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown>; act: Act }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
+type AppDay = Readonly<{ revision: string; cards: readonly Record<string, unknown>[] }>;
 type Day = Readonly<{
+  appDay(contract?: string): Promise<AppDay>; appAction(body: Record<string, string>): Promise<{ status: number; body: { receipt?: { state: string } } }>;
   act: Act; alarm(): Promise<void>; at(ms: number): void; chatRows(): Promise<number>;
   brief(): { state?: string } | undefined; row(): { status: string; attempts: number } | undefined; sql: SqlStorage;
 }>;
@@ -77,6 +80,15 @@ const withBriefDue = (name: string, work: (day: Day) => Promise<void>) =>
         .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
       const headers = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': HASH };
       await work({
+        appDay: async contract => {
+          const read = await owner.fetch(new Request('https://telegram-owner/app/v1/controls?view=day', { headers: { ...headers, ...(contract ? { 'x-waldo-app-contract': contract } : {}) } }));
+          const body = await read.json() as { revision: string; data: { cards: Record<string, unknown>[] } };
+          return { revision: body.revision, cards: body.data.cards };
+        },
+        appAction: async body => {
+          const posted = await owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+          return { status: posted.status, body: await posted.json() as { receipt?: { state: string } } };
+        },
         act: action => app.act({ id: '', value: '', ...action }),
         alarm: async () => { state.storage.kv.put('owner_alarm_last_v1', 1); await owner.alarm(); },
         at: ms => { clock = ms; },
@@ -163,5 +175,26 @@ it('Resume on a paused job runs it now with a fresh count; a job that is not pau
     await day.alarm();
     expect(day.brief()?.state).toBe('sent');
     expect(await day.act({ action: 'schedule.resume', id: 'card:nope' })).toBe(false);
+  });
+});
+
+it('the app reads the failed Brief at controls=3, an older build reads it as pending, and Try again from the app makes it once', async () => {
+  await withBriefDue('try-again-app', async (day) => {
+    const brief = (view: AppDay) => view.cards.find(card => card.id === 'card:brief')!;
+    model.down = true;
+    await day.alarm();
+    const older = brief(await day.appDay('controls=2'));
+    expect(older).toMatchObject({ sent: false, state: 'pending' });
+    expect(older).not.toHaveProperty('state_reason');
+    expect(older).not.toHaveProperty('retries_left');
+    const v3 = await day.appDay('controls=3');
+    expect(brief(v3)).toMatchObject({ sent: false, state: 'failed', state_reason: "Waldo couldn't reach its model this morning", retries_left: 3 });
+    model.down = false;
+    const posted = await day.appAction({ view: 'day', action: 'card.retry', id: 'card:brief', revision: v3.revision, request_id: 'retry-app-0001' });
+    expect(posted).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
+    expect(brief(await day.appDay('controls=3'))).toMatchObject({ state: 'generating', state_reason: 'Waldo is making it now', retries_left: 2 });
+    await day.alarm();
+    expect(brief(await day.appDay('controls=3'))).toMatchObject({ sent: true, state: 'sent', retries_left: 2 });
+    expect(await day.chatRows()).toBe(1);
   });
 });

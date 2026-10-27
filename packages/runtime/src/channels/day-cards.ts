@@ -2,7 +2,7 @@ import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIAR
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
-import { ModelUnavailableError, type Scheduler } from '../scheduler/multiplexer';
+import { ModelUnavailableError, QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { localIso, localToEpoch } from './reminders';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
@@ -228,16 +228,47 @@ export const retryDayCard = async (
   if (deps.book.read(day).some((row) => row.card === card.id && row.state === 'sent')) return 'sent';
   const found = deps.scheduler.lookup(card.id);
   if (found.state === 'unreadable') return 'unreadable';
-  // A try that is due or running is in flight; a try parked to wait for the model is not, and the owner may try again.
-  if (found.state === 'entry' && (found.entry.payload_refs.retry_id !== undefined && found.entry.status === 'armed' && found.entry.due_at <= deps.now
-    || deps.scheduler.runningRunId(card.id, found.entry.occurrence_at) !== null)) return 'running';
-  const tries = deps.kv.get<{ day: string; count: number }>(RETRIES_KEY);
-  const count = tries?.day === day ? tries.count : 0;
+  if (found.state === 'entry' && inFlight(deps.scheduler, found.entry, deps.now)) return 'running';
+  const count = triesUsed(deps.kv, day);
   if (count >= CARD_RETRIES_PER_DAY) return 'limit';
   deps.kv.put(RETRIES_KEY, { day, count: count + 1 });
   await deps.scheduler.schedule({ id: card.id, kind: 'brief', payloadRefs: { id: card.id, retry_id: `${day}.${count + 1}` },
     occurrenceAt: deps.now, dueAt: deps.now, recurrence: null });
   return 'started';
+};
+
+// A card is being made when its run is in flight, or a Try again is due now. A try parked to wait for the model is not, so
+// the owner may try again.
+const inFlight = (scheduler: Scheduler, entry: ScheduleEntry, now: number): boolean =>
+  scheduler.runningRunId(entry.id, entry.occurrence_at) !== null
+  || (entry.status === 'armed' && entry.payload_refs.retry_id !== undefined && entry.due_at <= now);
+
+const triesUsed = (kv: Kv, day: string): number => {
+  const tries = kv.get<{ day: string; count: number }>(RETRIES_KEY);
+  return tries?.day === day ? tries.count : 0;
+};
+
+const OUTAGE_REASONS: ReadonlySet<string> = new Set(Object.values(MODEL_OUTAGE_SKIP));
+export type CardViewState = Exclude<CardState, 'waiting_on_model'> | 'generating' | 'failed' | 'paused';
+export type CardStatus = Readonly<{ state?: CardViewState; reason?: string; retriesLeft: number }>;
+
+// Where one of today's cards stands, as the console and the app show it. The plan book says how a card finished or that it
+// waits for the model; its schedule row says whether it is paused or being made now. A state the owner can act on carries a
+// short fixed reason, never error text.
+export const cardStatus = (
+  deps: Readonly<{ scheduler: Scheduler; book: DayPlanBook; kv: Kv; timezone: string; now: number }>, card: DayCard,
+): CardStatus => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find((planned) => planned.card === card.id);
+  const retriesLeft = Math.max(0, CARD_RETRIES_PER_DAY - triesUsed(deps.kv, day));
+  const found = deps.scheduler.lookup(card.id);
+  const entry = found.state === 'entry' ? found.entry : null;
+  if (row?.state === 'sent' || row?.state === 'held') return { state: row.state, retriesLeft };
+  if (row?.state === 'skipped') return { state: 'skipped', ...(OUTAGE_REASONS.has(row.reason) ? { reason: row.reason } : {}), retriesLeft };
+  if (entry !== null && inFlight(deps.scheduler, entry, deps.now)) return { state: 'generating', reason: 'Waldo is making it now', retriesLeft };
+  if (entry?.status === 'quarantined') return { state: 'paused', reason: `Paused after ${QUARANTINE_AFTER_ATTEMPTS} failed tries in a row`, retriesLeft };
+  if (row?.state === 'waiting_on_model') return { state: 'failed', reason: MODEL_OUTAGE_SKIP[card.id], retriesLeft };
+  return { ...(row === undefined ? { state: 'pending' as const } : row.state ? { state: row.state } : {}), retriesLeft };
 };
 
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
