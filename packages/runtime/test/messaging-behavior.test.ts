@@ -298,11 +298,13 @@ describe('the voice block', () => {
     expect(boundary).toBeGreaterThan(-1);
     expect(readBack).toBe(boundary + 1);
     const line = lines[readBack]!;
+    expect(line).toContain('is fine and is not the near-medicine case');
     expect(line).toContain('word for word');
     expect(line).toContain("the label's");
-    expect(line).toContain('is not the near-medicine case');
-    for (const change of ['take', 'change', 'double', 'skip', 'stop']) expect(line).toContain(change);
-    expect(line).toContain('doctor or pharmacist');
+    expect(line).toContain('Anything beyond the label');
+    for (const change of ['more', 'less', 'another time', 'change', 'double', 'skip', 'stop']) expect(line).toContain(change);
+    expect(line).toContain("doctor or pharmacist's call");
+    expect(line).not.toContain('What to take');
   });
 
   // "Use a number when it helps, inline" pulled against "never raw numbers in chat"; zone words win, a number on request.
