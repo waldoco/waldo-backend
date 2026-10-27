@@ -4,9 +4,8 @@ select plan(9);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
--- The series read returns the app that wrote each reading, so the producer can tell a Samsung Health reading in Health
--- Connect from any other writer's. The stored sample keeps the whole change, origin included; only its package name is
--- returned, and only when it is a string. Synthetic owner and values throughout.
+-- The series read says only whether Samsung Health wrote a reading, so the producer can tell one in Health Connect from
+-- any other writer's. The stored sample keeps the whole change, origin included; no package name leaves the database. Synthetic owner and values throughout.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$
 declare t text:=body::text; a bigint:=extract(epoch from now())::bigint; r jsonb;
@@ -25,9 +24,9 @@ create function pg_temp.batch(rid text,before_anchor text,after_anchor text,samp
   select jsonb_build_object('request_id',rid,'source','health_connect','consent_epoch',1,'timezone','UTC','anchor_before',before_anchor,'anchor_after',after_anchor,'samples',samples,'deletions','[]'::jsonb) $$;
 create function pg_temp.read() returns jsonb language sql as $$
   select pg_temp.h('series_read','origin-owner',jsonb_build_object('from',pg_temp.today()-2,'to',pg_temp.today(),'signals',jsonb_build_array('resting_heart_rate'))) $$;
-create function pg_temp.packages() returns jsonb language sql as $$
-  select coalesce(jsonb_object_agg(s->>'value', s->'origin_package'), '{}'::jsonb)
-  from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where s ? 'origin_package' $$;
+create function pg_temp.samsung() returns jsonb language sql as $$
+  select coalesce(jsonb_object_agg(s->>'value', s->'samsung_writer'), '{}'::jsonb)
+  from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where s ? 'samsung_writer' $$;
 
 insert into auth.users(id,email) values ('e5000000-0000-0000-0000-0000000000e5','origin@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values ('e6000000-0000-0000-0000-0000000000e6','e5000000-0000-0000-0000-0000000000e5','origin-owner','origin@example.invalid');
@@ -39,12 +38,12 @@ select is(pg_temp.h('ingest','origin-owner',pg_temp.batch('origin-0001',null::te
   pg_temp.rhr('r-none',53,null),
   pg_temp.rhr('r-nullpkg',54,pg_temp.origin(null)))))->>'accepted','4','readings with and without a recorded writer are accepted');
 select is(pg_temp.read()->'sources'->0->'samples'->0->>'signal','resting_heart_rate','the series read returns them');
-select is(pg_temp.packages()->'51','"com.sec.android.app.shealth"'::jsonb,'a reading carries the package name of the app that wrote it');
-select is(pg_temp.packages()->'52','"com.example.ringapp"'::jsonb,'another app''s reading carries its own');
-select ok(not (pg_temp.packages() ? '53'),'a reading with no origin carries no package name, not an empty one');
-select ok(not (pg_temp.packages() ? '54'),'and one whose origin names no package carries none either');
-select is((select count(*)::int from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where s ? 'origin'),0,'the rest of the origin is not returned');
-select is((select count(*)::int from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where (s->>'origin_package') is not null and char_length(s->>'origin_package') > 200),0,'and no package name longer than the contract allows');
+select is(pg_temp.samsung()->'51','true'::jsonb,'a reading Samsung Health wrote is marked as such');
+select ok(not (pg_temp.samsung() ? '52'),'another app''s reading is not marked');
+select ok(not (pg_temp.samsung() ? '53'),'a reading with no origin is not marked');
+select ok(not (pg_temp.samsung() ? '54'),'and one whose origin names no package is not marked either');
+select is((select count(*)::int from jsonb_array_elements(pg_temp.read()->'sources'->0->'samples') s where s ? 'origin' or s ? 'origin_package' or s ? 'source_package_name'),0,'no origin, and no package name, is returned for any reading');
+select ok(position('com.example.ringapp' in pg_temp.read()::text)=0 and position('com.sec.android' in pg_temp.read()::text)=0,'a package name appears nowhere in the read');
 
 select * from finish();
 rollback;

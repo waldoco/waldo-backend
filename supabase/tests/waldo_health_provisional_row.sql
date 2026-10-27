@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(34);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -99,6 +99,25 @@ select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),
 select is(pg_temp.scores()->'sleep_debt'->>'need_basis','blended_average','and read back with that basis');
 select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('own_average')))->>'written','true','the earlier bases are still written');
 select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('guessed')))->>'error','invalid_request','a basis outside the closed set is refused');
+
+-- The days a pillar names are the days it was computed from: the row's own day and the thirty before it, never another time.
+create function pg_temp.day(back int) returns text language sql as $$ select to_char((now() at time zone 'UTC')::date - back,'YYYY-MM-DD') $$;
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(0),pg_temp.day(31)])))->>'written','true','the row''s own day and the thirty-one before it are admitted');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(32)])))->>'error','invalid_request','a day more than thirty-one before the row''s is refused');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(-1)])))->>'error','invalid_request','and a day after it');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array['1999-01-01'])))->>'error','invalid_request','and one years away');
+
+-- A label travels with a confidence that is a number: a value that was not finite and became null is not written silently.
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(jsonb_build_object('baseline',pg_temp.label(),'used',pg_temp.used(),'confidence',null))))->>'error','invalid_request','a labelled pillar with a null confidence is refused');
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx((pg_temp.recovery(jsonb_build_object('baseline',pg_temp.label(),'used',pg_temp.used())) - 'confidence')))->>'error','invalid_request','and one with no confidence');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',pg_temp.used(),'confidence',1.2))->>'error','invalid_request','and one outside zero to one');
+
+-- Accepted is for the sources the amendment names. The basis list refuses any other source before this check is reached.
+create function pg_temp.ctx_source(source text, activation text) returns jsonb language sql as $$
+  select pg_temp.ctx(pg_temp.recovery(jsonb_build_object('activation',activation))) || jsonb_build_object('basis',jsonb_build_array(jsonb_build_object('source',source,'consent_epoch',1))) $$;
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx_source('fitbit','accepted'))->>'error','invalid_request','accepted from a source outside the named ones is refused');
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx_source('apple','accepted'))->>'written','true','accepted from a named source is written');
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx_source('apple','candidate_unaccepted'))->>'written','true','and a candidate from it');
 
 select * from finish();
 rollback;
