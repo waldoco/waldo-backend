@@ -150,7 +150,7 @@ it('registered dispatcher uses the existing host for native field observation an
 it('rejects an oversized encoded observation and clears earlier action eligibility before persistence',async()=>{
  const f=fixture(),host=f.host();
  const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
- commonBrowserFixture.text='é'.repeat(140000);
+ commonBrowserFixture.links=1;commonBrowserFixture.linkName='é'.repeat(140000);
  const oversized=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read again.'},f.ctx);
  expect(oversized).toMatchObject({ok:false});expect(JSON.stringify(oversized)).toContain('observation_oversize');
  const row=f.rows.get('common-browser:fixture-task') as any;
@@ -281,7 +281,7 @@ it('failed reads and actions name the open session_handle and a next step, never
 it('cancel ends a retained session that has no current observation, whatever url it is given',async()=>{
  const f=fixture(),host=f.host();
  const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;expect(first.ok).toBe(true);
- commonBrowserFixture.text='é'.repeat(140000);
+ commonBrowserFixture.links=1;commonBrowserFixture.linkName='é'.repeat(140000);
  expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read again.'},f.ctx)).toMatchObject({ok:false});
  expect((f.rows.get('common-browser:fixture-task') as any).observation).toBeUndefined();
  expect(await host.actionHandler.handle({url:'https://public-pages.fixture.invalid/other',task:'Close the browser',max_actions:1,session_handle:first.data.session_handle,command:{operation:'cancel'}} as never,f.ctx)).toMatchObject({ok:true,data:{ended:true}});
@@ -351,4 +351,16 @@ it('a GET form whose action leaves the granted origins is refused before dispatc
  const refused=await host.actionHandler.handle({url:first.data.url,task:'Search',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,key:'Enter',intent:'read'}},f.ctx);
  expect(refused).toMatchObject({ok:false,code:'rejected'});expect(JSON.stringify(refused)).toContain('native_submit_requires_card');
  expect(commonBrowserFixture.effects).toBe(0);await host.cancel();
+});
+it('a link-heavy long page is read and acted on: the checkpoint keeps only the shown refs, never the page text',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.links=1500;commonBrowserFixture.text='Fictional encyclopedia paragraph. '.repeat(3000);
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ expect(first).toMatchObject({ok:true});expect(first.data.elements).toHaveLength(64);expect(first.data.text).toHaveLength(8000);
+ const stored=JSON.stringify(f.rows.get('common-browser:fixture-task'));
+ expect(stored).not.toContain('Fictional encyclopedia paragraph');expect(stored).not.toContain('Fictional_article_63_');
+ const filled=await host.actionHandler.handle({url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'read'}},f.ctx);
+ expect(filled).toMatchObject({ok:true});expect(commonBrowserFixture.effects).toBe(1);
+ const unshown=first.data.elements[63].ref.replace(/:63$/,':200');
+ expect(await host.actionHandler.handle({url:first.data.url,task:'Open an unshown link',max_actions:1,command:{operation:'click',element_ref:unshown}},f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.effects).toBe(1);await host.cancel();
 });

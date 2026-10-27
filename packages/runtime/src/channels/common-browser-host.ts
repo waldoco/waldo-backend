@@ -32,6 +32,7 @@ export type CommonBrowserConfiguration = Readonly<{
 // key/value limit. Measure UTF-8 JSON, including the envelope, and reserve room
 // for the bounded intent/cleanup metadata added after observation publication.
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
+const OBSERVATION_ELEMENT_LIMIT=64;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
@@ -116,7 +117,10 @@ export function commonBrowserHost(options:Readonly<{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
   if(!latest||latest.cleanup||!sameSession(latest,record))throw Error('common browser custody changed');
-  const {image:_,...observation}=observed;
+  // The checkpoint holds what a later action needs: the refs the model is shown and their native targets.
+  // Page text and the accessibility snapshot reach the model only, so a long page never outgrows storage.
+  const {image:_,state,observation:shown,...identity}=observed;
+  const observation={...identity,state:{...state,text:'',elements:state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)},observation:{...shown,text:'',accessibility_snapshot:undefined,elements:shown.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)}};
   const checkpoint={...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
   if(encodedCheckpointBytes(checkpoint)>COMMON_BROWSER_CHECKPOINT_BYTES-1024){
    // Do not truncate native refs/state or leave an older observation actionable.
@@ -130,8 +134,8 @@ export function commonBrowserHost(options:Readonly<{
    if(images.length>=4)images.shift();
    images.push({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
   }
-  return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
-   field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
+  return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,OBSERVATION_ELEMENT_LIMIT),tabs:observed.observation.tabs.slice(0,8),
+   field_values:observed.state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
    ...(observed.image?{}:{text_only:true,image_notice:'The screenshot was over the size limit, so no image of this page is attached. Use its text, accessibility_snapshot and element refs; any attached images are from earlier pages.'}),
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
  };
