@@ -75,7 +75,6 @@ declare global {
       GOOGLE_CLIENT_SECRET?: string;
       WHOOP_CLIENT_ID?: string;
       WHOOP_CLIENT_SECRET?: string;
-      WHOOP_REDIRECT_URI?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
       ANTHROPIC_API_KEY?: string;

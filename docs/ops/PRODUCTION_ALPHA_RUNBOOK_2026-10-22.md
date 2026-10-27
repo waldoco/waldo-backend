@@ -134,7 +134,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `TELEGRAM_BOT_TOKEN` | `channels/telegram-webhook.ts:116` | Telegram off | **not set**. Telegram is retiring, and ADR-0055/ADR-0073 item 7 treat it as a privacy residual. If it is ever set, use a new bot: the owner DO re-registers the webhook whenever its origin changes (`owner-do.ts:1219-1228`), so two Workers sharing one bot steal it back and forth. |
 | `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | `channels/whatsapp-webhook.ts:173-212` | WhatsApp off | not set until Meta verification and P5 (D5) |
 | `IMESSAGE_CREDENTIAL_WRAPPING_KEY` | `channels/imessage/bridge-do.ts:35` | iMessage off | not set (D5) |
-| `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REDIRECT_URI` | `health/providers/whoop-routes.ts:21` | WHOOP off | not set. WHOOP comes later (owner ruling, 22 Oct). |
+| `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` (redirect derived from `WALDO_PUBLIC_ORIGIN`) | `health/providers/whoop-routes.ts` | WHOOP off | not set. WHOOP comes later (owner ruling, 22 Oct). |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSER_USE_API_KEY` | `owner-do.ts:2957`; `browser-use-errand-engine.ts:60` | browser submit says it is not set up | not set (browser is Cloudflare-only, on staging) |
 | `WALDO_PROBE_TOKEN` | `channels/probe-turn.ts:84` | none; the route is 404 outside staging | not set |
 | `WALDO_PROBE_TELEGRAM_ID` | `channels/probe-turn.ts` | none; without it the staging probe refuses (503) | not set |
