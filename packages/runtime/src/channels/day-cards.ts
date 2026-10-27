@@ -191,7 +191,8 @@ export const runDayCard = async (input: Readonly<{
   if (card === null) return;
   const day = localIso(input.entry.occurrence_at, input.timezone).slice(0, 10);
   const waited = input.book.read(day).some((row) => row.card === card.id && row.state === 'waiting_on_model');
-  if (waited && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
+  // A Try again is the owner asking for the card now, so it runs whatever the hour.
+  if (waited && input.entry.payload_refs.retry_id === undefined && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
     input.book.skipped(day, card.id, MODEL_OUTAGE_SKIP[card.id]);
     return;
   }
@@ -208,6 +209,35 @@ export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook
   const resumed: CardId[] = [];
   for (const card of book.waitingForModel()) if (await scheduler.pullForward(card, now)) resumed.push(card);
   return resumed;
+};
+
+export const CARD_RETRIES_PER_DAY = 3;
+const RETRIES_KEY = 'day_card_retries_v1';
+export type CardRetry = 'started' | 'running' | 'sent' | 'limit' | 'unknown_card' | 'unreadable';
+
+// Try again on one of today's cards, as the owner. The card's own schedule row is armed to run now, so the scheduled card
+// job writes it and an upsert lifts a quarantine on the row. Each try carries its own retry_id, which keys the card's
+// delivery apart from the day's earlier attempt. A card already sent today is not written again. A card already armed for a
+// try that is due, or with a run in flight, is left alone, so a double tap makes one card. Three tries a day per owner.
+export const retryDayCard = async (
+  deps: Readonly<{ scheduler: Scheduler; book: DayPlanBook; kv: Kv; timezone: string; now: number }>, id: string,
+): Promise<CardRetry> => {
+  const card = cardFor(id);
+  if (card === null) return 'unknown_card';
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  if (deps.book.read(day).some((row) => row.card === card.id && row.state === 'sent')) return 'sent';
+  const found = deps.scheduler.lookup(card.id);
+  if (found.state === 'unreadable') return 'unreadable';
+  // A try that is due or running is in flight; a try parked to wait for the model is not, and the owner may try again.
+  if (found.state === 'entry' && (found.entry.payload_refs.retry_id !== undefined && found.entry.status === 'armed' && found.entry.due_at <= deps.now
+    || deps.scheduler.runningRunId(card.id, found.entry.occurrence_at) !== null)) return 'running';
+  const tries = deps.kv.get<{ day: string; count: number }>(RETRIES_KEY);
+  const count = tries?.day === day ? tries.count : 0;
+  if (count >= CARD_RETRIES_PER_DAY) return 'limit';
+  deps.kv.put(RETRIES_KEY, { day, count: count + 1 });
+  await deps.scheduler.schedule({ id: card.id, kind: 'brief', payloadRefs: { id: card.id, retry_id: `${day}.${count + 1}` },
+    occurrenceAt: deps.now, dueAt: deps.now, recurrence: null });
+  return 'started';
 };
 
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
