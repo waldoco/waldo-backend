@@ -5,8 +5,9 @@ import {CONTROL_ACTION_PATH} from './dashboard-control-actions';
 import { handleSignup, CONSOLE_SIGNUP_PATH } from './console-signup';
 import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
-import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth, fromAnotherSite, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
+import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth, fromAnotherSite, OWNER_COOKIE, type ConsoleAuth, type IdentitySignIn } from '../identity/console-auth';
 import { googlePkceCookie, readGoogleSignIn, startGoogleSignIn } from '../identity/google-pkce';
+import { readWebIdSignIn, startWebIdSignIn, webIdCookie, type WebIdProvider } from '../identity/web-id-token';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, consoleCookie, grantHeaders } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
@@ -21,6 +22,13 @@ export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_SIGNIN_PATH}/google`;
 const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
+export const CONSOLE_APPLE_PATH = `${CONSOLE_SIGNIN_PATH}/apple`;
+const CONSOLE_APPLE_CALLBACK_PATH = `${CONSOLE_APPLE_PATH}/callback`;
+// A provider's form post: state and id_token (Apple adds code, and on a first authorization a small user object).
+const WEB_ID_CALLBACK_MAX_BYTES = 16 * 1024;
+const WEB_ID_CALLBACKS: Readonly<Record<WebIdProvider, string>> = { apple: CONSOLE_APPLE_CALLBACK_PATH, google: CONSOLE_GOOGLE_CALLBACK_PATH };
+const clientIdOf = (value: string | undefined) => value && /^[A-Za-z0-9.-]{1,255}$/.test(value) ? value : null;
+const ID_TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 // Auth-specific fixed-window limits (per email, and per IP across both endpoints), enforced in
 // the owner directory so they hold globally: OTP send 5 per 15 min, verify 10 per 15 min,
@@ -31,7 +39,12 @@ export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
 // CONSOLE_GOOGLE_SIGNIN "1" offers Google on the sign-in page; it needs the callback on Supabase's redirect allow list first.
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string }>;
+// With CONSOLE_GOOGLE_CLIENT_ID (a web client whose redirect URIs include this console's Google callback, listed among
+// Supabase's Google client IDs) Google signs in by identity token; without it, through Supabase's own redirect flow.
+// CONSOLE_APPLE_SIGNIN "1" offers Apple, given APPLE_SERVICES_ID: the Services ID whose return URL is this console's
+// Apple callback, listed among Supabase's Apple client IDs.
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string;
+  CONSOLE_GOOGLE_CLIENT_ID?: string; CONSOLE_APPLE_SIGNIN?: string; APPLE_SERVICES_ID?: string }>;
 // The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
 const dashboardJson = (url: URL, request: Request) =>
   [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_ACCESS_LOG_PATH].includes(url.pathname)
@@ -215,10 +228,13 @@ const joinLink = `<p class="help">New to Waldo? <a href="${CONSOLE_SIGNUP_PATH}"
 // Confirm mode is the step-up before an action that creates lasting access: the same email code, in a browser that stays
 // signed in, back to the page the owner came from.
 const confirmIntro = `<h1>Confirm it's you</h1><p>Pairing a Mac, linking a chat, connecting an account or tool, letting a tool run without asking, inviting someone and deleting your account need an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. Enter your email and Waldo sends you one; this browser stays signed in.</p>`;
-const googleLink = (target: string | null) => `<a class="alt" id="signin-google" href="${CONSOLE_GOOGLE_PATH}${target ? `?return_to=${encodeURIComponent(target)}` : ''}">Continue with Google</a>`;
-const signinEmailForm = (note = '', email = '', target: string | null = null, confirming = false, google = false) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${confirming ? confirmIntro : '<h1>Sign in to Waldo</h1><p>Enter your email and Waldo sends you a sign-in code.</p>'}${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(email)}" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>${confirming ? '' : `${google ? googleLink(target) : ''}${staysSignedIn}${joinLink}`}`);
+const providerLink = (id: string, path: string, label: string, target: string | null) => `<a class="alt" id="${id}" href="${path}${target ? `?return_to=${encodeURIComponent(target)}` : ''}">${label}</a>`;
+type Providers = Readonly<{ google: boolean; apple: boolean }>;
+const providerLinks = ({ google, apple }: Providers, target: string | null) =>
+  `${apple ? providerLink('signin-apple', CONSOLE_APPLE_PATH, 'Continue with Apple', target) : ''}${google ? providerLink('signin-google', CONSOLE_GOOGLE_PATH, 'Continue with Google', target) : ''}`;
+const signinEmailForm = (note = '', email = '', target: string | null = null, confirming = false, providers: Providers = { google: false, apple: false }) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${confirming ? confirmIntro : '<h1>Sign in to Waldo</h1><p>Enter your email and Waldo sends you a sign-in code.</p>'}${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(email)}" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>${confirming ? '' : `${providerLinks(providers, target)}${staysSignedIn}${joinLink}`}`);
 // The default status is the same for every address, so this page never says who is a member.
-// link: the Google identity this code also confirms; it rides along with every form on the page.
+// link: the Apple or Google identity this code also confirms; it rides along with every form on the page.
 const linkField = (link: string | null) => link ? `<input type="hidden" name="link" value="${esc(link)}">` : '';
 const signinCodeForm = (email: string, note = '', target: string | null = null, link: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}${linkField(link)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${linkField(link)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
 
@@ -235,8 +251,14 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   const resume = request.method === 'GET' ? consoleReturnTarget([url.pathname + url.search]) : null;
   const signin = () => new Response(null, { status: 303, headers: { location: resume ? `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` : CONSOLE_SIGNIN_PATH } });
   let target = consoleReturnTarget(url.searchParams.getAll('return_to'));
-  const google = env.CONSOLE_GOOGLE_SIGNIN === '1' && Boolean(env.SUPABASE_PROJECT_URL && env.WALDO_ROUTER_HMAC_SECRET && auth.signInWithAuthCode);
-  const emailForm = (note = '', email = '') => signinEmailForm(note, email, target, url.searchParams.get('confirm') === '1', google);
+  const byIdToken = Boolean(env.WALDO_ROUTER_HMAC_SECRET && auth.signInWithIdToken);
+  // The client each provider's identity-token flow runs under, or null where it is not offered.
+  const webClients: Readonly<Record<WebIdProvider, string | null>> = {
+    apple: env.CONSOLE_APPLE_SIGNIN === '1' && byIdToken ? clientIdOf(env.APPLE_SERVICES_ID) : null,
+    google: env.CONSOLE_GOOGLE_SIGNIN === '1' && byIdToken ? clientIdOf(env.CONSOLE_GOOGLE_CLIENT_ID) : null,
+  };
+  const google = webClients.google === null && env.CONSOLE_GOOGLE_SIGNIN === '1' && Boolean(env.SUPABASE_PROJECT_URL && env.WALDO_ROUTER_HMAC_SECRET && auth.signInWithAuthCode);
+  const emailForm = (note = '', email = '') => signinEmailForm(note, email, target, url.searchParams.get('confirm') === '1', { google: google || webClients.google !== null, apple: webClients.apple !== null });
   let link: string | null = null;
   const codeForm = (email: string, note = '') => signinCodeForm(email, note, target, link);
   const formLink = (form: FormData) => { const value = form.get('link'); return typeof value === 'string' && value.length > 0 && value.length <= 2048 ? value : null; };
@@ -263,6 +285,72 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     event(hop, true, 'signed_in');
     return withCookies(new Response(terminal?.body ?? null, { status: terminal ? 200 : 303, headers }));
   };
+  // Both providers' callbacks spend the same per-IP budget as the email code.
+  const admitIdentity = async (limiterKey: string) => {
+    if (!env.RESPONSIBILITY_RATE_LIMITER) return 'limiter_absent' as const;
+    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    try {
+      return (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${limiterKey}:${ip}` })).success
+        && await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS) ? 'admitted' as const : 'throttled' as const;
+    } catch { return 'throttled' as const; }
+  };
+  // What an Apple or Google sign-in answered: members only, and an identity reaching an owner for the first time signs in
+  // only after the owner's mailbox confirms it with a code.
+  const finishIdentity = async (signedIn: IdentitySignIn, hop: string, name: 'Apple' | 'Google', back: (code: string, note: string) => Response, spent: string, notMember: string) => {
+    if (signedIn.state === 'refused') return back(signedIn.reason === 'token' ? 'code_refused' : 'no_email', `${name} did not confirm that sign-in. Try again, or use an email code.`);
+    // The person proved they hold this address, so saying it has no account tells them only about themselves.
+    if (signedIn.state === 'needs_invite') return back('not_member', notMember);
+    if (signedIn.state === 'confirm') {
+      let sent = false;
+      try { sent = await auth.throttle(`send:${signedIn.email}`, CONSOLE_OTP_SEND_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS) && await auth.sendCode(signedIn.email); }
+      catch { sent = false; }
+      if (!sent) return back('confirm_unsent', 'Sign-in is having trouble. Try again in a few minutes, or use an email code.');
+      event(hop, true, 'confirm_sent');
+      link = signedIn.link;
+      const response = codeForm(signedIn.email, `This is the first time this ${name} account signs in to your Waldo account. To confirm it, enter the code we emailed to ${signedIn.email}.`);
+      response.headers.append('set-cookie', spent);
+      return finish(response);
+    }
+    return signInOwner(signedIn.doName, hop, emailForm, [spent]);
+  };
+  const webStart = Object.entries({ apple: CONSOLE_APPLE_PATH, google: CONSOLE_GOOGLE_PATH } as const).find(([, path]) => url.pathname === path)?.[0] as WebIdProvider | undefined;
+  if (webStart && request.method === 'GET' && (webStart === 'apple' || webClients.google !== null)) {
+    const clientId = webClients[webStart];
+    if (!clientId || fromAnotherSite(request)) return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
+    const started = await startWebIdSignIn(webStart, env.WALDO_ROUTER_HMAC_SECRET!, clientId, `${url.origin}${WEB_ID_CALLBACKS[webStart]}`, target, Date.now());
+    event(`console_${webStart}`, true, 'started');
+    return finish(new Response(null, { status: 303, headers: { location: started.location, 'set-cookie': started.cookie } }));
+  }
+  // The provider posts the sign-in back from its own site, so this is a cross-site POST by design: without this browser's
+  // sealed nonce and state it signs no one in, and Supabase refuses a token whose nonce is not this attempt's.
+  const webCallback = (Object.entries(WEB_ID_CALLBACKS) as [WebIdProvider, string][]).find(([, path]) => url.pathname === path)?.[0];
+  if (webCallback && request.method === 'POST') {
+    const provider = webCallback, name = provider === 'apple' ? 'Apple' : 'Google', hop = `console_${provider}`;
+    const spent = webIdCookie(provider, WEB_ID_CALLBACKS[provider], '', 0);
+    const back = (code: string, note: string) => { event(hop, false, code); const response = emailForm(note); response.headers.append('set-cookie', spent); return finish(response); };
+    const started = webClients[provider] ? await readWebIdSignIn(provider, env.WALDO_ROUTER_HMAC_SECRET!, request, Date.now()) : null;
+    if (!started) return back('no_verifier', `${name} sign-in timed out or began in another browser. Try again.`);
+    target = consoleReturnTarget([started.target]);
+    const length = Number(request.headers.get('content-length'));
+    let form: FormData | null = null;
+    if (request.headers.has('content-length') && Number.isSafeInteger(length) && length <= WEB_ID_CALLBACK_MAX_BYTES) { try { form = await request.formData(); } catch { form = null; } }
+    const field = (key: string) => { const value = form?.get(key); return typeof value === 'string' ? value : ''; };
+    const unfinished = `${name} sign-in did not finish. Try again, or use an email code.`;
+    if (!form || field('state') !== started.state) return back('state_mismatch', unfinished);
+    const idToken = field('id_token');
+    // A cancel or a refusal posts an error and no token.
+    if (idToken.length > 4096 || !ID_TOKEN.test(idToken)) return back('not_finished', unfinished);
+    const admitted = await admitIdentity(`console-${provider}-ip`);
+    if (admitted === 'limiter_absent') return back('limiter_absent', 'Sign-in is temporarily unavailable. Try again shortly.');
+    if (admitted === 'throttled') return back('throttled', 'Too many attempts. Try again in a few minutes.');
+    let signedIn: IdentitySignIn;
+    // No invite: the console signs members in, and a new member joins in the app.
+    try { signedIn = await auth.signInWithIdToken!(provider, idToken, started.nonce, '', ''); }
+    catch { return back('verification_unavailable', 'Sign-in is temporarily unavailable. Try again shortly.'); }
+    return finishIdentity(signedIn, hop, name, back, spent, provider === 'apple'
+      ? 'No Waldo account uses the email on this Apple account. If you chose Hide My Email, Apple shared a relay address instead: sign in with your email code.'
+      : 'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
+  }
   if (url.pathname === CONSOLE_GOOGLE_PATH && request.method === 'GET') {
     // Another site may link here, but only this console starts the flow, so a visit it did not start sets no verifier.
     if (!google || fromAnotherSite(request)) return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
@@ -280,33 +368,14 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     target = consoleReturnTarget([started.target]);
     const code = url.searchParams.get('code');
     if (!code || code.length > 512) return back('not_finished', 'Google sign-in did not finish. Try again, or use an email code.');
-    if (!env.RESPONSIBILITY_RATE_LIMITER) return back('limiter_absent', 'Sign-in is temporarily unavailable. Try again shortly.');
-    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
-    let admitted = false;
-    try {
-      admitted = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-google-ip:${ip}` })).success
-        && await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS);
-    } catch { admitted = false; }
-    if (!admitted) return back('throttled', 'Too many attempts. Try again in a few minutes.');
-    let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithAuthCode']>>>;
+    const admitted = await admitIdentity('console-google-ip');
+    if (admitted === 'limiter_absent') return back('limiter_absent', 'Sign-in is temporarily unavailable. Try again shortly.');
+    if (admitted === 'throttled') return back('throttled', 'Too many attempts. Try again in a few minutes.');
+    let signedIn: IdentitySignIn;
     try { signedIn = await auth.signInWithAuthCode!(code, started.verifier); }
     catch { return back('verification_unavailable', 'Sign-in is temporarily unavailable. Try again shortly.'); }
-    if (signedIn.state === 'refused') return back(signedIn.reason === 'token' ? 'code_refused' : 'no_email', 'Google did not confirm that sign-in. Try again, or use an email code.');
-    // The person proved they hold this Google address, so saying it has no account tells them only about themselves.
-    if (signedIn.state === 'needs_invite') return back('not_member', 'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
-    if (signedIn.state === 'confirm') {
-      // A Google account this owner has never signed in with: the mailbox confirms it before anything is signed in.
-      let sent = false;
-      try { sent = await auth.throttle(`send:${signedIn.email}`, CONSOLE_OTP_SEND_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS) && await auth.sendCode(signedIn.email); }
-      catch { sent = false; }
-      if (!sent) return back('confirm_unsent', 'Sign-in is having trouble. Try again in a few minutes, or use an email code.');
-      event('console_google', true, 'confirm_sent');
-      link = signedIn.link;
-      const response = codeForm(signedIn.email, `This is the first time this Google account signs in to your Waldo account. To confirm it, enter the code we emailed to ${signedIn.email}.`);
-      response.headers.append('set-cookie', spent);
-      return finish(response);
-    }
-    return signInOwner(signedIn.doName, 'console_google', emailForm, [spent]);
+    return finishIdentity(signedIn, 'console_google', 'Google', back, spent,
+      'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
   }
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return finish(emailForm());
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {

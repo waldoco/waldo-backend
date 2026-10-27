@@ -7,6 +7,7 @@ import { consoleAuth } from '../src/identity/console-auth';
 import { GOOGLE_PKCE_COOKIE, GOOGLE_PKCE_PURPOSE } from '../src/identity/google-pkce';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 import { sealValue } from '../src/identity/sealed-value';
+import { readWebIdSignIn } from '../src/identity/web-id-token';
 
 const SECRET = 'fictional-id-token-router-secret-000000000000', DIRECTORY = 'https://id-token.fixture.invalid', KEY = 'fictional-public-key';
 const INVITE = 'ABCDEFGHJKLMNPQRSTUV', INVITED = 'new.member@example.test', MEMBER = 'member@example.test';
@@ -26,7 +27,7 @@ type Granted = { id: string; provider: string; last_sign_in_at: string };
 // email; a new identity links to the user holding the same verified email, else gets a user of its own; and an identity
 // linked to an existing user in this very grant is missing from the response's identities. The owner directory matches
 // the Auth user and the email together, as the SQL does, and trusts only a subject Supabase links to that Auth user.
-const supabase = async () => {
+const supabase = async (extra: Record<string, string> = {}) => {
   const inviteHash = await linkCodeHash(INVITE);
   let minted = 0, clock = Date.parse('2026-10-26T12:00:00Z');
   const state = {
@@ -166,6 +167,7 @@ const supabase = async () => {
     ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, CONSOLE_GOOGLE_SIGNIN: '1', APP_ID_TOKEN_SIGNIN: '1',
     RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !limited.value }) },
     OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: grantFetch }) } as unknown as DurableObjectNamespace,
+    ...extra,
   };
   const auth = consoleAuth(settings, fetcher as typeof fetch, () => Date.now() + now.offset)!;
   const app = async (path: string, body: unknown, overrides: Record<string, unknown> = {}) => {
@@ -584,5 +586,172 @@ describe('console sign-in with Google', () => {
     expect(done.status).toBe(200);
     expect(await done.text()).toContain('Google sign-in did not finish');
     expect(sandbox.state.grants).toEqual([]);
+  });
+});
+
+const WEB_ID = {
+  apple: { name: 'Apple', client: 'in.heywaldo.signin', on: { CONSOLE_APPLE_SIGNIN: '1', APPLE_SERVICES_ID: 'in.heywaldo.signin' }, authorize: 'https://appleid.apple.com/auth/authorize',
+    params: { response_type: 'code id_token', scope: 'email' }, off: [{ CONSOLE_APPLE_SIGNIN: '0', APPLE_SERVICES_ID: 'in.heywaldo.signin' }, { CONSOLE_APPLE_SIGNIN: '1' }, { CONSOLE_APPLE_SIGNIN: '1', APPLE_SERVICES_ID: 'bad id/with slash' }],
+    stranger: 'abc123@privaterelay.appleid.com', notMember: 'If you chose Hide My Email, Apple shared a relay address instead: sign in with your email code.' },
+  google: { name: 'Google', client: 'fictional-web-client.apps.googleusercontent.com', on: { CONSOLE_GOOGLE_CLIENT_ID: 'fictional-web-client.apps.googleusercontent.com' }, authorize: 'https://accounts.google.com/o/oauth2/v2/auth',
+    params: { response_type: 'id_token', scope: 'openid email', prompt: 'select_account' }, off: [{ CONSOLE_GOOGLE_SIGNIN: '0', CONSOLE_GOOGLE_CLIENT_ID: 'fictional-web-client.apps.googleusercontent.com' }],
+    stranger: 'stranger@example.test', notMember: 'No Waldo account uses that Google address.' },
+} as const;
+
+describe.each(['apple', 'google'] as const)('console sign-in with %s by identity token', provider => {
+  type Sandbox = Awaited<ReturnType<typeof supabase>>;
+  const P = WEB_ID[provider], ON = P.on, PATH = `/console/signin/${provider}`, CALLBACK = `${PATH}/callback`, COOKIE = `waldo_${provider}_signin`;
+  const cookiesOf = (response: Response) => (response.headers as unknown as SetCookies).getSetCookie();
+  const signedIn = (response: Response) => cookiesOf(response).some(value => value.startsWith('waldo_owner='));
+  const start = async (sandbox: Sandbox, path: string = PATH) => {
+    const response = await sandbox.console(path, { headers: { 'sec-fetch-site': 'same-origin' } });
+    expect(response.status).toBe(303);
+    const location = new URL(response.headers.get('location')!);
+    const cookie = response.headers.get('set-cookie')!;
+    return { location, cookie, pair: cookie.split(';')[0]! };
+  };
+  // Apple's form post back to the console, from Apple's site: a cross-site POST.
+  const post = (sandbox: Sandbox, fields: Record<string, string>, cookie?: string, extra: Record<string, string> = {}) => {
+    const body = new URLSearchParams(fields).toString();
+    return sandbox.console(CALLBACK, { method: 'POST', body,
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': String(body.length), 'sec-fetch-site': 'cross-site', ...(cookie ? { cookie } : {}), ...extra } });
+  };
+  // Apple signs the token for the nonce hash it was handed in the authorize request.
+  const providerReturns = async (sandbox: Sandbox, token: Omit<Token, 'nonce' | 'provider'>, path?: string) => {
+    const { location, pair } = await start(sandbox, path);
+    const idToken = sandbox.token({ provider, nonce: location.searchParams.get('nonce')!, ...token });
+    return { location, pair, idToken, fields: { state: location.searchParams.get('state')!, ...(provider === 'apple' ? { code: 'apple-web-code-0123456789' } : {}), id_token: idToken } };
+  };
+
+  it('starts the provider\'s own form-post flow under its client, with a sealed nonce and state in a SameSite=None cookie scoped to the callback', async () => {
+    const sandbox = await supabase(ON);
+    const page = await (await sandbox.console('/console/signin')).text();
+    expect(page).toContain(`href="${PATH}">Continue with ${P.name}</a>`);
+    const { location, cookie, pair } = await start(sandbox);
+    expect(`${location.origin}${location.pathname}`).toBe(P.authorize);
+    expect(Object.fromEntries(location.searchParams)).toEqual({ client_id: P.client, redirect_uri: `https://console.fixture.invalid${CALLBACK}`,
+      response_mode: 'form_post', ...P.params, state: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), nonce: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(cookie).toBe(`${pair}; Path=${CALLBACK}; HttpOnly; Secure; SameSite=None; Max-Age=600`);
+    expect(pair.startsWith(`${COOKIE}=`)).toBe(true);
+    const sealed = await readWebIdSignIn(provider, SECRET, new Request('https://console.fixture.invalid/', { headers: { cookie: pair } }), Date.now());
+    expect(sealed!.state).toBe(location.searchParams.get('state'));
+    expect(await hex(sealed!.nonce)).toBe(location.searchParams.get('nonce'));
+    expect(sandbox.fetcher).not.toHaveBeenCalled();
+  });
+
+  it('signs a member in through the app\'s identity-token grant, with this browser\'s raw nonce, and spends the cookie', async () => {
+    const sandbox = await supabase(ON);
+    await sandbox.member();
+    const sub = `${provider}-console-member`;
+    // A first sign-in with this identity confirms it by email code; once trusted it signs in directly.
+    const first = await providerReturns(sandbox, { email: MEMBER, sub });
+    const confirm = await post(sandbox, first.fields, first.pair);
+    expect(signedIn(confirm)).toBe(false);
+    expect(await confirm.text()).toContain(`This is the first time this ${P.name} account signs in to your Waldo account.`);
+    expect(sandbox.state.otp).toEqual([MEMBER]);
+    const owner = sandbox.state.owners.get(MEMBER)!;
+    sandbox.state.trusted.add(`${owner.doName}|${provider}|${sub}`);
+    const { fields, pair, idToken } = await providerReturns(sandbox, { email: MEMBER, sub });
+    const response = await post(sandbox, fields, pair);
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/console');
+    expect(signedIn(response)).toBe(true);
+    expect(cookiesOf(response)).toContain(`${COOKIE}=; Path=${CALLBACK}; HttpOnly; Secure; SameSite=None; Max-Age=0`);
+    const grant = sandbox.state.grants.at(-1)!;
+    expect(grant).toEqual({ grant_type: 'id_token', provider, id_token: idToken, nonce: (await readWebIdSignIn(provider, SECRET, new Request('https://x.invalid/', { headers: { cookie: pair } }), Date.now()))!.nonce });
+  });
+
+  it('admits members only: an address with no account is told so, nothing is created, and no invite is asked for', async () => {
+    const sandbox = await supabase(ON);
+    const { fields, pair } = await providerReturns(sandbox, { email: P.stranger, sub: `${provider}-stranger` });
+    const response = await post(sandbox, fields, pair);
+    expect(signedIn(response)).toBe(false);
+    expect(await response.text()).toContain(P.notMember);
+    expect(sandbox.state.signups).toEqual([]);
+    expect(sandbox.state.owners.size).toBe(0);
+  });
+
+  it('refuses a token minted for another attempt\'s nonce: Supabase checks it against this browser\'s raw nonce', async () => {
+    const sandbox = await supabase(ON);
+    await sandbox.member();
+    const { location, pair } = await start(sandbox);
+    const stolen = sandbox.token({ provider, email: MEMBER, sub: `${provider}-elsewhere`, nonce: await hex('another-browsers-raw-nonce-000') });
+    const response = await post(sandbox, { state: location.searchParams.get('state')!, id_token: stolen }, pair);
+    expect(signedIn(response)).toBe(false);
+    expect(await response.text()).toContain(`${P.name} did not confirm that sign-in.`);
+  });
+
+  it('signs no one in, and asks Supabase nothing, without this browser\'s cookie, with a forged or expired one, another attempt\'s state, a cancel, a malformed token or an oversized post', async () => {
+    const sandbox = await supabase(ON);
+    await sandbox.member();
+    const { fields, pair } = await providerReturns(sandbox, { email: MEMBER, sub: `${provider}-refused` });
+    const [, value] = pair.split('=') as [string, string];
+    const forged = `${COOKIE}=${await sealValue('another-router-secret-00000000000000000', `${provider}signin`, { nonce: 'n'.repeat(43), state: fields.state, target: null, expires: Math.floor(Date.now() / 1000) + 600 })}`;
+    const outlives = `${COOKIE}=${await sealValue(SECRET, `${provider}signin`, { nonce: 'n'.repeat(43), state: fields.state, target: null, expires: Math.floor(Date.now() / 1000) + 3600 })}`;
+    const otherProvider = `${COOKIE}=${await sealValue(SECRET, provider === 'apple' ? 'googlesignin' : 'applesignin', { nonce: 'n'.repeat(43), state: fields.state, target: null, expires: Math.floor(Date.now() / 1000) + 600 })}`;
+    const cases: [string, Response][] = [
+      ['no cookie', await post(sandbox, fields)],
+      ['forged', await post(sandbox, fields, forged)],
+      ['tampered', await post(sandbox, fields, `${COOKIE}=${value.slice(0, -2)}xx`)],
+      ['sealed for the other provider', await post(sandbox, fields, otherProvider)],
+      ['outlives the flow', await post(sandbox, fields, outlives)],
+      ['other state', await post(sandbox, { ...fields, state: 'A'.repeat(22) }, pair)],
+      ['cancelled', await post(sandbox, { state: fields.state, error: provider === 'apple' ? 'user_cancelled_authorize' : 'access_denied' }, pair)],
+      ['malformed token', await post(sandbox, { ...fields, id_token: 'not-a-token' }, pair)],
+      ['oversized', await post(sandbox, { ...fields, user: 'x'.repeat(17 * 1024) }, pair)],
+    ];
+    for (const [name, response] of cases) {
+      expect(signedIn(response), name).toBe(false);
+      expect(response.status, name).toBe(200);
+    }
+    expect(sandbox.state.grants).toEqual([]);
+  });
+
+  it('is throttled per IP like the other sign-ins, before Supabase is asked', async () => {
+    const sandbox = await supabase(ON);
+    const { fields, pair } = await providerReturns(sandbox, { email: MEMBER, sub: `${provider}-limited` });
+    sandbox.limited.value = true;
+    const response = await post(sandbox, fields, pair);
+    expect(await response.text()).toContain('Too many attempts.');
+    expect(sandbox.state.grants).toEqual([]);
+  });
+
+  it('offers no button and starts nothing while the switch is off or without a well-formed client, or from another site', async () => {
+    for (const settings of P.off) {
+      const sandbox = await supabase(settings);
+      expect(await (await sandbox.console('/console/signin')).text()).not.toContain(`Continue with ${P.name}`);
+      const startOff = await sandbox.console(PATH);
+      expect(startOff.headers.get('location')).toBe('/console/signin');
+      expect(startOff.headers.get('set-cookie')).toBeNull();
+      const callbackOff = await post(sandbox, { state: 'A'.repeat(22), id_token: 'a.b.c' });
+      expect(signedIn(callbackOff)).toBe(false);
+    }
+    const sandbox = await supabase(ON);
+    const crossSite = await sandbox.console(PATH, { headers: { 'sec-fetch-site': 'cross-site' } });
+    expect(crossSite.headers.get('location')).toBe('/console/signin');
+    expect(crossSite.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('returns a member to the page they asked for, carried through Apple in the sealed cookie', async () => {
+    const sandbox = await supabase(ON);
+    await sandbox.member();
+    const owner = sandbox.state.owners.get(MEMBER)!;
+    sandbox.state.trusted.add(`${owner.doName}|${provider}|${provider}-return`);
+    const { fields, pair } = await providerReturns(sandbox, { email: MEMBER, sub: `${provider}-return` }, `${PATH}?return_to=%2Fconsole%2Fdevices`);
+    const response = await post(sandbox, fields, pair);
+    expect(response.headers.get('location')).toBe('/console/devices');
+  });
+});
+
+describe('console Google with a sign-in client', () => {
+  it('starts the identity-token flow, not Supabase\'s redirect flow, and leaves Supabase\'s flow in place without one', async () => {
+    const withClient = await supabase({ CONSOLE_GOOGLE_CLIENT_ID: WEB_ID.google.client });
+    const started = await withClient.console('/console/signin/google', { headers: { 'sec-fetch-site': 'same-origin' } });
+    expect(new URL(started.headers.get('location')!).origin).toBe('https://accounts.google.com');
+    expect(started.headers.get('set-cookie')).toMatch(/^waldo_google_signin=/);
+    const without = await supabase();
+    const pkce = await without.console('/console/signin/google', { headers: { 'sec-fetch-site': 'same-origin' } });
+    expect(new URL(pkce.headers.get('location')!).origin).toBe(DIRECTORY);
+    expect(pkce.headers.get('set-cookie')).toMatch(/^waldo_google_pkce=/);
   });
 });
