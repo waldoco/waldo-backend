@@ -3,8 +3,9 @@ import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirector
 import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
 import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
-export type WhatsAppWebhookEnv = Readonly<{
+export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
   WHATSAPP_VERIFY_TOKEN?: string;
   WHATSAPP_APP_SECRET?: string;
@@ -188,7 +189,7 @@ export const handleWhatsAppWebhook = async (
   const debug = whatsappDebugLog(env);
   if (debug) console.log(JSON.stringify({ hop: 'whatsapp_debug_payload', payload }));
   const owners = env.OWNER_DO;
-  const origin = url.origin;
+  const origin = publicOrigin(env, url);
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
   // An admission the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta redelivers (its non-200
   // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal is

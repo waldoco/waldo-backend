@@ -2,6 +2,7 @@ import { sameSecret } from './telegram-webhook';
 import { CALENDAR_PUSH_PATH, GMAIL_PUSH_PATH, gmailPush, googlePushKeys, parseCalendarPush, parseGmailPush, verifyCalendarChannel, verifyPushToken, type GmailPushConfig } from '../connectors/google-push';
 import { signedRpc } from '../identity/owner-directory';
 import { handleWhoopWebhook, WHOOP_WEBHOOK_PATH } from '../health/providers/whoop-routes';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
 // Verified source events await bounded owner admission. A provider ack means the owner
 // durably recorded the event, never that its optional notification was delivered.
@@ -32,7 +33,7 @@ export type EventEnvelope = Readonly<{
   occurred_at?: string;
 }>;
 
-export type EventIngressEnv = Readonly<{
+export type EventIngressEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
   WALDO_ROUTER_HMAC_SECRET?: string;
   SUPABASE_PROJECT_URL?: string;
@@ -199,7 +200,7 @@ export const handleEventIngress = async (
   // become a retry storm at the provider.
   if (!envelope) return new Response('ok');
   const owners = env.OWNER_DO;
-  const origin = url.origin;
+  const origin = publicOrigin(env, url);
   const notify = config.notify !== false;
   const digest = await hmacSha256Hex(config.secret, body);
   // Provider identity is scoped to a configured source and checked against raw bytes.
