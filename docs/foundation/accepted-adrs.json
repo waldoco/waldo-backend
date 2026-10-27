@@ -1,9 +1,9 @@
 [
   {
     "_note": "Read-only snapshot reconstructed from waldo-brain ADR Markdown frontmatter for guard-adr-status.mjs. Do not hand-edit ADR statuses here; resync from the pinned source directory and apply accepted supersedes relationships.",
-    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/tree/88d013c7a708220c5c94bd0e317732162e3c3bf9/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29",
+    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/tree/6d10464c1aed844f8635b3bd225f641fee9994db/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29",
     "_resyncMethod": "agent-rules/scripts/sync.mjs frontmatter scan at _sourceCommit, plus accepted supersedes relationships such as ADR-0084 over ADR-0043",
-    "_sourceCommit": "88d013c7a708220c5c94bd0e317732162e3c3bf9",
+    "_sourceCommit": "6d10464c1aed844f8635b3bd225f641fee9994db",
     "_snapshot": true
   },
   {
