@@ -67,9 +67,11 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
         "Things that tend to slip, for Waldo to watch first: things they said they'd do.", 'Wears a Samsung Galaxy Watch.',
         'When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.']) expect(profile).toContain(fact);
       const later = ["Wants Waldo's help most with: their energy.", 'Where it is hardest for them: energy dips after lunch.', 'Never to be moved or booked over: their mornings before work.',
-        `At setup on ${new Date().toISOString().slice(0, 10)}: a busy stretch at work.`, 'When running low: they push through anyway.'];
+        'When running low: they push through anyway.'];
       const known = turn.slice(turn.indexOf('<owner_facts>'), turn.indexOf('</owner_facts>'));
       for (const fact of later) expect(known).toContain(fact);
+      // The date is the day the answers were saved, which a run across midnight cannot pin in advance.
+      expect(known).toMatch(/At setup on \d{4}-\d{2}-\d{2}: a busy stretch at work\./);
 
       // A later, ordinary turn on another subject reads them too: they are standing owner facts, not part of the first exchange.
       const before = model.requests.length;
@@ -77,9 +79,13 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
       expect(next.status).toBe(202);
       const { message_id: nextId } = await next.json() as { message_id: string };
       await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${nextId}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
-      const laterTurn = model.requests.slice(before).join('\n').replaceAll('\\"', '"');
-      expect(laterTurn).toContain('Can you move my Thursday call?');
-      for (const fact of ['When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.', ...later]) expect(laterTurn).toContain(fact);
+      // The model request that carries the Thursday call, read block by block as on the first turn.
+      const laterTurn = model.requests.slice(before).find(request => request.includes('Can you move my Thursday call?'))!.replaceAll('\\"', '"');
+      const laterProfile = laterTurn.slice(laterTurn.indexOf('<owner_profile>'), laterTurn.indexOf('</owner_profile>'));
+      const laterFacts = laterTurn.slice(laterTurn.indexOf('<owner_facts>'), laterTurn.indexOf('</owner_facts>'));
+      expect(laterProfile).toContain('When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.');
+      for (const fact of later) expect(laterFacts).toContain(fact);
+      expect(laterFacts).toMatch(/At setup on \d{4}-\d{2}-\d{2}: a busy stretch at work\./);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

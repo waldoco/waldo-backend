@@ -366,6 +366,30 @@ describe('setup answers, onboarding revision 2', () => {
     expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
   }, { agreementsOffered: false }));
 
+  it('keeps a reading stated in any answer\'s own words as health, so recall that leaves health out never returns it', () => owner(async ({ storage, send }) => {
+    const said = 'resting HR 52 lately';
+    const answers = {
+      day: { shape: 'meetings', own_words: said }, slips: { picked: ['breaks'], own_words: said }, matters: { picked: ['promises'], own_words: said },
+      protect: { picked: ['meals'], own_words: said }, season: { choice: 'busy', own_words: said }, low: { picked: ['cancel'], own_words: said },
+    };
+    expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, ...answers }, 'POST', REVISION_2)).status).toBe(200);
+    const stated = facts(storage).filter(claim => claim.text.includes(said));
+    expect(stated.map(claim => [claim.source_ref, claim.kind, claim.pinned])).toEqual(Object.keys(answers).map(answer => [`owner, first run: ${answer}`, 'health', null]));
+    // The background decision's and an externally built job's recall: owner claims that are not health.
+    const memory = store(storage);
+    expect(memory.recall('resting HR', 20).filter(claim => claim.text.includes(said))).toHaveLength(6);
+    expect(memory.recall('resting HR', 20).filter(claim => claim.kind !== 'health').map(claim => claim.text)).toEqual([]);
+  }, { agreementsOffered: false }));
+
+  it('reads a duplicated contract header, or one padded inside, as revision 1, and refuses the later answers', () => owner(async ({ send }) => {
+    for (const contract of ['onboarding=2,onboarding=2', 'onboarding= 2', 'onboarding =2', 'approvals=4, onboarding=2', 'onboarding=2,']) {
+      const refused = await send(ANSWERS, { request_id: `setup-more-${request++}`, rope: 'tell' }, 'POST', contract);
+      expect([contract, refused.status, await refused.json()]).toEqual([contract, 400, { error: 'invalid_request' }]);
+    }
+    // Space around a header value is not part of it (Fetch trims it), so a padded header still declares revision 2.
+    for (const contract of [' onboarding=2', 'onboarding=2 ']) expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, rope: 'tell' }, 'POST', contract)).status).toBe(200);
+  }, { agreementsOffered: false }));
+
   it('forgets each answer as the owner forgets any fact: gone from every view, and no longer held', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
     const memory = store(storage);
