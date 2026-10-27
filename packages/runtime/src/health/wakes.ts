@@ -21,6 +21,10 @@ export const basisSources = (basis: unknown): string =>
 export const driverPhrases = (raw: unknown): readonly string[] | null =>
   (Array.isArray(raw) ? raw.filter((phrase): phrase is string => typeof phrase === 'string' && PHRASE.test(phrase)) : null);
 
+// Tunable gate: how far Weight must move inside its zone since the last upload today to wake the model. It decides only whether
+// the model looks; the model still decides whether to propose anything.
+export const LOAD_JUMP_MIN_MOVE = STEADY_SCORE_MOVE;
+
 type Pillar = 'recovery' | 'form' | 'weight';
 export type HealthSnapshot = Readonly<{
   day: string; sources: string; drivers: readonly string[] | null;
@@ -60,7 +64,7 @@ const loadJump = (before: HealthSnapshot | null, after: HealthSnapshot, today: s
   comparable(before, after, today) && before.day === today && after.day === today
   && (['recovery', 'form', 'weight'] as const).every(pillar => before.zones[pillar] === after.zones[pillar])
   && before.load !== null && after.load !== null && before.load.version === after.load.version
-  && Math.abs(after.load.score - before.load.score) > STEADY_SCORE_MOVE;
+  && Math.abs(after.load.score - before.load.score) > LOAD_JUMP_MIN_MOVE;
 
 type Debt = Readonly<{ minutes: number; version: string }>;
 const debtOf = (answer: unknown, day: string): Debt | null => {
