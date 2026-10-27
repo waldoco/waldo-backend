@@ -450,7 +450,7 @@ const forgetting = (view: ConsoleView) => view.forgettingTopics.length === 0 ? '
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Not scheduled today';
-  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'waiting_on_model' ? chip('Waiting for the model') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
   return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');

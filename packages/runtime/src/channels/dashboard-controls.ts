@@ -36,7 +36,8 @@ const projections = {
     timezone: view.timezone,
     timezone_confirmed: view.timezoneConfirmed,
     date: view.now.slice(0,10),
-    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }) })),
+    // app.v1 names four card states; a card waiting for the model is unfinished and not yet written, so it reads as pending.
+    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state === 'waiting_on_model' ? 'pending' as const : card.state }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     // app.v1 names five behaviors in a strict object; a later kind stays out until a contract revision names it.
     schedules: { daily_brief: view.schedules.daily_brief, followups: view.schedules.followups, event_briefs: view.schedules.event_briefs, nightly: view.schedules.nightly, heartbeat: view.schedules.heartbeat },

@@ -10,7 +10,7 @@ import { createChatStore, type ChatDeps } from './chat-store';
 const flush = async () => { await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); }); };
 const deps = (page: () => Promise<ChatPage>, over: Partial<ChatDeps> = {}): ChatDeps => ({
   page, send: async () => ({ message_id: 'app-1', state: 'admitted', closed_reason: null, effects_unconfirmed: false } as ChatReceipt),
-  receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }), cancel: async () => ({ message_id: 'app-1', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: false }),
+  receipt: async () => ({ message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }), cancel: async () => ({ message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: false }),
   id: () => 'console-client-1', now: () => 1_760_000_000_000, setTimer: () => 0, clearTimer: () => undefined, visible: () => true, ...over,
 });
 let root: Root | null = null, host: HTMLElement | null = null;
@@ -161,6 +161,18 @@ describe('a reply streamed into the console', () => {
     expect(settled.classList.contains('arrived')).toBe(false);
     expect([...settled.querySelectorAll('.word-in')].map(word => word.textContent)).toEqual(['for', 'today.']);
   });
+
+  // The server closes a stopped turn as interrupted with the reason cancelled, whether it was stopped here or in the app.
+  it('says the owner stopped it when a stop closes the turn, here or elsewhere, with no Ask again', async () => {
+    const page = await streaming([running('Here is')], [[], [user]]);
+    await wait(() => expect(page.querySelector('.composer-send.stop')).not.toBeNull());
+    await act(async () => page.querySelector<HTMLButtonElement>('.composer-send.stop')!.click()); await flush();
+    await wait(() => expect(page.querySelector('.chat-closure')?.textContent).toContain('You stopped this one.'));
+    expect(page.querySelector('.chat-closure')?.textContent).not.toContain('didn’t finish');
+    expect([...page.querySelectorAll('.chat-closure button')].map(button => button.textContent)).toEqual(['Dismiss']);
+    const elsewhere = await streaming([running('Here is'), { message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: true }], [[], [user]]);
+    await wait(() => expect(elsewhere.querySelector('.chat-closure')?.textContent).toContain('You stopped this one. Something Waldo had already started may have happened.'));
+  }, 15_000);
 
   it('keeps what an interrupted reply had shown, marked unfinished, beside the closure', async () => {
     const page = await streaming(

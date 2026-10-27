@@ -1,5 +1,7 @@
 import { appControlsRequest } from './app-controls';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
+import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeSupportIds } from '../onboarding/welcome';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
@@ -134,7 +136,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, type PrepGate } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -288,7 +290,7 @@ type OwnerRuntime = Readonly<{
   healthChanged(day: string): Promise<void>;
   healthTrigger(entry: ScheduleEntry): Promise<void>;
   watches(entry: ScheduleEntry): Promise<void>;
-  cards(entry: ScheduleEntry): Promise<void>;
+  cards(entry: ScheduleEntry): Promise<void | 'waiting_on_model'>;
   updateCheck(trace: string): Promise<void>;
   calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
   // How the jobs lane applies each machine job this runtime started.
@@ -365,7 +367,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -1632,6 +1634,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if(this.activeApp?.id===row.id)this.activeAbort?.abort();
       return Response.json(this.appInbox.receipt(name,client,mainRef),{headers:{'cache-control':'no-store'}});
     }
+    if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&path.endsWith(APP_RATING_SUFFIX)&&request.method==='PUT'){
+      const id=path.slice(APP_CHAT_SEND_PATH.length+1,-APP_RATING_SUFFIX.length),at={step:'context'};
+      if(!id||id.includes('/'))return fail(404);
+      try{
+        return await appRatingRequest(request,id,{ratings:replyRatings(this.ctx.storage.sql),requests:requestBook(this.ctx.storage.sql,Date.now),now:Date.now,
+          transaction:work=>this.ctx.storage.transactionSync(work),
+          isReply:async messageId=>(await this.appChatRows(name,hash,undefined,at)).some(entry=>entry.id===messageId&&entry.role==='assistant')});
+      }catch(error){logAppReadFailure('app_rating',at.step,error);return fail(503);}
+    }
     if(APP_ONBOARDING_PATHS.includes(path)){
       return this.serial(async()=>{
         const current=async()=>{await this.appAuthority(name,hash);};
@@ -1692,6 +1703,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
   private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }) {
+    const entries=await this.appChatRows(name,hash,thread,at);
+    at.step='transcript';
+    const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null);
+  }
+  // The rows an app chat's page shows, read under a read admission.
+  private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }) {
     const now=Date.now(),abort=new AbortController();
     const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
     try{
@@ -1700,9 +1718,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       at.step='history';
       const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context,undefined,thread).readForDisplay();
       for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
-      at.step='transcript';
-      const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
-      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null);
+      return entries;
     }finally{abort.abort();}
   }
   // The text the chat shows for each of a thread's messages that has any, from rows whose witness matches.
@@ -4831,7 +4847,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
       },
     });
-    const cards = async (entry: ScheduleEntry) => {
+    const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
       if (card === null) return;
       const trace = `${entry.id}:${entry.occurrence_at}`;
@@ -4894,6 +4910,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'day_card' });
         throw error;
       }
+    };
+    const cards = (entry: ScheduleEntry) => {
+      const close = scheduler.lookup('card:close');
+      return runDayCard({ entry, book: plans, timezone: clock.timezone, now: Date.now(), generate: () => writeCard(entry),
+        freshness: { closeDue: close.state === 'entry' ? close.entry.due_at : null, quietStart: loops.proactivity().quiet_start } });
     };
     const settleFinal = async (record: FinalRecord): Promise<void> => {
       // Forget ended the record only when its own status says so: forget that reached a record already sent leaves it to arrive.

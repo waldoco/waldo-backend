@@ -25,6 +25,7 @@ const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
 export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+export const MODEL_PROBE_MS = 15 * 60_000;
 // A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
 // armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
 const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
@@ -61,7 +62,9 @@ export class UnreadableScheduleRowError extends Error {
 // One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
 export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
+// 'waiting_on_model': no model could answer. The row waits and probes again on MODEL_PROBE_MS, and the run never counts
+// toward quarantine. Only an executor that decides its own staleness returns it; any other failure throws.
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending' | 'waiting_on_model'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -251,6 +254,11 @@ export class Scheduler {
             throw new Error(`no scheduler executor for ${bumped.kind}`);
           }
           const delivery = await executor(bumped);
+          if (delivery === 'waiting_on_model') {
+            this.waitForModel(bumped, now);
+            this.settleRun(runId, 'failed', 'run', now);
+            continue;
+          }
           this.complete(bumped, now);
           if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
           else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
@@ -381,6 +389,20 @@ export class Scheduler {
       entry.updated_at,
     );
     return 'retry';
+  }
+
+  private waitForModel(entry: ScheduleEntry, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule
+          SET attempts = 0,
+              due_at = ?,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      now + MODEL_PROBE_MS,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
   }
 
   // C4 run history: one row per fire, inserted before dispatch (recordRunStart) and settled
