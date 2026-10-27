@@ -53,6 +53,7 @@ const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
  cleanup_unconfirmed:'The browser could not confirm this step closed cleanly, so nothing from it is claimed. Read the page again; if the session is gone, start a new one.',
  stale_observation:'The page changed since it was read. Read it again with browse_act read and use the new refs.',
  outcome_uncertain:'The step may or may not have taken effect, and it cannot be repeated. Read the page with browse_act read to see what changed.',
+ native_submit_requires_card:'This submits a form the browser may not send on its own: only a GET form whose target is a page this session may open can be submitted. Open the results page directly with goto if its address is known; otherwise tell the owner what the form would send, because this browser cannot submit it.',
  turn_deadline:'This turn ran out of time before the browser step finished, so nothing from it is claimed. The session stays open: continue it with its session_handle on the next turn.',
 };
 // Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
@@ -86,10 +87,11 @@ export function commonBrowserHost(options:Readonly<{
   return !!row&&!row.cleanup&&!row.cleanupFailed&&!row.handoff&&row.allocation==='observed'&&row.action?.state!=='prepared'&&row.action?.state!=='uncertain'&&(!row.download||row.download.state==='ready');
  };
  const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
+ const readableUrl=(grant:CommonBrowserGrant,url:string,method:string)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}};
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
-  authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}}});
+  authorizeRequest:async(url,method)=>readableUrl(grant,url,method)});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
@@ -262,7 +264,7 @@ export function commonBrowserHost(options:Readonly<{
       const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='select'?{operation:'select',element_ref:command.element_ref,value:command.value}:command.operation==='set_checked'?{operation:'set_checked',element_ref:command.element_ref,checked:command.checked}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
       if(!action)throw Error('unsupported current browser command');
       const element=action.operation==='scroll'?undefined:before.state.elements[before.observation.elements.findIndex(row=>row.ref===action.element_ref)];
-      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type))))throw Error('native browser submit approval required');
+      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type)))&&!(element.formMethod==='get'&&element.formAction&&readableUrl(grant,element.formAction,'GET')))throw new GeneralBrowserError('native_submit_requires_card');
       observed=await driver.act(record.session,before,action,prepare);
      }
     }
@@ -280,7 +282,7 @@ export function commonBrowserHost(options:Readonly<{
    }catch(error){
     if(!digest&&['read','inspect','back'].includes(args.command?.operation??''))sessionEnded=ended(error);
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
-    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
+    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText(error instanceof GeneralBrowserError&&error.code==='native_submit_requires_card'?'The browser refused this form submission before sending anything.':'The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
    }
   }};
  const api={handler,actionHandler,
