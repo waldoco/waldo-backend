@@ -568,3 +568,70 @@ describe('the health card budget', () => {
     });
   });
 });
+
+describe('telling the app a health card is up', () => {
+  const dayOfNow = () => localIso(NOW, TZ).slice(0, 10);
+  const mark = (h: Harness, at = NOW) => h.deps().book.mark(dayOfNow(), at - 60_000);
+  const notifying = () => { const told: string[] = []; return { told, notify: async (id: string) => { told.push(id); } }; };
+
+  it('tells the app once, with the approval id, after the card is up and its budget booked', async () => {
+    await withTrigger(async h => {
+      const { told, notify } = notifying();
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, charge: key => { h.charged.push(key); expect(told).toEqual([]); } }))).toBe('proposed');
+      expect(told).toEqual(['p1']);
+      expect(h.charged).toEqual(['health:2026-10-21']);
+    });
+  });
+
+  it('stays silent whenever no card goes up: no consent, nothing coming, no_op, quiet hours, the gate, shadow, a refused title, an off switch', async () => {
+    const quiet: Proactivity = { quiet_start: '07:00', quiet_end: '12:00', volume: 'normal' };
+    const create = (title: string) => async () => JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T16:00', title, notify_guests: null, reason: 'Protect an hour.' });
+    const scenarios: readonly (readonly [HealthTriggerOutcome, Partial<HealthTriggerDeps>])[] = [
+      ['no_health', { readHealth: async () => null }],
+      ['nothing_coming', { comingItems: async () => [] }],
+      ['no_op', { decide: async () => noOp }],
+      ['held_quiet', { proactivity: () => quiet }],
+      ['budget_gate', { admit: () => ({ verdict: 'spent' }) }],
+      ['held_cooldown', { admit: () => ({ verdict: 'wait', until: NOW + HEALTH_TRIGGER_FLOOR_MS }) }],
+      ['shadow_proposed', { modeSetting: () => 'shadow' }],
+      ['egress_refused', { decide: create('Recovery block') }],
+      ['invalid', { decide: async () => 'not json' }],
+      ['opted_out', { enabled: () => false }],
+    ];
+    for (const [outcome, over] of scenarios) {
+      await withTrigger(async h => {
+        const { told, notify } = notifying();
+        mark(h);
+        expect([outcome, await runHealthTrigger(h.deps({ ...over, notify }))]).toEqual([outcome, outcome]);
+        expect([outcome, told]).toEqual([outcome, []]);
+      });
+    }
+  });
+
+  it('stays silent for a run with nothing pending and for a change already waiting on its card', async () => {
+    await withTrigger(async h => {
+      h.sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)');
+      const { told, notify } = notifying();
+      const propose = async (args: ProposeCalendarChangeArgs) => {
+        h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES ('p1', 'calendar_change', 'card_unconfirmed', 's', ?, ?)", JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+        return 'p1';
+      };
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('idle');
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('proposed');
+      mark(h, NOW + 1_000);
+      expect(await runHealthTrigger(h.deps({ notify, propose, now: () => NOW + 1_000 }))).toBe('duplicate');
+      expect(told).toEqual(['p1']);
+    });
+  });
+
+  it('never fails the run when the push cannot be sent: the card is up and booked, and the run says so', async () => {
+    await withTrigger(async h => {
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify: async () => { throw new Error('push directory unavailable'); } }))).toBe('proposed');
+      expect(h.charged).toEqual(['health:2026-10-21']);
+      expect(h.reschedules).toEqual([]);
+    });
+  });
+});

@@ -35,7 +35,38 @@ describe('pushing the owner\'s app', () => {
   });
 
   it('every push carries only the ids the app\'s notification contract allows', () => {
-    for (const { data } of Object.values(PUSHES)) expect(pushNotificationSchema.parse(data)).toEqual(data);
+    for (const [kind, { data }] of Object.entries(PUSHES)) {
+      const composed = kind === 'approval' ? { ...data, approval_id: 'p0001' } : data;
+      expect(pushNotificationSchema.parse(composed)).toEqual(composed);
+    }
+  });
+
+  it('an approval push is fixed generic text with the id of the approval and nothing else: no reason, zone, number or title', async () => {
+    const { push, logged, posted } = fixture({ targets: async () => [target(EXPO), target(OTHER, 2)] });
+    await push('approval', 'p0001');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.body).toEqual([EXPO, OTHER].map(to => ({ to, body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: 'p0001' }, sound: 'default' })));
+    expect(logged).toEqual([{ code: 'sent', count: 2 }]);
+    expect(Object.keys((posted[0]!.body as { data: object }[])[0]!.data).sort()).toEqual(['approval_id', 'trigger']);
+  });
+
+  it('an approval push without its id is never sent and is not counted against the day', async () => {
+    const { push, logged, send, store, posted } = fixture();
+    await push('approval');
+    await push('approval', 'not an id');
+    expect([send.mock.calls.length, posted, store.size]).toEqual([0, [], 0]);
+    expect(logged).toEqual([{ code: 'invalid_payload', count: 0 }, { code: 'invalid_payload', count: 0 }]);
+  });
+
+  it('an approval push is held in quiet hours, and shares the day\'s limit with the Brief', async () => {
+    const held = fixture({ quiet: () => true });
+    await held.push('approval', 'p0001');
+    expect([held.send.mock.calls.length, held.logged]).toEqual([0, [{ code: 'quiet', count: 0 }]]);
+    const { push, send, logged } = fixture();
+    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await push(i % 2 ? 'brief' : 'approval', `p000${i}`);
+    await push('approval', 'p0009');
+    expect(send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
+    expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
   });
 
   it('without the access token push is not configured: it reads no devices and sends nothing', async () => {
