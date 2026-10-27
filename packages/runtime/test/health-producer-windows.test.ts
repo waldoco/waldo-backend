@@ -63,10 +63,10 @@ describe('the derived row: energy windows and the sleep debt trend', () => {
     const easing = (await written('1', series(20, 'apple', i => (i === 2 ? 240 : i < 2 ? 560 : 480)))).find(r => r.day === TODAY)!;
     expect(easing.sleep_debt.trend).toBe('easing');
   });
-  it('writes a steady trend on a partial sleep debt, since nothing can be said', async () => {
+  it('writes no trend on a partial sleep debt, since nothing can be said', async () => {
     const row = (await written('1', series(4))).find(r => r.day === TODAY)!;
     expect(row.sleep_debt.state).toBe('partial');
-    expect(row.sleep_debt.trend).toBe('steady');
+    expect('trend' in row.sleep_debt).toBe(false);
   });
   it('adds nothing with provisional scores off: no windows, no version, no trend', async () => {
     for (const row of await written(undefined, series(20))) {

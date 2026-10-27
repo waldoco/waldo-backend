@@ -37,10 +37,22 @@ describe('sleep debt trend', () => {
   it('is steady when the debt is the same three days running', () => {
     expect(trendOf(scores(() => 400))).toBe('steady');
   });
-  it('is steady when it cannot be computed: last night missing, or too few nights', () => {
-    expect(trendOf(scores(i => (i === 0 ? null : 400)))).toBe('steady');
-    expect(trendOf(scores(i => (i < 10 ? 400 : null)))).toBe('steady');
-    expect(trendOf(scores(i => (i === 1 ? null : i === 0 ? 300 : 480)))).toBe('steady');
+  // A direction the nights cannot back is left out, never written as steady: the key is absent, not null or undefined.
+  it('is absent when it cannot be computed: last night missing, too few nights, or a gap the day before', () => {
+    const missingLast = scores(i => (i === 0 ? null : 400)), fewNights = scores(i => (i < 10 ? 400 : null)), gapBefore = scores(i => (i === 1 ? null : i === 0 ? 300 : 480));
+    expect([missingLast.sleep_debt.state, fewNights.sleep_debt.state, gapBefore.sleep_debt.state]).toEqual(['partial', 'available', 'available']);
+    for (const result of [missingLast, fewNights, gapBefore]) {
+      expect('trend' in result.sleep_debt, result.sleep_debt.state).toBe(false);
+      expect(JSON.stringify(result.sleep_debt)).not.toContain('trend');
+    }
+  });
+  it('is absent from a partial debt', () => {
+    const debt = scores(i => (i < 4 ? 400 : null)).sleep_debt;
+    expect(debt.state).toBe('partial');
+    expect('trend' in debt).toBe(false);
+  });
+  it('is present on an available debt whose three figures can all be computed', () => {
+    expect(trendOf(scores(() => 400))).toBeDefined();
   });
   it('is not written when the debt has no nights at all', () => {
     expect(scores(() => null).sleep_debt).toMatchObject({ state: 'unavailable' });
