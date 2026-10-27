@@ -18,6 +18,9 @@ describe('shared baseline: priors', () => {
   it('holds the published resting-rate prior', () => {
     expect(PULSE_PRIOR).toEqual({ mu0: 65.5, tau: 7.7, sigma0: 3.03, nu0: 7 });
   });
+  it('pins the variability prior for these versions: a change is a new version, never an edit', () => {
+    expect(VARIABILITY_PRIOR).toEqual({ mu0: 3.653, tau: 0.58, sigma0: 0.2, nu0: 7 });
+  });
   it('holds an all-adult variability prior on the natural-log scale, from the pooled age bands', () => {
     expect(VARIABILITY_PRIOR.sigma0).toBe(0.2);
     expect(VARIABILITY_PRIOR.nu0).toBe(7);

@@ -224,7 +224,7 @@ describe('provisional sleep debt', () => {
     expect(now.state).toBe('available');
     if (now.state !== 'available') return;
     expect(now.debt_minutes).toBeGreaterThan(300);
-    expect(now.need_basis).toBe('own_average');
+    expect(now.need_basis).toBe('blended_average');
     expect(now.algorithm_version).toBe('sleep-debt.v2');
     expect(now.activation).toBe('accepted');
     const before = debt(off(nightly(360)));

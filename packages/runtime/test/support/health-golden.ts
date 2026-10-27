@@ -65,13 +65,17 @@ const dayOfReadings = (d: string, i: number): Sample[] => [
 ];
 export const PRODUCER_NOW = Date.parse('2026-03-20T12:00:00Z');
 const READ_AT = '2026-03-20T12:00:00.000123Z';
-const seriesOf = (nights: number, source: string) => ({
+// The writer of a reading, as the series read returns it: absent when the phone recorded none. `stray` gives the first
+// reading a writer of its own, for a source whose readings come from more than one app.
+const withWriter = (samples: Sample[], writer: string | undefined, stray: string | undefined): Sample[] =>
+  (writer === undefined && stray === undefined ? samples : samples.map((s, i) => ({ ...s, ...(i === 0 && stray !== undefined ? { origin_package: stray } : writer !== undefined ? { origin_package: writer } : {}) })));
+const seriesOf = (spec: GoldenProducerCase) => ({
   access: 'granted', read_at: READ_AT,
-  sources: [{ source, consent_epoch: 3, truncated: false, samples: Array.from({ length: nights }, (_, i) => dayOfReadings(addDays(TARGET, -i), i)).flat() }],
+  sources: [{ source: spec.source, consent_epoch: 3, truncated: false, samples: withWriter(Array.from({ length: spec.nights }, (_, i) => dayOfReadings(addDays(TARGET, -i), i)).flat(), spec.writer, spec.stray) }],
 });
 const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TARGET, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: false }));
 
-export type GoldenProducerCase = Readonly<{ nights: number; source: string; calendar: boolean }>;
+export type GoldenProducerCase = Readonly<{ nights: number; source: string; calendar: boolean; writer?: string; stray?: string }>;
 export const goldenProducerCases: Readonly<Record<string, GoldenProducerCase>> = {
   apple_mature_with_calendar: { nights: 25, source: 'apple', calendar: true },
   oura_mature_no_calendar: { nights: 25, source: 'oura', calendar: false },
@@ -82,7 +86,7 @@ export const goldenProducerCases: Readonly<Record<string, GoldenProducerCase>> =
 // The exact payloads written to the derived-row writer, as the strings the signed call carries.
 export const producerPayloads = async (compute: ProducerDeps['compute'], spec: GoldenProducerCase): Promise<string[]> => {
   const written: string[] = [];
-  const series = seriesOf(spec.nights, spec.source);
+  const series = seriesOf(spec);
   await produceHealthScores({
     readSeries: async range => ({ ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => { written.push(payload); return { written: true }; },

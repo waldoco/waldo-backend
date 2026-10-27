@@ -66,6 +66,63 @@ describe('provisional rows: pillars', () => {
   });
 });
 
+describe('provisional rows: which sources may be accepted', () => {
+  const SAMSUNG_HEALTH = 'com.sec.android.app.shealth';
+  const pillarsOf = (row: Row) => [row.recovery!, row.form!, row.weight!].filter(p => !('reason' in p));
+  const captured = async (spec: GoldenProducerCase) => {
+    const computed = new Map<string, DailyScores>();
+    const base = dailyScoresFor('1');
+    const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, spec);
+    return { rows: payloads.map(payload => JSON.parse(payload) as Row), computed };
+  };
+  it('accepts Health Connect readings only when every writer is Samsung Health, at the Samsung confidence', async () => {
+    const { rows: written, computed } = await captured({ nights: 25, source: 'health_connect', calendar: true, writer: SAMSUNG_HEALTH });
+    expect(written.length).toBeGreaterThan(0);
+    for (const row of written) {
+      expect(pillarsOf(row).length).toBeGreaterThan(0);
+      for (const pillar of ['recovery', 'form', 'weight'] as const) {
+        const stored = row[pillar]!, result = computed.get(row.day)![pillar];
+        if (result.state === 'unavailable') continue;
+        expect(stored.activation).toBe('accepted');
+        expect(stored.confidence).toBe(round3(result.coverage * 0.6));
+      }
+      expect((row.sleep_debt as { activation: string }).activation).toBe('accepted');
+    }
+  });
+  it.each([
+    ['another app', { writer: 'com.example.ringapp' }],
+    ['no writer recorded', {}],
+    ['one reading from another writer among Samsung Health ones', { writer: SAMSUNG_HEALTH, stray: 'com.example.ringapp' }],
+  ] as const)('computes Health Connect readings from %s the same, but never accepts them', async (_name, extra) => {
+    const { rows: written, computed } = await captured({ nights: 25, source: 'health_connect', calendar: true, ...extra });
+    const accepted = await captured({ nights: 25, source: 'health_connect', calendar: true, writer: SAMSUNG_HEALTH });
+    expect(written.length).toBeGreaterThan(0);
+    for (const row of written) {
+      for (const pillar of ['recovery', 'form', 'weight'] as const) {
+        const stored = row[pillar]!, result = computed.get(row.day)![pillar];
+        if (result.state === 'unavailable') { expect(stored).toEqual({ reason: result.reason }); continue; }
+        expect(stored.activation).toBe('candidate_unaccepted');
+        expect(stored.confidence).toBe(result.coverage);
+        expect(stored.baseline).toBeDefined();
+        const same = accepted.rows.find(r => r.day === row.day)![pillar]!;
+        expect([stored.score, stored.zone, stored.algorithm_version]).toEqual([same.score, same.zone, same.algorithm_version]);
+      }
+      expect((row.sleep_debt as { activation: string }).activation).toBe('candidate_unaccepted');
+      if (row.recovery!.confidence !== undefined) expect((row as unknown as { confidence: number }).confidence).toBe(row.recovery!.confidence);
+    }
+  });
+  it('does not look at the writer of an Apple, Samsung or WHOOP reading', async () => {
+    for (const source of ['apple', 'samsung', 'whoop']) {
+      const { rows: written } = await captured({ nights: 25, source, calendar: true, writer: 'com.example.ringapp' });
+      for (const row of written) for (const pillar of pillarsOf(row)) expect(pillar.activation).toBe('accepted');
+    }
+  });
+  it('never accepts a source the writer does not know', async () => {
+    const { rows: written } = await captured({ nights: 25, source: 'oura', calendar: true });
+    for (const row of written) for (const pillar of pillarsOf(row)) expect(pillar.activation).toBe('candidate_unaccepted');
+  });
+});
+
 describe('provisional rows: sleep debt', () => {
   it('is written as the second version, accepted, in the shape the app reads', async () => {
     const row = (await rows(goldenProducerCases.apple_mature_with_calendar!)).at(-1)!;
@@ -74,7 +131,8 @@ describe('provisional rows: sleep debt', () => {
     expect(debt.activation).toBe('accepted');
     expect(['available', 'partial']).toContain(debt.state);
     if (debt.state === 'available') expect(Object.keys(debt)).toEqual(['state', 'debt_minutes', 'need_basis', 'algorithm_version', 'activation']);
-    expect(['own_average', 'owner_confirmed']).toContain(debt.need_basis ?? 'own_average');
+    // The need is the owner's own mean shrunk toward eight hours, so the row says so rather than calling it their own average.
+    if (debt.state === 'available') expect(debt.need_basis).toBe('blended_average');
   });
 });
 

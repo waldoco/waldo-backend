@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(24);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -21,8 +21,8 @@ create function pg_temp.used() returns jsonb language sql as $$
   select '{"signals":["sleep","hrv","resting_heart_rate"],"days":["2026-03-18","2026-03-19","2026-03-20"]}'::jsonb $$;
 create function pg_temp.recovery(extra jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('score',72,'zone','good','algorithm_version','recovery.v5','activation','accepted','hrv_method','rmssd','confidence',0.8) || extra $$;
-create function pg_temp.ctx(recovery jsonb) returns jsonb language sql as $$
-  select jsonb_build_object('day',to_char((now() at time zone 'UTC')::date,'YYYY-MM-DD'),'timezone','UTC',
+create function pg_temp.ctx(recovery jsonb, debt jsonb default null) returns jsonb language sql as $$
+  select case when debt is null then '{}'::jsonb else jsonb_build_object('sleep_debt',debt) end || jsonb_build_object('day',to_char((now() at time zone 'UTC')::date,'YYYY-MM-DD'),'timezone','UTC',
     'basis',jsonb_build_array(jsonb_build_object('source','apple','consent_epoch',1)),
     'form',jsonb_build_object('reason','intraday_inputs_unavailable'),'recovery',recovery,
     'weight',jsonb_build_object('reason','calendar_demand_unavailable'),'freshness','fresh') $$;
@@ -91,6 +91,14 @@ select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(jsonb_build_object(
 select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery()) || jsonb_build_object('windows',jsonb_build_array(jsonb_build_object('start','10:00','end','12:00','kind','peak'))))->>'error','invalid_request','energy windows are not admitted until their own column exists');
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',pg_temp.used()))->>'written','true','a valid write after the refusals lands');
 select is(pg_temp.scores()->'recovery'->'baseline',pg_temp.label(),'and the row holds the label of the last write that landed');
+
+-- Sleep debt names a need the owner's nights shrank toward eight hours as its own basis, and still only the closed set.
+create function pg_temp.debt(basis text) returns jsonb language sql as $$
+  select jsonb_build_object('state','available','debt_minutes',410,'need_basis',basis,'algorithm_version','sleep-debt.v2','activation','accepted') $$;
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('blended_average')))->>'written','true','a sleep debt on a blended need is written');
+select is(pg_temp.scores()->'sleep_debt'->>'need_basis','blended_average','and read back with that basis');
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('own_average')))->>'written','true','the earlier bases are still written');
+select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('guessed')))->>'error','invalid_request','a basis outside the closed set is refused');
 
 select * from finish();
 rollback;
