@@ -624,7 +624,7 @@ describe('console sign-in with Google', () => {
 // A Sign in with Apple key made for the test: the .p8 Apple downloads is a PKCS #8 P-256 key in PEM.
 const appleKeyPair = async () => {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']) as CryptoKeyPair;
-  const body = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey))));
+  const body = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey) as ArrayBuffer)));
   const pem = `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g)!.join('\n')}\n-----END PRIVATE KEY-----`;
   return { pem, publicKey: pair.publicKey, env: { APPLE_SIGNIN_P8: pem, APPLE_KEY_ID: 'FIXTUREKID', APPLE_TEAM_ID: 'FIXTURETEAM' } };
 };
