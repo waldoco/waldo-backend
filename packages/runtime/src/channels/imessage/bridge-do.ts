@@ -16,8 +16,10 @@ import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFi
 import { iMessageMediaOf, type IMessageMedia, type PhotonMediaEnv } from './photon-media';
 import type { IMessageMessageTarget, IMessageTapback } from './final-outbox';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
+import { configuredPublicOrigin, type PublicOriginEnv } from '../../connectors/public-origin';
+import { CONSOLE_IMESSAGE_PATH } from './console';
 
-export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
+export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Readonly<{
   WALDO_ENVIRONMENT?: string;
   IMESSAGE_CONNECTOR_ENABLED?: string;
   IMESSAGE_CONNECTOR_POLICY?: string;
@@ -29,8 +31,6 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & Readonly<{
   IMESSAGE_ONBOARDING_URL?: string;
   /** Shared Waldo number: the address owners text "waldo CODE" to, shown in the console. */
   IMESSAGE_WALDO_ADDRESS?: string;
-  /** Shared Waldo number on Photon: the console page an enrolled but unlinked sender is sent to (https only). */
-  IMESSAGE_CONSOLE_URL?: string;
   /** "1": photos and files on Photon are fetched for the model. Otherwise each gets one reply that it was not opened. */
   IMESSAGE_MEDIA?: string;
 }> & PhotonMediaEnv;
@@ -558,7 +558,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       }
       // A number its owner enrolled on Photon but has not linked: point them at their console, never at a Waldo.
       // Only Photon enrolls numbers: without it there is nothing to look up (and no enrollment table to depend on).
-      const finish = photonConfig(this.env) ? onboardingUrl(this.env.IMESSAGE_CONSOLE_URL) : null;
+      const consoleOrigin = photonConfig(this.env) ? configuredPublicOrigin(this.env) : null;
+      const finish = consoleOrigin ? `${consoleOrigin}${CONSOLE_IMESSAGE_PATH}` : null;
       if (finish && ready !== 'unavailable' && await directory.enrolledHandle(environment, event.senderHandle)) {
         const enrolledHash = await sha256Hex(JSON.stringify([bridgeId, 'enrolled', event.senderHandle]));
         if (!(await directory.onboardingAllowed(environment, bridgeId, accountId, enrolledHash))) return 'stranger_throttled';
