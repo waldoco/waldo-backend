@@ -14,7 +14,7 @@ Run after the staging deploy that carries the flip, on the owner's account.
    where l.updated_at >= '<T>' order by l.updated_at desc;
    ```
 
-   Expect: rows for the owner's DO name on today's UTC day, kind `turn`, the chat model (`gpt-6.1-sol` unless the router says otherwise), `calls` at least 4, and `usd_estimate` above 0.
+   Expect: rows for the owner's DO name on today's UTC day, kind `turn`, the chat model (`gpt-6.1-terra` unless the router says otherwise), `calls` at least 4, and `usd_estimate` above 0.
 4. In Cloudflare logs for `waldo-runtime-staging`, filter `"hop":"cost_ledger"` since `T`. Expect none. A `sync_failed` line means the signed router rail refused the batch; the deltas stay in the DO and resend, so read its `error`.
 5. In Langfuse (staging project), open the four traces. Each generation names the chat model, not `gpt-6-luna`: the owner is below the USD 25 monthly ceiling, so no turn is clamped. An account already past USD 25 this UTC month runs on `gpt-6-luna` and holds browse and execute, so read its month's spend first (the per-day query in `docs/ops/OBSERVABILITY.md`).
 6. Run the report for the baseline every later cost change is judged against:

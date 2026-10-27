@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   ANTHROPIC_PROVIDER,
   type LLMRequest,
 } from '@waldo/contracts';
@@ -38,6 +39,14 @@ describe('AnthropicMessagesAdapter request shape', () => {
     const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Hello.' }])]);
     await expect(adapter.complete(gatewayRequest())).resolves.toMatchObject({ ok: true, data: { text: 'Hello.' } });
     expect(bodies[0]).toMatchObject({ model: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, system: 'Be concise.', max_tokens: 32, output_config: { effort: 'low' } });
+    expect(bodies[0]).not.toHaveProperty('temperature');
+    expect(bodies[0]).not.toHaveProperty('thinking');
+  });
+
+  it('sends a Sonnet request the same way: its model id, the cache breakpoint, no sampling and no thinking parameters', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Hello.' }])]);
+    await expect(adapter.complete(gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native'))).resolves.toMatchObject({ ok: true });
+    expect(bodies[0]).toMatchObject({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, system: [{ type: 'text', text: 'Be concise.', cache_control: { type: 'ephemeral' } }] });
     expect(bodies[0]).not.toHaveProperty('temperature');
     expect(bodies[0]).not.toHaveProperty('thinking');
   });

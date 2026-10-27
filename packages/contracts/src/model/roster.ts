@@ -2,8 +2,10 @@ import { z } from 'zod';
 
 export const OPENAI_GPT_6_LUNA_MODEL = 'gpt-6-luna' as const;
 export const OPENAI_GPT_6_1_SOL_MODEL = 'gpt-6.1-sol' as const;
+export const OPENAI_GPT_6_1_TERRA_MODEL = 'gpt-6.1-terra' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
 export const ANTHROPIC_CLAUDE_OPUS_5_5_MODEL = 'claude-opus-5-5' as const;
+export const ANTHROPIC_CLAUDE_SONNET_5_5_MODEL = 'claude-sonnet-5-5' as const;
 export const ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL = 'claude-haiku-5-5' as const;
 // Text embeddings for semantic memory recall, through the Workers AI binding. Not a chat model, so it is outside
 // modelNameSchema and the roster roles: nothing routes a conversation to it.
@@ -18,35 +20,42 @@ export const ANTHROPIC_PROVIDER = 'anthropic' as const;
 export const modelNameSchema = z.enum([
   WORKERS_AI_GEMMA_4_26B_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_GPT_6_1_SOL_MODEL,
+  OPENAI_GPT_6_1_TERRA_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
 // The owner's own conversation turns, on the app, iMessage and Telegram, and the delegate tasks they spawn.
-export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_SOL_MODEL;
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_TERRA_MODEL;
 // Every call that is not an owner's conversation turn: reaction choice, thread titles, memory extraction and
 // consolidation, conversation compaction, reminder, day-card, brief and heartbeat wording, and background decisions.
 // Not ROSTER.auxiliary below, which is the run loop's classifier role.
 // A model swap is a pin change here; a new model also needs its roster entry, PROVIDER_OF, OPENAI_REASONING, a
 // context spec and a price in packages/runtime/src/llm/pricing.ts.
 export const WALDO_AUXILIARY_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
-// The second provider's models, reached only when the OpenAI step above fails: the current Claude Opus for the owner's
-// own turns, the current Claude Haiku for everything else. Same pin discipline as the two models above.
-export const WALDO_CHAT_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_OPUS_5_5_MODEL;
+// The second provider's models, reached only when the OpenAI step above fails: the current Claude Sonnet for the owner's
+// own turns, the current Claude Haiku for everything else. Opus stays in the roster for a stronger tier, not as the
+// default fallback. Same pin discipline as the two models above.
+export const WALDO_CHAT_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_SONNET_5_5_MODEL;
 export const WALDO_AUXILIARY_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL;
 
-// The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both; Sol accepts no none or minimal.
+// The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both.
 export const reasoningEffortSchema = z.enum(['low', 'medium']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 
 // Per OpenAI model: the efforts its OpenAI model page lists, and the effort Waldo asks for. The effort follows the
-// model rather than the call, so a Luna call stays at low wherever it runs.
-export type OpenAIReasoning = Readonly<{ accepts: readonly string[]; effort: ReasoningEffort }>;
+// model rather than the call, so a Luna call stays at low wherever it runs. outputTokens is the output cap a call on
+// the model asks for when its route sets none: reasoning tokens count against a call's output cap, and OpenAI's
+// reasoning guide asks for at least 25,000 tokens of room for reasoning and output, so the owner's chat models carry
+// that room whatever effort they run at. A model without it keeps the route's cap.
+export type OpenAIReasoning = Readonly<{ accepts: readonly string[]; effort: ReasoningEffort; outputTokens?: number }>;
 export const OPENAI_REASONING: Readonly<Partial<Record<ModelName, OpenAIReasoning>>> = {
   [OPENAI_GPT_6_LUNA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'low' },
-  [OPENAI_GPT_6_1_SOL_MODEL]: { accepts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium' },
+  [OPENAI_GPT_6_1_SOL_MODEL]: { accepts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium', outputTokens: 25_000 },
+  [OPENAI_GPT_6_1_TERRA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium', outputTokens: 25_000 },
 };
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
@@ -62,9 +71,11 @@ export type Provider = z.infer<typeof providerSchema>;
 export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   [WORKERS_AI_GEMMA_4_26B_MODEL]: 'workers_ai',
   [ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]: ANTHROPIC_PROVIDER,
+  [ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]: ANTHROPIC_PROVIDER,
   [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: ANTHROPIC_PROVIDER,
   [OPENAI_GPT_6_LUNA_MODEL]: OPENAI_PROVIDER,
   [OPENAI_GPT_6_1_SOL_MODEL]: OPENAI_PROVIDER,
+  [OPENAI_GPT_6_1_TERRA_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare
@@ -88,6 +99,10 @@ export const CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS: Readonly<
   'claude-opus-5-5': {
     request: 'anthropic/claude-opus-5.5',
     response: ['claude-opus-5-5'],
+  },
+  'claude-sonnet-5-5': {
+    request: 'anthropic/claude-sonnet-5.5',
+    response: ['claude-sonnet-5-5'],
   },
   'claude-haiku-5-5': {
     request: 'anthropic/claude-haiku-5.5',
