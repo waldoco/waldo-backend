@@ -3,6 +3,7 @@ import {
   appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
+  HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
 } from './health-ingest';
 
@@ -376,10 +377,65 @@ describe('health scores read', () => {
   });
 });
 
+describe('health scores history (revision 4)', () => {
+  const available = { state: 'available', score: 71.5, zone: 'solid', algorithm_version: 'recovery.v5', activation: 'accepted', confidence: 0.6, hrv_method: 'rmssd' };
+  const baseline = { state: 'provisional', personal_days: 6, needed: 14, prior: 'adults' };
+  const entry = (day: string, over: Record<string, unknown> = {}) => ({
+    day, recovery: available, form: { state: 'unavailable', reason: 'baseline_immature' }, weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' }, ...over,
+  });
+  const week = (days: string[], over: Record<string, unknown> = {}) => ({ state: 'available', window_days: 7, from: '2026-10-04', to: '2026-10-10', days: days.map(day => entry(day)), ...over });
+
+  it('is served from the baseline revision, which names the pillar shape it carries', () => {
+    expect(HEALTH_SCORES_HISTORY_REVISION_V1).toBe(HEALTH_BASELINE_REVISION_V1);
+  });
+  it('takes exactly one window, of 7, 30 or 90 days', () => {
+    for (const days of ['7', '30', '90']) expect(healthScoresHistoryQueryV1Schema.safeParse({ days }).success, days).toBe(true);
+    rejected(healthScoresHistoryQueryV1Schema, [{}, { days: '14' }, { days: '0' }, { days: '91' }, { days: '07' }, { days: ' 7' }, { days: 7 }, { days: '7', from: '2026-10-01' }, { days: '7.0' }, { days: '' }, { days: ['7'] }]);
+  });
+  it('lists the days that have a row, oldest first, with gaps and never zeros', () => {
+    for (const valid of [
+      week([]), week(['2026-10-04', '2026-10-06', '2026-10-10']), week(['2026-10-10']),
+      { ...week(['2026-10-10']), days: [entry('2026-10-10', { recovery: { ...available, baseline }, backfilled: true })] },
+      { ...week(['2026-10-10']), days: [entry('2026-10-10', { form: { ...available, zone: 'steady', algorithm_version: 'form.v9' } })] },
+      week(['2026-09-12', '2026-10-10'], { window_days: 30, from: '2026-09-11', to: '2026-10-10' }),
+      week(['2026-10-10'], { window_days: 90, from: '2026-07-13', to: '2026-10-10' }),
+    ]) expect(healthScoresHistoryResponseV1Schema.safeParse(valid).success, JSON.stringify(valid).slice(0, 140)).toBe(true);
+    for (const reason of ['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings'])
+      expect(healthScoresHistoryResponseV1Schema.safeParse({ state: 'unavailable', day: null, reason }).success, reason).toBe(true);
+  });
+  it('carries the pillars and the baseline label, and nothing else of the day', () => {
+    const day = entry('2026-10-10');
+    expect(Object.keys(day).sort()).toEqual(['day', 'form', 'recovery', 'weight']);
+    rejected(healthScoresHistoryResponseV1Schema, [
+      week(['2026-10-10'], { days: [{ ...day, freshness: 'fresh' }] }), week(['2026-10-10'], { days: [{ ...day, drivers: [] }] }), week(['2026-10-10'], { days: [{ ...day, sleep_debt: { state: 'unavailable', reason: 'missing_sleep' } }] }),
+      week(['2026-10-10'], { days: [{ ...day, timezone: 'Asia/Kolkata' }] }), week(['2026-10-10'], { days: [{ ...day, backfilled: false }] }), week(['2026-10-10'], { days: [{ ...day, backfilled: 'yes' }] }),
+      week(['2026-10-10'], { days: [{ ...day, recovery: { state: 'available', score: 0 } }] }), week(['2026-10-10'], { days: [{ ...day, recovery: { ...available, baseline: { ...baseline, state: 'learning' } } }] }),
+      week(['2026-10-10'], { days: [{ ...day, recovery: { ...available, raw: 41 } }] }),
+    ]);
+  });
+  it('refuses days outside the window, out of order or repeated, more days than the window, and a window it could not have been asked for', () => {
+    rejected(healthScoresHistoryResponseV1Schema, [
+      week(['2026-10-03']), week(['2026-10-11']), week(['2026-10-06', '2026-10-05']), week(['2026-10-05', '2026-10-05']),
+      week([], { window_days: 7, from: '2026-10-03', to: '2026-10-10' }), week([], { window_days: 7, from: '2026-10-05', to: '2026-10-10' }), week([], { window_days: 14 }),
+      week([], { from: '2026-10-10', to: '2026-10-04' }), week([], { window_days: 30 }), week([], { state: 'partial' }), week([], { total: 0 }),
+      { state: 'available', from: '2026-10-04', to: '2026-10-10', days: [] }, { ...week([]), days: undefined },
+      week(Array.from({ length: 8 }, (_, i) => `2026-10-${String(i + 3).padStart(2, '0')}`)),
+      { state: 'unavailable', day: null, reason: 'consent_withdrawn', days: [] }, { state: 'unavailable', day: '2026-10-10', reason: 'consent_withdrawn' }, { state: 'unavailable', day: null, reason: 'baseline_immature' },
+    ]);
+  });
+  it('never holds more than 90 entries', () => {
+    const from = '2026-07-13';
+    const ninety = Array.from({ length: 90 }, (_, i) => new Date(Date.parse(`${from}T00:00:00Z`) + i * 86_400_000).toISOString().slice(0, 10));
+    expect(healthScoresHistoryResponseV1Schema.safeParse(week(ninety, { window_days: 90, from, to: ninety[89] })).success).toBe(true);
+    expect(healthScoresHistoryResponseV1Schema.safeParse(week([...ninety, '2026-10-11'], { window_days: 90, from, to: '2026-10-11' })).success).toBe(false);
+  });
+});
+
 describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
+      'GET /app/v1/health/scores/history',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);
