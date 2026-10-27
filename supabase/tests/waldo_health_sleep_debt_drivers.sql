@@ -68,10 +68,10 @@ select is((select count(*)::int from unnest(array[
 ]::jsonb[]) bad where pg_temp.h('context_write','debt-owner',pg_temp.ctx() || jsonb_build_object('sleep_debt',bad))->>'error' = 'invalid_request'),15,'every sleep debt outside the read shape is refused');
 select ok(not (pg_temp.scores() ? 'sleep_debt'),'and a refused write leaves the row as it was');
 
--- The model's read never carries it, though it reads the same row.
+-- The model's read carries it, as stored, beside the pillars.
 select is(pg_temp.h('context_write','debt-owner',pg_temp.ctx(pg_temp.available()))->>'written','true','sleep debt is written again');
 select isnt(pg_temp.model_read('debt-owner')->'context',null,'the model reads the row');
-select is(position('sleep_debt' in pg_temp.model_read('debt-owner')::text),0,'and finds no sleep debt in it');
+select is(pg_temp.model_read('debt-owner')->'context'->'sleep_debt',pg_temp.available(),'and finds the sleep debt in it, as stored');
 
 -- Drivers: only phrases built from the closed vocabulary, on the row and on a pillar, so no value can ride a label.
 select is(pg_temp.h('context_write','debt-owner',pg_temp.ctx(pg_temp.available(),'["wrist temperature far above usual","breathing rate above usual","blood oxygen below usual","awake time in the night far above usual","walking heart rate below usual"]'))->>'written',
