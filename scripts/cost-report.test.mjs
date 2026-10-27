@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { delta, fetchLangfuse, langfuseCalls, ledgerCalls, parseWindow, render, report } from './cost-report.mjs';
+import { delta, fetchLangfuse, langfuseCalls, ledgerCalls, parseWindow, render, report, turnReport } from './cost-report.mjs';
 
 const ledgerRows = [
   { owner: 'do-a', day: '2026-10-20', kind: 'turn', model: 'chat-model', calls: 4, input_tokens: 240000, cached_tokens: 180000, output_tokens: 2000, usd_estimate: 0.158 },
@@ -130,4 +130,29 @@ test('a report with every call priced prints no unpriced line', () => {
   const result = report(ledgerCalls(ledgerRows), parseWindow('2026-10-20..2026-10-21'));
   assert.equal(result.total.unpriced_calls, 0);
   assert.doesNotMatch(render('Cost ledger', result), /Unpriced/);
+});
+
+test('the turns view reports owner turns only, per model: cache share, input size per turn, cold turns and cost per turn', () => {
+  const turn = (id, model, input, cached, total, name = 'llm_reply', day = '2026-10-20T08:00:00Z') =>
+    ({ ...generation(id, 'app:1', `t-${id}`, day, input - cached, cached, total), name, providedModelName: model });
+  const observations = [
+    turn('a', 'chat-model', 60000, 57000, 0.003), turn('b', 'chat-model', 70000, 63000, 0.004), turn('c', 'chat-model', 55000, 0, 0.02),
+    turn('d', 'aux-model', 58000, 0, 0.006),
+    turn('e', 'aux-model', 2000, 0, 0.0001, 'llm_reaction'),
+    turn('f', 'chat-model', 60000, 57000, 0.003, 'llm_reply', '2026-11-02T08:00:00Z'),
+  ];
+  const view = turnReport(observations, parseWindow('2026-10-20..2026-10-26'));
+  assert.deepEqual(view.map((row) => row.model), ['chat-model', 'aux-model']);
+  const chat = view[0];
+  assert.equal(chat.turns, 3);
+  assert.equal(chat.cache_share, Number(((57000 + 63000) / (60000 + 70000 + 55000)).toFixed(4)));
+  assert.equal(chat.input_p50, 60000);
+  assert.equal(chat.input_p90, 70000);
+  assert.equal(chat.cold_turns, 1);
+  assert.equal(chat.usd_per_turn, Number(((0.003 + 0.004 + 0.02) / 3).toFixed(5)));
+  assert.deepEqual(view[1], { model: 'aux-model', turns: 1, cache_share: 0, input_p50: 58000, input_p90: 58000, cold_turns: 1, usd_per_turn: 0.006 });
+});
+
+test('the turns view refuses an observation without a name, so other calls are never counted as turns', () => {
+  assert.throws(() => turnReport([generation('x', 'app:1', 't', '2026-10-20T08:00:00Z', 1, 0, 0)], parseWindow('2026-10-20..2026-10-20')), /no name/);
 });

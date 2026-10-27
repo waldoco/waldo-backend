@@ -5,6 +5,8 @@ import {
   routingPolicySchema,
   WALDO_AUXILIARY_FALLBACK_MODEL,
   WALDO_CHAT_FALLBACK_MODEL,
+  WALDO_REASONING_FALLBACK_MODEL,
+  WALDO_REASONING_MODEL,
   type ModelName,
   type RoutingPolicy,
 } from '@waldo/contracts';
@@ -39,8 +41,9 @@ export const MODEL_UNREACHABLE_REPLY = "I can't reach my model right now. I've k
 // Every owner-path route: its model, then the second provider when its key is deployed, then the floor. Without a usable
 // key the route has no fallback step at all, so nothing counts it as a provider ahead and the route is exactly the
 // single-provider route it was before the second provider existed. A call on the responder's chat model falls
-// to the second provider's chat model, with its system prompt and latest messages cached provider-side and room for its thinking in the
-// output cap; every other call (side jobs on the auxiliary model) falls to the second provider's small model.
+// to the second provider's chat model, and a turn routed to the reasoning model to the second provider's reasoning model,
+// each with its system prompt and latest messages cached provider-side and room for its thinking in the output cap; every
+// other call (side jobs on the auxiliary model) falls to the second provider's small model.
 //
 // The floor stays 'template' on every route: the routes run under the user_message trigger, and the routing contract
 // keeps user-facing triggers on the template (ADR-0069 §4). Only the owner's own reply passes a renderTemplate, so a side
@@ -49,8 +52,8 @@ export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, acces
   routes: [{
     trigger: 'user_message',
     primary: { provider: PROVIDER_OF[primary], model: primary, cache: 'none', max_tokens: 4096 },
-    fallback: !validModelCredential(access.anthropicApiKey) ? [] : [primary === chatModel
-      ? { provider: ANTHROPIC_PROVIDER, model: WALDO_CHAT_FALLBACK_MODEL, cache: 'anthropic_native', max_tokens: 16_000 }
+    fallback: !validModelCredential(access.anthropicApiKey) ? [] : [primary === WALDO_REASONING_MODEL || primary === chatModel
+      ? { provider: ANTHROPIC_PROVIDER, model: primary === WALDO_REASONING_MODEL ? WALDO_REASONING_FALLBACK_MODEL : WALDO_CHAT_FALLBACK_MODEL, cache: 'anthropic_native', max_tokens: 16_000 }
       : { provider: ANTHROPIC_PROVIDER, model: WALDO_AUXILIARY_FALLBACK_MODEL, cache: 'none', max_tokens: 4096 }],
     floor: 'template',
   }],

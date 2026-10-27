@@ -2,8 +2,10 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
+  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
   ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   ANTHROPIC_PROVIDER,
+  OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
@@ -127,6 +129,14 @@ it('a side job answered by Haiku returns its answer', async () => {
 it('the owner turn route falls back to Sonnet with provider caching and room for thinking, and never to Opus', () => {
   const [step] = ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }).routes[0]!.fallback;
   expect(step).toMatchObject({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 });
+});
+
+it('a turn routed to Sol falls back to Opus, cached and with room to think; a Luna turn still falls to Haiku', () => {
+  const keys = { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' };
+  expect(ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, keys).routes[0]!.fallback)
+    .toEqual([{ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 }]);
+  expect(ownerRoutePolicy(OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, keys).routes[0]!.fallback)
+    .toEqual([{ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, cache: 'none', max_tokens: 4096 }]);
 });
 
 it('the owner gateway fails a step without its provider key as auth_failed, before any network call', async () => {

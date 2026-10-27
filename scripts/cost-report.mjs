@@ -3,7 +3,7 @@
 // Prints numbers only: no prompt, reply or tool text is read or printed.
 //
 //   node scripts/cost-report.mjs --window 2026-10-23..2026-10-29 [--baseline 2026-10-16..2026-10-22]
-//     [--ledger ledger.json] [--langfuse] [--json]
+//     [--ledger ledger.json] [--langfuse [--turns]] [--json]
 //
 // --ledger reads the single JSON cell this query returns in the Supabase SQL editor (service role):
 //   select coalesce(json_agg(r), '[]') from (
@@ -15,6 +15,8 @@
 // are DO names; the two sources are reported side by side, not joined.
 //
 // Cache share is cached input tokens over all input tokens, the hit rate the prefix-stability work is judged by.
+// --turns adds the owner's own turns (llm_reply generations) per model: cache share, input tokens per turn at p50 and p90,
+// turns that ran with less than half their input cached, and cost per turn. Model routing is judged by these.
 
 import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -64,6 +66,31 @@ export const langfuseCalls = (observations) => observations.map((item) => {
 });
 
 const share = (cached, input) => (input > 0 ? cached / input : null);
+
+const COLD_TURN_SHARE = 0.5;
+const nearestRank = (sorted, q) => sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)];
+export const turnReport = (observations, window) => {
+  const byModel = new Map();
+  for (const item of observations) {
+    if (!item.name) throw new Error(`Langfuse observation ${item.id} has no name; request fields=core,basic,usage`);
+    if (item.name !== 'llm_reply') continue;
+    const [call] = langfuseCalls([item]);
+    if (!inWindow(call.day, window)) continue;
+    byModel.set(call.model, [...(byModel.get(call.model) ?? []), call]);
+  }
+  return [...byModel].map(([model, calls]) => {
+    const input = calls.reduce((sum, call) => sum + call.input, 0), cached = calls.reduce((sum, call) => sum + call.cached, 0);
+    const sizes = calls.map((call) => call.input).sort((a, b) => a - b);
+    return {
+      model, turns: calls.length, cache_share: Number((share(cached, input) ?? 0).toFixed(4)),
+      input_p50: nearestRank(sizes, 0.5), input_p90: nearestRank(sizes, 0.9),
+      cold_turns: calls.filter((call) => (share(call.cached, call.input) ?? 0) < COLD_TURN_SHARE).length,
+      usd_per_turn: Number((calls.reduce((sum, call) => sum + call.usd, 0) / calls.length).toFixed(5)),
+    };
+  }).sort((a, b) => b.turns - a.turns || a.model.localeCompare(b.model));
+};
+const renderTurns = (rows) => ['Owner turns by model (llm_reply)', ...rows.map((row) =>
+  `${row.model}: ${row.turns} turns, cache share ${(row.cache_share * 100).toFixed(1)}%, input p50 ${row.input_p50} / p90 ${row.input_p90} tokens, ${row.cold_turns} cold, $${row.usd_per_turn} per turn`)].join('\n');
 const summary = (bucket) => ({
   calls: bucket.calls, traces: bucket.traces.size, holds: bucket.holds, unpriced_calls: bucket.unpriced, unpriced_models: [...bucket.unpricedModels].sort(), input: bucket.input, cached: bucket.cached, output: bucket.output,
   usd: bucket.usd, cache_share: share(bucket.cached, bucket.input),
@@ -154,7 +181,9 @@ const main = async (argv) => {
     if (!base || !publicKey || !secretKey) throw new Error('--langfuse needs LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY');
     const from = baseline && baseline.from < window.from ? baseline.from : window.from;
     const to = baseline && baseline.to > window.to ? baseline.to : window.to;
-    emit('Langfuse', langfuseCalls(await fetchLangfuse({ base, publicKey, secretKey, from, to })));
+    const observations = await fetchLangfuse({ base, publicKey, secretKey, from, to });
+    emit('Langfuse', langfuseCalls(observations));
+    if (argv.includes('--turns')) { const turns = turnReport(observations, window); json.turns = turns; sections.push(renderTurns(turns)); }
   }
   console.log(argv.includes('--json') ? JSON.stringify(json, null, 2) : sections.join('\n\n'));
 };
