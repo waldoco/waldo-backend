@@ -29,9 +29,21 @@ export const spendBrowserErrandSubmit = (storage: DurableObjectStorage, runId: s
   return true;
 });
 
-// Returns the ended grant so its receipt can list the writes made under it.
+const receiptKey = (runId: string) => `browser-errand-receipt:${runId}`;
+// Ends the grant and keeps what it allowed and what was submitted under it until the owner has heard it.
 export const revokeBrowserErrand = (storage: DurableObjectStorage, runId: string): BrowserErrandGrant | undefined => storage.transactionSync(() => {
   const grant = storage.kv.get<BrowserErrandGrant>(key(runId));
   storage.kv.delete(key(runId));
+  if (grant) storage.kv.put(receiptKey(runId), grant);
   return grant;
 });
+
+// The owner's line for an ended grant: how many of the allowed submissions went out, where, and when. Never what they carried.
+export const browserErrandReceipt = (storage: DurableObjectStorage, runId: string, timezone: string): string | null => {
+  const grant = storage.kv.get<BrowserErrandGrant>(receiptKey(runId));
+  if (!grant) return null;
+  if (!grant.submits.length) return `Receipts: this errand submitted nothing on ${grant.origin}.`;
+  const times = grant.submits.map(at => new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(at)).join(', ');
+  return `Receipts: this errand submitted ${grant.submits.length} of ${grant.maxSubmits} allowed form${grant.maxSubmits === 1 ? '' : 's'} on ${grant.origin} (${times}).`;
+};
+export const clearBrowserErrandReceipt = (storage: DurableObjectStorage, runId: string): void => { storage.kv.delete(receiptKey(runId)); };

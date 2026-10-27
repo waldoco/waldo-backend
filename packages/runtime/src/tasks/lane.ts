@@ -36,6 +36,9 @@ export type JobsLaneDeps = Readonly<{
   // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
   // conversationRef: the app thread a task was started in, where its messages go while that thread is open.
   deliver(id: string, trace: string, text: string, commit: () => void, conversationRef?: string): Promise<void>;
+  // The host's receipt of what a job's site grant submitted, which the owner hears whatever the report says; cleared in
+  // the commit that settles the job.
+  errandReceipt?: Readonly<{ line(jobId: string): string | null; clear(jobId: string): void }>;
   // Whether this alarm still has time for a model turn; work left over waits for the next pass.
   room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
@@ -149,9 +152,12 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
         reply = fixedReport(row, deps.timezone);
       }
     }
+    const receipt = deps.errandReceipt?.line(row.id) ?? null;
+    if (receipt) reply = reply === null ? receipt : `${reply}\n\n${receipt}`;
+    const commit = () => { settle(row); deps.errandReceipt?.clear(row.id); };
     try {
-      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row), taskBrief(row).conversation_ref);
-      else settle(row);
+      if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, commit, taskBrief(row).conversation_ref);
+      else commit();
     } catch (error) {
       if (!(error instanceof ClosedRunError)) throw error;
       hop(row, 'task_apply_dropped', { ok: false, code: book.get(row.id)?.cancel_reason ?? 'settled' });

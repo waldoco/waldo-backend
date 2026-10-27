@@ -83,6 +83,24 @@ describe('the jobs lane', () => {
     });
   });
 
+  it('an errand that held a site grant ends its report with the host\'s receipt of what it submitted, cleared with the settle', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const id = reported(book, 'k1'), cleared: string[] = [];
+      await runJobsLane(deps({ errandReceipt: { line: job => job === id ? 'Receipts: this errand submitted 2 of 3 allowed forms on https://checkin.airline.example (14:03, 14:05).' : null, clear: job => { cleared.push(job); } } }));
+      expect(sent.get(`task:${id}`)).toMatch(/^Reply to [\s\S]+\n\nReceipts: this errand submitted 2 of 3 allowed forms on https:\/\/checkin\.airline\.example \(14:03, 14:05\)\.$/);
+      expect(cleared).toEqual([id]);
+    });
+  });
+
+  it('an errand whose report the model would skip still tells the owner what it submitted', async () => {
+    await withLane(async ({ book, sent, deps }) => {
+      const id = reported(book, 'k1');
+      await runJobsLane(deps({ turn: async () => 'SKIP', errandReceipt: { line: () => 'Receipts: this errand submitted nothing on https://checkin.airline.example.', clear: () => {} } }));
+      expect(sent.get(`task:${id}`)).toBe('Receipts: this errand submitted nothing on https://checkin.airline.example.');
+      expect(book.get(id)!.status).toBe('applied');
+    });
+  });
+
   it('a result the model says to skip settles without a message', async () => {
     await withLane(async ({ book, sent, deps }) => {
       const id = reported(book, 'k1');
