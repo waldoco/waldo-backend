@@ -66,9 +66,20 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
       for (const fact of ['Wants to be called Asha', 'Needs long stretches of focus at work, and they are easy to break. In their own words: "Mornings are for writing"',
         "Things that tend to slip, for Waldo to watch first: things they said they'd do.", 'Wears a Samsung Galaxy Watch.',
         'When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.']) expect(profile).toContain(fact);
+      const later = ["Wants Waldo's help most with: their energy.", 'Where it is hardest for them: energy dips after lunch.', 'Never to be moved or booked over: their mornings before work.',
+        `At setup on ${new Date().toISOString().slice(0, 10)}: a busy stretch at work.`, 'When running low: they push through anyway.'];
       const known = turn.slice(turn.indexOf('<owner_facts>'), turn.indexOf('</owner_facts>'));
-      for (const fact of ["Wants Waldo's help most with: their energy.", 'Where it is hardest for them: energy dips after lunch.', 'Never to be moved or booked over: their mornings before work.',
-        `At setup on ${new Date().toISOString().slice(0, 10)}: a busy stretch at work.`, 'When running low: they push through anyway.']) expect(known).toContain(fact);
+      for (const fact of later) expect(known).toContain(fact);
+
+      // A later, ordinary turn on another subject reads them too: they are standing owner facts, not part of the first exchange.
+      const before = model.requests.length;
+      const next = await app('/app/v1/chat/main/messages', { client_message_id: 'setup-client-02', text: 'Can you move my Thursday call?' });
+      expect(next.status).toBe(202);
+      const { message_id: nextId } = await next.json() as { message_id: string };
+      await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${nextId}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+      const laterTurn = model.requests.slice(before).join('\n').replaceAll('\\"', '"');
+      expect(laterTurn).toContain('Can you move my Thursday call?');
+      for (const fact of ['When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.', ...later]) expect(laterTurn).toContain(fact);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

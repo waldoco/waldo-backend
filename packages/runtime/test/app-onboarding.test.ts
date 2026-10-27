@@ -281,12 +281,28 @@ describe('setup answers, onboarding revision 2', () => {
     expect([saved.status, (await saved.json() as { held: Record<string, boolean> }).held]).toEqual([200, { ...NONE, name: true, day: true, slips: true, matters: true, spots: true, protect: true, season: true, low: true }]);
   }, { agreementsOffered: false }));
 
+  it('refuses the later answers from a build that does not declare revision 2, exactly as before, and stores nothing', () => owner(async ({ storage, send }) => {
+    for (const contract of [undefined, 'onboarding=1', 'approvals=4', 'onboarding=x']) {
+      for (const [answer, value] of Object.entries(MORE)) {
+        const refused = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha', [answer]: value }, 'POST', contract);
+        expect([answer, refused.status, await refused.json()]).toEqual([answer, 400, { error: 'invalid_request' }]);
+      }
+    }
+    expect(facts(storage)).toEqual([]);
+  }, { agreementsOffered: false }));
+
   it('answers a build that reads revision 1 with the first four only, and replays one request to each build at its own revision', () => owner(async ({ send }) => {
-    const body = { request_id: 'setup-more-replay', name: 'Asha', ...MORE };
-    const old = await send(ANSWERS, body);
-    expect(await old.json()).toEqual({ request_id: body.request_id, held: { name: true, day: false, slips: false, wearable: false }, replayed: false });
-    expect(await (await send(ANSWERS, body, 'POST', REVISION_2)).json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true, matters: true, spots: true, protect: true, rope: true, season: true, low: true }, replayed: true });
-    expect(await (await send(ANSWERS, body, 'POST', 'onboarding=1')).json()).toEqual({ request_id: body.request_id, held: { name: true, day: false, slips: false, wearable: false }, replayed: true });
+    const body = { request_id: 'setup-more-replay', name: 'Asha' };
+    const first = await send(ANSWERS, body, 'POST', REVISION_2);
+    expect(await first.json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true }, replayed: false });
+    for (const contract of [undefined, 'onboarding=1']) {
+      const old = await (await send(ANSWERS, body, 'POST', contract)).json();
+      expect([old, Object.keys((old as { held: object }).held)]).toEqual([{ request_id: body.request_id, held: { name: true, day: false, slips: false, wearable: false }, replayed: true }, ['name', 'day', 'slips', 'wearable']]);
+    }
+    expect(await (await send(ANSWERS, body, 'POST', REVISION_2)).json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true }, replayed: true });
+    const both = { request_id: 'setup-more-replay-2', name: 'Asha', ...MORE };
+    expect((await (await send(ANSWERS, both, 'POST', REVISION_2)).json() as { held: unknown }).held).toEqual({ ...NONE, name: true, matters: true, spots: true, protect: true, rope: true, season: true, low: true });
+    expect((await send(ANSWERS, both)).status).toBe(400);
   }, { agreementsOffered: false }));
 
   it('still takes an older build\'s name and day alone, and leaves the newer answers as they are', () => owner(async ({ storage, send }) => {

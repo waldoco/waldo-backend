@@ -191,7 +191,7 @@ describe('setup answers, onboarding revision 2', () => {
   it('takes each new answer alone, cleared with null or an empty choice, beside the first four', () => {
     accepted(appSetupAnswersRequestV1Schema, [
       more, { request_id: 'setup-answers-02', spots: [] }, { request_id: 'setup-answers-02', rope: null }, { request_id: 'setup-answers-02', low: null },
-      { request_id: 'setup-answers-02', name: 'Asha', ...more }, { ...more, matters: { picked: [], own_words: 'Something else' } },
+      { ...more, name: 'Asha' }, { ...more, matters: { picked: [], own_words: 'Something else' } },
       { ...more, season: { choice: null, own_words: '' } }, { ...more, season: { choice: 'none', own_words: '' } },
       { ...more, spots: appSetupSpotV1Schema.options }, { ...more, protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: 'x'.repeat(280) } },
       ...['tell', 'suggest', 'draft'].map(rope => ({ ...more, rope })),
