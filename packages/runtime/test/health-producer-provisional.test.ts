@@ -153,6 +153,21 @@ describe('provisional rows: a confidence that is not a number', () => {
   });
 });
 
+describe('provisional rows off: a coverage that is not a number', () => {
+  it('is written as a null confidence, as it always was, and never refuses the row', async () => {
+    const base = dailyScoresFor(undefined);
+    const nan = (input: Parameters<typeof base>[0]) => { const out = base(input); return out.recovery.state === 'available' ? { ...out, recovery: { ...out.recovery, coverage: Number.NaN } } : out; };
+    const written = (await producerPayloads(nan, goldenProducerCases.apple_mature_with_calendar!)).map(payload => JSON.parse(payload) as Row);
+    expect(written.length).toBeGreaterThan(0);
+    for (const row of written) {
+      if ('reason' in row.recovery!) continue;
+      expect(row.recovery!.confidence).toBeNull();
+      expect(row.confidence).toBeNull();
+    }
+    expect(written.some(row => !('reason' in row.recovery!))).toBe(true);
+  });
+});
+
 describe('provisional rows: what does not change', () => {
   it('keeps the row\'s own keys and their order, adding none at the top level', async () => {
     const on = (await rows(goldenProducerCases.apple_mature_with_calendar!)).at(-1)!;
