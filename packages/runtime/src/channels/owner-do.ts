@@ -165,6 +165,7 @@ import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standi
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
+import { revokeBrowserErrand } from './browser-errand-grant';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
@@ -588,6 +589,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       spend: () => self.setup(self.taskChannel()).monthSpend(),
       wake: due => armTaskJobsWake(self.ctx.storage, due),
       withdrawCards: runRef => { withdrawRunCards(self.ctx.storage.sql, runRef, Date.now()); },
+      endGrant: runRef => { const ended = revokeBrowserErrand(self.ctx.storage, runRef); if (ended) console.log(JSON.stringify({ hop: 'browser_errand_grant_ended', ok: true, submits: ended.submits.length, max_submits: ended.maxSubmits })); },
       providerHealth: self.providerHealth,
       admitted: () => self.taskOwnerAdmitted(),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
