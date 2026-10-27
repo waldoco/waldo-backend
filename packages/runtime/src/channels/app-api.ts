@@ -15,6 +15,7 @@ import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/provider
 import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
+import { APP_RATING_SUFFIX } from './app-rating';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -230,8 +231,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
         notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName) } : {}) });
   }
-  // A stop is a control on a message already paid for, so it counts as a read, not a send.
+  // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
+  const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
   const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
@@ -293,8 +295,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
   if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
-    const mutating = request.method === 'POST';
+    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
+    const mutating = request.method === 'POST' || request.method === 'PUT';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > (sending ? APP_SEND_MAX_WIRE_BYTES : maxBytes))) return fail(413);

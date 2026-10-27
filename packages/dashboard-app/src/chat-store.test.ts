@@ -17,7 +17,7 @@ function harness() {
     page: async () => { state.pageCalls += 1; const queued = state.pages.shift() ?? state.history; if (queued instanceof Error) throw queued; return queued; },
     send: async (id, text) => { state.sends.push([id, text]); const result = state.sendResult ?? { message_id: 'app-1', state: 'admitted', closed_reason: null, effects_unconfirmed: false }; if (result instanceof Error) throw result; return result; },
     receipt: async () => { const result = state.receipts.shift() ?? { message_id: 'app-1', state: 'running', closed_reason: null, effects_unconfirmed: false }; if (result instanceof Error) throw result; return result; },
-    cancel: async id => { state.cancels.push(id); return { message_id: 'app-1', state: 'revoked', closed_reason: 'cancelled', effects_unconfirmed: false }; },
+    cancel: async id => { state.cancels.push(id); return { message_id: 'app-1', state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: false }; },
     id: () => `console-client-${++ids}`,
     now: () => now,
     setTimer: (run, ms) => { const id = next++; timers.set(id, { at: now + ms, run }); return id; },
@@ -155,7 +155,7 @@ describe('console chat store', () => {
     store.send('Book it'); await settle();
     await store.stop('console-client-1');
     expect(state.cancels).toEqual(['console-client-1']);
-    expect(store.get().local[0]).toMatchObject({ state: 'revoked', closedReason: 'cancelled' });
+    expect(store.get().local[0]).toMatchObject({ state: 'interrupted', closedReason: 'cancelled' });
     expect(store.working()).toBe(false);
   });
 
