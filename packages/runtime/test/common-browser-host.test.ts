@@ -345,6 +345,12 @@ it('a POST form submit is refused with the typed native_submit_requires_card bef
  const text=JSON.stringify(refused);expect(text).toContain('native_submit_requires_card');expect(text).not.toContain('outcome is unknown');
  expect(commonBrowserFixture.effects).toBe(0);expect((f.rows.get('common-browser:fixture-task') as any).action).toBeUndefined();await host.cancel();
 });
+it('a dialog-method form is refused like any submit that is not a GET',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.form=true;commonBrowserFixture.formMethod='dialog' as never;commonBrowserFixture.formAction='https://public-pages.fixture.invalid/a';
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ const refused=await host.actionHandler.handle({url:first.data.url,task:'Close',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,key:'Enter',intent:'read'}},f.ctx);
+ expect(JSON.stringify(refused)).toContain('native_submit_requires_card');expect(commonBrowserFixture.effects).toBe(0);await host.cancel();
+});
 it('a GET form whose action leaves the granted origins is refused before dispatch',async()=>{
  const f=fixture(),host=f.host();commonBrowserFixture.form=true;commonBrowserFixture.formMethod='get';commonBrowserFixture.formAction='https://elsewhere.fixture.invalid/search';
  const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
