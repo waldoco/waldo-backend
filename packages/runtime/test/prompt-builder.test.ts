@@ -157,7 +157,6 @@ describe('createRuntimePromptBuilder', () => {
             'Day summary: Calendar is clear after lunch.',
             'Upcoming high-stakes:',
             '- Board check-in',
-            'Active goals: unavailable in this phase.',
           ].join('\n'),
           'Workspace context: unavailable in this phase.',
         ].join('\n\n'),
@@ -305,7 +304,7 @@ describe('createRuntimePromptBuilder', () => {
 
       expect(prompt).toContain('No user profile is available for this invocation.');
       expect(prompt).toContain('No derived health context is available for this invocation.');
-      expect(prompt).toContain('Active goals: unavailable in this phase.');
+      expect(prompt).not.toContain('Active goals');
       expect(prompt).toContain('Workspace context: unavailable in this phase.');
       expect(prompt).toContain('No channel persona is configured for this invocation.');
       expect(prompt).not.toContain('must not render');

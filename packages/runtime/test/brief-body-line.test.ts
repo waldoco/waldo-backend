@@ -109,6 +109,16 @@ describe('the body in a day card', () => {
     for (const card of DAY_CARDS) expect(prompt(card.id)).toContain('say nothing about sleep, recovery or energy, and never guess or make up a score');
   });
 
+  it('the Brief and the Check-in say a provisional score is provisional and offer the best energy window only when the context names one', () => {
+    const prompt = (id: string) => dayCardPrompt(DAY_CARDS.find(card => card.id === id)!, '2026-10-03T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
+    for (const id of ['card:brief', 'card:midday']) {
+      expect(prompt(id)).toContain('When a score is provisional, say so plainly if you mention it: their personal baseline is still forming.');
+      expect(prompt(id)).toContain('When this context names energy windows, name the best one and what to protect in it, as one offer.');
+      expect(prompt(id)).toContain('Never invent a window, a score or readiness.');
+    }
+    expect(prompt('card:close')).not.toContain('energy window');
+  });
+
   it('with health shared, the Brief request carries the owner\'s shared health and the rule, and no stored row keeps the health', async () => {
     await briefFor('brief-body-shared', state => {
       const request = briefRequest();
