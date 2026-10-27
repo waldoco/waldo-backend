@@ -1,4 +1,5 @@
-import { ALGORITHM, recoveryBasis } from './recovery';
+import { circularStanding, labelOf, standing } from './baseline';
+import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
@@ -35,6 +36,18 @@ const stressReading = (day: DayRecord): Readonly<{ heartRate: number; hrv: numbe
   const hrvs = buckets.flatMap(bucket => (bucket.hrv === null || bucket.hrvMethod !== 'rmssd' ? [] : [bucket.hrv]));
   return { heartRate: mean(heartRates), hrv: hrvs.length >= MIN_HRV_BUCKETS ? mean(hrvs) : null };
 };
+// The provisional stress part keeps hourly HRV of each method apart: a day is read against its own method's days only.
+const HRV_METHODS = ['rmssd', 'sdnn'] as const;
+const stressReadingByMethod = (day: DayRecord): Readonly<{ heartRate: number; hrv: Readonly<Record<(typeof HRV_METHODS)[number], number | null>> }> | null => {
+  const buckets = awakeRestingBuckets(day);
+  const heartRates = buckets.flatMap(bucket => (bucket.heartRate === null ? [] : [bucket.heartRate]));
+  if (heartRates.length < MIN_STRESS_BUCKETS) return null;
+  const meanOf = (method: (typeof HRV_METHODS)[number]) => {
+    const values = buckets.flatMap(bucket => (bucket.hrv === null || bucket.hrvMethod !== method ? [] : [bucket.hrv]));
+    return values.length >= MIN_HRV_BUCKETS ? mean(values) : null;
+  };
+  return { heartRate: mean(heartRates), hrv: { rmssd: meanOf('rmssd'), sdnn: meanOf('sdnn') } };
+};
 const history = <T,>(prior: readonly DayRecord[], read: (day: DayRecord) => T | null) =>
   prior.flatMap(day => { const value = read(day); return value === null ? [] : [{ day: day.day, value }]; });
 // A day still in progress is compared with the same hours of the owner's earlier days, matched on each day's own wall
@@ -47,9 +60,9 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 const formHours = (day: DayRecord): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrv !== null || bucket.daylightMinutes !== null || bucket.movementMinutes !== null) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null): FormResult => {
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult => {
   const target = formHours(record), prior = earlier.map(formHours);
-  const recovery = recoveryBasis(target, prior, sleepNeedMinutes);
+  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
   if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
   if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
   // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
@@ -70,27 +83,63 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
   const days = new Set<string>(recovery.days);
   const add = (name: string, score: number, weight: number, used: readonly string[]) => { components.push({ name, score, weight }); signals.push(name); used.forEach(day => days.add(day)); };
 
-  const midpoints = target.sleep ? history(prior, day => day.sleep?.midpointMinute ?? null) : [];
-  if (target.sleep && midpoints.length >= BASELINE_DAYS) {
-    const z = circularZScore(target.sleep.midpointMinute, midpoints.map(entry => entry.value));
-    if (z !== null) add('sleep_midpoint', nearUsual(z), FORM_WEIGHTS.midpoint, midpoints.map(entry => entry.day));
-  }
-  const daylight = dayTotal(today, bucket => bucket.daylightMinutes);
-  const daylightHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.daylightMinutes));
-  if (daylight !== null && daylightHistory.length >= BASELINE_DAYS) add('daylight', nearUsual(zScore(daylight, daylightHistory.map(entry => entry.value))), FORM_WEIGHTS.daylight, daylightHistory.map(entry => entry.day));
-  const movement = dayTotal(today, bucket => bucket.movementMinutes);
-  const movementHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.movementMinutes));
-  if (movement !== null && movementHistory.length >= BASELINE_DAYS) add('movement', nearUsual(zScore(movement, movementHistory.map(entry => entry.value))), FORM_WEIGHTS.motion, movementHistory.map(entry => entry.day));
-  const stress = stressReading(today);
-  const stressHistory = history(prior, day => stressReading(sameHours(day)));
-  if (stress && stressHistory.length >= BASELINE_DAYS) {
-    const parts = [lowerIsBetter(zScore(stress.heartRate, stressHistory.map(entry => entry.value.heartRate)))];
-    const hrvHistory = stressHistory.flatMap(entry => (entry.value.hrv === null ? [] : [entry.value.hrv]));
-    if (stress.hrv !== null && hrvHistory.length >= BASELINE_DAYS) parts.push(higherIsBetter(logZScore(stress.hrv, hrvHistory)));
-    add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
+  const own: number[] = [...('own' in recovery ? recovery.own ?? [] : [])];
+  const usedPrior = 'usedPrior' in recovery && recovery.usedPrior === true;
+  // A component with no prior joins at seven own days and is judged against its own days alone.
+  const addOwn = (name: string, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
+    if (at === null) return;
+    add(name, score(at.z), weight, entries.map(entry => entry.day));
+    own.push(at.own);
+  };
+  if (provisional) {
+    const midpoints = target.sleep ? history(prior, day => day.sleep?.midpointMinute ?? null) : [];
+    if (target.sleep) addOwn('sleep_midpoint', circularStanding(target.sleep.midpointMinute, midpoints.map(entry => entry.value)), midpoints, FORM_WEIGHTS.midpoint, nearUsual);
+    const daylight = dayTotal(today, bucket => bucket.daylightMinutes);
+    const daylightHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.daylightMinutes));
+    if (daylight !== null) addOwn('daylight', standing(daylight, daylightHistory.map(entry => entry.value), null), daylightHistory, FORM_WEIGHTS.daylight, nearUsual);
+    const movement = dayTotal(today, bucket => bucket.movementMinutes);
+    const movementHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.movementMinutes));
+    if (movement !== null) addOwn('movement', standing(movement, movementHistory.map(entry => entry.value), null), movementHistory, FORM_WEIGHTS.motion, nearUsual);
+    const stress = stressReadingByMethod(today);
+    const stressHistory = history(prior, day => stressReadingByMethod(sameHours(day)));
+    const heartRate = stress && standing(stress.heartRate, stressHistory.map(entry => entry.value.heartRate), null);
+    if (stress && heartRate) {
+      const parts = [lowerIsBetter(heartRate.z)], counts = [heartRate.own];
+      // The day's own HRV method, against that method's own days only; the first method with a baseline of its own.
+      for (const method of HRV_METHODS) {
+        const value = stress.hrv[method];
+        const ownValues = stressHistory.flatMap(entry => (entry.value.hrv[method] === null ? [] : [entry.value.hrv[method]!]));
+        const at = value === null ? null : standing(value, ownValues, null, 'ln');
+        if (at) { parts.push(higherIsBetter(at.z)); counts.push(at.own); break; }
+      }
+      add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
+      own.push(...counts);
+    }
+  } else {
+    const midpoints = target.sleep ? history(prior, day => day.sleep?.midpointMinute ?? null) : [];
+    if (target.sleep && midpoints.length >= BASELINE_DAYS) {
+      const z = circularZScore(target.sleep.midpointMinute, midpoints.map(entry => entry.value));
+      if (z !== null) add('sleep_midpoint', nearUsual(z), FORM_WEIGHTS.midpoint, midpoints.map(entry => entry.day));
+    }
+    const daylight = dayTotal(today, bucket => bucket.daylightMinutes);
+    const daylightHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.daylightMinutes));
+    if (daylight !== null && daylightHistory.length >= BASELINE_DAYS) add('daylight', nearUsual(zScore(daylight, daylightHistory.map(entry => entry.value))), FORM_WEIGHTS.daylight, daylightHistory.map(entry => entry.day));
+    const movement = dayTotal(today, bucket => bucket.movementMinutes);
+    const movementHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.movementMinutes));
+    if (movement !== null && movementHistory.length >= BASELINE_DAYS) add('movement', nearUsual(zScore(movement, movementHistory.map(entry => entry.value))), FORM_WEIGHTS.motion, movementHistory.map(entry => entry.day));
+    const stress = stressReading(today);
+    const stressHistory = history(prior, day => stressReading(sameHours(day)));
+    if (stress && stressHistory.length >= BASELINE_DAYS) {
+      const parts = [lowerIsBetter(zScore(stress.heartRate, stressHistory.map(entry => entry.value.heartRate)))];
+      const hrvHistory = stressHistory.flatMap(entry => (entry.value.hrv === null ? [] : [entry.value.hrv]));
+      if (stress.hrv !== null && hrvHistory.length >= BASELINE_DAYS) parts.push(higherIsBetter(logZScore(stress.hrv, hrvHistory)));
+      add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
+    }
   }
   if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'stress')) return { state: 'unavailable', reason: 'baseline_immature' };
 
   const { score, coverage } = combine(components);
-  return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used: { signals, days: [...days].sort() } };
+  const used = { signals, days: [...days].sort() };
+  if (provisional) return { state: 'available', score, zone: formZone(score), algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted', coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior) };
+  return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
 };

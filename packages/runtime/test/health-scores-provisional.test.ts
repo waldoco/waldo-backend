@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PULSE_PRIOR, VARIABILITY_PRIOR } from '../src/health/scores/baseline';
 import { computeDailyScores } from '../src/health/scores';
-import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket } from '../src/health/scores/types';
+import type { BaselineLabel, DailyScores, DailyScoresInput, DayRecord, HourlyBucket } from '../src/health/scores/types';
 
 // Provisional day-1 scores (recovery.v5, form.v9, weight.v5, sleep-debt.v2). Every value is synthetic.
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -35,9 +35,10 @@ const asleepAt = (minutes: (i: number) => number | null) => (i: number): Partial
   const m = minutes(i), d = addDays(TARGET, -i);
   return { sleep: m === null ? null : { startAt: `${addDays(d, -1)}T23:00:00.000Z`, endAt: `${d}T07:00:00.000Z`, asleepMinutes: m, midpointMinute: 180 } };
 };
-const available = <P extends { state: string }>(pillar: P): Extract<P, { state: 'available' }> => {
+// An available pillar. Where the label is wanted it is there only on a pillar computed provisionally, which the caller names.
+const available = <P extends { state: string }>(pillar: P): Extract<P, { state: 'available' }> & { baseline: BaselineLabel } => {
   if (pillar.state !== 'available') throw new Error(`expected available, got ${JSON.stringify(pillar)}`);
-  return pillar as Extract<P, { state: 'available' }>;
+  return pillar as Extract<P, { state: 'available' }> & { baseline: BaselineLabel };
 };
 // The first morning: no earlier day at all, sleep and the two resting signals only.
 const firstMorning = (over: Partial<DayRecord> = {}) => [day(0, { overnightHrv: [{ value: TYPICAL_VARIABILITY, method: 'rmssd' }], restingHeartRate: [{ value: PULSE_PRIOR.mu0, method: 'overnight_resting' }], ...over })];
@@ -102,8 +103,9 @@ describe('provisional Recovery: which methods have a baseline', () => {
     const rmssdTarget = [day(0, { overnightHrv: [{ value: 41, method: 'rmssd' }] }), ...sdnnDays.slice(1)];
     const r = available(on(rmssdTarget).recovery);
     expect(r.hrv_method).toBe('rmssd');
-    // The RMSSD night stands on the prior alone, so the SDNN days add nothing to its days.
-    expect(r.used.days).not.toContain(addDays(TARGET, -1));
+    // The RMSSD night stands on the prior alone, so what the SDNN days hold changes nothing in it.
+    const louder = days(20, () => ({ overnightHrv: [{ value: 150, method: 'sdnn' as const }] }));
+    expect(available(on([rmssdTarget[0]!, ...louder.slice(1)]).recovery).score).toBe(r.score);
   });
   it('prefers RMSSD when the night has both', () => {
     const both = firstMorning({ overnightHrv: [{ value: TYPICAL_VARIABILITY, method: 'rmssd' }, { value: 55, method: 'sdnn' }] });

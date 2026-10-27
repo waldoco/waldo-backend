@@ -265,18 +265,30 @@ const sleepDebtOf = (debt: DailyScores['sleep_debt']): object => {
   return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
 };
 
+// The confidence of each source a row can be computed from, as ADR-0081 ranks them; the phone transports take the lowest.
+const SOURCE_CONFIDENCE: Readonly<Record<string, number>> = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 };
+const LOWEST_SOURCE_CONFIDENCE = 0.6;
+const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_version: string; activation: string; hrv_method: HrvMethod | null; baseline?: unknown; used: unknown }>;
+// A pillar computed provisionally carries its baseline label, the signals and days it used, and a confidence that is its
+// coverage times its source's confidence. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+const confidenceOf = (pillar: AvailablePillar, source: string): number =>
+  (pillar.baseline ? round3(pillar.coverage * (SOURCE_CONFIDENCE[source] ?? LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage);
+const pillarRow = (zone: string, result: AvailablePillar, source: string): object => ({
+  score: result.score, zone, confidence: confidenceOf(result, source), algorithm_version: result.algorithm_version,
+  activation: result.activation, hrv_method: result.hrv_method, ...(result.baseline ? { baseline: result.baseline, used: result.used } : {}),
+});
+
 const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, tags: readonly string[]): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
     day, timezone, read_at: readAt, basis: [{ source: basis.source, consent_epoch: basis.epoch }],
-    recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason)
-      : { score: recovery.score, zone: toRowZone('recovery', recovery.zone), confidence: recovery.coverage, algorithm_version: recovery.algorithm_version, activation: recovery.activation, hrv_method: recovery.hrv_method },
-    form: form.state === 'unavailable' ? unavailable(form.reason)
-      : { score: form.score, zone: toRowZone('form', form.zone), confidence: form.coverage, algorithm_version: form.algorithm_version, activation: form.activation, hrv_method: form.hrv_method },
-    weight: weight.state === 'unavailable' ? unavailable(weight.reason)
-      : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
-    ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
+    recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason) : pillarRow(toRowZone('recovery', recovery.zone), recovery, basis.source),
+    form: form.state === 'unavailable' ? unavailable(form.reason) : pillarRow(toRowZone('form', form.zone), form, basis.source),
+    weight: weight.state === 'unavailable' ? unavailable(weight.reason) : pillarRow(toRowZone('weight', weight.zone), weight, basis.source),
+    ...(recovery.state === 'available' ? { confidence: confidenceOf(recovery, basis.source) } : {}),
     sleep_debt: sleepDebtOf(scores.sleep_debt), drivers: scores.drivers,
     freshness: 'fresh', tags,
   };

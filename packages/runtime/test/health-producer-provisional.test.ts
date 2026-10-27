@@ -6,8 +6,10 @@ import { goldenProducerCases, producerPayloads, type GoldenProducerCase } from '
 // The derived row the producer writes with provisional scores on: the label and provenance on each available pillar, the
 // confidence from coverage and the chosen source, and the sleep debt as its second version. Synthetic owners only.
 type Row = Record<string, Record<string, unknown>> & { day: string; basis: { source: string }[] };
-const rows = async (spec: GoldenProducerCase, flag: string | undefined = '1'): Promise<Row[]> =>
+const rowsWith = async (spec: GoldenProducerCase, flag: string | undefined): Promise<Row[]> =>
   (await producerPayloads(dailyScoresFor(flag), spec)).map(payload => JSON.parse(payload) as Row);
+const rows = (spec: GoldenProducerCase) => rowsWith(spec, '1');
+const rowsOff = (spec: GoldenProducerCase) => rowsWith(spec, undefined);
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const SOURCE_CONFIDENCE = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 } as const;
 const PILLARS = ['recovery', 'form', 'weight'] as const;
@@ -56,7 +58,7 @@ describe('provisional rows: pillars', () => {
     const row = (await rows(goldenProducerCases.whoop_first_night!)).at(-1)!;
     expect(row.recovery!.baseline).toEqual({ state: 'provisional', personal_days: 0, needed: 14, prior: 'adults' });
     expect(row.recovery!.algorithm_version).toBe('recovery.v5');
-    const off = (await rows(goldenProducerCases.whoop_first_night!, undefined)).at(-1)!;
+    const off = (await rowsOff(goldenProducerCases.whoop_first_night!)).at(-1)!;
     expect(off.recovery).toEqual({ reason: 'baseline_immature' });
   });
   it('stay well inside the writer\'s size limit', async () => {
@@ -79,7 +81,7 @@ describe('provisional rows: sleep debt', () => {
 describe('provisional rows: what does not change', () => {
   it('keeps the row\'s own keys and their order, adding none at the top level', async () => {
     const on = (await rows(goldenProducerCases.apple_mature_with_calendar!)).at(-1)!;
-    const off = (await rows(goldenProducerCases.apple_mature_with_calendar!, undefined)).at(-1)!;
+    const off = (await rowsOff(goldenProducerCases.apple_mature_with_calendar!)).at(-1)!;
     expect(Object.keys(on)).toEqual(Object.keys(off));
   });
 });

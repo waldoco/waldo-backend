@@ -14,8 +14,8 @@ export const normal = (next: () => number) => Math.sqrt(-2 * Math.log(1 - next()
 
 export interface OwnerSpec {
   readonly seed: number;
-  readonly sleepMinutes: number;
-  readonly sleepSd: number;
+  readonly usualNight: number;
+  readonly nightSd: number;
   // The owner's usual overnight variability in milliseconds, and its night-to-night spread on the natural-log scale.
   readonly variabilityMedian: number;
   readonly variabilitySd: number;
@@ -26,7 +26,7 @@ export interface OwnerSpec {
   readonly calendar: number | null;
 }
 export const typicalOwner = (seed: number): OwnerSpec => ({
-  seed, sleepMinutes: 480, sleepSd: 20, variabilityMedian: 40, variabilitySd: 0.15, pulseMean: 62, pulseSd: 2.5, hrvMethod: 'rmssd', load: 100, calendar: 240,
+  seed, usualNight: 480, nightSd: 20, variabilityMedian: 40, variabilitySd: 0.15, pulseMean: 62, pulseSd: 2.5, hrvMethod: 'rmssd', load: 100, calendar: 240,
 });
 
 // What an event does to one night, on top of the owner's usual.
@@ -58,7 +58,7 @@ export const history = (spec: OwnerSpec, nights: number, events: Events = () => 
     const e = events(night), day = dayOf(night), previous = dayOf(night - 1);
     const variability = Math.exp(Math.log(spec.variabilityMedian) + spec.variabilitySd * draws[1]! + (e.lnVariabilityDelta ?? 0));
     const pulse = spec.pulseMean + spec.pulseSd * draws[2]! + (e.pulseDelta ?? 0);
-    const sleep = e.missingSleep ? null : { startAt: `${previous}T23:00:00.000Z`, endAt: `${day}T07:00:00.000Z`, asleepMinutes: e.sleepMinutes ?? spec.sleepMinutes + spec.sleepSd * draws[0]!, midpointMinute: 180 + 15 * draws[3]! };
+    const sleep = e.missingSleep ? null : { startAt: `${previous}T23:00:00.000Z`, endAt: `${day}T07:00:00.000Z`, asleepMinutes: e.sleepMinutes ?? spec.usualNight + spec.nightSd * draws[0]!, midpointMinute: 180 + 15 * draws[3]! };
     const load = spec.load === null ? null : (spec.load + 10 * draws[4]!) * (e.loadFactor ?? 1);
     return {
       day, timezone: 'UTC', sleep,

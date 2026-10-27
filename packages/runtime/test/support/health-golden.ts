@@ -6,23 +6,25 @@ import type { DailyScoresInput, DayRecord, HourlyBucket } from '../../src/health
 const TARGET = '2026-03-20';
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
+// The synthetic owners' usual levels, named by role so a level never sits beside a signal name.
+const USUAL = { pulse: 72, variability: 55, daylight: 20, movement: 12, energy: 30, night: 450, resting: 55, overnight: 60, breathing: 14, oxygen: 96, awake: 25, walking: 100, temperature: 34, restingSample: 56, windowVariability: 50 };
 
 const hourly = (day: string, offset: number, hrvMethod: 'rmssd' | 'sdnn' = 'rmssd'): HourlyBucket[] =>
   [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(),
-    heartRate: 72 + wobble(h + offset, 2), hrv: 55 + wobble(h + offset, 3), hrvMethod,
-    daylightMinutes: 20 + wobble(h + offset, 2), movementMinutes: 12 + wobble(h + offset, 2), activeEnergyKcal: 30 + wobble(h + offset, 5),
+    heartRate: USUAL.pulse + wobble(h + offset, 2), hrv: USUAL.variability + wobble(h + offset, 3), hrvMethod,
+    daylightMinutes: USUAL.daylight + wobble(h + offset, 2), movementMinutes: USUAL.movement + wobble(h + offset, 2), activeEnergyKcal: USUAL.energy + wobble(h + offset, 5),
   }));
 const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {
   const d = addDays(TARGET, -i);
   return {
     day: d, timezone: 'Europe/London',
-    sleep: { startAt: `${addDays(d, -1)}T23:00:00.000Z`, endAt: `${d}T07:00:00.000Z`, asleepMinutes: 450 + wobble(i, 20), midpointMinute: 180 + wobble(i, 15) },
-    overnightHrv: [{ value: 60 + wobble(i, 6), method: 'rmssd' }],
-    restingHeartRate: [{ value: 55 + wobble(i, 2), method: 'provider_resting_daily' }],
+    sleep: { startAt: `${addDays(d, -1)}T23:00:00.000Z`, endAt: `${d}T07:00:00.000Z`, asleepMinutes: USUAL.night + wobble(i, 20), midpointMinute: 180 + wobble(i, 15) },
+    overnightHrv: [{ value: USUAL.overnight + wobble(i, 6), method: 'rmssd' }],
+    restingHeartRate: [{ value: USUAL.resting + wobble(i, 2), method: 'provider_resting_daily' }],
     hourly: hourly(d, i), workouts: [],
     demand: { meetingMinutes: 240 + wobble(i, 40), messageCount: 30 + wobble(i, 5), openTaskMinutes: 120 + wobble(i, 20), physicalLoad: 100 + wobble(i, 10) },
-    vitals: { breathingRate: 14 + wobble(i, 0.6), bloodOxygen: 96 + wobble(i, 1), awakeMinutes: 25 + wobble(i, 8), walkingHeartRate: 100 + wobble(i, 3), wristTemperature: [{ value: 34 + wobble(i, 0.3), method: 'absolute' }] },
+    vitals: { breathingRate: USUAL.breathing + wobble(i, 0.6), bloodOxygen: USUAL.oxygen + wobble(i, 1), awakeMinutes: USUAL.awake + wobble(i, 8), walkingHeartRate: USUAL.walking + wobble(i, 3), wristTemperature: [{ value: USUAL.temperature + wobble(i, 0.3), method: 'absolute' }] },
     ...over,
   };
 };
@@ -47,17 +49,17 @@ type Sample = Record<string, unknown>;
 const sample = (signal: string, d: string, over: Sample = {}): Sample =>
   ({ signal, day: d, start_at: `${d}T08:00:00.000Z`, end_at: `${d}T09:00:00.000Z`, utc_offset_minutes: 0, timezone: 'UTC', value: 1, ...over });
 const dayOfReadings = (d: string, i: number): Sample[] => [
-  sample('sleep_duration', d, { start_at: `${addDays(d, -1)}T23:00:00.000Z`, end_at: `${d}T07:00:00.000Z`, value: 450 + wobble(i, 20), method: 'asleep_duration' }),
+  sample('sleep_duration', d, { start_at: `${addDays(d, -1)}T23:00:00.000Z`, end_at: `${d}T07:00:00.000Z`, value: USUAL.night + wobble(i, 20), method: 'asleep_duration' }),
   sample('sleep_midpoint', d, { start_at: `${addDays(d, -1)}T23:00:00.000Z`, end_at: `${d}T07:00:00.000Z`, value: 180 + wobble(i, 15), method: 'sleep_midpoint' }),
-  sample('overnight_hrv', d, { start_at: `${addDays(d, -1)}T23:00:00.000Z`, end_at: `${d}T07:00:00.000Z`, value: 55 + wobble(i, 6), method: 'rmssd' }),
-  sample('resting_heart_rate', d, { start_at: `${d}T03:00:00.000Z`, end_at: `${d}T04:00:00.000Z`, value: 56 + wobble(i, 2) }),
+  sample('overnight_hrv', d, { start_at: `${addDays(d, -1)}T23:00:00.000Z`, end_at: `${d}T07:00:00.000Z`, value: USUAL.variability + wobble(i, 6), method: 'rmssd' }),
+  sample('resting_heart_rate', d, { start_at: `${d}T03:00:00.000Z`, end_at: `${d}T04:00:00.000Z`, value: USUAL.restingSample + wobble(i, 2) }),
   ...[8, 9, 10, 11, 12, 13, 14, 15].flatMap(h => {
     const start_at = `${d}T${String(h).padStart(2, '0')}:00:00.000Z`, end_at = `${d}T${String(h + 1).padStart(2, '0')}:00:00.000Z`;
     return [
-      sample('heart_rate_window', d, { start_at, end_at, value: 72 + wobble(h + i, 2) }),
-      sample('hrv_window', d, { start_at, end_at, value: 50 + wobble(h + i, 4), method: 'rmssd' }),
-      sample('daylight_duration', d, { start_at, end_at, value: 20 }),
-      sample('movement_duration', d, { start_at, end_at, value: 12 }),
+      sample('heart_rate_window', d, { start_at, end_at, value: USUAL.pulse + wobble(h + i, 2) }),
+      sample('hrv_window', d, { start_at, end_at, value: USUAL.windowVariability + wobble(h + i, 4), method: 'rmssd' }),
+      sample('daylight_duration', d, { start_at, end_at, value: USUAL.daylight }),
+      sample('movement_duration', d, { start_at, end_at, value: USUAL.movement }),
     ];
   }),
 ];

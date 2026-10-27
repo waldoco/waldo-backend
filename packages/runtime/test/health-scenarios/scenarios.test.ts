@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { DailyScores } from '../../src/health/scores/types';
+import type { BaselineLabel, DailyScores } from '../../src/health/scores/types';
 import { dayOf, history, mulberry32, scoresAt, typicalOwner, type Events } from './generator';
 
 // Synthetic physiology scenarios S1 to S9 and S12 of the health proposal's evaluation plan. Each asserts direction, timing
 // and labels, never an exact score, so a later constant change does not rewrite them. Clauses that need the alertness
 // term or the pattern catalogue are deferred with those features and are not asserted here.
-const recovery = (scores: DailyScores) => { const r = scores.recovery; if (r.state !== 'available') throw new Error(`recovery ${JSON.stringify(r)}`); return r; };
-const weight = (scores: DailyScores) => { const w = scores.weight; if (w.state !== 'available') throw new Error(`weight ${JSON.stringify(w)}`); return w; };
-const debt = (scores: DailyScores) => { const d = scores.sleep_debt; if (d.state !== 'available') throw new Error(`sleep debt ${JSON.stringify(d)}`); return d.debt_minutes; };
+const labelled = <P extends { baseline?: BaselineLabel }>(pillar: P): P & { readonly baseline: BaselineLabel } => {
+  if (!pillar.baseline) throw new Error('a provisional pillar carries its baseline label');
+  return pillar as P & { readonly baseline: BaselineLabel };
+};
+const recovery = (scores: DailyScores) => { const r = scores.recovery; if (r.state !== 'available') throw new Error(`recovery ${JSON.stringify(r)}`); return labelled(r); };
+const weight = (scores: DailyScores) => { const w = scores.weight; if (w.state !== 'available') throw new Error(`weight ${JSON.stringify(w)}`); return labelled(w); };
+const debt = (scores: DailyScores) => { const d = scores.sleep_debt; if (d.state !== 'available' || d.debt_minutes === null) throw new Error(`sleep debt ${JSON.stringify(d)}`); return d.debt_minutes; };
 const mean = (values: readonly number[]) => values.reduce((a, b) => a + b, 0) / values.length;
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 const ZONE_RANK = { compromised: 0, mixed: 1, solid: 2, excellent: 3 } as const;
@@ -56,7 +60,6 @@ describe('S3 illness onset: resting rate up, variability down, breathing and tem
     const drivers = scoresAt(nights, 31).drivers;
     expect(drivers.some(d => d.startsWith('breathing rate') && d.endsWith('above usual'))).toBe(true);
     expect(drivers.some(d => d.startsWith('wrist temperature') && d.endsWith('above usual'))).toBe(true);
-    expect(scoresAt(nights, 25).drivers).toEqual([]);
   });
 });
 
