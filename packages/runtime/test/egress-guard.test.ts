@@ -8,7 +8,7 @@ describe('redactSecretUrls (narrow scope)', () => {
     expect(r.text).toBe('go here [link removed] to connect');
   });
   it('redacts a first-party /c/ ticket link', () => {
-    const r = redactSecretUrls('https://waldo.piyushfulper3210.workers.dev/c/AbCdEfGhIjKlMnOpQrStUv');
+    const r = redactSecretUrls('https://staging.heywaldo.in/c/AbCdEfGhIjKlMnOpQrStUv');
     expect(r.count).toBe(1);
     expect(r.text).toBe('[link removed]');
   });

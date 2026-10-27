@@ -1,6 +1,6 @@
 // Trusted observation code; page content supplies evidence, never owner authority.
 export type GeneralSelectOption = Readonly<{ value: string; label: string; disabled: boolean; selected: boolean }>;
-export type GeneralElement = Readonly<{ selector: string; tag: string; role: string; name: string; href: string; value: string; type: string; disabled: boolean; selected: boolean; checked: boolean; inForm: boolean; editable?: boolean; readOnly?: boolean; secret?:boolean; options?: readonly GeneralSelectOption[] }>;
+export type GeneralElement = Readonly<{ selector: string; tag: string; role: string; name: string; href: string; value: string; type: string; disabled: boolean; selected: boolean; checked: boolean; inForm: boolean; formMethod?: string; formAction?: string; editable?: boolean; readOnly?: boolean; secret?:boolean; options?: readonly GeneralSelectOption[] }>;
 export type GeneralPageState = Readonly<{ url: string; title: string; text: string; width: number; height: number; scrollX: number; scrollY: number; elements: readonly GeneralElement[]; challenge?: true }>;
 // Typed page facts the model decides on. Their meaning is structural (a password field, a known challenge widget
 // or Cloudflare's mitigation header), never a reading of the page's words.
@@ -48,8 +48,13 @@ export function generalPageState(): GeneralPageState {
     else if(tag==='input' && type==='range') nativeRole='slider';
     else if(['input','textarea'].includes(tag) || node.isContentEditable) nativeRole='textbox';
     const role=node.getAttribute('role') || nativeRole;
+    // What submitting from this control would send: a submit button's own formmethod/formaction, otherwise the form's
+    // default button's (implicit submission from Enter), otherwise the form's. The browser resolves the action URL.
+    const form = node.form;
+    const submitter: any = form ? [node, ...Array.from(form.elements)].find((item: any) => item.tagName === 'BUTTON' ? !['button', 'reset'].includes(String(item.type)) : item.tagName === 'INPUT' && ['submit', 'image'].includes(String(item.type))) : undefined;
+    const submission = form ? { formMethod: String(submitter?.hasAttribute('formmethod') ? submitter.formMethod : form.method).toLowerCase(), formAction: String(submitter?.hasAttribute('formaction') ? submitter.formAction : form.action) } : {};
     const options = tag === 'select' ? Array.from(node.options).map((option: any) => ({ value: String(option.value), label: String(option.label), disabled: Boolean(option.disabled || option.parentElement?.disabled), selected: Boolean(option.selected) })) : undefined;
-    elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
+    elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), ...submission, editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
   }
   // Visible widgets of the common bot-verification vendors: Cloudflare Turnstile and its interstitial, reCAPTCHA,
   // hCaptcha, DataDome, PerimeterX and Arkose. Invisible reCAPTCHA/hCaptcha sit on ordinary pages and ask nothing of
