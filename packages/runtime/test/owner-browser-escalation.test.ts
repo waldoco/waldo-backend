@@ -31,7 +31,7 @@ function fixture(keys=true){
 const held=(rows:Map<string,any>)=>[...rows].filter(([key])=>key.startsWith('common-browser:')&&key!=='common-browser:due').map(([,row])=>row).filter(row=>row?.session);
 
 it('an escalated browse_page runs on the Browserbase binding, metered at its rate, and never touches the Cloudflare binding',async()=>{
- const f=fixture(),first=await f.read({retain_session:true,browser:'escalated',escalation_reason:'blocked'});
+ const f=fixture(),first=await f.read({retain_session:true,escalate:'blocked'});
  expect(first).toMatchObject({ok:true,data:{session_handle:expect.any(String)}});
  const create=f.vendor.filter(call=>call.url==='https://api.browserbase.com/v1/sessions');
  expect(create).toHaveLength(1);expect(create[0]!.headers.get('x-bb-api-key')).toBe(API_KEY);
@@ -46,13 +46,13 @@ it('an escalated browse_page runs on the Browserbase binding, metered at its rat
  expect(f.cloudflare.fetch).not.toHaveBeenCalled();
 });
 it('without Browserbase keys an escalation is refused typed and nothing is allocated',async()=>{
- const f=fixture(false),refused=await f.read({retain_session:true,browser:'escalated',escalation_reason:'verification_challenge'});
+ const f=fixture(false),refused=await f.read({retain_session:true,escalate:'verification_challenge'});
  expect(refused).toMatchObject({ok:false});expect(JSON.stringify(refused)).toContain('escalation_unavailable');
  expect(commonBrowserFixture.allocations).toBe(0);expect(f.vendor).toHaveLength(0);expect(held(f.rows)).toHaveLength(0);
 });
 it('an escalation asked while a standard session is open is refused typed, never quietly kept on the standard browser',async()=>{
  const f=fixture(),standard=await f.read({retain_session:true});expect(standard).toMatchObject({ok:true});
- for(const args of [{retain_session:true,browser:'escalated',escalation_reason:'login'},{session_handle:standard.data.session_handle,browser:'escalated',escalation_reason:'login'}]){
+ for(const args of [{retain_session:true,escalate:'login'},{session_handle:standard.data.session_handle,escalate:'login'}]){
   const refused=await f.read(args);expect(refused).toMatchObject({ok:false});expect(JSON.stringify(refused)).toContain('escalation_needs_new_session');
  }
  expect(f.vendor).toHaveLength(0);expect(held(f.rows).map(row=>row.session.provider)).toEqual(['cloudflare_playwright']);

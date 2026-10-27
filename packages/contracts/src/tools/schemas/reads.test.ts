@@ -308,12 +308,11 @@ describe('browsePageArgs', () => {
     expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: '' }).success).toBe(false);
     expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'x', act: 'click' }).success).toBe(false);
   });
-  it('carries the model\'s typed escalation decision: an escalated browser always names its reason', () => {
+  it('carries the model\'s typed escalation decision as its reason', () => {
     const page = { url: 'https://example.com', instruction: 'read', retain_session: true };
-    for (const escalation_reason of ['blocked', 'login', 'verification_challenge', 'multi_step'] as const)
-      expect(browsePageArgsSchema.safeParse({ ...page, browser: 'escalated', escalation_reason }).success).toBe(true);
-    expect(browsePageArgsSchema.safeParse({ ...page, browser: 'standard' }).success).toBe(true);
-    for (const invalid of [{ browser: 'escalated' }, { browser: 'standard', escalation_reason: 'blocked' }, { escalation_reason: 'login' }, { browser: 'browserbase', escalation_reason: 'blocked' }, { browser: 'escalated', escalation_reason: 'cheaper' }])
+    for (const escalate of ['blocked', 'login', 'verification_challenge', 'multi_step'] as const)
+      expect(browsePageArgsSchema.safeParse({ ...page, escalate }).success).toBe(true);
+    for (const invalid of [{ escalate: 'cheaper' }, { escalate: true }, { escalate: '' }, { browser: 'escalated' }])
       expect(browsePageArgsSchema.safeParse({ ...page, ...invalid }).success).toBe(false);
   });
 });

@@ -300,9 +300,8 @@ export const browsePageArgsSchema = z.strictObject({
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
-  browser: z.enum(['standard', 'escalated']).optional().describe('escalated: open a hosted browser for a page the standard browser could not finish (blocked, a login, a verification challenge, a long multi-step flow). It is slower and costs more against the owner\'s browser allowance; name the reason.'),
-  escalation_reason: z.enum(['blocked', 'login', 'verification_challenge', 'multi_step']).optional().describe('Required with browser: escalated.'),
-}).refine((args) => (args.browser === 'escalated') === (args.escalation_reason !== undefined), 'An escalated browser needs exactly one escalation_reason, and only an escalated browser takes one');
+  escalate: z.enum(['blocked', 'login', 'verification_challenge', 'multi_step']).optional().describe('Opens a costlier hosted browser; the reason why.'),
+});
 export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 
 // B-tool-2: bounded in-page actions. observe-before-act seam, capped steps, deterministic

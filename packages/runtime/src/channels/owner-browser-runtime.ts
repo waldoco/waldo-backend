@@ -31,7 +31,7 @@ const spendRefusal=(cause:unknown)=>{
 // A browser refusal the model can act on: it names the open session's handle and the ways forward.
 class BrowserSessionRefusal extends Error {}
 const ESCALATION_UNAVAILABLE='The escalated browser is not available here, so nothing was opened. Continue with the standard browser, or tell the owner the site could not be reached. Browser diagnostic: {"browser_code":"escalation_unavailable"}';
-const ESCALATION_NEEDS_NEW_SESSION='This browser session runs on the standard browser and cannot move to the escalated one, so nothing changed. End it with browse_act cancel, then call browse_page with retain_session:true, browser:"escalated" and no session_handle. Browser diagnostic: {"browser_code":"escalation_needs_new_session"}';
+const ESCALATION_NEEDS_NEW_SESSION='This browser session runs on the standard browser and cannot move to the escalated one, so nothing changed. End it with browse_act cancel, then call browse_page with retain_session:true, escalate and no session_handle. Browser diagnostic: {"browser_code":"escalation_needs_new_session"}';
 const heldElsewhere=(handle:string)=>`An interactive browser session from an earlier turn is still open (session_handle ${handle}). Continue it by passing that session_handle, or end it with browse_act command cancel and that session_handle, then start a new one. A read without retain_session works now.`;
 
 // The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
@@ -233,7 +233,7 @@ export function ownerBrowserRuntime(options: Readonly<{
             }
           }
           let bound;
-          if(args.browser==='escalated'){
+          if(args.escalate){
             // The model chose the escalated browser; a standard session never quietly stands in for it.
             const scope=options.activeScope()!,named=args.session_handle?retainedTask()?.sessionHandle===args.session_handle?retainedTask()!.taskId:active?.host.sessionHandle()===args.session_handle?active.taskId:undefined:undefined;
             if(named&&!onVendor(named)||!args.session_handle&&active&&active.scope===scope&&!onVendor(active.taskId))return {ok:false,code:'rejected',error:ESCALATION_NEEDS_NEW_SESSION,source_taint:'external'};
