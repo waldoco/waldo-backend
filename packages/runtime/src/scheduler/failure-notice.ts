@@ -2,6 +2,7 @@ import type { ScheduleKind } from '@waldo/contracts';
 import { localIso } from '../channels/reminders';
 import { QUARANTINE_AFTER_ATTEMPTS } from './multiplexer';
 import { openModelAuthIncidents } from '../llm/auth-incident';
+import { dayPlanBook, dayWindow } from '../channels/day-cards';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
@@ -28,14 +29,15 @@ const NOTICED_KEEP_MS = 2 * 24 * 60 * 60_000;
 type Noticed = readonly Readonly<{ id: string; scheduleId: string; at: number }>[];
 
 // text is null for a pause the daily cap, or a house-keeping job's earlier notice, keeps silent. kind 'model_auth' is a
-// provider that refused the key: no job paused, so its scheduleId names the provider's incident instead.
+// refused key holding up the owner's day cards: no job paused, so its scheduleId names the local day instead.
 export type FailureNotice = Readonly<{ id: string; scheduleId: string; kind: ScheduleKind | 'model_auth'; until: number; text: string | null }>;
 
-// What the owner hears once per incident when a model provider refuses Waldo's key. Fixed, with no provider, code or error text.
-export const MODEL_AUTH_NOTICE = "I can't reach my model right now, so your day cards and the work I do on my own are waiting. I'll pick them up as soon as it's back.";
+// What the owner hears when a refused key leaves a day card waiting for the model. Fixed, with no provider, code or error text.
+export const MODEL_AUTH_NOTICE = "I can't reach my model right now, so today's day cards are waiting. I'll make them as soon as it's back.";
 const MODEL_AUTH_PREFIX = 'model-auth:';
-// How long an incident's notice may wait for its surface (quiet hours, a closed window) before it is no longer worth saying.
-const MODEL_AUTH_NOTICE_MS = 24 * 60 * 60_000;
+// A refused key the fallback provider covered changes nothing the owner sees; ops hear of every incident from its log. The
+// owner hears only while an incident is open and a card is actually waiting for the model, once a local day at most.
+const refusedKeyHoldsCards = (sql: Sql, day: string) => openModelAuthIncidents(sql).length > 0 && dayPlanBook(sql).waitingForModel(day).length > 0;
 
 const jobName = (row: Readonly<{ id: string; kind: ScheduleKind }>) => (row.kind === 'brief' ? DAY_CARD_NAMES[row.id] : undefined) ?? JOB_NAMES[row.kind];
 const pausedRows = (sql: Sql, now: number) => sql.exec<{ id: string; kind: ScheduleKind; until: number }>(
@@ -59,10 +61,9 @@ export function dueFailureNotices(sql: Sql, kv: Kv, now: number, timezone: strin
   const told = kv.get<Record<string, number>>(QUIET_KEY) ?? {};
   const today = localIso(now, timezone).slice(0, 10);
   const when = retryAt(timezone);
-  const refused = openModelAuthIncidents(sql).flatMap(incident => {
-    const id = `${MODEL_AUTH_PREFIX}${incident.provider}:${incident.since}`;
-    return noticed.some(entry => entry.id === id) ? [] : [{ id, scheduleId: `${MODEL_AUTH_PREFIX}${incident.provider}`, kind: 'model_auth' as const, until: incident.since + MODEL_AUTH_NOTICE_MS, text: MODEL_AUTH_NOTICE }];
-  });
+  const refusedId = `${MODEL_AUTH_PREFIX}${today}`;
+  const refused = refusedKeyHoldsCards(sql, today) && !noticed.some(entry => entry.id === refusedId)
+    ? [{ id: refusedId, scheduleId: refusedId, kind: 'model_auth' as const, until: dayWindow(now, timezone).to, text: MODEL_AUTH_NOTICE }] : [];
   return [...refused, ...pausedRows(sql, now).flatMap(row => {
     const name = jobName(row), id = `schedule-failed:${row.id}:${row.until}`;
     if (!name || noticed.some(entry => entry.id === id)) return [];
@@ -88,10 +89,8 @@ export function pausedJobs(sql: Sql, now: number, timezone: string): readonly Re
 
 // Whether the pause a notice names still holds: a re-armed, rescheduled or deleted job makes its notice untrue.
 export function failurePauseHolds(sql: Sql, pause: Readonly<{ scheduleId: string; until: number }>): boolean {
-  // A refused-key notice holds while its incident is open: once the provider answers again, it would no longer be true.
-  if (pause.scheduleId.startsWith(MODEL_AUTH_PREFIX)) {
-    const provider = pause.scheduleId.slice(MODEL_AUTH_PREFIX.length);
-    return openModelAuthIncidents(sql).some(incident => incident.provider === provider && incident.since + MODEL_AUTH_NOTICE_MS === pause.until);
-  }
+  // A refused-key notice holds while a refused key still holds up that day's cards: once the provider answers, or no card
+  // waits, it would no longer be true.
+  if (pause.scheduleId.startsWith(MODEL_AUTH_PREFIX)) return refusedKeyHoldsCards(sql, pause.scheduleId.slice(MODEL_AUTH_PREFIX.length));
   return sql.exec("SELECT 1 FROM schedule WHERE id = ? AND status = 'quarantined' AND quarantined_until = ?", pause.scheduleId, pause.until).toArray().length > 0;
 }

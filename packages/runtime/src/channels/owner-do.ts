@@ -4126,7 +4126,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.
     const surfaceHandlers = (list: DispatchToolOptions<ToolDispatcherContext>['handlers']) => refusingUnreachableCheckBacks(list, () => this.proactiveReachable());
     // The model access the owner's turns and workers share; read before a machine job is written.
-    // A provider that refused the key opens one incident: logged once for ops, and told once to the owner by noticeFailures.
+    // A provider that refused the key opens one incident, logged once for ops. The owner hears of it from noticeFailures only while a day card waits for the model.
     // Noticing it never fails the call that met it.
     const onAttempts = (attempts: readonly LLMAttempt[]) => {
       try { observeModelAuth(storage.sql, attempts, Date.now(), log); } catch { console.error(JSON.stringify({ hop: 'model_auth_failed', ok: false, code: 'observe_failed' })); }
