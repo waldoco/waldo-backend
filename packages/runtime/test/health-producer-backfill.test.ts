@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BACKFILL_DAYS_PER_RUN, produceHealthScores, type ProducerDeps } from '../src/health/producer';
 import { dailyScoresFor } from '../src/health/scores';
 
@@ -117,5 +117,18 @@ describe('backfilled rows: bounded work that continues', () => {
     const secondDays = late(second.rows).map(r => r.day);
     expect(secondDays).toHaveLength(5);
     expect(secondDays.every(day => !firstDays.includes(day) && day > firstDays.at(-1)!)).toBe(true);
+  });
+});
+
+describe('backfilled rows: the written-row log', () => {
+  it('logs one line for each successful write, backfilled ones included, with nothing else in it', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a record */ } });
+    const { rows } = await run('1', 25);
+    spy.mockRestore();
+    const logged = lines.filter(line => line.hop === 'health_scores');
+    expect(logged).toHaveLength(rows.length);
+    expect(late(rows).length).toBeGreaterThan(0);
+    for (const line of logged) expect(Object.keys(line).sort()).toEqual(['code', 'hop', 'provisional']);
   });
 });
