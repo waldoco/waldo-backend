@@ -93,8 +93,8 @@ type Pillar = 'recovery' | 'form' | 'weight';
 // The stored read model holds one zone vocabulary; the contract uses words that carry their own direction. A stored
 // 'unknown' is a score whose algorithm version has no ratified zone bands yet: it is shown without a zone word.
 // A build that does not name the baseline revision has nowhere to show the label, so a provisional score is withheld from it as
-// not yet learned, judged on the stored state alone so a damaged label cannot let the number through. From the baseline
-// revision on, a label that does not read fails the same way, since a score is never shown without the label it was stored with;
+// not yet learned, judged on the stored state alone so a damaged label cannot let the number through. At every revision a label
+// that is present and does not read fails the same way, since a score is never shown without the label it was stored with;
 // a pillar stored with no label at all is shown as it always was.
 const pillarView = (pillar: Pillar, stored: unknown, revision: number): object | null => {
   const row = asObject(stored);
@@ -104,7 +104,7 @@ const pillarView = (pillar: Pillar, stored: unknown, revision: number): object |
   if (!labelled && asObject(row.baseline)?.state === 'provisional') return { state: 'unavailable', reason: 'baseline_immature' };
   const zone = row.zone === 'unknown' ? null : fromRowZone(pillar, row.zone);
   if (zone === null && row.zone !== 'unknown') return null;
-  const baseline = labelled && 'baseline' in row ? healthBaselineV1Schema.safeParse(row.baseline) : null;
+  const baseline = 'baseline' in row ? healthBaselineV1Schema.safeParse(row.baseline) : null;
   if (baseline && !baseline.success) {
     console.error('app health scores baseline shape');
     return { state: 'unavailable', reason: 'baseline_immature' };
@@ -112,7 +112,7 @@ const pillarView = (pillar: Pillar, stored: unknown, revision: number): object |
   return {
     state: 'available', score: row.score, zone, algorithm_version: row.algorithm_version, activation: row.activation,
     confidence: row.confidence ?? null, hrv_method: row.hrv_method ?? null,
-    ...(baseline?.success ? { baseline: baseline.data } : {}),
+    ...(labelled && baseline?.success ? { baseline: baseline.data } : {}),
   };
 };
 
