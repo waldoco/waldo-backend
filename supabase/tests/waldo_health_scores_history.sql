@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(35);
+select plan(40);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -13,6 +13,8 @@ begin
 end $$;
 create function pg_temp.grant_body(rid text) returns jsonb language sql as $$
   select jsonb_build_object('request_id',rid,'source','apple','purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true) $$;
+create function pg_temp.grant_src(rid text,src text) returns jsonb language sql as $$
+  select jsonb_build_object('request_id',rid,'source',src,'purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true) $$;
 create function pg_temp.d(back integer) returns text language sql as $$ select to_char((now() at time zone 'UTC')::date - back,'YYYY-MM-DD') $$;
 create function pg_temp.dz(tz text,back integer) returns text language sql as $$ select to_char((now() at time zone tz)::date - back,'YYYY-MM-DD') $$;
 create function pg_temp.ctz(tz text,back integer,score numeric) returns jsonb language sql as $$
@@ -23,6 +25,7 @@ create function pg_temp.ctz(tz text,back integer,score numeric) returns jsonb la
     'weight',jsonb_build_object('reason','calendar_demand_unavailable'),
     'freshness','fresh') $$;
 create function pg_temp.ctx(back integer,score numeric) returns jsonb language sql as $$ select pg_temp.ctz('UTC',back,score) $$;
+create function pg_temp.ctb(back integer,score numeric,basis jsonb) returns jsonb language sql as $$ select pg_temp.ctz('UTC',back,score) || jsonb_build_object('basis',basis) $$;
 create function pg_temp.hist(owner text,days integer) returns jsonb language sql as $$ select pg_temp.h('scores_history',owner,jsonb_build_object('days',days)) $$;
 create function pg_temp.listed(owner text,days integer) returns text[] language sql as $$
   select coalesce(array_agg(d->>'day' order by n),array[]::text[]) from jsonb_array_elements(pg_temp.hist(owner,days)->'history'->'days') with ordinality as x(d,n) $$;
@@ -30,13 +33,14 @@ create function pg_temp.listed(owner text,days integer) returns text[] language 
 -- Synthetic owners and synthetic values throughout.
 insert into auth.users(id,email) values
   ('e1000000-0000-0000-0000-0000000000e1','history@example.invalid'), ('e2000000-0000-0000-0000-0000000000e2','other@example.invalid'),
-  ('e4000000-0000-0000-0000-0000000000e4','full@example.invalid'), ('e7000000-0000-0000-0000-0000000000e7','east@example.invalid'), ('e8000000-0000-0000-0000-0000000000e8','west@example.invalid');
+  ('e4000000-0000-0000-0000-0000000000e4','full@example.invalid'), ('e7000000-0000-0000-0000-0000000000e7','east@example.invalid'), ('e8000000-0000-0000-0000-0000000000e8','west@example.invalid'), ('eb000000-0000-0000-0000-0000000000eb','mixed@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values
   ('e3000000-0000-0000-0000-0000000000e3','e1000000-0000-0000-0000-0000000000e1','history-owner','history@example.invalid'),
   ('e5000000-0000-0000-0000-0000000000e5','e2000000-0000-0000-0000-0000000000e2','other-owner','other@example.invalid'),
   ('e6000000-0000-0000-0000-0000000000e6','e4000000-0000-0000-0000-0000000000e4','full-owner','full@example.invalid'),
   ('e9000000-0000-0000-0000-0000000000e9','e7000000-0000-0000-0000-0000000000e7','east-owner','east@example.invalid'),
-  ('ea000000-0000-0000-0000-0000000000ea','e8000000-0000-0000-0000-0000000000e8','west-owner','west@example.invalid');
+  ('ea000000-0000-0000-0000-0000000000ea','e8000000-0000-0000-0000-0000000000e8','west-owner','west@example.invalid'),
+  ('ec000000-0000-0000-0000-0000000000ec','eb000000-0000-0000-0000-0000000000eb','mixed-owner','mixed@example.invalid');
 
 select has_function('waldo','health_scores_history',array['text','text','bigint','text'],'the history read exists with the router-signed signature');
 select ok(not has_function_privilege('authenticated','waldo.health_scores_history(text,text,bigint,text)','execute'),'a signed-in client cannot call it directly');
@@ -68,8 +72,8 @@ select is((pg_temp.listed('full-owner',90))[1] || ' ' || (pg_temp.listed('full-o
 select is(cardinality(pg_temp.listed('full-owner',30)) || '/' || cardinality(pg_temp.listed('full-owner',7)),'30/7','thirty and seven days return thirty and seven');
 
 select is((select count(*)::int from unnest(array[
-  '{}'::jsonb, '{"days":14}', '{"days":"7"}', '{"days":7,"owner":"other-owner"}', '"week"', '{"days":null}', '{"days":90.5}', '{"days":0}', '{"days":7.0}', '{"days":[7]}', '{"days":true}'
-]) bad where pg_temp.h('scores_history','history-owner',bad)->>'error' = 'invalid_request'),11,'every window but 7, 30 and 90, and every malformed body, is refused');
+  '{}'::jsonb, '{"days":14}', '{"days":"7"}', '{"days":7,"owner":"other-owner"}', '"week"', '{"days":null}', '{"days":90.5}', '{"days":0}', '{"days":7.0}', '{"days":[7]}', '{"days":true}', '{"days":365}', '{"days":91}'
+]) bad where pg_temp.h('scores_history','history-owner',bad)->>'error' = 'invalid_request'),13,'every window but 7, 30 and 90, and every malformed body, is refused');
 select is(pg_temp.hist('nobody',7),'{"error":"not_linked"}'::jsonb,'an unknown owner object is not linked');
 
 -- The window ends on the owner's own today. One of these two zones is on a different date from UTC at any moment.
@@ -92,6 +96,20 @@ select is(pg_temp.hist('history-owner',7)->'history'->'days'->1->'backfilled','t
 select is(pg_temp.h('consent_withdraw','history-owner',jsonb_build_object('request_id','withdraw-h-store1','source','apple','purpose','storage_compute','expected_epoch',1))->'consent'->>'status','withdrawn','the owner withdraws storage');
 select is(pg_temp.hist('history-owner',90),'{"unavailable":"consent_withdrawn"}'::jsonb,'and every window then says so, with no row beside it');
 select is(pg_temp.listed('other-owner',7),array[pg_temp.d(4)],'while the other owner still has their own day');
+
+-- A day counts only while every source it was computed from is still consented at the epoch it was computed at.
+select is((pg_temp.h('consent_grant','mixed-owner',pg_temp.grant_src('grant-m-apple-st1','apple'))->'consent'->>'status') || (pg_temp.h('consent_grant','mixed-owner',pg_temp.grant_src('grant-m-sams-st1','samsung'))->'consent'->>'status') || (pg_temp.h('consent_grant','mixed-owner',pg_temp.grant_src('grant-m-hc-st1','health_connect'))->'consent'->>'status'),'grantedgrantedgranted','an owner consents to three sources');
+select is((select count(*)::int from unnest(array[
+  pg_temp.ctb(0,61,'[{"source":"apple","consent_epoch":1}]'::jsonb),
+  pg_temp.ctb(1,62,'[{"source":"apple","consent_epoch":1},{"source":"samsung","consent_epoch":1}]'::jsonb),
+  pg_temp.ctb(2,63,'[{"source":"apple","consent_epoch":1},{"source":"health_connect","consent_epoch":1}]'::jsonb),
+  pg_temp.ctb(3,64,'[{"source":"samsung","consent_epoch":1}]'::jsonb)]) c where pg_temp.h('context_write','mixed-owner',c)->>'written' = 'true'),4,'with four days, each computed from its own sources');
+select is(pg_temp.listed('mixed-owner',7),array[pg_temp.d(3),pg_temp.d(2),pg_temp.d(1),pg_temp.d(0)],'every day is listed while its sources are consented');
+-- Stand in for a row that outlives its basis: one source's consent is withdrawn and another's epoch has moved on, with the rows left in place.
+update waldo.health_consents set withdrawn_at = now() where owner_id = 'ec000000-0000-0000-0000-0000000000ec' and source = 'samsung';
+update waldo.health_scopes set epoch = epoch + 1 where owner_id = 'ec000000-0000-0000-0000-0000000000ec' and source = 'health_connect' and purpose = 'storage_compute';
+select is(pg_temp.listed('mixed-owner',7),array[pg_temp.d(0)],'a day whose basis names a withdrawn source, or a source whose epoch has moved on, is absent, and the day on a live basis stays');
+select is(pg_temp.listed('mixed-owner',90),array[pg_temp.d(0)],'in every window');
 
 select * from finish();
 rollback;
