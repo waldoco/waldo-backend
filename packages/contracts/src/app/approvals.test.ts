@@ -276,7 +276,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(3);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(4);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -285,5 +285,53 @@ describe('the exact draft of a send, approvals revision 3', () => {
     const detailed = appApprovalV1Schema.parse({ ...calendar, exact: { changes: { ...calendar.exact.changes, time_zone: 'Europe/London' } } }) as AppApprovalV1;
     expect(appApprovalAtRevision(detailed, 2)).toBe(detailed);
     expect(appApprovalAtRevision(detailed, 3)).toBe(detailed);
+  });
+});
+
+describe('the health origin of an approval, approvals revision 4', () => {
+  const health = { reason: 'A short night, so a gentler start to the day.' };
+  const marked = { ...calendar, health };
+
+  it('accepts the one-line reason a health trigger gave, up to the longest a proposal can carry', () => {
+    expect(appApprovalV1Schema.safeParse(marked).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...calendar, health: { reason: 'x'.repeat(300) } }).success).toBe(true);
+  });
+
+  it.each([
+    ['an empty reason', { reason: '' }],
+    ['a reason past what a proposal can carry', { reason: 'x'.repeat(301) }],
+    ['no reason', {}],
+    ['a score beside the reason', { reason: 'A short night.', score: 41 }],
+    ['a zone beside the reason', { reason: 'A short night.', zone: 'low' }],
+    ['a reason that is not text', { reason: 3 }],
+  ] as const)('rejects %s', (_shape, value) => {
+    expect(appApprovalV1Schema.safeParse({ ...calendar, health: value }).success).toBe(false);
+  });
+
+  it('a build reading revision 3 or below gets exactly the shape before it, and a revision 4 build gets the same object', () => {
+    const parsed = appApprovalV1Schema.parse(marked) as AppApprovalV1;
+    for (const revision of [1, 2, 3]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(calendar)]);
+    expect(appApprovalAtRevision(parsed, 4)).toBe(parsed);
+    expect(JSON.stringify(parsed)).toContain('"health"');
+  });
+
+  it('strips the marker together with the details and the draft an older revision also leaves out', () => {
+    const detailed = appApprovalV1Schema.parse({ ...marked, exact: { changes: { ...calendar.exact.changes, time_zone: 'Europe/London', location: 'Studio' } } }) as AppApprovalV1;
+    expect(JSON.stringify(appApprovalAtRevision(detailed, 1))).toBe(JSON.stringify(calendar));
+    const atThree = appApprovalAtRevision(detailed, 3);
+    expect(atThree.health).toBeUndefined();
+    expect(atThree.exact.changes?.time_zone).toBe('Europe/London');
+    const mail = appApprovalV1Schema.parse({ ...email, health }) as AppApprovalV1;
+    expect(JSON.stringify(appApprovalAtRevision(mail, 3))).toBe(JSON.stringify(email));
+  });
+
+  it('an approval without the marker is returned as it is at every revision', () => {
+    const plain = appApprovalV1Schema.parse(calendar) as AppApprovalV1;
+    for (const revision of [2, 3, 4, 5]) expect(appApprovalAtRevision(plain, revision)).toBe(plain);
+  });
+
+  it('serves the marker in a list only as the schema allows', () => {
+    expect(appApprovalListV1Schema.safeParse({ approvals: [marked, email] }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [{ ...marked, health: { reason: '' } }] }).success).toBe(false);
   });
 });

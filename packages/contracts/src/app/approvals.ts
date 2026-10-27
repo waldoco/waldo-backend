@@ -62,6 +62,10 @@ const EXACT_BY_KIND = {
   email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
+// An approval the health trigger raised carries the model's one-line reason for it, approvals revision 4. Only the
+// reason is in it, never a reading or a zone of its own: the bound is the longest a proposal's reason can be.
+export const appApprovalHealthV1Schema = z.strictObject({ reason: z.string().min(1).max(300) });
+
 export const appApprovalV1Schema = z.strictObject({
   approval_id: approvalIdV1Schema, kind: approvalKindV1Schema, state: appApprovalStateV1Schema,
   review: approvalReviewV1Schema, exact: appApprovalExactV1Schema,
@@ -71,6 +75,7 @@ export const appApprovalV1Schema = z.strictObject({
     .refine(surfaces => new Set(surfaces).size === surfaces.length, 'surfaces repeat').optional(),
   // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
   question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
+  health: appApprovalHealthV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
   .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
     { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
@@ -78,18 +83,21 @@ export const appApprovalV1Schema = z.strictObject({
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
-export const APP_APPROVALS_CONTRACT_REVISION = 3;
-// An approval as a build reading `revision` parses it: revision 2 is the shape before the draft of a send, and
-// revision 1 the shape before the calendar details too. An approval a revision leaves whole is returned as it is.
+export const APP_APPROVALS_CONTRACT_REVISION = 4;
+// An approval as a build reading `revision` parses it: revision 3 is the shape before the health origin, revision 2 the
+// shape before the draft of a send, and revision 1 the shape before the calendar details too. An approval a revision
+// leaves whole is returned as it is.
 export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
-  const { message, ...withoutMessage } = approval.exact;
-  const exact = revision < 3 && message !== undefined ? withoutMessage : approval.exact;
+  const { health, ...withoutHealth } = approval;
+  const whole = revision < 4 && health !== undefined ? withoutHealth : approval;
+  const { message, ...withoutMessage } = whole.exact;
+  const exact = revision < 3 && message !== undefined ? withoutMessage : whole.exact;
   const changes = exact.changes;
   if (revision < 2 && changes) {
     const first = Object.fromEntries(Object.entries(changes).filter(([key]) => !(CALENDAR_DETAILS as readonly string[]).includes(key))) as typeof changes;
-    return { ...approval, exact: { ...exact, changes: first } };
+    return { ...whole, exact: { ...exact, changes: first } };
   }
-  return exact === approval.exact ? approval : { ...approval, exact };
+  return exact === whole.exact ? whole : { ...whole, exact };
 };
 export const appApprovalListQueryV1Schema = z.strictObject({ state: appApprovalStateV1Schema.optional() });
 export const appApprovalListV1Schema = z.strictObject({ approvals: z.array(appApprovalV1Schema).max(100) });

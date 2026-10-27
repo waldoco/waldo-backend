@@ -1,17 +1,21 @@
 import { z } from 'zod';
 import { briefVariantSchema, triggerTypeSchema } from '../core/trigger';
 import { formZoneSchema, loadZoneSchema, recoveryZoneSchema } from '../health/crs';
+import { approvalIdV1Schema } from '../app/parts';
 import { cardIdSchema } from './card';
 
 // Push payloads ride the outbox and land in provider requests (ADR-0012 channel
 // adapters), so the content contract is Art-9-safe by construction: stable IDs + zone
 // words only. Rendered copy — and ADR-0015's free-text brief_trigger_reason — is
 // composed at the persona-slicing layer (ADR-0035) and never persists in this shape.
+//
+// An approval push says only that something waits and which approval opens: the id, never why.
 export const pushNotificationSchema = z
   .strictObject({
-    trigger: triggerTypeSchema,
+    trigger: triggerTypeSchema.or(z.literal('approval')),
     variant: briefVariantSchema.optional(),
     card_ref: cardIdSchema.optional(),
+    approval_id: approvalIdV1Schema.optional(),
     form_zone: formZoneSchema.optional(),
     recovery_zone: recoveryZoneSchema.optional(),
     load_zone: loadZoneSchema.optional(),
@@ -19,7 +23,15 @@ export const pushNotificationSchema = z
   .refine((payload) => (payload.trigger === 'brief') === (payload.variant !== undefined), {
     error: "variant is present iff trigger is 'brief'",
     path: ['variant'],
-  });
+  })
+  .refine(
+    (payload) =>
+      payload.trigger === 'approval'
+        ? payload.approval_id !== undefined &&
+          [payload.card_ref, payload.form_zone, payload.recovery_zone, payload.load_zone].every((key) => key === undefined)
+        : payload.approval_id === undefined,
+    { error: "an approval push carries its approval_id and nothing else, and no other trigger carries one", path: ['approval_id'] },
+  );
 export type PushNotification = z.infer<typeof pushNotificationSchema>;
 
 // ADR-0067 (narrow acceptance): bind/rebind/unlink notices form a standalone,
