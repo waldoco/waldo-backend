@@ -24,6 +24,7 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
+import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import type { HealthWakeReason } from '../health/wakes';
@@ -300,6 +301,8 @@ type OwnerRuntime = Readonly<{
   connectLink(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<string | null>;
   issueTicket(provider: ConnectProvider, channel: ConnectChannel, opts?: Readonly<{ handoff?: boolean }>): Promise<Readonly<{ url: string; hash: string }> | null>;
   calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
+  // GET /app/v1/calendar/day for this owner, after appRoute checked the session.
+  calendarDay(request: Request): Promise<Response>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
     beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
@@ -364,7 +367,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_calendar_day', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -1673,6 +1676,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
+    }
+    if(path===APP_CALENDAR_DAY_PATH){
+      try{return await this.setup('app').calendarDay(request);}catch(error){logAppReadFailure('app_calendar_day','read',error);return fail(503);}
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       this.recoverApp();
@@ -5127,6 +5133,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
         accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
         client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
+      calendarDay: (request) => appCalendarDayRequest(request, { now: Date.now, timezone: () => clock.timezone, google,
+        readScores: day => healthRpc('scores_read', JSON.stringify({ day })) }),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;
