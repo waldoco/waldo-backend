@@ -676,12 +676,58 @@ describe('telling the app a health card is up', () => {
     });
   });
 
-  it('never fails the run when the push cannot be sent: the card is up and booked, and the run says so', async () => {
+  const LEDGER = 'CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)';
+  const waiting = (h: Harness, cards: { n: number }) => async (args: ProposeCalendarChangeArgs) => {
+    const id = `p${++cards.n}`;
+    h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES (?, 'calendar_change', 'card_unconfirmed', 's', ?, ?)", id, JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+    return id;
+  };
+  const recorded = (h: Harness) => h.sql.exec<{ outcome: string; approval_id: string | null }>('SELECT outcome, approval_id FROM health_trigger_runs').toArray();
+
+  it('records the run and clears the mark before it tells the app, so nothing the push does can lose the run', async () => {
     await withTrigger(async h => {
       mark(h);
-      expect(await runHealthTrigger(h.deps({ notify: async () => { throw new Error('push directory unavailable'); } }))).toBe('proposed');
+      const seen: unknown[] = [];
+      const notify = async () => { seen.push([recorded(h), h.deps().book.pending(NOW)]); };
+      expect(await runHealthTrigger(h.deps({ notify }))).toBe('proposed');
+      expect(seen).toEqual([[[{ outcome: 'proposed', approval_id: 'p1' }], null]]);
+    });
+  });
+
+  it('a push that hangs leaves the run recorded and the mark cleared', async () => {
+    await withTrigger(async h => {
+      mark(h);
+      let reached!: () => void;
+      const called = new Promise<void>(resolve => { reached = resolve; });
+      void runHealthTrigger(h.deps({ notify: () => { reached(); return new Promise<void>(() => undefined); } }));
+      await called;
+      expect(recorded(h)).toEqual([{ outcome: 'proposed', approval_id: 'p1' }]);
+      expect(h.deps().book.pending(NOW)).toBeNull();
+    });
+  });
+
+  it('a push that throws never fails the run, and the next run puts up no second card and sends no second push', async () => {
+    await withTrigger(async h => {
+      h.sql.exec(LEDGER);
+      const cards = { n: 0 }, propose = waiting(h, cards), told: string[] = [];
+      const notify = async (id: string) => { told.push(id); throw new Error('push directory unavailable'); };
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('proposed');
       expect(h.charged).toEqual(['health:2026-10-21']);
       expect(h.reschedules).toEqual([]);
+      mark(h, NOW + 1_000);
+      expect(await runHealthTrigger(h.deps({ notify, propose, now: () => NOW + 1_000 }))).toBe('duplicate');
+      expect([cards.n, told, recorded(h).map(row => row.outcome)]).toEqual([1, ['p1'], ['proposed', 'duplicate']]);
+    });
+  });
+
+  it('a throwing re-arm after a run that landed is logged as a failure and never thrown, so the scheduler does not retry before the floor', async () => {
+    await withTrigger(async h => {
+      const book = h.deps().book;
+      book.mark('2026-10-21', NOW - 60_000);
+      const decide = async () => { book.mark('2026-10-21', NOW + 5_000); return noOp; };
+      await expect(runHealthTrigger(h.deps({ decide, reschedule: async () => { throw new Error('scheduler unavailable'); } }))).resolves.toBe('no_op');
+      expect(h.logs.at(-1)).toContain('"code":"failed"');
     });
   });
 });

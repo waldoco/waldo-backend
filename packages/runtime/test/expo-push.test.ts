@@ -69,6 +69,47 @@ describe('pushing the owner\'s app', () => {
     expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
   });
 
+  it('keeps the Brief\'s slot: approval pushes stop one short of the day\'s limit until the Brief has been pushed, and use the last slot after it', async () => {
+    const early = fixture();
+    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await early.push('approval', `p000${i}`);
+    expect(early.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT - 1);
+    expect(early.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
+    await early.push('brief');
+    expect(early.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
+    expect(early.posted.at(-1)!.body).toEqual([expect.objectContaining({ body: 'Your Brief is ready' })]);
+
+    const briefFirst = fixture();
+    await briefFirst.push('brief');
+    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await briefFirst.push('approval', `p000${i}`);
+    expect(briefFirst.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
+    expect(briefFirst.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
+  });
+
+  it('the reserved slot is per owner-day: the next day starts with the Brief\'s slot held again', async () => {
+    let day = '2026-10-13';
+    const { push, send } = fixture({ today: () => day });
+    await push('brief');
+    day = '2026-10-14';
+    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await push('approval', `p000${i}`);
+    expect(send).toHaveBeenCalledTimes(1 + PUSH_DAILY_LIMIT - 1);
+  });
+
+  it('gives up on a send that never answers, and on a receipt that never arrives, instead of holding the caller', async () => {
+    vi.useFakeTimers();
+    try {
+      const silent = fixture({ send: ((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))) as unknown as typeof fetch });
+      const pending = silent.push('approval', 'p0001');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+      expect(silent.logged).toEqual([{ code: 'send_failed', count: 0 }]);
+      const unreadable = fixture({ send: (async () => ({ ok: true, json: () => new Promise(() => undefined) })) as unknown as typeof fetch });
+      const reading = unreadable.push('approval', 'p0001');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await reading;
+      expect(unreadable.logged).toEqual([{ code: 'receipt_unreadable', count: 0 }]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('without the access token push is not configured: it reads no devices and sends nothing', async () => {
     const targets = vi.fn(async () => [target(EXPO)]);
     const { push, logged, send, store } = fixture({ accessToken: undefined, targets });
