@@ -171,6 +171,12 @@ it('the console calls a card waiting for the model what it is', () => {
   expect(renderConsole(view, 'day')).toContain('Waiting for the model');
 });
 
+it('the console offers Resume on each paused job, by its schedule id', () => {
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [{ id: 'card:brief', name: 'Your Brief', until: 'Sat 4 Oct, 09:00' }] }, 'day');
+  expect(html).toContain('value="schedule.resume"');
+  expect(html).toContain('value="card:brief"');
+});
+
 it('the console calls a skipped card skipped, a card with no outcome done, and an unplanned card not scheduled', () => {
   const view = { ...SAMPLE_CONSOLE_VIEW, cards: [
     { ...SAMPLE_CONSOLE_VIEW.cards[0]!, state: 'skipped' as const },

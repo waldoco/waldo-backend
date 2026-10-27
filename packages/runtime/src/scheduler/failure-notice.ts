@@ -69,9 +69,9 @@ export function markFailureNoticed(kv: Kv, notice: FailureNotice, now: number): 
 }
 
 // Every job the scheduler has paused for its own failures, named as the owner knows it, with the retry's local time.
-export function pausedJobs(sql: Sql, now: number, timezone: string): readonly Readonly<{ name: string; until: string }>[] {
+export function pausedJobs(sql: Sql, now: number, timezone: string): readonly Readonly<{ id: string; name: string; until: string }>[] {
   const when = retryAt(timezone);
-  return pausedRows(sql, now).flatMap(row => { const name = jobName(row); return name ? [{ name, until: when.format(row.until) }] : []; });
+  return pausedRows(sql, now).flatMap(row => { const name = jobName(row); return name ? [{ id: row.id, name, until: when.format(row.until) }] : []; });
 }
 
 // Whether the pause a notice names still holds: a re-armed, rescheduled or deleted job makes its notice untrue.

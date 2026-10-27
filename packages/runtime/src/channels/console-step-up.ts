@@ -39,6 +39,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'schedule.set': { gated: false, why: 'Sets when the daily cards arrive; grants no access.' },
   'schedule.reset': { gated: false, why: 'Restores the default card times; grants no access.' },
   'timezone.set': { gated: false, why: 'Sets the owner\'s time zone; grants no access.' },
+  'schedule.resume': { gated: false, why: 'Runs a paused job now; grants no access.' },
   'card.retry': { gated: false, why: 'Writes one of today\'s cards again, at most three times a day; grants no access.' },
   'card.today': { gated: false, why: 'Arranges today\'s cards; grants no access.' },
   'card.pin': { gated: false, why: 'Pins a card to a time; grants no access.' },

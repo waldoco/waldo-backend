@@ -153,3 +153,15 @@ it('refuses a card it does not know', async () => {
     expect(await day.act({ action: 'card.retry', id: 'card:nope' })).toBe(false);
   });
 });
+
+it('Resume on a paused job runs it now with a fresh count; a job that is not paused is left alone', async () => {
+  await withBriefDue('resume-paused', async (day) => {
+    expect(await day.act({ action: 'schedule.resume', id: 'card:brief' })).toBe(false);
+    day.sql.exec("UPDATE schedule SET status = 'quarantined', quarantined_until = ?, attempts = 3 WHERE id = 'card:brief'", AT + 24 * 60 * 60_000);
+    expect(await day.act({ action: 'schedule.resume', id: 'card:brief' })).toBe(true);
+    expect(day.row()).toEqual({ status: 'armed', attempts: 0 });
+    await day.alarm();
+    expect(day.brief()?.state).toBe('sent');
+    expect(await day.act({ action: 'schedule.resume', id: 'card:nope' })).toBe(false);
+  });
+});

@@ -145,7 +145,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -195,6 +195,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
+  'schedule.resume': 'Resumed. It runs now.',
   'card.retry': "Making it now. It shows here and in your chat when it's ready.",
   'card.retry.sent': 'That card already went out today.',
   'card.retry.limit': "That's today's three tries. Waldo keeps trying on its own while the card is still useful today.",
@@ -252,7 +253,7 @@ export type ConsoleView = Readonly<{
   proactivity: Proactivity;
   schedules: SchedulePreferences;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
-  pausedJobs: readonly Readonly<{ name: string; until: string }>[];
+  pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
   lastRequest: LastRequest | null;
@@ -465,7 +466,7 @@ const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" a
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
-const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div></div>`).join('');
+const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div><div class="act">${form(view.csrf, 'schedule.resume', 'Resume', { id: job.id })}</div></div>`).join('');
 const schedules = (view: ConsoleView) => `${paused(view)}${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;

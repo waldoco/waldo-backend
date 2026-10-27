@@ -40,7 +40,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   ],
   proactivity: { quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' },
   schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true, health_proposals: true },
-  pausedJobs: [{ name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }],
+  pausedJobs: [{ id: 'dreaming', name: 'My overnight memory pass', until: 'Sat 2 Nov, 03:00' }],
   ledger: 'Open approvals: none\nDone: reminder "drink water" set (daily 09:00)\nReminders:\n- 2026-09-24T09:00 drink water (daily)',
   files: [
     { id: 2, kind: 'document', file_id: 'f2', name: 'blood-panel-sept.pdf', mime: 'application/pdf', size: 482_000, caption: 'can you read this', at: Date.parse('2026-09-23T12:10:00Z') },

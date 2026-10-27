@@ -156,6 +156,18 @@ export class Scheduler {
     return moved;
   }
 
+  // The owner lifts a pause: the row runs now, with a fresh count. Only a paused row moves.
+  async resume(id: string): Promise<boolean> {
+    const now = this.deps.now();
+    const resumed = this.sql.exec(
+      `UPDATE schedule SET status = 'armed', quarantined_until = NULL, attempts = 0, due_at = MAX(occurrence_at, ?), updated_at = MAX(?, updated_at + 1)
+        WHERE id = ? AND status = 'quarantined'`,
+      now, now, id,
+    ).rowsWritten > 0;
+    if (resumed) await this.rearm();
+    return resumed;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();

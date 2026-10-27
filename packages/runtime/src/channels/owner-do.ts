@@ -5109,6 +5109,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
           if (!(await google.disconnect(id))) return false;
+        } else if (action === 'schedule.resume') {
+          if (!(await scheduler.resume(id))) return false;
         } else if (action === 'card.retry') {
           const tried = await retryDayCard({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now }, id);
           if (tried === 'unknown_card') return false;
