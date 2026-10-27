@@ -1844,6 +1844,21 @@ describe('gateway attempt failure detail', () => {
     const result = await new RuntimeLLMProvider({ gateway }).complete(request(), runtimeCtx());
     expect(result).toMatchObject({ ok: false, reason: 'template_unavailable', detail: 'OpenAI request failed (503)' });
   });
+
+  it('keeps a refused key as auth_failed when every attempt fails, not transient', async () => {
+    const gateway = new ScriptedGateway(() => ({ ok: false, error: 'OpenAI request failed (401)', code: 'auth_failed' }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(request(), runtimeCtx());
+    expect(result).toMatchObject({ ok: false, reason: 'template_unavailable', code: 'auth_failed' });
+  });
+
+  it('reports auth_failed when a refused key is among mixed failures, so the dead key is not read as a blip', async () => {
+    let call = 0;
+    const gateway = new ScriptedGateway(() => (call++ === 0
+      ? { ok: false, error: 'OpenAI request failed (401)', code: 'auth_failed' }
+      : { ok: false, error: 'Anthropic request failed (503)', code: 'transient' }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(request(), runtimeCtx());
+    expect(result).toMatchObject({ ok: false, code: 'auth_failed' });
+  });
 });
 
 describe('sanitiseRequest structural degradation', () => {
