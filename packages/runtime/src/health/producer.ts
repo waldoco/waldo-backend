@@ -422,7 +422,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         const unavailable = (reason: 'intraday_inputs_unavailable' | 'calendar_demand_unavailable') => ({ state: 'unavailable' as const, reason });
         const late = { ...scores, form: unavailable('intraday_inputs_unavailable'), weight: unavailable('calendar_demand_unavailable') };
         const row = { ...rowOf(day, late, { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, [], false), backfilled: true };
-        await deps.writeContext(JSON.stringify(row));
+        if (writeOutcome(await deps.writeContext(JSON.stringify(row))) === 'written') logWritten(row);
       }
     };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
