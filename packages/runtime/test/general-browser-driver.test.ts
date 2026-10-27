@@ -57,6 +57,15 @@ it('keeps an admitted public interaction connection guarded until explicit disco
   expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
   expect(await f.sdk.sessions()).toHaveLength(1);
 });
+it('a write a page sends reaches the host authorization with its exact body, and is refused unless the host admits it', async () => {
+  const f = harness('input'), seen: any[] = [], body = new TextEncoder().encode('booking=FICTIONAL1');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (url, method, sent) => { seen.push([url, method, sent]); return method === 'GET'; }, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  await driver.navigate(session, 'https://docs.example/index');
+  let aborted = false;
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => false, postDataBuffer: () => body }), abort: async () => { aborted = true; } });
+  expect(seen).toContainEqual(['https://docs.example/write', 'POST', body]);expect(aborted).toBe(true);
+  await driver.disconnect();
+});
 it('never removes the HTTP guard while retained documents are live', async () => {
   const f = harness('input'); let unguardedWrites = 0;
   f.context.unroute = async () => { if (f.pages.some(page => page.url() !== 'about:blank')) unguardedWrites++; };
@@ -65,7 +74,7 @@ it('never removes the HTTP guard while retained documents are live', async () =>
   await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Guarded' }, async () => {});
   expect(unguardedWrites).toBe(0);
   let aborted = false;
-  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => false }), abort: async () => { aborted = true; } });
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => false , postDataBuffer: () => null}), abort: async () => { aborted = true; } });
   expect(aborted).toBe(true);
   await driver.disconnect();
 });
@@ -73,7 +82,7 @@ it('carries background denied-document state into the next retained operation', 
   const f = harness('input');
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (_url, method) => method === 'GET', maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
   await driver.navigate(session, 'https://docs.example/index');
-  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), abort: async () => {} });
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), abort: async () => {} });
   await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected' });
   expect(f.pages).toHaveLength(0);expect(f.calls.filter(call => call === 'attach')).toHaveLength(1);
 });
@@ -229,7 +238,7 @@ it('does not fulfill a denied document or report a click into it as useful work'
   const first = await driver.navigate(session, 'https://docs.example/index');
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
-    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
       fetch: async () => ({ status: () => 403, headers: () => ({}) }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 } });
@@ -274,7 +283,7 @@ it('rejects redirect chains before an unchecked redirected request', async () =>
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await driver.navigate(session, 'https://docs.example/index');
   const calls: string[] = [];
-  await f.route({ request: () => ({ url: () => 'https://docs.example/redirect', method: () => 'GET', isNavigationRequest: () => false }),
+  await f.route({ request: () => ({ url: () => 'https://docs.example/redirect', method: () => 'GET', isNavigationRequest: () => false , postDataBuffer: () => null}),
     continue: async () => { calls.push('unchecked'); },
     fetch: async (options: unknown) => { expect(options).toMatchObject({ maxRedirects: 0 }); return { status: () => 302 }; },
     fulfill: async () => { calls.push('fulfilled'); }, abort: async () => { calls.push('blocked'); } });
@@ -307,7 +316,7 @@ it('keeps routed mutation uncertainty and separately records unconfirmed denied-
   f.browser.newBrowserCDPSession = async () => ({ send: async () => { throw Error('termination unconfirmed'); } });
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
-    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403, headers: () => ({}) }), abort: async () => {} });
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, postDataBuffer: () => null, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403, headers: () => ({}) }), abort: async () => {} });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
 });
