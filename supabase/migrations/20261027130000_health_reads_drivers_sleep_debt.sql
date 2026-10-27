@@ -1,11 +1,58 @@
--- The scores read returns the row's drivers, so the app can show which of the owner's own signals are outside their usual
--- from health revision 4.
+-- The reads return what the row holds of the owner's own signals, so the app and the model can say which are outside their
+-- usual and how much sleep they owe.
 -- - waldo.health_scores_read is re-created whole from its last definition (20261023140000) and adds one key, drivers: the
 --   row's own list of closed-vocabulary phrases, an empty list when none, exactly as the writer stored it. The Worker shows it
---   only to a build that names revision 4. Energy windows are not read here: they need a column of their own and the
+--   only to a build that names health revision 4. Energy windows are not read here: they need a column of their own and the
 --   migration that adds it.
--- Signature, security definer, search_path and grants are unchanged. Additive: apply this before the Worker that reads it,
--- and an earlier Worker, which ignores keys it does not name, is unaffected.
+-- - waldo.health_context_read is re-created whole from its last definition (20261021150000) and adds the row's sleep debt
+--   beside the drivers and pillars it already returned, left out when the row has none, never a zero. Each pillar was already
+--   returned whole, so a baseline label stored inside a pillar reaches the reader with it. The consent check is unchanged:
+--   the read still returns nothing unless the owner's model-use consent is live for the row's basis.
+-- Signatures, security definer, search_path and grants are unchanged. Additive: apply this before the Worker that reads the
+-- new keys; an earlier Worker names the fields it reads and is unaffected.
+
+create or replace function waldo.health_context_read(p_do_name text, p_at bigint, p_sig text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_owner uuid; v_auth uuid;
+begin
+  if not waldo.router_signed('healthctx.read.' || p_do_name, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select id, auth_user_id into v_owner, v_auth from waldo.owners where do_name = p_do_name and state = 'active';
+  if v_auth is null then return null; end if;
+  return (
+    select jsonb_build_object(
+      'context', jsonb_build_object(
+        'id', c.id,
+        'day', c.day,
+        'form', c.form,
+        'recovery', c.recovery,
+        'weight', c.weight,
+        'drivers', c.drivers,
+        'confidence', c.confidence,
+        'freshness', c.freshness,
+        'tags', c.tags,
+        'compiled_at', c.updated_at,
+        'basis', b.consent_basis
+      ) || case when c.sleep_debt is null then '{}'::jsonb else jsonb_build_object('sleep_debt', c.sleep_debt) end,
+      'previous', (
+        select jsonb_build_object('day', p2.day, 'form_score', (p2.form ->> 'score')::numeric,
+          'recovery_zone', p2.recovery ->> 'zone', 'weight_zone', p2.weight ->> 'zone', 'basis', pb.consent_basis)
+        from public.health_context_daily p2
+        join waldo.health_context_basis pb on pb.owner_id = v_owner and pb.day = p2.day
+        where p2.user_id = v_auth and p2.day < c.day and waldo.health_basis_live(v_owner, pb.consent_basis, true)
+        order by p2.day desc
+        limit 1
+      )
+    )
+    from public.health_context_daily c
+    join waldo.health_context_basis b on b.owner_id = v_owner and b.day = c.day
+    where c.user_id = v_auth and waldo.health_basis_live(v_owner, b.consent_basis, true)
+    order by c.day desc
+    limit 1
+  );
+end $$;
+
 create or replace function waldo.health_scores_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid; v_auth uuid; v_body jsonb; v_day date; v_row record;

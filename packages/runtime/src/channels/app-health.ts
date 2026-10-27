@@ -146,7 +146,9 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   // A stored sleep debt that does not read as the contract's is left out, never passed on, so it cannot cost the owner
   // their scores.
   const shown = revision >= HEALTH_SLEEP_DEBT_REVISION_V1;
-  const debt = shown && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(stored.sleep_debt) : null;
+  // A need that leans on the prior is a word a build pinned before the baseline revision cannot parse, so it never reaches one.
+  const priorLed = revision < HEALTH_BASELINE_REVISION_V1 && asObject(stored?.sleep_debt)?.need_basis === 'blended_average';
+  const debt = shown && !priorLed && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(stored.sleep_debt) : null;
   if (debt && !debt.success) console.error('app health scores sleep debt shape');
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,

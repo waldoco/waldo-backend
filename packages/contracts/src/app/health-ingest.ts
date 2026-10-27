@@ -370,7 +370,7 @@ export const healthSleepDebtV1Schema = z.union([
   scoreUnavailable,
   z.strictObject({ state: z.literal('partial'), confidence: z.number().finite().min(0).max(1), algorithm_version: algorithmVersion, activation }),
   z.strictObject({
-    state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average']),
+    state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average', 'blended_average']),
     algorithm_version: algorithmVersion, activation,
   }),
 ]);
@@ -391,7 +391,8 @@ export const healthScoresV1Schema = z.strictObject({
   windows: z.array(healthEnergyWindowV1Schema).max(4).optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
-// names health revision 2 or later, whose pin always has it.
+// names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third
+// word those pins do not have, so it is shown only from the baseline revision; below it the key is left out.
 export const HEALTH_SLEEP_DEBT_REVISION_V1 = HEALTH_PROVIDER_REVISION_V1;
 // No row to show for the day: a 200 with the reason, never a zero score.
 export const healthScoresUnavailableV1Schema = z.strictObject({
