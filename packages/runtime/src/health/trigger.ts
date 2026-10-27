@@ -407,7 +407,7 @@ export type HealthTriggerDeps = Readonly<{
 // exists, and the model weighs how much a change that early is worth an interruption.
 export const resolveHealthMode = (setting: HealthTriggerSetting): HealthTriggerMode => (setting === 'shadow' ? 'shadow' : 'live');
 
-export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> => {
+const evaluate = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> => {
   const { book, timezone } = deps;
   const started = deps.now();
   const localDay = localIso(started, timezone).slice(0, 10);
@@ -462,6 +462,18 @@ export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthT
     await deps.reschedule(started + HEALTH_TRIGGER_FLOOR_MS).catch(() => undefined);
     return done('failed', mode);
   }
+};
+
+// The outcomes that already put the entry back themselves.
+const REARMED_BY_RUN: ReadonlySet<HealthTriggerOutcome> = new Set<HealthTriggerOutcome>(['held_quiet', 'held_cooldown', 'failed']);
+
+// While a run works the scheduler holds its entry, so the arm a wake makes then does nothing. A mark that landed in that time
+// survives the run's own clear, and the run leaves the next evaluation armed for it instead of letting it wait for another
+// upload. One entry covers however many landed.
+export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> => {
+  const outcome = await evaluate(deps);
+  if (!REARMED_BY_RUN.has(outcome) && deps.book.pending(deps.now()) !== null) await deps.reschedule(healthTriggerDueAt(deps.now(), deps.book.lastRunAt()));
+  return outcome;
 };
 
 // Arms the one evaluation entry no earlier than an hour after the last one. An entry already armed (a quiet-hours hold, an

@@ -87,9 +87,10 @@ const derivedViewCommon = {
 } as const;
 
 // A version name as a stored row carries it, e.g. form.v9 or recovery.candidate.v4: the pillar's own name, optional middle
-// parts and a numbered revision. The pillar prefix stops a Form view naming a Recovery version.
+// parts that are words and a numbered revision. The pillar prefix stops a Form view naming a Recovery version, and digits only
+// in the last part stop a measurement from riding in a name.
 const versionOf = (pillar: 'form' | 'recovery') =>
-  z.string().max(64).regex(new RegExp(`^${pillar}(?:\\.[a-z0-9-]+)*\\.v[0-9]+$`));
+  z.string().max(64).regex(new RegExp(`^${pillar}(?:\\.[a-z][a-z-]*)*\\.v[0-9]+$`));
 
 export const formHealthViewSchema = z.strictObject({
   ...derivedViewCommon,

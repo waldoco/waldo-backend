@@ -323,10 +323,10 @@ describe('derived health view carries the row\'s own version and what the model 
   });
 
   it('rejects a version that is not a stored version name, or names the other pillar', () => {
-    for (const algorithm_version of ['', 'form', 'form.9', 'form.v', 'Form.v9', 'form v9', 'form.v9; drop', 'recovery.v5', `form.${'a'.repeat(64)}.v1`]) {
+    for (const algorithm_version of ['', 'form', 'form.9', 'form.v', 'Form.v9', 'form v9', 'form.v9; drop', 'recovery.v5', `form.${'a'.repeat(64)}.v1`, 'form.hrv-62.v1', 'form.9.v1', 'form.-x.v1']) {
       expect(parse(form({ algorithm_version })).success, algorithm_version).toBe(false);
     }
-    for (const algorithm_version of ['form.v9', 'recovery', 'recovery.v5 ', 'recovery..v5']) expect(parse(recovery({ algorithm_version })).success, algorithm_version).toBe(false);
+    for (const algorithm_version of ['form.v9', 'recovery', 'recovery.v5 ', 'recovery..v5', 'recovery.hrv-62.v1']) expect(parse(recovery({ algorithm_version })).success, algorithm_version).toBe(false);
   });
 
   it('keeps the pillar the view is about without reading any version name', () => {
