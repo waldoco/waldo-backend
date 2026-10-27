@@ -58,6 +58,7 @@ describe('energy windows: the golden vector', () => {
     expect(windowsOf(run(10))).toEqual(CLEAN);
   });
 
+  // With no Recovery today the peaks are not trimmed: an unknown zone is a day not known to be poor, never a poor one.
   it('is the same for any recovery zone that leaves peaks alone, and when the zone is unknown', () => {
     expect(windowsOf(run(10), { recoveryZone: 'solid' })).toEqual(CLEAN);
     expect(windowsOf(run(10), { recoveryZone: null })).toEqual(CLEAN);
@@ -119,6 +120,18 @@ describe('energy windows: recovery zone and sleep debt scale the peaks', () => {
   });
   it('never trims for easing or steady debt', () => {
     expect(windowsOf(run(10), { sleepTrend: 'easing' })).toEqual(CLEAN);
+  });
+});
+
+describe('energy windows: three peaks', () => {
+  // Three runs above the line, the middle one the smallest: only the two largest are kept, beside the one dip.
+  const THREE = (h: number): number => 70 + ((h >= 2 && h <= 4) || (h >= 12 && h <= 14) ? 9 : 0) + (h >= 7 && h <= 8 ? 3 : 0) - (h >= 9 && h <= 11 ? 16 : 0);
+  it('keeps the two largest and drops the third', () => {
+    expect(windowsOf(run(10, () => ({ curve: THREE })))).toEqual([
+      { start: '08:00', end: '11:00', kind: 'peak' },
+      { start: '15:00', end: '18:00', kind: 'dip' },
+      { start: '18:00', end: '22:00', kind: 'peak' },
+    ]);
   });
 });
 
