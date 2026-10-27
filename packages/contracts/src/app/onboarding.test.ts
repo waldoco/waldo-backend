@@ -4,8 +4,10 @@ import {
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
-  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
+  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
+  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1,
 } from './onboarding';
+import { appJsonWireBytes } from './core';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
 
 const rejected = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(false));
@@ -171,6 +173,70 @@ describe('setup answers', () => {
     accepted(appSetupAnswersResultV1Schema, [{ request_id: 'setup-answers-01', held, replayed: false }]);
     rejected(appSetupAnswersResultV1Schema, [{ request_id: 'setup-answers-01', held, }, { request_id: 'setup-answers-01', held: { name: true }, replayed: false },
       { request_id: 'setup-answers-01', held: { ...held, day: 'yes' }, replayed: false }, { request_id: 'setup-answers-01', held, replayed: false, answers: [] }]);
+  });
+});
+
+describe('setup answers, onboarding revision 2', () => {
+  // The rest of the setup conversation: what the owner wants a hand with, where it is hardest, what is never to be moved, how
+  // Waldo should bring things up, the season they are in, and what goes first when they run low.
+  const more = {
+    request_id: 'setup-answers-02',
+    matters: { picked: ['sleep', 'promises'], own_words: 'Mostly the evenings' },
+    spots: ['sleep-waking', 'promises-favours', 'promises-lookinto'],
+    protect: { picked: ['workouts', 'family'], own_words: '' },
+    rope: 'suggest',
+    season: { choice: 'travel', own_words: 'Two weeks in Pune' },
+    low: { picked: ['patience', 'cancel'], own_words: '' },
+  };
+  it('takes each new answer alone, cleared with null or an empty choice, beside the first four', () => {
+    accepted(appSetupAnswersRequestV1Schema, [
+      more, { request_id: 'setup-answers-02', spots: [] }, { request_id: 'setup-answers-02', rope: null }, { request_id: 'setup-answers-02', low: null },
+      { ...more, name: 'Asha' }, { ...more, matters: { picked: [], own_words: 'Something else' } },
+      { ...more, season: { choice: null, own_words: '' } }, { ...more, season: { choice: 'none', own_words: '' } },
+      { ...more, spots: appSetupSpotV1Schema.options }, { ...more, protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: 'x'.repeat(280) } },
+      ...['tell', 'suggest', 'draft'].map(rope => ({ ...more, rope })),
+    ]);
+    rejected(appSetupAnswersRequestV1Schema, [
+      { ...more, spots: ['none'] }, { ...more, spots: ['promises-work', 'promises-work'] }, { ...more, spots: 'sleep-waking' }, { ...more, spots: { picked: ['sleep-waking'] } },
+      { ...more, matters: { picked: ['health'], own_words: '' } }, { ...more, matters: { picked: ['sleep', 'sleep'], own_words: '' } }, { ...more, matters: ['sleep'] },
+      { ...more, protect: { picked: ['sleep'], own_words: '' } }, { ...more, protect: { picked: ['meals'] } }, { ...more, protect: { picked: [], own_words: 'x'.repeat(281) } },
+      { ...more, rope: 'act' }, { ...more, rope: '' }, { ...more, season: 'busy' }, { ...more, season: { choice: 'holiday', own_words: '' } }, { ...more, season: { own_words: '' } },
+      { ...more, low: { picked: ['focus', 'focus'], own_words: '' } }, { ...more, low: { picked: ['tired'], own_words: '' } }, { ...more, low: { picked: ['focus'], own_words: 'x'.repeat(281) } },
+      { ...more, low: { picked: ['focus'], own_words: '', readings: [] } },
+    ]);
+  });
+  it('lets only a build that declares revision 2 send the later answers', () => {
+    const first = { request_id: 'setup-answers-02', name: 'Asha', day: { shape: 'focus' as const, own_words: '' } };
+    for (const revision of [1, 2, 3]) expect(appSetupAnswersFitRevision(first, revision)).toBe(true);
+    for (const answer of ['matters', 'spots', 'protect', 'rope', 'season', 'low'] as const) {
+      const later = appSetupAnswersRequestV1Schema.parse({ ...first, [answer]: more[answer] });
+      expect([answer, appSetupAnswersFitRevision(later, 1), appSetupAnswersFitRevision(later, 2)]).toEqual([answer, false, true]);
+    }
+  });
+  it('fits the longest answers in any script under the answers route cap', () => {
+    // Six answers in the owner's own words at their limit, every choice picked, in characters JSON spells out as \uXXXX: six
+    // bytes each, more than any script takes.
+    const words = '\u0001'.repeat(280), longest = {
+      request_id: 'x'.repeat(80), name: `a${'\u0001'.repeat(79)}`, day: { shape: 'varies', own_words: words }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words },
+      wearable: 'garmin', matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises'], own_words: words }, spots: appSetupSpotV1Schema.options,
+      protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words }, rope: 'suggest', season: { choice: 'none', own_words: words },
+      low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words },
+    };
+    accepted(appSetupAnswersRequestV1Schema, [longest]);
+    expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
+    expect(appOnboardingRoutesV1.find(route => route.path === '/app/v1/onboarding/answers')?.max_request_bytes).toBe(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
+  });
+  it('holds each new answer only for a build that reads revision 2, and the first four for every build', () => {
+    const all = { name: true, day: false, slips: false, wearable: true, matters: true, spots: true, protect: false, rope: true, season: true, low: false };
+    const result = { request_id: 'setup-answers-02', held: all, replayed: false };
+    accepted(appSetupAnswersResultV1Schema, [result]);
+    rejected(appSetupAnswersResultV1Schema, [{ ...result, held: { ...all, rope: 'yes' } }, { ...result, held: { ...all, mood: true } }]);
+    const first = { request_id: 'setup-answers-02', held: { name: true, day: false, slips: false, wearable: true }, replayed: false };
+    expect(APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1).toBe(2);
+    for (const revision of [1]) expect(appSetupAnswersResultAtRevision(result, revision)).toEqual(first);
+    for (const revision of [2, 3]) expect(appSetupAnswersResultAtRevision(result, revision)).toBe(result);
+    // An answer recorded before the revision replays as it was, whichever revision reads it.
+    expect(appSetupAnswersResultAtRevision(first, 2)).toBe(first);
   });
 });
 

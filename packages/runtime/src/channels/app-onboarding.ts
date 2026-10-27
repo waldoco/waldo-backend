@@ -1,9 +1,11 @@
 import {
-  APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
+  APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
   appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
-  appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema,
+  appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersFitRevision, appSetupAnswersRequestV1Schema, appSetupAnswersResultAtRevision, appSetupAnswersResultV1Schema,
+  type AppSetupAnswersResultV1,
 } from '../../../contracts/src/app/onboarding';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import type { AppConsentStateV1 } from '../../../contracts/src/app/onboarding';
 import type { ChatChannels } from './chat-channel-links';
 import { z } from 'zod';
@@ -56,9 +58,9 @@ type Problem = keyof typeof STATUS;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const problem = (error: Problem) => reply({ error }, STATUS[error]);
 
-const readBody = async (request: Request): Promise<unknown> => {
+const readBody = async (request: Request, maxBytes: number): Promise<unknown> => {
   const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > APP_ONBOARDING_MAX_REQUEST_BYTES_V1) return undefined;
+  if (new TextEncoder().encode(text).byteLength > maxBytes) return undefined;
   try { return JSON.parse(text); } catch { return undefined; }
 };
 
@@ -87,7 +89,10 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     return path.startsWith('/app/v1/') && APP_ONBOARDING_PATHS.includes(path) ? reply({ error: 'method_not_allowed' }, 405) : problem('not_found');
   }
   if (request.method !== 'POST' || !['/app/v1/onboarding/actions', ANSWERS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
-  const raw = await readBody(request);
+  // A result is recorded whole and answered at the revision the asking build reads, so a replay suits whichever build asks. A
+  // build below the setup answers' revision keeps the cap and the fields it always had.
+  const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'onboarding');
+  const raw = await readBody(request, path === ANSWERS_PATH && revision >= APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 ? APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1 : APP_ONBOARDING_MAX_REQUEST_BYTES_V1);
   if (path === CHANNEL_LINK_PATH) {
     // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
     const link = appChannelLinkRequestV1Schema.safeParse(raw);
@@ -106,11 +111,13 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     : path === '/app/v1/consents/withdraw' ? appConsentWithdrawV1Schema.safeParse(raw)
     : appFindingActionV1Schema.safeParse(raw);
   if (!parsed.success) return problem('invalid_request');
+  if (path === ANSWERS_PATH && !appSetupAnswersFitRevision(appSetupAnswersRequestV1Schema.parse(parsed.data), revision)) return problem('invalid_request');
   const body = parsed.data, digest = await bodyDigest(body);
   const seen = host.requests.find(path, body.request_id, digest);
   if (seen.kind === 'reused') return problem('request_reused');
-  if (seen.kind === 'replay') return answer({ ...(seen.result as object), replayed: true });
-  const record = (result: Record<string, unknown>) => { host.requests.record(path, body.request_id, digest, result); return answer({ ...result, replayed: false }); };
+  const shaped = (result: Record<string, unknown>) => path === ANSWERS_PATH ? appSetupAnswersResultAtRevision(result as AppSetupAnswersResultV1, revision) : result;
+  if (seen.kind === 'replay') return answer(shaped({ ...(seen.result as object), replayed: true }));
+  const record = (result: Record<string, unknown>) => { host.requests.record(path, body.request_id, digest, result); return answer(shaped({ ...result, replayed: false })); };
 
   if (path === '/app/v1/onboarding/actions') {
     const action = appOnboardingActionV1Schema.parse(body);

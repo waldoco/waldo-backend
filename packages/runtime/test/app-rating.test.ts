@@ -89,6 +89,18 @@ it('repeating a request or a rating changes nothing, and a request_id reused for
   });
 });
 
+it('a request_id reused on a different reply is refused with 409, and that reply keeps no rating', async () => {
+  await withExchange('app-rating-reuse-other', async (owner, state, { reply }) => {
+    const page = appHistoryResultV1Schema.parse(await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: headers('app-rating-reuse-other') }))).json());
+    const older = page.messages.filter(message => message.role === 'assistant').map(message => message.id).find(id => id !== reply)!;
+    expect(older).toBeDefined();
+    expect((await rate(owner, 'app-rating-reuse-other', reply, { request_id: 'rating-req-0001', rating: 'up' })).status).toBe(200);
+    const reused = await rate(owner, 'app-rating-reuse-other', older, { request_id: 'rating-req-0001', rating: 'up' });
+    expect([reused.status, await reused.json()]).toEqual([409, { error: 'request_reused', code: 'request_reused' }]);
+    expect(stored(state)).toEqual([{ message_id: reply, rating: 'up', at: expect.any(Number) }]);
+  }, 2);
+});
+
 it('refuses a malformed request with 400 and stores nothing; the valid shapes pass', async () => {
   await withExchange('app-rating-invalid', async (owner, state, { reply }) => {
     for (const body of ['not json', { request_id: 'short', rating: 'up' }, { request_id: 'rating-req-0001', rating: 'meh' }, { request_id: 'rating-req-0001' },
