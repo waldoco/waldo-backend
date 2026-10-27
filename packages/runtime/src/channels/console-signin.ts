@@ -5,18 +5,22 @@ import {CONTROL_ACTION_PATH} from './dashboard-control-actions';
 import { handleSignup, CONSOLE_SIGNUP_PATH } from './console-signup';
 import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
-import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
+import { CONSOLE_SESSION_IDLE_MS, CONSOLE_SESSION_LIFETIME_MS, CONSOLE_STEP_UP_MS, consoleAuth, fromAnotherSite, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
+import { googlePkceCookie, readGoogleSignIn, startGoogleSignIn } from '../identity/google-pkce';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, clearConsoleCookie, consoleCookie, grantHeaders } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
+import { DASHBOARD_ACCESS_LOG_PATH } from './dashboard-access-log';
 import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
 import { fenceSession, ownerSessionHash } from './session-fence';
 import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
+export const CONSOLE_GOOGLE_PATH = `${CONSOLE_SIGNIN_PATH}/google`;
+const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
 
 // Auth-specific fixed-window limits (per email, and per IP across both endpoints), enforced in
 // the owner directory so they hold globally: OTP send 5 per 15 min, verify 10 per 15 min,
@@ -26,10 +30,11 @@ export const CONSOLE_OTP_VERIFY_LIMIT = 10;
 export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+// CONSOLE_GOOGLE_SIGNIN "1" offers Google on the sign-in page; it needs the callback on Supabase's redirect allow list first.
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; CONSOLE_GOOGLE_SIGNIN?: string }>;
 // The dashboard's JSON reads and writes: a signed-out call gets a JSON 401 and every answer keeps the dashboard's headers.
 const dashboardJson = (url: URL, request: Request) =>
-  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH].includes(url.pathname)
+  [DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,DASHBOARD_HEALTH_PATH,DASHBOARD_ADMIN_HEALTH_PATH,DASHBOARD_ACCESS_LOG_PATH].includes(url.pathname)
   ||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json');
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;
@@ -50,7 +55,7 @@ export const consoleReturnTarget = (values: readonly unknown[]): string | null =
 const returnField = (target: string | null) => target ? `<input type="hidden" name="return_to" value="${esc(target)}">` : '';
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}main{display:grid;gap:16px;width:min(320px,90vw)}form{display:grid;gap:12px;width:100%}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}label{font:bold 1rem system-ui,sans-serif}button:disabled{opacity:.65;cursor:wait}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}button.secondary{background:transparent;color:#1A1A1A;border:1px solid #ccc}h1{margin:0}p{margin:0}.help{color:#555;font-size:15px}</style></head><body><main>${body}<p id="signin-progress" role="status" aria-live="polite"></p><button id="signin-cancel" type="button" hidden>Stop waiting</button></main><script>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}main{display:grid;gap:16px;width:min(320px,90vw)}form{display:grid;gap:12px;width:100%}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}label{font:bold 1rem system-ui,sans-serif}button:disabled{opacity:.65;cursor:wait}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}button.secondary{background:transparent;color:#1A1A1A;border:1px solid #ccc}a.alt{font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc;color:#1A1A1A;text-align:center;text-decoration:none}h1{margin:0}p{margin:0}.help{color:#555;font-size:15px}</style></head><body><main>${body}<p id="signin-progress" role="status" aria-live="polite"></p><button id="signin-cancel" type="button" hidden>Stop waiting</button></main><script>
 (() => {
   let main = document.querySelector('main');
   let pending = null;
@@ -210,9 +215,12 @@ const joinLink = `<p class="help">New to Waldo? <a href="${CONSOLE_SIGNUP_PATH}"
 // Confirm mode is the step-up before an action that creates lasting access: the same email code, in a browser that stays
 // signed in, back to the page the owner came from.
 const confirmIntro = `<h1>Confirm it's you</h1><p>Pairing a Mac, linking a chat, connecting an account or tool, letting a tool run without asking, inviting someone and deleting your account need an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. Enter your email and Waldo sends you one; this browser stays signed in.</p>`;
-const signinEmailForm = (note = '', email = '', target: string | null = null, confirming = false) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${confirming ? confirmIntro : '<h1>Sign in to Waldo</h1><p>Enter your email and Waldo sends you a sign-in code.</p>'}${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(email)}" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>${confirming ? '' : `${staysSignedIn}${joinLink}`}`);
+const googleLink = (target: string | null) => `<a class="alt" id="signin-google" href="${CONSOLE_GOOGLE_PATH}${target ? `?return_to=${encodeURIComponent(target)}` : ''}">Continue with Google</a>`;
+const signinEmailForm = (note = '', email = '', target: string | null = null, confirming = false, google = false) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${confirming ? confirmIntro : '<h1>Sign in to Waldo</h1><p>Enter your email and Waldo sends you a sign-in code.</p>'}${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(email)}" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>${confirming ? '' : `${google ? googleLink(target) : ''}${staysSignedIn}${joinLink}`}`);
 // The default status is the same for every address, so this page never says who is a member.
-const signinCodeForm = (email: string, note = '', target: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
+// link: the Google identity this code also confirms; it rides along with every form on the page.
+const linkField = (link: string | null) => link ? `<input type="hidden" name="link" value="${esc(link)}">` : '';
+const signinCodeForm = (email: string, note = '', target: string | null = null, link: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}${linkField(link)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${linkField(link)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
 
 // With Supabase configured, the console signs in by email code (invite-required for new members) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
@@ -227,12 +235,84 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   const resume = request.method === 'GET' ? consoleReturnTarget([url.pathname + url.search]) : null;
   const signin = () => new Response(null, { status: 303, headers: { location: resume ? `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` : CONSOLE_SIGNIN_PATH } });
   let target = consoleReturnTarget(url.searchParams.getAll('return_to'));
-  const emailForm = (note = '', email = '') => signinEmailForm(note, email, target, url.searchParams.get('confirm') === '1');
-  const codeForm = (email: string, note = '') => signinCodeForm(email, note, target);
+  const google = env.CONSOLE_GOOGLE_SIGNIN === '1' && Boolean(env.SUPABASE_PROJECT_URL && env.WALDO_ROUTER_HMAC_SECRET && auth.signInWithAuthCode);
+  const emailForm = (note = '', email = '') => signinEmailForm(note, email, target, url.searchParams.get('confirm') === '1', google);
+  let link: string | null = null;
+  const codeForm = (email: string, note = '') => signinCodeForm(email, note, target, link);
+  const formLink = (form: FormData) => { const value = form.get('link'); return typeof value === 'string' && value.length > 0 && value.length <= 2048 ? value : null; };
+  // The owner's console session, the same whichever way they proved their email. retry is the page to show on a failure.
+  const signInOwner = async (doName: string, hop: string, retry: (note: string) => Response, cookies: readonly string[] = []): Promise<Response> => {
+    const withCookies = (response: Response) => { cookies.forEach(cookie => response.headers.append('set-cookie', cookie)); return finish(response); };
+    const grant = await owners.get(owners.idFromName(doName))
+      .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: grantHeaders(doName, request) });
+    if (!grant.ok) {
+      event(hop, false, 'grant_failed');
+      return withCookies(retry('Sign-in is having trouble. Try again in a moment.'));
+    }
+    let ownerCookieValue: string | null;
+    try { ownerCookieValue = await auth.ownerCookie(doName, request); }
+    catch { ownerCookieValue = null; }
+    if (ownerCookieValue === null) {
+      event(hop, false, 'session_unavailable');
+      return withCookies(retry('Sign-in is having trouble. Try again in a moment.'));
+    }
+    const terminal = target && !redirectReturnTarget([target]) ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
+    const headers = new Headers(terminal?.headers ?? { location: target ?? CONSOLE_PATH });
+    headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, await grant.text()));
+    headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookieValue));
+    event(hop, true, 'signed_in');
+    return withCookies(new Response(terminal?.body ?? null, { status: terminal ? 200 : 303, headers }));
+  };
+  if (url.pathname === CONSOLE_GOOGLE_PATH && request.method === 'GET') {
+    // Another site may link here, but only this console starts the flow, so a visit it did not start sets no verifier.
+    if (!google || fromAnotherSite(request)) return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
+    const started = await startGoogleSignIn(env.WALDO_ROUTER_HMAC_SECRET!, env.SUPABASE_PROJECT_URL!, `${url.origin}${CONSOLE_GOOGLE_CALLBACK_PATH}`, CONSOLE_GOOGLE_PATH, target, Date.now());
+    event('console_google', true, 'started');
+    return finish(new Response(null, { status: 303, headers: { location: started.location, 'set-cookie': started.cookie } }));
+  }
+  // Supabase sends the browser back here from its own site, so this is the one sign-in step that a cross-site visit may
+  // finish: without this browser's verifier the code cannot be exchanged.
+  if (url.pathname === CONSOLE_GOOGLE_CALLBACK_PATH && request.method === 'GET') {
+    const spent = googlePkceCookie(CONSOLE_GOOGLE_PATH, '', 0);
+    const back = (code: string, note: string) => { event('console_google', false, code); const response = emailForm(note); response.headers.append('set-cookie', spent); return finish(response); };
+    const started = google ? await readGoogleSignIn(env.WALDO_ROUTER_HMAC_SECRET!, request, Date.now()) : null;
+    if (!started) return back('no_verifier', 'Google sign-in timed out or began in another browser. Try again.');
+    target = consoleReturnTarget([started.target]);
+    const code = url.searchParams.get('code');
+    if (!code || code.length > 512) return back('not_finished', 'Google sign-in did not finish. Try again, or use an email code.');
+    if (!env.RESPONSIBILITY_RATE_LIMITER) return back('limiter_absent', 'Sign-in is temporarily unavailable. Try again shortly.');
+    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    let admitted = false;
+    try {
+      admitted = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-google-ip:${ip}` })).success
+        && await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS);
+    } catch { admitted = false; }
+    if (!admitted) return back('throttled', 'Too many attempts. Try again in a few minutes.');
+    let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithAuthCode']>>>;
+    try { signedIn = await auth.signInWithAuthCode!(code, started.verifier); }
+    catch { return back('verification_unavailable', 'Sign-in is temporarily unavailable. Try again shortly.'); }
+    if (signedIn.state === 'refused') return back(signedIn.reason === 'token' ? 'code_refused' : 'no_email', 'Google did not confirm that sign-in. Try again, or use an email code.');
+    // The person proved they hold this Google address, so saying it has no account tells them only about themselves.
+    if (signedIn.state === 'needs_invite') return back('not_member', 'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
+    if (signedIn.state === 'confirm') {
+      // A Google account this owner has never signed in with: the mailbox confirms it before anything is signed in.
+      let sent = false;
+      try { sent = await auth.throttle(`send:${signedIn.email}`, CONSOLE_OTP_SEND_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS) && await auth.sendCode(signedIn.email); }
+      catch { sent = false; }
+      if (!sent) return back('confirm_unsent', 'Sign-in is having trouble. Try again in a few minutes, or use an email code.');
+      event('console_google', true, 'confirm_sent');
+      link = signedIn.link;
+      const response = codeForm(signedIn.email, `This is the first time this Google account signs in to your Waldo account. To confirm it, enter the code we emailed to ${signedIn.email}.`);
+      response.headers.append('set-cookie', spent);
+      return finish(response);
+    }
+    return signInOwner(signedIn.doName, 'console_google', emailForm, [spent]);
+  }
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return finish(emailForm());
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const form = await request.formData();
     target = consoleReturnTarget(form.getAll('return_to'));
+    link = formLink(form);
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     if (form.get('intent') === 'edit') return finish(emailForm('Check your email address, then request a code.', email));
     if (!email.includes('@')) return finish(emailForm('Enter your email address.', email));
@@ -275,6 +355,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
     target = consoleReturnTarget(form.getAll('return_to'));
+    link = formLink(form);
     const email = String(form.get('email') ?? '');
     // A verification code is guessable, so verify attempts are throttled like code sends,
     // fail-closed: without the limiter this public endpoint refuses rather than allowing
@@ -303,7 +384,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       return finish(codeForm(email, 'Too many attempts. Try again in a few minutes.'));
     }
     let doName: string | null;
-    try { doName = await auth.verify(email, String(form.get('code') ?? '')); }
+    try { doName = link ? await auth.verify(email, String(form.get('code') ?? ''), undefined, undefined, link) : await auth.verify(email, String(form.get('code') ?? '')); }
     catch {
       event('console_verify', false, 'verification_unavailable');
       return finish(codeForm(email, 'Verification is temporarily unavailable. Try again shortly.'));
@@ -312,25 +393,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event('console_verify', false, 'invalid');
       return finish(codeForm(email, 'That code did not work. A code works once and expires after a while: enter the newest one, or send a new code.'));
     }
-    const grant = await owners.get(owners.idFromName(doName))
-      .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: grantHeaders(doName, request) });
-    if (!grant.ok) {
-      event('console_verify', false, 'grant_failed');
-      return finish(codeForm(email, 'Sign-in is having trouble. Try again in a moment.'));
-    }
-    let ownerCookieValue: string | null;
-    try { ownerCookieValue = await auth.ownerCookie(doName, request); }
-    catch { ownerCookieValue = null; }
-    if (ownerCookieValue === null) {
-      event('console_verify', false, 'session_unavailable');
-      return finish(codeForm(email, 'Sign-in is having trouble. Try again in a moment.'));
-    }
-    const terminal = target && !redirectReturnTarget([target]) ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
-    const headers = new Headers(terminal?.headers ?? { location: target ?? CONSOLE_PATH });
-    headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, await grant.text()));
-    headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookieValue));
-    event('console_verify', true, 'signed_in');
-    return finish(new Response(terminal?.body ?? null, { status: terminal ? 200 : 303, headers }));
+    return signInOwner(doName, 'console_verify', note => codeForm(email, note));
   }
   // D1: sign-out-everywhere. Drops every server-side session, so all live cookies - including
   // this one - die at their next validation, then clears the cookies on this browser too.

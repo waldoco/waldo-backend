@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROGRESS_NOTE_MAX_CHARS } from '@waldo/contracts';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { PROGRESS_CLOSE_WAIT_MS, PROGRESS_FALLBACK, ProgressPacer, progressInput, type ProgressDeps, type ProgressDraft, type ProgressEvent } from '../src/channels/progress-pacer';
 
 const timing = { firstMs: 20_000, secondMs: 75_000, minTurnMs: 10_000 };
@@ -153,4 +155,12 @@ describe('progress pacer wording', () => {
     expect(input).toContain('query_calendar');
     expect(input).toContain('Your first one said: "Checking your calendar."');
   });
+});
+
+// iMessage works like a person texting back: the reply, with no "still working" notes in between. Both deploys keep the
+// notes off; removing the var turns them back on.
+it('iMessage progress notes are off in production and staging', () => {
+  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  expect(parsed.vars.WALDO_IMESSAGE_PROGRESS).toBe('0');
+  expect(parsed.env.staging.vars.WALDO_IMESSAGE_PROGRESS).toBe('0');
 });

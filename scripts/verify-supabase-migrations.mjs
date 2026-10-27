@@ -85,6 +85,13 @@ const expectedMigrations = [
   '20261025120000_waldo_connect_session_granola.sql',
   '20261025130000_app_session_thirty_days.sql',
   '20261025140000_app_push_expo.sql',
+  '20261026120000_waldo_owner_phone_set.sql',
+  '20261026130000_waldo_oauth_client_endpoints.sql',
+  '20261026140000_waldo_text_first_link_phone_proof.sql',
+  '20261026150000_waldo_connect_session_chat_apps.sql',
+  '20261026155000_waldo_revoke_user_session_reads.sql',
+  '20261026160000_waldo_signin_identities.sql',
+  '20261027090000_waldo_app_push_session_lifecycle.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

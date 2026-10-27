@@ -1,3 +1,4 @@
+import type { EmbeddingRunner } from '../memory/semantic-recall';
 import { ownerDirectory, type OwnerDirectory } from '../identity/owner-directory';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
@@ -33,6 +34,7 @@ export type TelegramWebhookEnv = Readonly<{
   // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
   // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
   WALDO_TOOL_SEARCH?: string;
+  WALDO_TOOL_LOADER?: string;
   // 'on' shows owner replies while they are written (Telegram drafts, the app's receipt draft). Off when unset.
   WALDO_STREAM_REPLIES?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
@@ -71,10 +73,15 @@ export type TelegramWebhookEnv = Readonly<{
   GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
+  MEMORY_SEMANTIC_RECALL?: string;
+  AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
   OWNER_LOOKUP?: string;
+  // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
+  OWNER_PROFILE?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

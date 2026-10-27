@@ -89,7 +89,7 @@ iMessage shows no typing dots, so a long owner turn sends at most two short note
   - A reply that finds the slot busy waits for it as above, and the slot is read before any directory lookup.
 - **Messages during a long turn.** iMessage has no steer or stop path. A message the owner sends meanwhile waits and runs
   as the next turn, after the current reply has gone to the bridge.
-- **Off switch:** `WALDO_IMESSAGE_PROGRESS=0`.
+- **Off switch:** `WALDO_IMESSAGE_PROGRESS=0`, set in both deploys: iMessage gets the reply alone, like a person texting back. Removing the var turns notes back on.
 - **Typing dots** are a host change, proposed in `waldoco/waldo-imessage-host`: the host types from an owner message
   until its next send to that chat. The backend sends no typing commands, since they would take the single mailbox slot.
 

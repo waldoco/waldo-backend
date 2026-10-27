@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, type LLMRequest } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, type LLMRequest } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { ConversationStore } from '../src/channels/conversation-store';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
@@ -31,21 +31,21 @@ const responder = ({ store, memory, privateOwner, timezone }: { store?: Conversa
   if (timezone) args[4] = { timezone, now: () => new Date() };
   return { requests, owner: createOwnerResponder(...args), routed: () => requests.map(request => [request.model, request.reasoning_effort]) };
 };
-const SOL_MEDIUM = [OPENAI_GPT_6_1_SOL_MODEL, 'medium'];
+const TERRA_MEDIUM = [OPENAI_GPT_6_1_TERRA_MODEL, 'medium'];
 const LUNA_LOW = [OPENAI_GPT_6_LUNA_MODEL, 'low'];
 
-it('an owner turn asks Sol at medium effort', async () => {
+it('an owner turn asks Terra at medium effort', async () => {
   const { owner, routed } = responder();
   await owner.respond(ownerTyped({ traceId: 'route-owner-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'find me a quiet hotel near the venue for Friday', memoryWrites: false }), time);
-  expect(routed()).toEqual([SOL_MEDIUM]);
+  expect(routed()).toEqual([TERRA_MEDIUM]);
 });
 
 // Production turns carry their run's scope, so they run in a responder rebuilt for that scope; so does their reaction.
-it('an owner turn and its reaction in their own run scope keep Sol at medium and Luna at low', async () => {
+it('an owner turn and its reaction in their own run scope keep Terra at medium and Luna at low', async () => {
   const { owner, routed } = responder();
   await owner.respond(ownerTyped({ traceId: 'route-scoped-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'book the cheaper of the two hotels', memoryWrites: false, runScope: scope('owner-run') }), time);
   await owner.chooseReaction(ownerTyped({ traceId: 'route-scoped-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'great, thanks', runScope: scope('reaction-run') }));
-  expect(routed()).toEqual([SOL_MEDIUM, LUNA_LOW]);
+  expect(routed()).toEqual([TERRA_MEDIUM, LUNA_LOW]);
 });
 
 it('choosing a reaction and titling a thread ask Luna at low effort', async () => {
@@ -82,7 +82,7 @@ it('compacting the history of owner turns that ran in their own run scope asks L
       const { owner, routed } = responder({ store });
       for (let n = 1; n <= 6; n += 1) await owner.respond(ownerTyped({ traceId: `route-compact-${n}`, conversationRef: 'owner', surface: 'app', text: `Question ${n}: ${'q'.repeat(90)}`, runScope: scope(`compact-run-${n}`) }), time);
       await owner.compactIfDue!('owner');
-      expect(routed()).toEqual([...Array(6).fill(SOL_MEDIUM), LUNA_LOW]);
+      expect(routed()).toEqual([...Array(6).fill(TERRA_MEDIUM), LUNA_LOW]);
     });
   } finally { Object.assign(COMPACTION, defaults); }
 });
@@ -97,11 +97,11 @@ it('a reminder for an admitted owner asks Luna at low effort', async () => {
 });
 
 // Reasoning tokens count against max_output_tokens; OpenAI's reasoning guide asks for at least 25,000 tokens of room.
-it('gives a Sol owner turn 25,000 output tokens of room and keeps a Luna auxiliary call at 4,096', async () => {
+it('gives a Terra owner turn 25,000 output tokens of room and keeps a Luna auxiliary call at 4,096', async () => {
   const { owner, requests } = responder();
   await owner.respond(ownerTyped({ traceId: 'route-room-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'compare three hotels near the venue', memoryWrites: false }), time);
   await owner.chooseReaction(ownerTyped({ traceId: 'route-room-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'perfect' }));
-  expect(requests.map(request => [request.model, request.reasoning_effort, request.max_tokens])).toEqual([[...SOL_MEDIUM, 25_000], [...LUNA_LOW, 4_096]]);
+  expect(requests.map(request => [request.model, request.reasoning_effort, request.max_tokens])).toEqual([[...TERRA_MEDIUM, 25_000], [...LUNA_LOW, 4_096]]);
 });
 
 // Hosted search is offered on the owner's own reply with tools, located by the owner's time zone; an unset zone keeps

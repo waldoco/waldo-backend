@@ -110,32 +110,34 @@ export const whatsappConsoleRoute = (send: (body: Readonly<{ text: string; link_
 // conversation, the search index and every later prompt hold only the reply, so the credential is never in anything the model
 // or a search reads. The links are kept here by the message they answer: a new one voids the ones before it, as a new mint
 // voids the earlier grant, and one past its ten minutes reads as a fixed note.
-const APP_CONSOLE_LINKS_KEY = 'app_console_links_v1';
 const APP_CONSOLE_LINKS_MAX = 32;
 export const APP_CONSOLE_LINK_GONE = 'Console sign-in link: expired. Ask me for a new one.';
 type AppConsoleLink = Readonly<{ run: string; text: string | null; expires: number }>;
 type AppConsoleKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
-const appLinks = (kv: AppConsoleKv) => kv.get<AppConsoleLink[]>(APP_CONSOLE_LINKS_KEY) ?? [];
+// One kind of one-time link the app shows this way: where its links are kept, how long one works, and the note after.
+export type AppLinkBook = Readonly<{ key: string; ttlMs: number; gone: string }>;
+const CONSOLE_LINKS: AppLinkBook = { key: 'app_console_links_v1', ttlMs: LINK_MS, gone: APP_CONSOLE_LINK_GONE };
+const appLinks = (kv: AppConsoleKv, book: AppLinkBook) => kv.get<AppConsoleLink[]>(book.key) ?? [];
 
-export const appConsoleRoute = (kv: AppConsoleKv, now: () => number = Date.now): ConsoleLinkRoute => {
+export const appConsoleRoute = (kv: AppConsoleKv, now: () => number = Date.now, book: AppLinkBook = CONSOLE_LINKS): ConsoleLinkRoute => {
   const run = (turn: ConsoleLinkTurn) => { if (!turn.runScope) throw new ClosedRunError(); return turn.runScope.runId; };
   return {
     surface: 'app',
-    sent: (turn) => appLinks(kv).some((link) => link.run === run(turn)),
+    sent: (turn) => appLinks(kv, book).some((link) => link.run === run(turn)),
     async deliver(text, turn) {
       const answers = run(turn);
-      turn.runScope!.commit(() => kv.put(APP_CONSOLE_LINKS_KEY,
-        [...appLinks(kv).map((link) => ({ ...link, text: null })), { run: answers, text, expires: now() + LINK_MS }].slice(-APP_CONSOLE_LINKS_MAX)));
+      turn.runScope!.commit(() => kv.put(book.key,
+        [...appLinks(kv, book).map((link) => ({ ...link, text: null })), { run: answers, text, expires: now() + book.ttlMs }].slice(-APP_CONSOLE_LINKS_MAX)));
       return true;
     },
   };
 };
 
 // What the transcript adds under the newest reply to a message: its link while it works, the fixed note after, else nothing.
-export const appConsoleLinks = (kv: AppConsoleKv, now: () => number = Date.now) => {
-  const links = appLinks(kv);
+export const appConsoleLinks = (kv: AppConsoleKv, now: () => number = Date.now, book: AppLinkBook = CONSOLE_LINKS) => {
+  const links = appLinks(kv, book);
   return (run: string): string | null => {
     const link = links.find((candidate) => candidate.run === run);
-    return !link ? null : link.text !== null && link.expires > now() ? link.text : APP_CONSOLE_LINK_GONE;
+    return !link ? null : link.text !== null && link.expires > now() ? link.text : book.gone;
   };
 };

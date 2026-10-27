@@ -140,7 +140,8 @@ select is(pg_temp.check('sms-eve', pg_temp.op('b'))->>'kind', 'reserved', 'a che
 update waldo.owners set phone = '+919800000055' where do_name = 'sms-eve';
 select is(pg_temp.checked('sms-eve', pg_temp.op('b'), 'approved', pg_temp.sid('f')), 'denied', 'an approval for the old number proves nothing');
 select ok(not pg_temp.verified('sms-eve'), 'eve stays unverified');
-select is(pg_temp.state('sms-eve')->'challenge', 'null'::jsonb, 'and a code sent to her old number is not shown against the new one');
+select is(((pg_temp.state('sms-eve')->'challenge') - 'expires_at'::text) - 'retry_at'::text, jsonb_build_object('state', 'expired', 'checks_left', 0),
+  'and a code sent to her old number is not shown against the new one: nothing to check, only the wait it leaves');
 
 -- A code nobody entered within ten minutes cannot be checked.
 insert into waldo.owners (do_name, email, phone) values ('sms-lee', 'lee@test.invalid', '+919800000011');

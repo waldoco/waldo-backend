@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -395,6 +395,67 @@ describe('Granola from the app', () => {
   });
 });
 
+describe('catalogue apps from the app', () => {
+  const connect = { view: 'connections', action: 'app.connect', id: 'notion', revision, request_id: 'app-connect-0001' };
+  const tile = { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.', consent: 'Connecting here lets the tools Notion labels read-only run without asking.', connectAvailable: true, connection: null };
+  const withApps = (apps: object[]) => projection({ ...connections, apps });
+
+  it('connects and disconnects one tile by its catalogue id, from the connections view', () => {
+    expect(appControlActionV1Schema.safeParse(connect).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'app.disconnect', id: 'slack' }).success).toBe(true);
+  });
+
+  it.each([
+    ['no id', { id: undefined }],
+    ['an id that is not a catalogue id', { id: 'Notion' }],
+    ['a server address in place of an id', { id: 'https://mcp.notion.com/mcp' }],
+    ['a server address in value', { value: 'https://mcp.notion.com/mcp' }],
+    ['another view', { view: 'day' }],
+    ['a field it does not take', { volume: 'low' }],
+    ['a confirmation', { confirmation: 'DELETE' }],
+  ])('refuses an app action with %s', (_label, change) => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, ...change }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'app.disconnect', ...change }).success).toBe(false);
+  });
+
+  it('reads connections with or without apps, so older Workers still parse', () => {
+    expect(appControlProjectionV1Schema.safeParse(withApps([])).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(withApps([tile, { ...tile, id: 'granola', label: 'Granola', consent: null, connection: { status: 'reauth_needed', connected_at: 1_761_400_000_000 } }])).success).toBe(true);
+  });
+
+  it.each([
+    ['an unknown status', { connection: { status: 'connected', connected_at: 1 } }],
+    ['an empty label', { label: '' }],
+    ['an empty consent (null means none)', { consent: '' }],
+    ['a logo address', { logo: 'https://example.test/notion.png' }],
+    ['the server address', { url: 'https://mcp.notion.com/mcp' }],
+    ['no connection field', { connection: undefined }],
+    ['an uppercase id', { id: 'Notion' }],
+  ])('refuses a tile with %s', (_label, change) => {
+    expect(appControlProjectionV1Schema.safeParse(withApps([{ ...tile, ...change }])).success).toBe(false);
+  });
+
+  it('carries revocation only on a recorded receipt', () => {
+    for (const revocation of ['revoked', 'unsupported', 'failed']) expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Disconnected.', revocation }).success).toBe(true);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'rejected', message: 'No.', revocation: 'failed' }).success).toBe(false);
+    expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Disconnected.', revocation: 'not_needed' }).success).toBe(false);
+  });
+
+  it('parses every example the app builds against', async () => {
+    const fixture = (await import('./fixtures/connections-apps.v1.json')).default;
+    const projections = [fixture.none_connected, fixture.one_active, fixture.one_reauth_needed];
+    for (const example of projections) expect(appControlProjectionV1Schema.safeParse(example).success).toBe(true);
+    expect(fixture.one_reauth_needed.data.apps.some((app) => app.connection?.status === 'reauth_needed')).toBe(true);
+    expect(fixture.none_connected.data.apps.map((app) => app.id)).toEqual(['granola', 'notion', 'todoist', 'linear', 'slack']);
+    for (const action of fixture.actions) expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
+    const results = [fixture.connect_result, fixture.already_connected_result, fixture.disconnect_revoked_result, fixture.disconnect_unsupported_result, fixture.disconnect_failed_result];
+    for (const result of results) expect(appControlResultV1Schema.safeParse(result).success).toBe(true);
+    expect(fixture.connect_result.receipt.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}\?handoff=[A-Za-z0-9_-]{22}$/);
+    expect(fixture.already_connected_result.receipt).not.toHaveProperty('navigation');
+    expect([fixture.disconnect_revoked_result, fixture.disconnect_unsupported_result, fixture.disconnect_failed_result].map((result) => result.receipt.revocation)).toEqual(['revoked', 'unsupported', 'failed']);
+  });
+});
+
 describe('welcome constellation fixture', () => {
   it('parses every example the app builds against', async () => {
     const fixture = (await import('./fixtures/welcome-constellation.v1.json')).default;
@@ -430,5 +491,49 @@ describe('the phone view', () => {
     for (const bad of [{ ...data, phone: '98000 00001' }, { ...data, extra: true }, { ...data, actions: ['phone.sms_resend'] },
       { ...data, challenge: { ...data.challenge, state: 'sent' } }, { ...data, challenge: { ...data.challenge, checks_left: 6 } }, { ...data, challenge: { ...data.challenge, retry_at: undefined } }])
       expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: bad }).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  const set = { view: 'phone', action: 'phone.set', value: '+919800000001', revision, request_id: 'phone-0005' };
+  it('sets the number on file with phone.set, which carries the E.164 number in value and nothing else', () => {
+    expect(appControlActionV1Schema.safeParse(set).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, phone: null, challenge: null, actions: ['phone.set'] } }).success).toBe(true);
+  });
+
+  it('sets up the number on file for iMessage with imessage.enroll, which carries nothing and is the phone view\'s alone', () => {
+    const enroll = { view: 'phone', action: 'imessage.enroll', revision, request_id: 'phone-0009' };
+    expect(appControlActionV1Schema.safeParse(enroll).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, actions: ['phone.set', 'imessage.enroll'] } }).success).toBe(true);
+    for (const bad of [{ ...enroll, value: '+919800000001' }, { ...enroll, code: '424242' }, { ...enroll, id: 'imessage' }, { ...enroll, view: 'connections' }]) {
+      expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    const messages = Object.values(APP_IMESSAGE_ENROLL_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    for (const message of messages) expect(message).not.toMatch(/\d/);
+  });
+
+  it('names the ways this server proves a number, and how the linked iMessage relates to it, without the handle', () => {
+    const phone = (extra: Record<string, unknown>) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, ...extra } }).success;
+    for (const proof of [[], ['sms'], ['imessage'], ['sms', 'imessage']]) expect(phone({ proof })).toBe(true);
+    for (const from of ['none', 'number', 'email', 'other_number']) expect(phone({ proof: ['imessage'], imessage_from: from })).toBe(true);
+    for (const bad of [{ proof: ['whatsapp'] }, { proof: 'sms' }, { proof: [null] }, { imessage_from: 'woof@heywaldo.in' }, { imessage_from: '0001' }, { imessage_from: null }]) {
+      expect(phone(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('refuses a phone.set without a number, with a malformed one, with anything else, or elsewhere', () => {
+    for (const bad of [
+      { ...set, value: undefined }, { ...set, value: '' }, { ...set, value: '9800000001' }, { ...set, value: '+91 98000 00001' }, { ...set, value: '+0919800000001' },
+      { ...set, value: '+9198' }, { ...set, value: `+91${'9'.repeat(14)}` }, { ...set, value: ' +919800000001' },
+      { ...set, code: '424242' }, { ...set, id: 'phone' }, { ...set, confirmation: 'DELETE' }, { ...set, view: 'account' },
+    ]) expect(appControlActionV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  });
+
+  it('names one receipt per phone.set outcome, none of which repeats the number', () => {
+    const receipts = Object.values(APP_PHONE_SET_RECEIPTS_V1);
+    for (const receipt of receipts) expect(appControlReceiptV1Schema.parse(receipt)).toEqual(receipt);
+    expect(new Set(receipts.map(receipt => receipt.message)).size).toBe(receipts.length);
+    expect(APP_PHONE_SET_RECEIPTS_V1.set.state).toBe('recorded');
+    expect(APP_PHONE_SET_RECEIPTS_V1.taken.state).toBe('rejected');
+    expect(receipts.map(receipt => receipt.message).join(' ')).not.toMatch(/\d/);
   });
 });

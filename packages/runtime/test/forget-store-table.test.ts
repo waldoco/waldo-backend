@@ -27,6 +27,7 @@ const TABLES: Record<string, Row> = {
   forget_purge_steps: exempt('fingerprint hash, store name, state, attempt count, a content-free code and a time'),
   forget_generation: exempt('one counter of how many forgets have landed; no owner text'),
   claim_recall_ready: exempt('claim ids'),
+  claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),
   consent_ledger: exempt('purpose and action enums, a copy version number and a time; no owner text'),
   app_write_requests: exempt('request id, route, body digest and the stored answer: ids, states and times, never owner text'),
@@ -39,6 +40,7 @@ const TABLES: Record<string, Row> = {
   mcp_connections: exempt('a connected MCP server: the https URL the owner entered, Waldo\'s name for it, issuer, granted scopes, status, token version and expiry; no conversation text and no token'),
   mcp_tools: exempt('server-written tool definitions with their digests; no owner text'),
   mcp_tool_reads: exempt('which tool definitions the owner lets run without a card: tool name, digest and time'),
+  mcp_sends: exempt('a send as the owner for Patrol: time, Waldo\'s name for the server, the server\'s tool name, how it was allowed, whether it ran and an intent hash; never its arguments or result'),
   mcp_attempts: exempt('a consent attempt: endpoints, client id and the PKCE verifier until it settles, then only its outcome; no owner text'),
   mcp_questions: gap('a server\'s questions for the owner and the call\'s arguments, which can carry owner text, kept up to 24 hours; a forget does not reach it'),
   calendar_demand: exempt('local day, zone, a sha256 of the selected calendar set and busy-minute counts; no event titles, attendees or ids'),
@@ -81,7 +83,7 @@ const TABLES: Record<string, Row> = {
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   // Product-schema tables (do-schema.ts), none wired to purge
   task_jobs: purged('memory-forget-do-provider.test.ts'),
-  memory_blocks: purged('memory-forget-do-provider.test.ts'), memory_inbox: purged('memory-forget-do-provider.test.ts'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
+  memory_blocks: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), memory_inbox: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
   skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
 };
 

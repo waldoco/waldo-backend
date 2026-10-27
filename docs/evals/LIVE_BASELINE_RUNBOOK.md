@@ -28,7 +28,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_OPENAI_KEY` | repository secret, set as `OPENAI_API_KEY` locally | An OpenAI key for an eval project, with a spend limit set in the OpenAI dashboard |
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
-| `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
+| `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-terra`). |
 | `WALDO_EVAL_MAX_CALLS` | required for live | `3300`: `pnpm eval:plan` suggests 3100 in split mode and 2200 in joint mode for 3 trials of today's catalogue, and the workflow sets 3300 so a few more scenarios do not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
@@ -84,7 +84,7 @@ A test holds the cap in `evals-live.yml` at or above the plan's suggestion for t
 
 **Cost estimate.** [inference] This is an estimate, not a measurement.
 
-Prices come from `packages/runtime/src/llm/pricing.ts`: Sol $2 input, $0.10 cached input and $10 output per million tokens. Opus 5.5 is $4 and $20 per million, confirmed against the claude-api reference on 21 October 2026.
+Prices come from `packages/runtime/src/llm/pricing.ts`. The candidate figures below were priced on Sol ($2 input, $0.10 cached input and $10 output per million tokens). The default candidate is now Terra at $1, $0.05 and $5, so [inference] the candidate rows are about half what they show. Opus 5.5 is $4 and $20 per million, confirmed against the claude-api reference on 21 October 2026.
 
 A chat request in the recorded dry run is about 51,000 characters, roughly 13,000 tokens, mostly the system prompt and tool schemas. Live requests grow with tool output.
 

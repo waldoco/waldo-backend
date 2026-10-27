@@ -84,7 +84,7 @@ export function IMessageControls({ record, busy, onAction }: { record: IMessageR
         {offered('imessage.link') && <button className="primary" disabled={busy} onClick={() => onAction('imessage.link')}>Get an iMessage link code</button>}
         {offered('imessage.unlink') && <button disabled={busy} onClick={() => { if (window.confirm('Unlink this number? Texts from it stop reaching your Waldo.')) onAction('imessage.unlink'); }}>Unlink this number</button>}
       </div>
-      <p className="meta">Direct iMessage text only. Groups, SMS, files and reactions aren’t supported.</p>
+      <p className="meta">Direct iMessages only. Waldo tells you when it can’t open a photo or file here. Groups, SMS, voice notes and reactions aren’t supported.</p>
     </section>
     <section className="tile" aria-labelledby="imessage-host-title">
       <div className="chart-head"><h2 id="imessage-host-title">Your own Mac host</h2></div>

@@ -5,6 +5,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { consoleAccess } from '../src/channels/console';
+import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1 } from '../../contracts/src/app/controls';
+import { WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-console', CODE = '424242';
 const vars = {
@@ -15,10 +17,10 @@ type Read = { csrf: string; revision: string; data: { phone: string | null; veri
 type Acted = { status: number; body: { receipt?: { state: string; message: string }; error?: string; duplicate?: boolean } };
 
 // A ledger that keeps one owner's number and challenge, and a Twilio that approves only CODE.
-function world(phone: string | null, twilioStatus = 200) {
+function world(phone: string | null, twilioStatus = 200, linked: string[] = []) {
   const open = { expires_at: 1, retry_at: null as number | null, checks_left: 5 };
   const ledger = { phone, verified: false, challenge: null as null | { state: string; expires_at: number; retry_at: number | null; checks_left: number } };
-  const twilio: URLSearchParams[] = [];
+  const twilio: URLSearchParams[] = [], sets: Record<string, unknown>[] = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.startsWith('https://verify.twilio.com/')) {
@@ -30,6 +32,19 @@ function world(phone: string | null, twilioStatus = 200) {
     }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1], args = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
     if (fn === 'owner_phone_state') return Response.json(ledger);
+    if (fn === 'presence_hint') return Response.json(args.p_provider === 'imessage' ? imessageHint : null);
+    if (fn === 'imessage_enrollment_read') return Response.json({ email: 'owner@example.invalid', phone: ledger.phone, phone_verified: ledger.verified, enrollment: photonEnrollment });
+    if (fn === 'app_session_authority') return Response.json({ owner_id: '5b3c4d5e-6f70-4a8b-9cad-1e2f3a4b5c6d', do_name: args.p_do_name, session_hash: args.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
+    if (fn === 'console_session_inventory') {
+      const at = new Date(Date.now() - 60_000).toISOString();
+      return Response.json([{ session: APP_SESSION, created_at: at, last_seen_at: at, expires_at: new Date(Date.now() + 3_600_000).toISOString(), rotated_to: null, signed_in_at: at }]);
+    }
+    if (fn === 'console_auth_throttle') { throttles.push(args); return Response.json(throttleAllows); }
+    if (fn === 'owner_phone_set') {
+      sets.push(JSON.parse(args.p_payload!) as Record<string, unknown>);
+      Object.assign(ledger, { phone: sets.at(-1)!.phone, verified: false, challenge: null });
+      return Response.json({ kind: 'set', unlinked: linked.splice(0) });
+    }
     if (fn !== 'phone_sms_transition') return new Response('unexpected', { status: 500 });
     const payload = JSON.parse(args.p_payload!) as Record<string, string>;
     const step = ({
@@ -46,12 +61,20 @@ function world(phone: string | null, twilioStatus = 200) {
     } as Record<string, () => unknown>)[args.p_action!];
     return Response.json(step ? step() : { kind: 'denied' });
   });
-  return { ledger, twilio };
+  return { ledger, twilio, sets };
 }
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// The last characters of the handle the owner's iMessage is linked from, as the directory's presence hint gives them.
+let imessageHint: string | null = null;
+// The owner's Photon enrollment as the directory reads it, where Waldo's iMessage runs on Photon.
+let photonEnrollment: { phone: string; assigned_number: string; photon_user_id: string } | null = null;
+const APP_SESSION = 'a'.repeat(64);
+// The directory's throttle: what it was asked, and whether it allows the next try.
+let throttles: Record<string, unknown>[] = [], throttleAllows = true;
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); imessageHint = null; photonEnrollment = null; throttles = []; throttleAllows = true; });
 
 let n = 0;
-const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; state: DurableObjectState }) => Promise<void>) => {
+type AppRead = { revision: string; data: { phone: string | null; verified: boolean; actions: string[]; proof?: string[] } };
+const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Promise<Read>; act(action: string, fields?: Record<string, string>): Promise<Acted>; actAs(requestId: string, action: string, fields?: Record<string, string>, revision?: string): Promise<Acted & { revision: string }>; appRead(): Promise<AppRead>; appAct(action: string): Promise<Acted>; state: DurableObjectState }) => Promise<void>) => {
   const name = `phone-console-${n++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
@@ -71,7 +94,18 @@ const owner = (extra: Record<string, string | undefined>, work: (o: { read(): Pr
       return { status: response.status, body: await response.json(), revision: used };
     };
     const act = (action: string, fields: Record<string, string> = {}): Promise<Acted> => actAs(`phone-request-${++request}`, action, fields);
-    await work({ read, act, actAs, state });
+    const app = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': APP_SESSION };
+    const appRead = async (): Promise<AppRead> => {
+      const response = await object.fetch(new Request('https://owner/app/v1/controls?view=phone', { headers: app }));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const appAct = async (action: string): Promise<Acted> => {
+      const body = JSON.stringify({ view: 'phone', revision: (await appRead()).revision, request_id: `phone-app-${++request}`, action });
+      const response = await object.fetch(new Request('https://owner/app/v1/actions', { method: 'POST', headers: { ...app, 'content-type': 'application/json' }, body }));
+      return { status: response.status, body: await response.json() };
+    };
+    await work({ read, act, actAs, appRead, appAct, state });
   });
 };
 
@@ -79,13 +113,13 @@ describe('the console phone view', () => {
   it('texts a code to the number on file and proves it with the right code, keeping neither the code nor the token', async () => {
     const w = world('+919800000001');
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act, state }) => {
-      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: true, challenge: null, actions: ['phone.sms_send'] });
+      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: true, challenge: null, actions: ['phone.sms_send', 'phone.set'], proof: ['sms'] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 200, body: { receipt: { state: 'recorded', message: expect.stringContaining('within 10 minutes') } } });
       expect(w.twilio.map((form) => Object.fromEntries(form))).toEqual([{ To: '+919800000001', Channel: 'sms' }]);
-      expect((await read()).data.actions).toEqual(['phone.sms_send', 'phone.sms_check']);
+      expect((await read()).data.actions).toEqual(['phone.sms_send', 'phone.sms_check', 'phone.set']);
       expect(await act('phone.sms_check', { code: '111111' })).toMatchObject({ status: 409, body: { receipt: { message: 'That code did not match. Check it and try again.' } } });
       expect(await act('phone.sms_check', { code: '42 42 42' })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded', message: 'Your number is verified.' } } });
-      expect((await read()).data).toMatchObject({ verified: true, actions: [] });
+      expect((await read()).data).toMatchObject({ verified: true, actions: ['phone.set'] });
       const stored = JSON.stringify([...(await state.storage.list()).entries()]);
       for (const secret of [CODE, '111111', TOKEN]) expect(stored).not.toContain(secret);
     });
@@ -109,35 +143,65 @@ describe('the console phone view', () => {
     });
   });
 
+  it('sets a number from the console form, stored unverified, with a receipt that does not repeat it', async () => {
+    const w = world(null);
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act, state }) => {
+      expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: { state: 'recorded', message: expect.not.stringContaining('9800000002') } } });
+      expect(w.sets).toEqual([{ do_name: expect.stringMatching(/^phone-console-/), phone: '+919800000002', countries: ['+91'] }]);
+      expect((await read()).data).toMatchObject({ phone: '+919800000002', verified: false, actions: ['phone.sms_send', 'phone.set'] });
+      expect(JSON.stringify([...(await state.storage.list()).entries()])).not.toContain('9800000002');
+    });
+  });
+
+  it('a change of number that unlinked the WhatsApp chat from the old one clears the bound sender and what was held for it', async () => {
+    world('+919800000001', 200, ['whatsapp']);
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act, state }) => {
+      state.storage.kv.put('whatsapp_subject', '919800000001');
+      state.storage.kv.put(`${WA_HELD_PREFIX}0001`, { heldAt: 1, body: { text: 'held for the old chat' } });
+      expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set_unlinked } });
+      expect(state.storage.kv.get('whatsapp_subject')).toBeUndefined();
+      expect([...state.storage.kv.list({ prefix: WA_HELD_PREFIX })]).toEqual([]);
+    });
+  });
+
+  it('a change of number with nothing linked from the old one leaves the WhatsApp chat alone', async () => {
+    world('+919800000001');
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ act, state }) => {
+      state.storage.kv.put('whatsapp_subject', '919800000077');
+      expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set } });
+      expect(state.storage.kv.get('whatsapp_subject')).toBe('919800000077');
+    });
+  });
+
   it('with the switch off it shows the number and offers nothing, and a send is refused before anything is called', async () => {
     const w = world('+919800000001');
     await owner({ PHONE_SMS_VERIFY: '0' }, async ({ read, act }) => {
-      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: false, challenge: null, actions: [] });
+      expect((await read()).data).toEqual({ phone: '+919800000001', verified: false, sms: false, challenge: null, actions: [], proof: [] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { error: 'no_longer_eligible' } });
       expect(w.twilio).toEqual([]);
       expect(w.ledger.challenge).toBeNull();
     });
   });
 
-  it('offers nothing for an owner with no number, or one already verified', async () => {
+  it('offers only setting the number to an owner with no number, or one already verified', async () => {
     world(null);
-    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.set']); });
     const w = world('+919800000001');
     w.ledger.verified = true;
-    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.set']); });
   });
 
   it('offers a resend only once the wait the ledger set has passed, and a check only while checks are left', async () => {
     const w = world('+919800000001');
     w.ledger.challenge = { state: 'pending', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) + 60, checks_left: 5 };
-    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_check']); });
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_check', 'phone.set']); });
     w.ledger.challenge = { state: 'pending', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) - 1, checks_left: 0 };
-    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_send']); });
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.sms_send', 'phone.set']); });
     w.ledger.challenge = { state: 'unknown', expires_at: 1, retry_at: Math.floor(Date.now() / 1000) + 3600, checks_left: 5 };
-    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+    await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.set']); });
     for (const state of ['sending', 'checking']) {
       w.ledger.challenge = { state, expires_at: 1, retry_at: null, checks_left: 5 };
-      await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual([]); });
+      await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read }) => { expect((await read()).data.actions).toEqual(['phone.set']); });
     }
   });
 
@@ -153,7 +217,7 @@ describe('the console phone view', () => {
   it('offers no text to a number outside the listed country codes', async () => {
     const w = world('+447700900001');
     await owner({ PHONE_SMS_VERIFY: '1' }, async ({ read, act }) => {
-      expect((await read()).data).toEqual({ phone: '+447700900001', verified: false, sms: false, challenge: null, actions: [] });
+      expect((await read()).data).toEqual({ phone: '+447700900001', verified: false, sms: false, challenge: null, actions: ['phone.set'], proof: ['sms'] });
       expect(await act('phone.sms_send')).toMatchObject({ status: 409, body: { error: 'no_longer_eligible' } });
       expect(w.twilio).toEqual([]);
     });
@@ -165,6 +229,64 @@ describe('the console phone view', () => {
       await act('phone.sms_send');
       expect(await act('phone.sms_check', { code: '4242' })).toMatchObject({ status: 409, body: { receipt: { message: 'Enter the six digits from the text.' } } });
       expect(w.twilio).toHaveLength(1);
+    });
+  });
+
+  describe('proving the number by iMessage', () => {
+    const imessageOn = { PHONE_SMS_VERIFY: '0', IMESSAGE_WALDO_ADDRESS: 'woof@fixture.invalid', PHOTON_PROJECT_ID: undefined };
+    it('with texting off and the iMessage link code offered, the number can be set and nothing can be texted', async () => {
+      const w = world('+919800000001');
+      await owner(imessageOn, async ({ read, act }) => {
+        expect((await read()).data).toMatchObject({ phone: '+919800000001', sms: false, actions: ['phone.set'], proof: ['imessage'], imessage_from: 'none' });
+        expect(await act('phone.set', { value: '+919800000002' })).toMatchObject({ status: 200, body: { receipt: APP_PHONE_SET_RECEIPTS_V1.set } });
+        expect(w.ledger.phone).toBe('+919800000002');
+        expect(await act('phone.sms_send')).toMatchObject({ status: 409 });
+        expect(w.twilio).toEqual([]);
+      });
+    });
+    // Waldo's iMessage on Photon: an owner texts their own assigned number, which exists only once the number on file is enrolled.
+    const photonOn = { PHONE_SMS_VERIFY: '0', IMESSAGE_WALDO_ADDRESS: 'woof@fixture.invalid', IMESSAGE_CONNECTOR_ENABLED: '1', WALDO_ENVIRONMENT: 'test',
+      IMESSAGE_CREDENTIAL_WRAPPING_KEY: 'f'.repeat(64), PHOTON_PROJECT_ID: 'proj-fixture', PHOTON_OAUTH_CLIENT_ID: 'client-fixture', PHOTON_OAUTH_CLIENT_SECRET: 'fictional-photon-client-secret',
+      IMESSAGE_CONNECTOR_POLICY: '{"signatureMaxAgeMs":60000,"heartbeatMaxAgeMs":90000,"capabilityMaxAgeMs":90000,"maxRequestBytes":131072,"maxRetainedBytes":16777216,"maxRecords":4096,"pullMaxWaitMs":0,"deliveryDeadlineMs":20000,"mutationDeadlineMs":30000,"commitmentMaxAgeMs":30000,"setupLifetimeMs":600000,"replyHandoffMaxAgeMs":600000,"source":"handoff-2026-10-10-proposed-local-test-profile"}' };
+    it('on Photon, the app offers to set up iMessage for an unenrolled number and the console does not', async () => {
+      world('+919800000001');
+      await owner(photonOn, async ({ read, appRead, appAct }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set', 'imessage.enroll'], proof: ['imessage'] });
+        expect((await read()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
+        // Photon is not connected in this world, so the tap reaches the enrollment and is refused with its own receipt.
+        expect(await appAct('imessage.enroll')).toMatchObject({ status: 409, body: { receipt: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable } });
+      });
+    });
+    it('on Photon, the set-up is held to five an hour per owner, and past that is refused as throttled, not as Photon being unavailable', async () => {
+      world('+919800000001');
+      throttleAllows = false;
+      await owner(photonOn, async ({ appAct, state }) => {
+        expect(await appAct('imessage.enroll')).toMatchObject({ status: 409, body: { receipt: APP_IMESSAGE_ENROLL_RECEIPTS_V1.throttled } });
+        expect(throttles).toHaveLength(1);
+        expect(throttles[0]).toMatchObject({ p_key: `imessage.enroll.${state.storage.kv.get('do_name')}`, p_limit: 5, p_window_seconds: 3600 });
+      });
+    });
+    it('on Photon, an owner already enrolled for the number on file is not offered it again', async () => {
+      world('+919800000001');
+      photonEnrollment = { phone: '+919800000001', assigned_number: '+16285550101', photon_user_id: 'user-1' };
+      await owner(photonOn, async ({ appRead }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
+      });
+    });
+    it('without Photon the app is never offered it', async () => {
+      world('+919800000001');
+      await owner(imessageOn, async ({ appRead }) => {
+        expect((await appRead()).data).toMatchObject({ actions: ['phone.set'], proof: ['imessage'] });
+      });
+    });
+    it('says an iMessage linked from an Apple ID email proves no number, without showing it', async () => {
+      world('+919800000001');
+      imessageHint = '.com';
+      await owner(imessageOn, async ({ read }) => {
+        const data = (await read()).data;
+        expect(data).toMatchObject({ verified: false, imessage_from: 'email' });
+        expect(JSON.stringify(data)).not.toContain('.com');
+      });
     });
   });
 });

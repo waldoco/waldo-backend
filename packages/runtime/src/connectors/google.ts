@@ -455,6 +455,32 @@ const b64urlDecode = (data: string): string => {
   return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
 };
 
+// Continuation bodies are lowercase base32, not base64. The scribe decodes base64 views up to a fixed depth and refuses
+// a payload with anything still encoded below it; a base64 body around a provider token that may itself be base64
+// would spend that depth on our own wrapper and refuse the whole result page. Lowercase base32 is never read as base64,
+// so the provider token keeps the full depth, and it stays shorter than hex inside the receipt length bounds.
+const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
+const cursorBody = (value: unknown): string => {
+  let bits = 0, buffer = 0, out = '';
+  for (const byte of new TextEncoder().encode(JSON.stringify(value))) {
+    buffer = (buffer << 8) | byte; bits += 8;
+    while (bits >= 5) { bits -= 5; out += BASE32[(buffer >>> bits) & 31]; }
+    buffer &= (1 << bits) - 1;
+  }
+  return bits > 0 ? out + BASE32[(buffer << (5 - bits)) & 31] : out;
+};
+const cursorValue = (body: string): unknown => {
+  const bytes: number[] = [];
+  let bits = 0, buffer = 0;
+  for (const char of body) {
+    const index = BASE32.indexOf(char);
+    if (index < 0) throw new Error('invalid continuation body');
+    buffer = ((buffer << 5) | index) & 0xfff; bits += 5;
+    if (bits >= 8) { bits -= 8; bytes.push((buffer >>> bits) & 255); }
+  }
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(bytes)));
+};
+
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
 // (tools/live/google.ts). BODY_CAP bounds callers that do not opt in to full bodies; read_thread opts in,
 // takes up to FULL_BODY_MAX, and shows it in chunks after preparing the whole body.
@@ -600,16 +626,21 @@ export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; 
   ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
+  // Calls that run at once (parallel reads, a thread's attachments, both contact searches) wait on one refresh, so a grant
+  // is refreshed and its health reported once however many calls need the token. A failed refresh is not kept.
+  let refreshing: Promise<string> | null = null;
   const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
-  const bearer = async () => {
-    if (access && access.until > Date.now()) return access.token;
-    const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
+  const bearer = (): Promise<string> => {
+    if (access && access.until > Date.now()) return Promise.resolve(access.token);
+    refreshing ??= token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).then((result) => {
+      health?.('');
+      access = { token: result.access_token, until: Date.now() + 50 * 60_000 };
+      return access.token;
+    }, (error: unknown) => {
       if (error instanceof GoogleTokenError && error.kind === 'auth') health?.(error.message);
       throw error;
-    });
-    health?.('');
-    access = { token: result.access_token, until: Date.now() + 50 * 60_000 };
-    return access.token;
+    }).finally(() => { refreshing = null; });
+    return refreshing;
   };
   const call = async (url: string, init: RequestInit = {}) => {
     const response = await fetcher(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${await bearer()}` } });
@@ -625,7 +656,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const signature = async (body: string) => [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${binding}.${body}`)))].map(b => b.toString(16).padStart(2, '0')).join('');
     return {
       async encode(value: unknown): Promise<string> {
-        const body = b64url(new TextEncoder().encode(JSON.stringify(value)));
+        const body = cursorBody(value);
         const cursor = `${body}.${await signature(body)}`;
         if (cursor.length > 16_384) throw new Error(`invalid ${kind} continuation size`);
         return cursor;
@@ -639,7 +670,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           let mismatch = expected.length ^ parts[1]!.length;
           for (let i = 0; i < expected.length; i++) mismatch |= expected.charCodeAt(i) ^ (parts[1]!.charCodeAt(i) || 0);
           if (mismatch) throw new Error();
-          return JSON.parse(b64urlDecode(parts[0]!));
+          return cursorValue(parts[0]!);
         } catch { throw new Error(`invalid ${kind} cursor or query binding`); }
       },
     };
@@ -897,7 +928,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           let mismatch = expected.length ^ parts[1]!.length;
           for (let i=0;i<expected.length;i++) mismatch |= expected.charCodeAt(i) ^ (parts[1]!.charCodeAt(i)||0);
           if (mismatch) throw new Error();
-          const cursor = JSON.parse(b64urlDecode(parts[0]!)) as {v?:unknown;token?:unknown};
+          const cursor = cursorValue(parts[0]!) as {v?:unknown;token?:unknown};
           if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor) || Object.keys(cursor).length !== 2 || cursor.v !== 1 || typeof cursor.token !== 'string' || !cursor.token || cursor.token.length > 2048) throw new Error();
           providerToken = cursor.token;
         } catch { throw new Error('invalid Calendar cursor or query binding'); }
@@ -911,7 +942,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       let continuation: string | null = null;
       if (data.nextPageToken) {
         if (data.nextPageToken === providerToken) throw new Error('Calendar pagination made no progress');
-        const payload = b64url(new TextEncoder().encode(JSON.stringify({v:1,token:data.nextPageToken})));
+        const payload = cursorBody({v:1,token:data.nextPageToken});
         continuation = `${payload}.${await signature(payload)}`;
       }
       return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(item).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};

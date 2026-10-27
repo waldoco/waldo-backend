@@ -19,9 +19,13 @@ export type ConnectionsRecord = Base<'connections', {
   sessions: { until: string; count: number; items: { signed_in: string; until: string; current: boolean }[] };
   channels?: { channel: 'telegram' | 'whatsapp' | 'imessage'; state: 'linked' | 'blocked' | 'pending' | 'unlinked'; masked_label: string | null }[];
   mcp?: McpServerRecord[];
+  mcp_catalogue?: McpCatalogueTile[];
 }>;
+// An official MCP server the console offers in one click; url is the exact address mcp.connect sends. about is the whole
+// tile text; consent, when sent, is the part of it that connecting agrees to (null: connecting grants nothing).
+export type McpCatalogueTile = { id: string; label: string; about: string; consent?: string | null; url: string; connected: boolean };
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
-export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
+export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string; allowed_on_connect?: true }[] };
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
@@ -52,7 +56,7 @@ export type IMessageRecord = Base<'imessage', {
 export type DevicesRecord = Base<'devices', {
   actions: 'device.pair'[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: (typeof DEVICE_ROW)[number][] }[]; query_kinds: string[]; notification_bodies: string[];
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
-const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
+const PHONE_ACTIONS = ['phone.sms_send', 'phone.sms_check', 'phone.set'] as const, PHONE_STATES = ['sending', 'pending', 'checking', 'approved', 'expired', 'unknown'] as const;
 /** The number on file and how to prove it. Times are epoch seconds; retry_at null means a code may be asked for now. */
 export type PhoneRecord = Base<'phone', {
   phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
@@ -116,13 +120,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   if (expected === 'connections') {
     if (!obj(data.google) || typeof data.google.connectAvailable !== 'boolean' || !Array.isArray(data.google.accounts) || !data.google.accounts.every(account => obj(account) && string(account.id) && string(account.email) && ['calendar', 'mail', 'tasks'].every(key => typeof account[key] === 'boolean') && ['access_granted', 'needs_reconnect'].includes(String(account.health))) || !obj(data.telegram) || typeof data.telegram.linked !== 'boolean' || typeof data.telegram.unlinkAvailable !== 'boolean' || !obj(data.sessions) || !string(data.sessions.until) || !Number.isSafeInteger(data.sessions.count) || Number(data.sessions.count) < 1 || !Array.isArray(data.sessions.items) || !data.sessions.items.every(item => obj(item) && string(item.signed_in) && string(item.until) && typeof item.current === 'boolean')
       || (data.channels !== undefined && (!Array.isArray(data.channels) || !data.channels.every(item => obj(item) && ['telegram', 'whatsapp', 'imessage'].includes(String(item.channel)) && ['linked', 'blocked', 'pending', 'unlinked'].includes(String(item.state)) && optionalString(item.masked_label))))
-      || (data.mcp !== undefined && (!Array.isArray(data.mcp) || !data.mcp.every(mcpServer)))) throw shapeError();
+      || (data.mcp !== undefined && (!Array.isArray(data.mcp) || !data.mcp.every(mcpServer)))
+      || (data.mcp_catalogue !== undefined && (!Array.isArray(data.mcp_catalogue) || !data.mcp_catalogue.every(catalogueTile)))) throw shapeError();
     return { ...base, view: 'connections', data: {
     google: { connectAvailable: data.google.connectAvailable, accounts: data.google.accounts.map(account => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.health })) },
     telegram: { linked: data.telegram.linked, unlinkAvailable: data.telegram.unlinkAvailable },
     sessions: { until: data.sessions.until, count: data.sessions.count, items: (data.sessions.items as { signed_in: string; until: string; current: boolean }[]).map(item => ({ signed_in: item.signed_in, until: item.until, current: item.current })) },
     ...(data.channels === undefined ? {} : { channels: (data.channels as NonNullable<ConnectionsRecord['data']['channels']>).map(item => ({ channel: item.channel, state: item.state, masked_label: item.masked_label })) }),
-    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tools_capped: server.tools_capped, read_only_digest: server.read_only_digest, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }), digest: tool.digest })) })) }),
+    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tools_capped: server.tools_capped, read_only_digest: server.read_only_digest, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }), digest: tool.digest, ...(tool.allowed_on_connect ? { allowed_on_connect: true as const } : {}) })) })) }),
+    ...(data.mcp_catalogue === undefined ? {} : { mcp_catalogue: (data.mcp_catalogue as McpCatalogueTile[]).map(tile => ({ id: tile.id, label: tile.label, about: tile.about, ...(tile.consent === undefined ? {} : { consent: tile.consent }), url: tile.url, connected: tile.connected })) }),
     } } as Records[V];
   }
   if (expected === 'waiting') {
@@ -228,7 +234,9 @@ export async function fetchControls<V extends ControlsView>(view: V, signal?: Ab
 
 const mcpServer = (item: unknown): boolean => obj(item) && string(item.id) && string(item.name) && string(item.host) && string(item.server_url) && ['oauth', 'none'].includes(String(item.auth)) && ['active', 'reauth_needed'].includes(String(item.status))
   && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean' && typeof item.tools_capped === 'boolean'
-  && digest(item.read_only_digest) && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string') && digest(tool.digest));
+  && digest(item.read_only_digest) && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string') && digest(tool.digest) && (tool.allowed_on_connect === undefined || tool.allowed_on_connect === true));
+const catalogueTile = (item: unknown): boolean => obj(item) && string(item.id) && string(item.label) && string(item.about) && (item.consent === undefined || item.consent === null || string(item.consent)) && typeof item.connected === 'boolean' && httpsUrl(item.url);
+const httpsUrl = (value: unknown): boolean => { if (typeof value !== 'string') return false; try { return new URL(value).protocol === 'https:'; } catch { return false; } };
 const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 
 // Existing connectUrl issues a first-party /c/<22-character ticket>. Direct

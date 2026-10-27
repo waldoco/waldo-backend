@@ -1,3 +1,4 @@
+import type { AppTile } from './connect-app';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { PROFILE_KINDS } from '../memory/claims';
 import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
@@ -38,7 +39,7 @@ export const clearConsoleCookie = (name: string): string => `${name}=; Path=${CO
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
 // expires is when the session ends if it is not used again: its last renewal plus the idle limit, never past
-// signed_in plus the lifetime. verified_at is when this browser last proved an email code; a link sign-in proves none.
+// signed_in plus the lifetime. verified_at is when this browser last signed in with an email code or Google; a link sign-in proves none.
 export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number; signed_in?: number; verified_at?: number; ends?: number }>;
 
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
@@ -144,7 +145,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -226,6 +227,8 @@ export type ConsoleView = Readonly<{
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
+  // Every catalogue app as a Connections tile. Only the app's read fills it.
+  apps?: readonly AppTile[];
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
   imessage?: Readonly<{ linked: boolean }>;

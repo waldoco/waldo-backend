@@ -59,7 +59,30 @@ it('rejects empty sends, invalid formatting ranges and path-bearing filenames', 
     expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.audio, attachments: [{ ...syntheticIMessageEvents.audio.attachments[0], filename }] }).success).toBe(false);
   }
 });
+it('expresses a send threaded as a reply by naming the exact message and part on its target', () => {
+  const c = syntheticIMessageCommand();
+  const threaded = { ...c, target: { ...c.target, messageGuid: 'fixture-message', partIndex: 2 } };
+  expect(iMessageCommandSchema.parse(threaded)).toMatchObject({ operation: 'send', target: { chatGuid: c.target.chatGuid, messageGuid: 'fixture-message', partIndex: 2 } });
+  expect(iMessageCommandSchema.safeParse({ ...c, target: { ...c.target, partIndex: 2 } }).success).toBe(false);
+  expect(iMessageCommandSchema.safeParse({ ...threaded, replyTo: { messageGuid: 'fixture-message', partIndex: 2 } }).success).toBe(false);
+});
 it('requires a declared trusted audience without deriving it from opaque chat GUIDs', () => {
   const c = syntheticIMessageCommand();
   expect(iMessageCommandSchema.safeParse({ ...c, binding: { ...c.binding, conversationKind: undefined } }).success).toBe(false);
+});
+describe('iMessage v1 Photon attachment metadata', () => {
+  const photo = { id: 'p-attachment-guid-1', name: 'IMG_0001.jpg', mimeType: 'image/jpeg', size: 2048 };
+  const pdf = { id: 'p-attachment-guid-2', name: 'notes.pdf', mimeType: 'application/pdf', size: 0 };
+  it('is optional per message and preserved as sent', () => {
+    expect(iMessageEventSchema.parse(syntheticIMessageEvents.text)).not.toHaveProperty('photonAttachments');
+    const parsed = iMessageEventSchema.parse({ ...syntheticIMessageEvents.text, text: 'what is this?', photonAttachments: [photo, pdf] });
+    expect('photonAttachments' in parsed && parsed.photonAttachments).toEqual([photo, pdf]);
+    expect(iMessageEventSchema.parse({ ...syntheticIMessageEvents.text, photonAttachments: [] })).toMatchObject({ photonAttachments: [] });
+  });
+  it('rejects a blank or missing id, a path-bearing name, a bad size, extra keys and non-message kinds', () => {
+    const bad = [{ ...photo, id: '' }, { ...photo, id: ' p' }, { name: photo.name, mimeType: photo.mimeType, size: photo.size }, { ...photo, name: '../IMG.jpg' }, { ...photo, name: '/tmp/IMG.jpg' },
+      { ...photo, mimeType: '' }, { ...photo, size: -1 }, { ...photo, size: 1.5 }, { ...photo, size: '2048' }, { ...photo, url: 'https://example.invalid/IMG.jpg' }];
+    for (const attachment of bad) expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.text, photonAttachments: [attachment] }).success, JSON.stringify(attachment)).toBe(false);
+    expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.customReaction, photonAttachments: [photo] }).success).toBe(false);
+  });
 });

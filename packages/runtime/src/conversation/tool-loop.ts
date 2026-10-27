@@ -1,6 +1,6 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
-import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
+import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
@@ -8,6 +8,7 @@ import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, tu
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
 import { numericHealthIn } from '../scribe/sanitiser';
+import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -158,8 +159,12 @@ export async function runToolLoop(input: Readonly<{
   // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
   // rest of the turn. propose_action refuses an untainted call and dispatch refuses withheld browsing instead.
   stableMenu?: boolean;
+  // Builds the round's offered list from this loop's tools: the harness tool loader offers the core and its meta tools, and
+  // routes a use_tool call to the call it names before anything below reads the call. Not for a task worker's remote loop.
+  loader?: (tools: readonly LLMTool[]) => ToolLoader;
 }>): Promise<string> {
-  const tools = input.remote ? [...input.remote.tools] : toolDefinitions(input.handlers);
+  const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
+  const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
   const seen = new Map<string, LoopToolResult>();
   // A resumed step that cannot be repeated and already ran is refused if called again, as it is within one slice. One whose
@@ -203,7 +208,7 @@ export async function runToolLoop(input: Readonly<{
     if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
     const start = roundStarts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? roundStarts.at(-1)!;
     const [first, ...rest] = turns.slice(start);
-    const names = [...new Set(turns.slice(0, start).map((turn) => turn.call.name))].join(', ');
+    const names = [...new Set(turns.slice(0, start).map((turn) => toolOfCall(turn.call)))].join(', ');
     return [{ ...first!, output: `${first!.output}\n[earlier in this turn: ${start} older tool results are no longer shown (${names}); run a read again if you still need its result]` }, ...rest];
   };
   // Results cleared so far, oldest first; clearing only moves forward, so what was sent stays as it was sent.
@@ -220,7 +225,7 @@ export async function runToolLoop(input: Readonly<{
     const turn = turns[cleared]!, result = results[cleared];
     if (result) {
       const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
-      turns[cleared] = { ...turn, output: `${result.lead}${clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) })}` };
+      turns[cleared] = { ...turn, output: `${result.lead}${clearedToolResult(toolOfCall(turn.call), { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) })}` };
       // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
       if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
     }
@@ -245,6 +250,10 @@ export async function runToolLoop(input: Readonly<{
   });
   let browsingWithheld = false;
   let exit: LoopExit = 'completed';
+  // Taint the turn started with came from somewhere this loop did not see.
+  const ctxOrigins = input.ctx as { taintOrigins?: readonly string[]; toolArgSourceTaint?: unknown };
+  ctxOrigins.taintOrigins ??= ctxOrigins.toolArgSourceTaint === 'external' ? ['*'] : [];
+  const taintedBy = (origin: string) => { ctxOrigins.taintOrigins = [...(ctxOrigins.taintOrigins ?? ['*']), origin]; };
   for (let round = 0; ; round += 1) {
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
@@ -282,6 +291,7 @@ export async function runToolLoop(input: Readonly<{
     // result. They taint the rest of the turn the same way (ADR-0049), before this round's calls are dispatched.
     if (response.output_items?.some((item) => item.type === 'web_search_call')) {
       (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+      taintedBy('*');
     }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
@@ -291,23 +301,30 @@ export async function runToolLoop(input: Readonly<{
     }
     let firstCall = true;
     roundStarts.push(turns.length);
+    // The model's calls as it made them, which its history replays, and the calls the loop runs for them.
     const calls = response.tool_calls;
+    const routed: readonly RoutedCall[] = calls.map((made) => loader?.route(made) ?? { call: made });
+    const runCalls = routed.map((route) => route.call);
     // Reads dispatched ahead of their turn in a batch, by call index. A batch starts at the first read of a run of
     // concurrent reads and is fully settled before any of its results is applied, so a hook's context write-back never
     // lands over a taint the loop applied. Results then apply strictly in model order, as if each had just run.
     const early = new Map<number, Promise<Readonly<{ result: LoopToolResult; ms: number }>>>();
     // A task worker's calls run on the brain over RPC; every other loop runs its handlers here.
-    const run = (call: LLMToolCall) => input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+    const run = (index: number) => {
+      const { call, answer } = routed[index]!;
+      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+    };
     let batchLead = true;
-    for (const [index, call] of calls.entries()) {
+    for (const [index, made] of calls.entries()) {
+      const call = runCalls[index]!;
       input.ctx.runScope?.admit();
       if (!early.has(index)) {
-        const batch = offer ? concurrentBatch(calls, index, mutationTools, seen) : [index];
+        const batch = offer ? concurrentBatch(runCalls, index, mutationTools, seen) : [index];
         if (batch.length > 1) {
           for (const member of batch) {
-            input.onToolStart?.(calls[member]!.name);
+            input.onToolStart?.(runCalls[member]!.name);
             const startedAt = Date.now();
-            early.set(member, run(calls[member]!).then((result) => ({ result, ms: Date.now() - startedAt })));
+            early.set(member, run(member).then((result) => ({ result, ms: Date.now() - startedAt })));
           }
           await Promise.allSettled(batch.map((member) => early.get(member)!));
           input.ctx.runScope?.admit();
@@ -341,11 +358,16 @@ export async function runToolLoop(input: Readonly<{
           ? refusal(toolError('tools_withdrawn'), 'not_found', 'handler_unavailable')
           : !runs
             ? refusal(toolError('browsing_withheld', BROWSING_UNAVAILABLE), 'auth_failed', 'withheld_this_turn')
-            : settled?.result ?? await run(call);
+            : settled?.result ?? await run(index);
       if (runs) {
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
-        if (result.ok) done.push(call.name);
+        if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
+      }
+      // A call through use_tool whose arguments missed the schema gets the definition back, so its next call can be right.
+      if (routed[index]!.via && !result.ok && result.error_code === 'invalid_args') {
+        const definition = loader?.definition(call.name);
+        if (definition) result = { ...result, tool_definition: definition };
       }
       input.ctx.runScope?.admit();
       const browsingNote = !browsingWithheld && !result.ok && result.code === 'auth_failed' && BROWSE_TOOLS.has(call.name)
@@ -394,6 +416,7 @@ export async function runToolLoop(input: Readonly<{
       // per-round derivation for conversational turns.
       if ((result as { source_taint?: 'external' | null }).source_taint === 'external') {
         (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+        taintedBy(taintOrigin(call.name, result));
       }
       const roundsLeft = Math.min(input.maxSteps - round - 1, input.budget?.remaining ?? Infinity);
       const toolTimeLeft = deadline - Date.now() - FINAL_ANSWER_RESERVE_MS;
@@ -414,7 +437,7 @@ export async function runToolLoop(input: Readonly<{
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
       const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
-      turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+      turns.push({ call: made, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       results.push({ lead: '', full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
@@ -467,7 +490,15 @@ const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationT
   return batch.length > 1 ? batch : [start];
 };
 
-export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome }>;
+// Where a tainting result's outside content came from. Only tools whose data Waldo itself shapes may name it
+// (data.taint_origin); any other tool's data may carry provider fields, so its origin is unknown.
+const ORIGIN_DECLARING_TOOLS: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool']);
+const taintOrigin = (tool: string, result: LoopToolResult): string => {
+  const origin = ORIGIN_DECLARING_TOOLS.has(tool) && result.ok && typeof result.data === 'object' && result.data !== null ? (result.data as { taint_origin?: unknown }).taint_origin : undefined;
+  return typeof origin === 'string' && /^[a-z]+(:[a-z0-9-]+)?$/.test(origin) ? origin : '*';
+};
+
+export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome; tool_definition?: LLMTool }>;
 
 // A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
 const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>
@@ -502,8 +533,8 @@ export async function dispatchLoopTool(
     ...(result.blocked ? { blocked: result.blocked } : {}),
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
-    // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.
-    ...(result.guard ? { guard: `${result.guard.check}:${result.guard.reason}` } : {}),
+    // Enum-only check:reason, then the denial stage when the guard named one - the trace-visible diagnostic when capture is off.
+    ...(result.guard ? { guard: guardLabel(result.guard) } : {}),
     ...(result.source_taint ? { source_taint: result.source_taint } : {}),
     ...(result.connect ? { connect: result.connect } : {}),
   };

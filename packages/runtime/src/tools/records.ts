@@ -12,7 +12,7 @@ export const BRAIN_NAMESPACES = {
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, read_tool_output for stored tool output, and chat threads.',
   health: "Health logs and scores: log a meal or workout, list what was logged, and the owner's derived scores.",
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, list or cancel reminders, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
-  settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, and send_console_link for the console.',
+  settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
   skills: 'Reviewed skills: list, load, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
   artifacts: 'Documents Waldo makes: create, revise, export, list or read an artifact, a drafted document or a sheet cell.',
@@ -43,8 +43,12 @@ export type ToolReplayRow = { readonly replay: ToolReplayClass; readonly basis: 
 //          nothing back.
 //  concurrent  one model response may run it beside other concurrent reads: it changes nothing a later call can
 //          observe (no store write that spans an await, no send, no session, no tool-menu change). The Google reads and
-//          read_drive are not: their client stamps probe and health state across awaits and can send a reconnect link.
-//          read_thread can relay a message, and read_tool_output reads a store sibling calls evict from.
+//          read_drive are: grant health, the circuit's probe stamp and the reconnect notice run one at a time on the owner
+//          object's Google chain, a client's token refresh is shared by the calls waiting on it, and the legacy-grant
+//          migration is shared by the reads that start it. read_thread's code relay goes to the owner alone and changes
+//          nothing a call reads. The MCP reads are not: a call stamps its connection's token version and status after it
+//          returns, a stale tool list is rewritten while sibling reads check its digests, and a server's question is stored.
+//          read_tool_output reads a store sibling calls evict from.
 //  probe   strip = a synthetic capture probe never reaches it: Google reads and writes (private data), the browser,
 //          the MCP bridge, the connect flow and the console link (a capture probe hands its sends to the probe caller).
 //  paid    held past the owner's monthly spend ceiling: it bills browser or sandbox time on top of the model call.
@@ -79,21 +83,25 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // claim null: a note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
   send_progress_note: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again') },
   // claim null: queued is not sent; the file leaves after the reply is written, so no done-claim can rest on this receipt.
+  // core: offered only on an iMessage owner turn whose host verified tapbacks, where a tapback is a reply the model makes in
+  // passing, so it is never behind a search. claim null: queued is not sent; it leaves with the reply.
+  react_to_message: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: { replay: 'provider_idempotent', basis: 'the commandId is fixed by the turn and the reaction, and the bridge mailbox and the host journal keep one command per commandId', evidence: { file: 'channels/imessage/final-outbox.ts', needle: 'wrx_' } } },
   attach_file: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
   // claim null: its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
   send_console_link: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('mints the one console grant and sends it; a re-run voids the link already sent, so it never auto-retries') },
+  connect_app: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: true, claim: null, replay: unknown('starts one sign-in attempt and sends its link or code; a re-run starts another and the directory revokes the earlier link, so it never auto-retries') },
   use_mac: { brain: 'actions', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'mac_action_requested', replay: { replay: 'provider_idempotent', basis: 'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.', evidence: { file: 'tools/live/use-mac.ts', needle: 'request_id' } } },
   get_crs: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_health: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  query_calendar: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  get_communication: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  search_communication: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  search_contacts: { brain: 'mail', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  read_thread: { brain: 'core', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  get_tasks: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  search_contacts: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_thread: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  get_tasks: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_master_metrics: { brain: 'health', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   get_context: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read('pure clock read (tools/live/get-context.ts)') },
-  query_availability: { brain: 'calendar', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  query_availability: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   read_memory: { brain: 'core', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_episodes: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   // core: the route for a privileged call whose arguments came from outside; the refusal that names it must find it loaded.
@@ -102,9 +110,9 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   read_document: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   list_artifacts: { brain: 'artifacts', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   read_artifact: { brain: 'artifacts', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
-  read_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('deploy-configured Google MCP reads carry a host-derived read intent through the connector-proxy; reads on owner-connected servers run only for tools the owner allowed at their current definition digest and have no intent ledger, so a replay runs the read again (tools/live/mcp.ts); either way the remote server is trusted to be read-only') },
+  read_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('deploy-configured Google MCP reads carry a host-derived read intent through the connector-proxy; reads on owner-connected servers run only for tools the owner allowed at their current definition digest (a read allowed by connecting from an official tile only in an untainted turn the owner started) and have no intent ledger, so a replay runs the read again (tools/live/mcp.ts); a tool that sends as the owner (mcp-catalogue sends_as_owner) is refused here and goes through call_mcp_tool; either way the remote server is trusted to be read-only') },
   search_mcp_tools: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
-  read_drive: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
+  read_drive: { brain: 'web', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
   search_connector: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
   propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposal handler not inspected') },
   search_tools: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: null, replay: read() },
@@ -151,7 +159,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   set_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_set', replay: unknown(NOT_INSPECTED) },
   cancel_standing_order: { brain: 'settings', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'standing_order_cancelled', replay: unknown(NOT_INSPECTED) },
   // claim null: proposes a card on the owner channel and executes directly elsewhere, so no single effect holds.
-  call_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown') },
+  call_mcp_tool: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, claim: null, replay: unknown('proposes a card on the owner channel, executes directly elsewhere; a tool that sends as the owner and that they allowed runs at once in their own untainted request under a host-derived intent the edge runs at most once (tools/live/mcp.ts); remote effect unknown') },
   // reminders, beside cancel_task: the core tool budget has no room for it, so the namespace line names it for the search.
   // scope deny: its worker reads mail, files and the web for the brief. Started is not done: the owner hears the result
   // from the apply turn.
@@ -213,9 +221,9 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
-  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings',
+  set_proactivity: 'settings', set_schedule_preference: 'settings', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', send_progress_note: 'actions', attach_file: 'actions', react_to_message: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.

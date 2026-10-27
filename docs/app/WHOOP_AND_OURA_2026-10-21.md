@@ -119,8 +119,10 @@ Set no WHOOP secret and enter no client for the edge until all three hold: the a
    `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). The Worker
    uses the client secret only to verify `X-WHOOP-Signature`; the owner object uses the client id and redirect address only. Without all
    three the routes answer `not_configured` and nothing is sent to WHOOP.
-4. Enter the client for the edge once, with the same id, secret and redirect address (the edge reads it by issuer and redirect address,
-   and the client id must match): `select waldo.oauth_client_put('https://api.prod.whoop.com', '<worker host>/oauth/whoop/callback', '<client id>', 'client_secret_post', '<client secret>');`
+4. Enter the client for the edge once, with the same id, secret and redirect address. The edge reads it by issuer and redirect address,
+   the client id must match, and its secret is sent only to the pinned token endpoint. Use `oauth_client_seed`; seeding again rotates
+   the secret. Steps are in `docs/ops/PRE_REGISTERED_OAUTH_CLIENTS.md`:
+   `select waldo.oauth_client_seed('https://api.prod.whoop.com', '<worker host>/oauth/whoop/callback', '<client id>', 'client_secret_post', :'client_secret', 'https://api.prod.whoop.com/oauth/oauth2/token', null);`
 5. Apply migration `20261021150000_health_wearables_zone_change.sql` to the health plane before the deploy that reads it. It registers WHOOP
    with the `oauth-proxy` custodian, so it needs the connections migration that creates `waldo.connection_custody`, and the `oauth-proxy`
    Edge Function must be deployed before a connection can start.

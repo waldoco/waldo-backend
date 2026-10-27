@@ -11,6 +11,7 @@ export const DASHBOARD_ADMIN_HEALTH_PATH = '/console/dashboard/api/v1/admin/heal
 export const HEALTH_READ_LIMIT = 30;
 export const ADMIN_HEALTH_READ_LIMIT = 10;
 const WINDOW_MS = 60_000;
+const HEALTH_READ_KEY = 'console:health-rate';
 
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
@@ -98,7 +99,7 @@ export const consoleHealth = async (input: ConsoleHealthInput): Promise<Response
   const admin = url.pathname === DASHBOARD_ADMIN_HEALTH_PATH;
   if (input.request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405);
   if (url.search) return reply({ error: 'invalid_query' }, 400);
-  if (!admitted(input.kv, admin ? 'console:admin-health-rate' : 'console:health-rate', admin ? ADMIN_HEALTH_READ_LIMIT : HEALTH_READ_LIMIT, input.now)) {
+  if (!admitted(input.kv, admin ? 'console:admin-health-rate' : HEALTH_READ_KEY, admin ? ADMIN_HEALTH_READ_LIMIT : HEALTH_READ_LIMIT, input.now)) {
     return reply({ error: 'rate_limited' }, 429, { 'retry-after': '60' });
   }
   return admin ? adminRead(input) : ownerRead(input);

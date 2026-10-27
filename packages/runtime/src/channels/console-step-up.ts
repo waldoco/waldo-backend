@@ -57,6 +57,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'mcp.disconnect': { gated: false, why: 'Disconnects a tool server; removes access.' },
   'granola.connect': { gated: true, why: 'Connects Granola, whose meeting notes Waldo keeps reading after this session.' },
   'granola.disconnect': { gated: false, why: 'Disconnects Granola; removes access.' },
+  'app.connect': { gated: false, why: 'Opens a catalogue app\'s own sign-in; once the owner approves there, that app\'s read-only tools run without asking.' },
+  'app.disconnect': { gated: false, why: 'Disconnects a catalogue app; removes access.' },
   'mcp.runs': { gated: true, why: 'Lets a connected tool run without asking: a standing grant.' },
   'telegram.link': { gated: true, why: 'Issues a code that binds a Telegram chat, which can then send console sign-in links.' },
   'telegram.unlink': { gated: false, why: 'Unlinks Telegram; removes access.' },
@@ -82,6 +84,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
   'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
   'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
+  'phone.set': { gated: true, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
 };
 
 // Console routes that start access or record consent outside an action. A gated route is refused whatever its method.

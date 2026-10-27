@@ -30,7 +30,7 @@ select is(pg_temp.register('push-owner',repeat('a',64),'41000000-0000-0000-0000-
 select is(pg_temp.register('push-owner',repeat('a',64),'41000000-0000-0000-0000-000000000001',0,'op-register-1','apns-token-0002-synthetic'),null,'the same operation id with a different token is refused');
 select is(pg_temp.register('push-owner',repeat('a',64),'41000000-0000-0000-0000-000000000001',5,'op-register-2','apns-token-0003-synthetic'),null,'a stale expected epoch is refused');
 select is(pg_temp.register('push-foreign',repeat('a',64),'41000000-0000-0000-0000-000000000009',0,'op-register-3','apns-token-0004-synthetic'),null,'another owner cannot register with this session');
-select is(pg_temp.register('push-foreign',repeat('f',64),'41000000-0000-0000-0000-000000000009',0,'op-register-4','apns-token-0001-synthetic'),null,'a token live for one owner cannot be claimed by another');
+select is(pg_temp.register('push-foreign',repeat('f',64),'41000000-0000-0000-0000-000000000009',0,'op-register-4','apns-token-0001-synthetic'),null,'a token live for one owner cannot be claimed by another from another installation');
 select throws_ok($$select waldo.app_push_register('push-owner',repeat('a',64),'41000000-0000-0000-0000-000000000002','apns','sandbox',0,'op-register-5','apns-token-0005-synthetic',pg_temp.at(),'forged')$$,'42501',null,'a forged registration signature is denied');
 select throws_ok($$select pg_temp.register('push-owner',repeat('a',64),'41000000-0000-0000-0000-000000000002',0,'op-register-6','bad token!')$$,'42501',null,'a malformed token is denied');
 

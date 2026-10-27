@@ -104,7 +104,8 @@ the nodes they back. Web text stays in look-up findings and is never copied.**
    transaction. Reads and model calls run in the job, outside any SQLite transaction. A second start returns the first row.
    A rerun needs the owner's act.
 2. **Bounded reads, as pointers.**
-   - Health: 90 days through the signed series read, under live `storage_compute` and `model_processing` consent.
+   - Health: 30 days through the signed series read, under live `storage_compute` and `model_processing` consent, and only
+     while the owner keeps health in memory. Health runs first; the other stages get its nodes as context.
    - Calendar and Tasks: every connected Google account, named explicitly.
    - Mail: senders, subjects, dates and thread ids over 90 days, never bodies or snippets.
    - Web: only through the existing look-up and its `owner_lookup` consent.

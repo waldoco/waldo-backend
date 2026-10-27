@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { NO_REPLAYS } from './helpers/no-replays';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -62,7 +63,7 @@ const lane = (h: Harness, appliers: Partial<Record<'heartbeat' | 'update_sweep' 
       // A machine job's apply turn names its own tools: it must never be handed the owner's full apply list.
       applyTools: () => { throw new Error('a machine job reached applyTools()'); },
       deliver: async (id, _trace, text, commit) => { h.transaction(() => { commit(); sent.set(id, text); }); },
-      room: () => true, heldTopics: () => [], machine: Object.fromEntries(Object.entries(appliers).map(([job, apply]) => [job, { apply }])), ...over,
+      room: () => true, heldTopics: () => [], ...NO_REPLAYS, machine: Object.fromEntries(Object.entries(appliers).map(([job, apply]) => [job, { apply }])), ...over,
     }),
   };
 };
@@ -87,6 +88,7 @@ describe('the machine reader allowlist', () => {
         book, now: () => T0, handlers: () => [handler('search_communication'), handler('web_search')] as unknown as ReturnType<TaskHostDeps['handlers']>,
         context: () => ({ authenticatedUserId: 'owner-1', sanitise }), serialBrowser: (_scope, run) => run(), releaseBrowser: () => undefined,
         log: () => undefined, wake: async () => undefined,
+        replayApproval: async () => { throw new Error('no approval replays in this harness'); },
       });
       const machine = book.startAttempt(enqueue(book, spec()).job.id)!;
       const claim = await host.claim(machine);

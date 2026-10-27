@@ -1,22 +1,50 @@
 import type { ConsoleAction } from './console';
 import type { ControlReceipt } from './dashboard-control-actions';
-import { phoneSms, type OwnerPhoneState, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
+import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1 } from '../../../contracts/src/app/controls';
+import { phoneSms, type OwnerPhoneState, type PhoneSetOutcome, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
 
+type IMessageFrom = 'none' | 'number' | 'email' | 'other_number';
 export type PhoneControls = Readonly<{ version: 1; view: 'phone'; state: 'available'; csrf: string;
-  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check')[] }> }>;
+  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set' | 'imessage.enroll')[]; proof: readonly ('sms' | 'imessage')[]; imessage_from?: IMessageFrom }> }>;
+
+// How this owner reaches Waldo on iMessage. address: the one they text, the shared address or, with Photon, their own assigned
+// number once enrolled (null otherwise, or where no link code can be issued); photon: Waldo's iMessage runs on Photon, so a number
+// is enrolled first; enrollable: this owner can enroll; enrolled: the number enrolled, if any.
+export type IMessageReach = Readonly<{ address: string | null; photon: boolean; enrollable: boolean; enrolled: string | null }>;
+export type IMessageEnrolled = 'enrolled' | 'phone_taken' | 'invalid' | 'throttled' | 'refused' | 'photon_disconnected' | 'disabled' | 'unknown';
+// The other way to prove a number: the owner sends their iMessage link code from it, and redeeming it proves the number on
+// file when the handle is that number. read rejects when the directory cannot say; hint: the last characters of the handle
+// their iMessage is linked from, null when not linked; enroll: given only where the owner can enroll from this surface (the
+// app; the console enrolls from its iMessage view), enrolls a number with Photon at the owner's tap.
+export type IMessageProof = Readonly<{ read(): Promise<IMessageReach>; hint(): Promise<string | null>; enroll?(phone: string): Promise<IMessageEnrolled> }>;
+const NO_IMESSAGE: IMessageProof = { read: async () => ({ address: null, photon: false, enrollable: false, enrolled: null }), hint: async () => null };
+// A reach the directory cannot confirm counts as none, so the view still answers.
+const reachOf = (imessage: IMessageProof) => imessage.read().catch(() => null);
+const linkable = (reach: IMessageReach | null) => reach !== null && (reach.address !== null || (reach.photon && reach.enrollable));
+// An Apple ID email ends in letters; a number's hint is its last digits.
+const imessageFrom = (hint: string | null, phone: string | null): IMessageFrom =>
+  hint === null ? 'none' : !/^\d+$/.test(hint) ? 'email' : phone?.endsWith(hint) ? 'number' : 'other_number';
 
 // The number on file and how to prove it. Texting a code is listed only while it is offered, the number is unproven,
-// nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left. The
-// ledger re-checks both when the owner acts, and also applies the daily caps, which this read does not show.
-export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, now = Date.now()): Promise<PhoneControls> {
+// nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left; setting
+// the number to an active owner while it can be proven, by a texted code or an iMessage link code. The ledger re-checks
+// each when the owner acts, and also applies the daily caps, which this read does not show.
+export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, imessage: IMessageProof = NO_IMESSAGE, now = Date.now()): Promise<PhoneControls> {
   if (!owner) throw new Error('owner_unbound');
   const sms = phoneSms(env);
-  const state = await sms.state(owner) ?? { phone: null, verified: false, sms: sms.offered, challenge: null };
+  const [read, reach] = await Promise.all([sms.state(owner), reachOf(imessage)]);
+  const state = read ?? { phone: null, verified: false, sms: sms.offered, challenge: null }, byLink = linkable(reach);
+  // With Photon, the number on file is enrolled before its link code can go to the owner's own Waldo number.
+  const enrollable = !!imessage.enroll && !!reach?.photon && reach.enrollable && state.phone !== null && !state.verified && reach.enrolled !== state.phone;
   const open = state.sms && state.phone !== null && !state.verified, challenge = state.challenge;
   const sendable = !challenge || (challenge.state !== 'sending' && challenge.state !== 'checking' && (challenge.retry_at === null || challenge.retry_at * 1000 <= now));
   const actions = [...(open && sendable ? ['phone.sms_send' as const] : []),
-    ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : [])];
-  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions } };
+    ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : []),
+    ...((sms.offered || byLink) && read !== null ? ['phone.set' as const] : []),
+    ...(enrollable ? ['imessage.enroll' as const] : [])];
+  const proof = [...(sms.offered ? ['sms' as const] : []), ...(byLink ? ['imessage' as const] : [])];
+  const hint = byLink ? await imessage.hint().catch(() => undefined) : undefined;
+  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions, proof, ...(hint !== undefined ? { imessage_from: imessageFrom(hint, state.phone) } : {}) } };
 }
 
 const rejected = (message: string): ControlReceipt => ({ state: 'rejected', message });
@@ -53,9 +81,31 @@ const CHECKED: Readonly<Record<PhoneSmsOutcome['kind'], ControlReceipt>> = {
   disabled: rejected('Texting a code is not available on this server.'),
 };
 
-// The receipt never holds the code or the number.
-export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt> {
+const ENROLLED: Readonly<Record<IMessageEnrolled, ControlReceipt>> = {
+  ...APP_IMESSAGE_ENROLL_RECEIPTS_V1, refused: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable, photon_disconnected: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable,
+  disabled: APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable,
+};
+const SET: Readonly<Record<PhoneSetOutcome['kind'], ControlReceipt>> = {
+  ...APP_PHONE_SET_RECEIPTS_V1, denied: APP_PHONE_SET_RECEIPTS_V1.unavailable, disabled: APP_PHONE_SET_RECEIPTS_V1.unavailable,
+};
+
+// The receipt never holds the code or the number. A change of number unlinks, in the directory, the chats linked from the
+// old one; what the owner DO holds for a WhatsApp chat (the bound sender, its held and outbox messages) is cleared through
+// whatsappUnlinked, as the WhatsApp unlink action does. An iMessage unlink is the directory's alone, as in that action.
+export async function phoneControlAct(env: PhoneSmsEnv, owner: string, action: ConsoleAction, fields: Readonly<Record<string, string>>,
+  whatsappUnlinked: () => Promise<void>, imessage: IMessageProof = NO_IMESSAGE): Promise<ControlReceipt> {
   const sms = phoneSms(env);
+  if (action.action === 'phone.set') {
+    const outcome = await sms.set(owner, action.value, !sms.offered && linkable(await reachOf(imessage)));
+    if (outcome.unlinked?.includes('whatsapp')) await whatsappUnlinked();
+    return outcome.unlinked?.length ? APP_PHONE_SET_RECEIPTS_V1.set_unlinked : SET[outcome.kind];
+  }
+  // Enrolls the number on file, never one from the request; the listing already required it unproven and not yet enrolled.
+  if (action.action === 'imessage.enroll') {
+    const phone = (await sms.state(owner).catch(() => null))?.phone ?? null;
+    if (!phone) return ENROLLED.invalid;
+    return imessage.enroll ? ENROLLED[await imessage.enroll(phone).catch(() => 'unknown' as const)] : ENROLLED.disabled;
+  }
   if (action.action === 'phone.sms_send') return SENT[(await sms.send(owner)).kind];
   const code = (fields.code ?? '').replace(/\s/g, '');
   if (!/^\d{6}$/.test(code)) return rejected('Enter the six digits from the text.');

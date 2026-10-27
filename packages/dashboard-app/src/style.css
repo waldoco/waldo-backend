@@ -268,6 +268,20 @@ input:focus,select:focus { box-shadow:inset 0 0 0 1px var(--ink); }
 .branch .disclosure-body { padding-left:12px; }
 .marks { display:inline-flex; align-items:center; gap:6px; padding:6px 8px; border-radius:999px; background:var(--tile); box-shadow:0 0 0 .5px var(--hair-strong); }
 .marks .icon { color:#16a34a; }
+/* A connector without a bundled mark: its initial in the 16px slot a logo takes. */
+.lettermark { display:grid; place-items:center; flex:none; width:16px; height:16px; border-radius:5px; background:var(--fill-2); color:var(--t2); font-size:10px; font-weight:600; line-height:1; }
+.catalogue-tile>* { margin-left:12px; }
+.catalogue-tile .tile-name { display:flex; align-items:center; gap:12px; min-height:52px; margin-bottom:0; }
+.catalogue-tile .tile-name .value { font-weight:500; color:var(--ink); }
+.catalogue-tile .control-actions { margin:8px 0 12px 12px; }
+/* The (i): a quiet 18px disc with a 26px hit area; its text opens in the flow, so a closed card never clips it. */
+.info-tip { display:inline; }
+.info-button { position:relative; display:inline-grid; place-items:center; vertical-align:-3px; width:18px; height:18px; min-height:0; padding:0; margin-left:2px; border-radius:50%; background:var(--fill-2); color:var(--t2); font-size:11px; font-weight:600; line-height:1; font-style:normal; }
+.info-button::before { content:'i'; }
+.info-button::after { content:''; position:absolute; inset:-4px; }
+.info-button[aria-expanded=true],.info-button[aria-expanded=true]:hover:not(:disabled) { background:var(--ink); color:var(--on-ink); }
+.info-text { display:block; margin:8px 0 4px; padding:10px 12px; border-radius:var(--r-inner); background:var(--fill); color:var(--t2); font-size:13px; font-weight:400; line-height:1.45; letter-spacing:normal; text-transform:none; white-space:normal; overflow-wrap:anywhere; animation:sharpen .2s var(--ease); }
+.info-text[hidden] { display:none; }
 .control-row { display:grid; grid-template-columns:1fr auto; gap:20px; padding:16px 0; border-top:.5px solid var(--hair); align-items:center; }
 .control-receipt h2 { font-size:16px; }
 .control-receipt-message { color:var(--ink); }
@@ -603,6 +617,8 @@ footer .refresh:disabled { opacity:1; }
   color-scheme:dark;
 }
 :root[data-scene="night"] .heading-figure { opacity:0; pointer-events:none; }
+/* Brand marks keep their own colours, so at night each sits on a small light tile; dark marks (Granola) stay legible. */
+:root[data-scene="night"] .marks .logo { box-sizing:border-box; padding:1px; border-radius:4px; background:#f4f3f0; }
 :root[data-scene="night"] .page-heading:has(.heading-figure) { padding-right:0; }
 @media(max-width:640px) { :root[data-scene="night"] .primary-nav { background:rgba(28,27,26,.92); } }
 .view-toggle .icon { width:14px; height:14px; }
@@ -824,3 +840,13 @@ footer .refresh:disabled { opacity:1; }
   .thread-actions.open { display:flex; flex-basis:100%; margin-left:-12px; }
 }
 @media(max-width:640px) { .chat-head { top:54px; } .chat-rail.open { inset:54px 0 0; padding:12px 16px calc(80px + env(safe-area-inset-bottom)); } }
+
+/* Vault: passwords and payments, each a panel with its state beside the title. */
+.vault-head { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
+.vault-page .panel>h3 { margin:12px 0 6px; font-size:14px; }
+/* Patrol's access log: two plain tables that scroll sideways on a phone rather than widen the page. */
+.access-log { margin-top:20px; }
+.access-log>h3 { margin:16px 0 8px; font-size:14px; }
+.access-log-table { width:100%; border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; margin-bottom:8px; }
+.access-log-table th,.access-log-table td { text-align:left; padding:6px 10px 6px 0; border-bottom:.5px solid var(--hair); white-space:nowrap; }
+.access-log-table th { font-weight:500; color:var(--t2); }

@@ -1,10 +1,10 @@
 import { ControlsPanel } from './Controls';
 import { OwnerControlsPanel } from './OwnerControls';
 export type SettingsSection = 'day' | 'sessions' | 'usage' | 'account' | 'setup';
-export type SettingsTab = 'day' | 'connections' | 'files' | 'usage' | 'account' | 'invites' | 'admin' | 'admin-health' | 'health' | 'setup' | 'sessions';
+export type SettingsTab = 'day' | 'connections' | 'files' | 'usage' | 'account' | 'invites' | 'admin' | 'admin-health' | 'health' | 'vault' | 'setup' | 'sessions';
 const tabs: { key: SettingsTab; label: string; href: string }[] = [
   { key: 'day', label: 'Your day', href: '#/settings/day' }, { key: 'connections', label: 'Connections', href: '#/connections' },
-  { key: 'health', label: 'Health', href: '#/health' },
+  { key: 'health', label: 'Health', href: '#/health' }, { key: 'vault', label: 'Vault', href: '#/vault' },
   { key: 'files', label: 'Files', href: '#/files' }, { key: 'usage', label: 'Usage', href: '#/settings/usage' },
   {key:'setup',label:'Setup',href:'#/settings/setup'}, {key:'sessions',label:'Sessions',href:'#/settings/sessions'},
   { key: 'account', label: 'Account', href: '#/settings/account' }, { key: 'invites', label: 'Invites', href: '#/invites' },

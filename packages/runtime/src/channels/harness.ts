@@ -58,7 +58,9 @@ export const OWNER_REQUEST_HOP = 'owner_request';
 export type LastRequest = Readonly<{ trace: string; at: string; ok: boolean; partial: boolean; recorded_steps: number; hops: readonly Readonly<{ hop: string; ok: boolean; ms: number; note: string }>[] }>;
 export type TraceRow = Readonly<{ time: string; trace: string; hop: string; ok: boolean; ms: number; note: string }>;
 
-export const traceBook = (sql: Sql, keep = 500) => {
+// trace_log keeps this many newest steps of every kind; older ones are deleted as new ones arrive.
+export const TRACE_KEPT = 500;
+export const traceBook = (sql: Sql, keep = TRACE_KEPT) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS trace_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, trace TEXT NOT NULL, hop TEXT NOT NULL,
     ok INTEGER NOT NULL, ms INTEGER NOT NULL, note TEXT,

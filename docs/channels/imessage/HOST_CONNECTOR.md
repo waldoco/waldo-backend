@@ -41,6 +41,15 @@ authentication/scope failure (including revoked, expired or pending-only credent
 authentication; 409 identity/result/generation conflict; 429 redeem throttle; 503 infrastructure or
 backpressure (never a success ACK). Diagnostics are fixed codes; no bodies, handles, GUIDs or keys.
 
+**Photon attachments (additive, optional).** A `message` or `update` event may carry
+`photonAttachments: [{id,name,mimeType,size}]`: Photon's attachment GUID, its file name (a basename),
+its MIME type and its size in bytes, as Photon reports them. A Photon host sends metadata only and
+`attachments: []`; the Worker fetches the bytes from Photon by `id`, only for the owner whose own
+message Photon shows them on. `messageGuid` must be Photon's message GUID and `senderHandle` Photon's
+sender address, since the Worker checks both against Photon. The caption stays in `text`, without
+U+FFFC placeholders. A host that omits the field behaves as before. A Mac host keeps `attachments`;
+its files are answered, not opened.
+
 **Results.** `local_recorded` means recorded in the Mac's local database, never delivered/read. An
 `unknown` result or a missing result after the mutation deadline permanently quarantines the account's
 send lane; there is no clear/reconciliation API. Receipt events are candidate evidence only.
@@ -65,7 +74,9 @@ observation of the challenge; it is not Apple cryptographic attestation.
 | Plain-text reply to the same exact direct chat | Supported (frozen, signed, committed) |
 | Groups, SMS, RCS, SMS fallback | Refused / retained as evidence |
 | Incoming media (photos, voice, files) | Retained as held evidence; not loaded, not transcribed |
-| Outgoing files, formatting, effects, GUID replies | Refused (typed not_started) |
+| Owner's reply to a message Waldo sent them in the bound chat (`replyToGuid`) | The turn reads one quoted line: the message's first 80 characters, health readings withheld |
+| Waldo's reply threaded onto the owner's message (a `send` whose `target` names `messageGuid` and `partIndex`) | Only where the host reports `replies` sent, verified and exact; otherwise the plain reply. A target outside the bound chat is refused (`target_not_in_chat`) |
+| Outgoing files, formatting, effects | Refused (typed not_started) |
 | Reactions, edit, unsend, typing, read receipts | Refused outbound; inbound kept as evidence |
 | Delivered/read receipts | Candidate evidence only, correlated by account + messageGuid |
 

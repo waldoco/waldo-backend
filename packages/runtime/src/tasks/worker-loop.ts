@@ -1,5 +1,5 @@
 import {
-  buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
+  buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
 import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
@@ -228,10 +228,10 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
       policy: ownerRoutePolicy(model, WALDO_CHAT_MODEL, access),
       ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access) } } : {}),
       renderRequest: ({ step }) => {
-        const effort = OPENAI_REASONING[step.model]?.effort;
+        const { effort, outputTokens } = OPENAI_REASONING[step.model] ?? {};
         return {
           cache_key: `waldo-task:${claim.ownerRef}:${claim.profile}`, system, messages: [{ role: 'user' as const, content }],
-          max_tokens: step.model === OPENAI_GPT_6_1_SOL_MODEL ? 25_000 : step.max_tokens ?? 4_096, temperature: 0.2,
+          max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}), ...(tools ? { tools: [...tools] } : {}), ...(turns.length ? { tool_turns: [...turns] } : {}),
         };
       },

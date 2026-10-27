@@ -64,7 +64,8 @@ describe('MCP OAuth routes', () => {
     expect(mcpConnectReceipt({ kind: 'redirect', path: `/console/mcp/start/${'A'.repeat(43)}` })).toMatchObject({ state: 'recorded', navigation: `/console/mcp/start/${'A'.repeat(43)}` });
     expect(mcpConnectReceipt({ kind: 'redirect', path: 'https://evil.example/authorize' })).toMatchObject({ state: 'rejected' });
     expect(mcpConnectReceipt({ kind: 'failed', reason: 'egress_host' })).toEqual({ state: 'rejected', message: 'That address points at a private or internal network, which Waldo does not reach.' });
-    expect(mcpDisconnectReceipt({ ok: true, provider: 'unsupported' }).message).toContain('did not confirm it revoked access');
+    expect(mcpDisconnectReceipt({ ok: true, provider: 'unsupported' }).message).toContain('gives Waldo no way to revoke its access, so remove Waldo in that service\'s settings too');
+    expect(mcpDisconnectReceipt({ ok: true, provider: 'failed' }).message).toContain('did not confirm it revoked access');
     expect(mcpDisconnectReceipt({ ok: false, provider: 'failed' }).state).toBe('rejected');
     expect(mcpDisconnectReceipt({ ok: false, provider: 'not_needed' })).toEqual({ state: 'rejected', message: 'That server is no longer connected. Refresh the records.' });
   });
@@ -103,6 +104,16 @@ describe('the MCP callback is bound to the browser that started the connect', ()
     expect(granola).not.toContain('asks you first');
     const other = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner().env)).text();
     expect(other).toContain('asks you first');
+  });
+
+  it('names an official server from the catalogue, and never echoes an id it does not know', async () => {
+    const nonce = 'F'.repeat(43), query = `code=c&state=${encodeURIComponent(await mcpState(SECRET, OWNER, nonce))}`;
+    const notion = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c3', name: 'notion', official: 'notion' }).env)).text();
+    expect(notion).toContain('Notion connected');
+    expect(notion).toContain('labels read-only run without asking');
+    const forged = await (await handleMcpCallback(callbackFor(query, await bound(nonce)), fakeOwner({ kind: 'linked', id: 'c4', name: 'x', official: '<script>alert(1)</script>' }).env)).text();
+    expect(forged).not.toContain('<script>alert(1)');
+    expect(forged).toContain('Server connected');
   });
 
   it('sets the binding on the console start link, leaves the attempt to that browser, and refuses a replay once it is spent', async () => {

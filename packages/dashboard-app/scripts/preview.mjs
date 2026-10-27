@@ -14,7 +14,20 @@ const nowMinutes = Math.floor((Date.now() - zoneMidnight) / 60000);
 const payload = { version: 1, as_of: new Date().toISOString(), timezone: 'Asia/Kolkata', brief: { status: 'sent_recorded', at: at(8 * 60) }, waiting: { count: 2, first: { id: 'synthetic-1', summary: 'Move Design review from 3:00 pm to 4:30 pm.' } }, next_card: { id: 'synthetic-card', label: 'Check-in', scheduled_at: at(Math.min(23 * 60 + 30, nowMinutes + 95)) }, latest_activity: { kind: 'update_card', status: 'recorded', at: at(Math.max(0, nowMinutes - 25)), summary: 'Updated the Check-in card with a shifted meeting.' }, services: [{ account_id: 'synthetic-google', email: 'sample@example.test', grants: ['calendar', 'gmail'], health: 'needs_reconnect' }] };
 const admin = {csrf:'synthetic-csrf',as_of:'2026-09-30T08:00:00Z',current_issuer:{id:'issuer',email:'admin@example.test',issued_count:2},owners:[{id:'issuer',email:'admin@example.test',state:'active',presences:['telegram'],created_at:'2026-09-01T00:00:00Z',issued_count:2},...Array.from({length:12},(_,i)=>({id:`owner-${i}`,email:`person${i}@example.test`,state:'active',presences:[],created_at:'2026-09-01T00:00:00Z',issued_count:0}))],invites:[{id:'one',email:'one@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-29T00:00:00Z',expires_at:'2026-10-13T00:00:00Z',used_at:null,revoked_at:null},{id:'two',email:'two@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-01T00:00:00Z',expires_at:'2026-09-15T00:00:00Z',used_at:null,revoked_at:null}]};
 
+const accessLog = { version: 1, as_of: new Date().toISOString(), window_days: 30, kept_steps: 500,
+    tools: { rows: [['search_communication', 'core', 'read', true, 20], ['query_calendar', 'core', 'read', true, 22], ['propose_calendar_change', 'calendar', 'acted', true, 23], ['get_health', 'core', 'read', true, 90], ['web_search', 'core', 'read', false, 200]].map(([tool, category, kind, ok, ago]) => ({ at: new Date(Date.now() - ago * 60000).toISOString(), tool, category, kind, ok })), next_before: null, oldest_at: new Date(Date.now() - 6 * 86400000).toISOString() },
+    approvals: { rows: [{ at: new Date(Date.now() - 23 * 60000).toISOString(), kind: 'calendar_change', decision: 'done', decided_at: new Date(Date.now() - 21 * 60000).toISOString() }, { at: new Date(Date.now() - 86400000).toISOString(), kind: 'email_send', decision: 'skipped', decided_at: new Date(Date.now() - 86000000).toISOString() }], next_before: null } };
 const rev = 'a'.repeat(64);
+// The catalogue as the Worker words it (runtime connectors/mcp-catalogue.ts), with Linear already connected.
+const consent = (label) => ` Connecting here lets the tools ${label} labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.`;
+const mcpPreview = {
+  mcp: [{ id: 'mcp_linear', name: 'Linear', host: 'mcp.linear.app', server_url: 'https://mcp.linear.app/mcp', auth: 'oauth', status: 'active', scopes: ['read'], wants_scopes: [], tools: 2, hidden_tools: 0, runs_without_asking: 1, marked_read_only: 1, tools_changed: false, tools_capped: false, read_only_digest: 'b'.repeat(64),
+    tool_list: [{ tool: 'list_issues', runs: 'without_asking', read_only_hint: true, digest: 'c'.repeat(64), allowed_on_connect: true }, { tool: 'create_issue', runs: 'asks_first', read_only_hint: false, digest: 'd'.repeat(64) }] }],
+  mcp_catalogue: [
+    { id: 'granola', label: 'Granola', about: 'Read your meeting notes and transcripts. Waldo never changes anything in Granola.', consent: null, url: 'https://mcp.granola.ai/mcp', connected: false },
+    { id: 'notion', label: 'Notion', about: 'Search and read your pages and databases.' + consent('Notion'), consent: consent('Notion').trim(), url: 'https://mcp.notion.com/mcp', connected: false },
+    { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.' + consent('Todoist'), consent: consent('Todoist').trim(), url: 'https://ai.todoist.net/mcp', connected: false },
+    { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.' + consent('Linear'), consent: consent('Linear').trim(), url: 'https://mcp.linear.app/mcp', connected: true }] };
 const controls = (view) => {
   const base = { version: 1, view, state: 'available', csrf: 'synthetic-csrf', revision: rev };
   const data = {
@@ -23,7 +36,7 @@ const controls = (view) => {
       { id: 'checkin', name: 'Check-in', defaultTime: '14:30', time: '14:30', reason: 'A midday look at what moved.', sent: false, pin: '14:30' },
       { id: 'close', name: 'The Close', defaultTime: '20:30', time: null, reason: 'An evening wrap of what got done.', sent: false, pin: null }],
       proactivity: { quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' } },
-    connections: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'sample@example.test', calendar: true, mail: true, tasks: false, health: 'needs_reconnect' }, { id: 'g2', email: 'work@example.test', calendar: true, mail: true, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { until: 'Oct 6, 9:00 PM', count: 2, items: [{ signed_in: 'Oct 6, 9:00 AM', until: 'Oct 6, 9:00 PM', current: true }, { signed_in: 'Oct 5, 8:00 PM', until: 'Oct 6, 8:00 AM', current: false }] }, channels: [{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }] },
+    connections: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'sample@example.test', calendar: true, mail: true, tasks: false, health: 'needs_reconnect' }, { id: 'g2', email: 'work@example.test', calendar: true, mail: true, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { until: 'Oct 6, 9:00 PM', count: 2, items: [{ signed_in: 'Oct 6, 9:00 AM', until: 'Oct 6, 9:00 PM', current: true }, { signed_in: 'Oct 5, 8:00 PM', until: 'Oct 6, 8:00 AM', current: false }] }, channels: [{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }, { channel: 'whatsapp', state: 'unlinked', masked_label: null }], ...mcpPreview },
     waiting: { proposals: [
       { id: 'p1', kind: 'calendar_change', summary: 'Move Design review from 3:00 pm to 4:30 pm.', state: 'open', review: { kind: 'calendar_change', action: 'move', title: 'Design review', event_id: 'evt_synthetic', start: '2026-09-29 16:30', end: '2026-09-29 17:15', reason: 'Overlaps with your protected focus block.' }, actions: ['approval.approve', 'approval.skip'] },
       { id: 'p2', kind: 'email_send', summary: 'Reply to Sam about the Thursday agenda.', state: 'open', review: { kind: 'email_send', to: ['sam@example.test'], cc: [], bcc: [], subject: 'Re: Thursday agenda', body: 'Thursday works. I will send the agenda tonight.' }, actions: ['approval.skip'] }] },
@@ -141,6 +154,9 @@ const server = createServer((req, res) => {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({message:action==='invite.create'?'Synthetic receipt only. Copy it now and send it yourself. Waldo did not email anyone.':'Synthetic receipt only. Invite revoked. Waldo did not email anyone.',...(action==='invite.create'?{code:'SYNTHETICCODE'}:{})}));
       if(selected==='admin-refresh-failure')adminReadFailed=true;
     });return;
+  }
+  if (req.url?.startsWith('/console/dashboard/api/v1/access-log')) {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(accessLog)); return;
   }
   if (req.url === '/console/dashboard/api/v1/overview') {
     if (selected === 'signed-out' || selected === 'unavailable') { res.writeHead(selected === 'signed-out' ? 401 : 503); res.end(); return; }

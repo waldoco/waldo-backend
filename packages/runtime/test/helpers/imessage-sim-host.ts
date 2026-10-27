@@ -6,6 +6,7 @@ import { S2_HEADER } from '../../src/channels/imessage/wire';
 import { sha256Hex, signS2, verifyCommitment, verifyS2, type S2Headers } from '../../src/channels/imessage/crypto';
 
 export type Call = (request: Request) => Promise<Response>;
+type Flag = boolean | Partial<{ receive: boolean; send: boolean; exactTarget: boolean; verified: boolean }>;
 export type Delivery = { deliveryId: string; attempt: number; body: string; headers: S2Headers; commitment: { version: 1; commandDigest: string; expiresAtMs: number; signature: string } };
 
 export class SimulatedHost {
@@ -13,7 +14,8 @@ export class SimulatedHost {
   generation = 'sim-generation-1';
   /** Durable journal: commandId -> {digest, result}. A journaled command is never sent natively twice. */
   readonly journal = new Map<string, { digest: string; result: IMessageResult }>();
-  readonly nativeSends: { commandId: string; text: string }[] = [];
+  readonly nativeSends: { commandId: string; text: string; replyTo?: { messageGuid: string; partIndex: number } }[] = [];
+  readonly nativeReactions: { commandId: string; messageGuid: string; partIndex: number; type: string; action: string }[] = [];
   private nonce = 0; private seq = 0;
   // Each simulated host is its own source address, as each real host is: the edge limits requests per address, and a test
   // file's hosts sharing one would trip it once the file runs fast enough.
@@ -35,10 +37,12 @@ export class SimulatedHost {
   }
   scope() { return { version: 1 as const, bridgeId: this.bridgeId, accountId: this.accountId }; }
   heartbeat(status: 'online' | 'offline' = 'online') { return this.signed('/heartbeat', JSON.stringify({ ...this.scope(), databaseGeneration: this.generation, status })); }
-  capabilities(text = true) {
+  /** reactions, replies: the standard_reactions and replies flags as reported, or every field on when true. */
+  capabilities(text = true, reactions: Flag = false, replies: Flag = false) {
     const flag = (on: boolean) => ({ receive: on, send: on, exactTarget: on, verified: on, ...(on ? { probeReference: 'sim-probe' } : {}) });
+    const reported = (f: Flag) => typeof f === 'boolean' ? flag(f) : { ...flag(false), ...f, ...(f.verified ? { probeReference: 'sim-probe' } : {}) };
     const features = Object.fromEntries(['text', 'files', 'replies', 'standard_reactions', 'custom_reactions', 'formatting', 'url_preview', 'effects', 'native_voice', 'typing', 'read_receipts', 'edit', 'unsend', 'stickers', 'polls', 'groups', 'group_mutations', 'name_photo_sharing']
-      .map((f) => [f, flag(f === 'text' && text)]));
+      .map((f) => [f, f === 'standard_reactions' ? reported(reactions) : f === 'replies' ? reported(replies) : flag(f === 'text' && text)]));
     return this.signed('/capabilities', JSON.stringify({ ...this.scope(), transport: 'imsg', hostVersion: 'sim-host-1', transportVersion: 'sim', readiness: 'ready', features }));
   }
   message(text: string, o: Partial<{ eventId: string; senderHandle: string; chatGuid: string; isGroup: boolean; isFromMe: boolean; service: string; attachments: unknown[] }> = {}) {
@@ -46,6 +50,14 @@ export class SimulatedHost {
     return { version: 1, bridgeId: this.bridgeId, accountId: this.accountId, eventId: o.eventId ?? `sim-event-${n}`, cursor: { databaseGeneration: this.generation, value: String(n) },
       occurredAt: new Date(Date.now() - 1000).toISOString(), service: o.service ?? 'iMessage', senderHandle: sender, chatGuid: chat, participants: [sender], isGroup: o.isGroup ?? false,
       isFromMe: o.isFromMe ?? false, messageGuid: `sim-guid-${n}`, partIndex: 0, kind: 'message', text, attachments: o.attachments ?? [] };
+  }
+  /** A standard tapback on `target` in the sender's direct chat, as the host forwards one. */
+  reaction(target: string, type: string, o: Partial<{ action: 'add' | 'remove'; senderHandle: string; actorHandle: string; chatGuid: string; isFromMe: boolean; isGroup: boolean; partIndex: number }> = {}) {
+    const n = ++this.seq, sender = o.senderHandle ?? 'owner@example.invalid', chat = o.chatGuid ?? `iMessage;-;${sender}`;
+    return { version: 1, bridgeId: this.bridgeId, accountId: this.accountId, eventId: `sim-event-${n}`, cursor: { databaseGeneration: this.generation, value: String(n) },
+      occurredAt: new Date(Date.now() - 1000).toISOString(), service: 'iMessage', senderHandle: sender, chatGuid: chat, participants: [sender], isGroup: o.isGroup ?? false,
+      isFromMe: o.isFromMe ?? false, messageGuid: `sim-guid-${n}`, partIndex: 0, kind: 'reaction', action: o.action ?? 'add', actorHandle: o.actorHandle ?? sender,
+      target: { bridgeId: this.bridgeId, accountId: this.accountId, chatGuid: chat, messageGuid: target, partIndex: o.partIndex ?? 0 }, reaction: { kind: 'standard', type } };
   }
   send(event: unknown, opts: { atMs?: number; nonce?: string } = {}) { return this.signed('/events', JSON.stringify(event), opts); }
   async pull(): Promise<{ status: number; delivery: Delivery | null }> {
@@ -63,9 +75,13 @@ export class SimulatedHost {
     const valid = await verifyS2(d.body, d.headers, this.key) && d.commitment.commandDigest === digest
       && await verifyCommitment({ bridgeId: this.bridgeId, accountId: this.accountId, deliveryId: d.deliveryId, commandId: command.commandId, commandDigest: digest, expiresAtMs: d.commitment.expiresAtMs }, d.commitment.signature, this.key);
     let result: IMessageResult;
-    if (!valid || command.operation !== 'send' || command.allowSMSFallback !== false) result = { version: 1, commandId: command.commandId, target: command.target, state: 'rejected', disposition: 'not_started', reason: 'commitment_invalid' };
+    if (!valid || (command.operation !== 'send' && command.operation !== 'react') || command.allowSMSFallback !== false) result = { version: 1, commandId: command.commandId, target: command.target, state: 'rejected', disposition: 'not_started', reason: 'commitment_invalid' };
     else if ((opts.now ?? Date.now()) > d.commitment.expiresAtMs) result = { version: 1, commandId: command.commandId, target: command.target, state: 'rejected', disposition: 'not_started', reason: 'commitment_expired' };
-    else { this.nativeSends.push({ commandId: command.commandId, text: command.text }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
+    else if (command.operation === 'react') {
+      if (command.reaction.kind !== 'standard') throw new Error('the simulated host sends standard tapbacks only');
+      this.nativeReactions.push({ commandId: command.commandId, messageGuid: command.target.messageGuid!, partIndex: command.target.partIndex!, type: command.reaction.type, action: command.action });
+      result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-react-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-reaction-${this.nativeReactions.length}` } };
+    } else { this.nativeSends.push({ commandId: command.commandId, text: command.text, ...(command.target.messageGuid !== undefined ? { replyTo: { messageGuid: command.target.messageGuid, partIndex: command.target.partIndex! } } : {}) }); result = { version: 1, commandId: command.commandId, target: command.target, state: 'local_recorded', messageGuid: `sim-sent-${command.commandId}`, evidence: { kind: 'local_database', reference: `sim-row-${this.nativeSends.length}` } }; }
     this.journal.set(command.commandId, { digest, result });
     return result;
   }

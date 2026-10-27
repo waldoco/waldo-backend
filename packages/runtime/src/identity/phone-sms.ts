@@ -22,11 +22,18 @@ export type PhoneChallenge = Readonly<{ state: PhoneChallengeState; expires_at: 
 export type OwnerPhoneState = Readonly<{ phone: string | null; verified: boolean; sms: boolean; challenge: PhoneChallenge | null }>;
 const OUTCOMES = ['denied', 'no_number', 'verified', 'unsupported', 'number_taken', 'held', 'busy', 'throttled', 'expired', 'unknown', 'refused', 'pending', 'approved'] as const;
 export type PhoneSmsOutcome = Readonly<{ kind: 'disabled' | (typeof OUTCOMES)[number] }>;
+const SET_OUTCOMES = ['set', 'unchanged', 'taken', 'invalid', 'unsupported', 'throttled', 'denied'] as const;
+// unlinked: on a set, the providers whose links from the old number the ledger unlinked with it.
+export type PhoneSetOutcome = Readonly<{ kind: 'disabled' | 'unknown' | (typeof SET_OUTCOMES)[number]; unlinked?: readonly ('whatsapp' | 'imessage')[] }>;
+const LINKED = ['whatsapp', 'imessage'] as const;
 export type PhoneSms = Readonly<{
   offered: boolean;
   state(doName: string): Promise<OwnerPhoneState | null>;
   send(doName: string): Promise<PhoneSmsOutcome>;
   check(doName: string, code: string): Promise<PhoneSmsOutcome>;
+  // Stores the owner's number unverified, or answers why not; a number another active owner has verified is taken.
+  // byLink: the caller found the owner can prove a number by sending a link code from it, so texting need not be on.
+  set(doName: string, phone: string, byLink?: boolean): Promise<PhoneSetOutcome>;
 }>;
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -51,7 +58,8 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
   const countries = (env.PHONE_SMS_COUNTRIES ?? '').split(',').map((code) => code.trim());
   const dailyLimit = /^[1-9]\d{0,5}$/.test(env.PHONE_SMS_DAILY_LIMIT ?? '') ? Number(env.PHONE_SMS_DAILY_LIMIT) : null;
   const keyed = env.TWILIO_API_KEY_SID !== undefined && env.TWILIO_API_KEY_SID !== '';
-  const provider = env.PHONE_SMS_VERIFY === '1' && countries.every((code) => /^\+[1-9]\d{0,2}$/.test(code)) && dailyLimit !== null
+  const countriesValid = countries.every((code) => /^\+[1-9]\d{0,2}$/.test(code));
+  const provider = env.PHONE_SMS_VERIFY === '1' && countriesValid && dailyLimit !== null
     ? twilioPhoneVerification({ user: (keyed ? env.TWILIO_API_KEY_SID : env.TWILIO_ACCOUNT_SID) ?? '',
       secret: (keyed ? env.TWILIO_API_KEY_SECRET : env.TWILIO_AUTH_TOKEN) ?? '', service: env.TWILIO_VERIFY_SERVICE_SID ?? '' }, fetcher) : null;
   const offered = rpc !== null && provider !== null;
@@ -97,5 +105,20 @@ export const phoneSms = (env: PhoneSmsEnv, fetcher: typeof fetch = fetch, now = 
     },
     send: (doName) => run(doName, 'send'),
     check: (doName, code) => run(doName, 'check', code),
+    // Offered with texting or a link code, so a number is set only where it can then be proven. The ledger applies the
+    // same country codes either way and counts the attempts; a lost answer may have saved the number, so it reads as unknown.
+    async set(doName, phone, byLink = false) {
+      if (!rpc || !countriesValid || !(offered || byLink)) return { kind: 'disabled' };
+      if (!E164.test(phone)) return { kind: 'invalid' };
+      const payload = JSON.stringify({ do_name: doName, phone, countries });
+      let result: unknown;
+      try { result = await rpc!('owner_phone_set', `phoneset.${payload}`, { p_payload: payload }); } catch { return { kind: 'unknown' }; }
+      const { kind, unlinked } = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+      if (!SET_OUTCOMES.includes(kind as (typeof SET_OUTCOMES)[number])) return { kind: 'unknown' };
+      if (kind !== 'set') return { kind: kind as (typeof SET_OUTCOMES)[number] };
+      // A set always names what it unlinked; an answer that does not is not one this Worker can act on.
+      if (!Array.isArray(unlinked) || !unlinked.every((provider) => LINKED.includes(provider))) return { kind: 'unknown' };
+      return { kind: 'set', unlinked: unlinked as ('whatsapp' | 'imessage')[] };
+    },
   };
 };
