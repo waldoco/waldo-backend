@@ -1311,10 +1311,13 @@ export class ModelUnavailableError extends Error {
 }
 
 // Why no model could answer, when the failure says nothing about this request: the provider refused the key, every provider on
-// the route was open-circuited, or every one failed. A turn out of time, a hook halt or a refused request is none of these.
+// the route was open-circuited, or every one failed for its own health. A turn out of time, a hook halt or a request a provider
+// refused (rejected, oversize, not found) is none of these: it would fail the same way on a healthy provider. A key without
+// model access (forbidden) is the key's outage, so it counts.
 export type ModelDownReason = 'auth_failed' | 'breaker_open' | 'template_unavailable' | 'gateway_exhausted';
 export function modelDownReason(failure: RuntimeLLMFailure): ModelDownReason | null {
   if ((failure.reason !== 'template_unavailable' && failure.reason !== 'gateway_exhausted') || failure.detail === 'turn_deadline') return null;
+  if (failure.attempts.some((attempt) => attempt.outcome === 'failure' && !PROVIDER_HEALTH_CODES.has(attempt.code))) return null;
   if (failure.code === 'auth_failed') return 'auth_failed';
   if (failure.attempts.length > 0 && failure.attempts.every((attempt) => attempt.outcome === 'skipped')) return 'breaker_open';
   return failure.reason;

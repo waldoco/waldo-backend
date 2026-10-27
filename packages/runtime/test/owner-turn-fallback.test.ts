@@ -133,6 +133,21 @@ it('a job every provider failed transiently is model-unavailable; a request the 
   expect(refused).not.toBeInstanceOf(ModelUnavailableError);
 });
 
+it('a request every provider refused is not model-down, so its schedule fails and pauses rather than waiting for the model', async () => {
+  for (const code of ['rejected', 'oversize', 'not_found'] as const) {
+    const refused = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: code }], [ANTHROPIC_PROVIDER]: [{ fail: code }] }).gateway)
+      .chooseReaction(ownerTyped({ traceId: `refused-all-${code}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect(refused).not.toBeInstanceOf(ModelUnavailableError);
+  }
+});
+
+it('a key without model access everywhere is model-down: the key is the outage, not the request', async () => {
+  const forbidden = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'forbidden' }], [ANTHROPIC_PROVIDER]: [{ fail: 'forbidden' }] }).gateway)
+    .chooseReaction(ownerTyped({ traceId: 'forbidden-all', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(forbidden).toBeInstanceOf(ModelUnavailableError);
+});
+
 it('a side job answered by Haiku returns its answer', async () => {
   const { gateway, models } = scriptedProviders({ [ANTHROPIC_PROVIDER]: [{ text: '{"reaction":"👌"}' }] });
   const owner = responder(gateway);

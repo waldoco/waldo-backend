@@ -81,8 +81,8 @@ export const dayPlanBook = (sql: Sql) => {
         day, card,
       );
     },
-    waitingForModel(): readonly CardId[] {
-      return sql.exec<{ card: CardId }>('SELECT DISTINCT card FROM day_plan WHERE sent = 3 ORDER BY card').toArray().map((row) => row.card);
+    waitingForModel(day: string): readonly CardId[] {
+      return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 3 ORDER BY card', day).toArray().map((row) => row.card);
     },
     // Quiet-hours hold (H1b): sent=2 records "held", never "sent" - a held card stays truthfully
     // unsent until the heartbeat's release re-arms it and the real send marks sent=1. The
@@ -208,10 +208,11 @@ export const runDayCard = async (input: Readonly<{
   }
 };
 
-// The model is back: every card still waiting runs now. A card past its freshness is skipped when it runs.
-export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook, now: number): Promise<readonly CardId[]> => {
+// The model is back: today's cards still waiting run now. A card past its freshness is skipped when it runs. A row left
+// waiting on an earlier day is not resumed, so its id's next occurrence is never pulled forward in its place.
+export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<readonly CardId[]> => {
   const resumed: CardId[] = [];
-  for (const card of book.waitingForModel()) if (await scheduler.pullForward(card, now)) resumed.push(card);
+  for (const card of book.waitingForModel(localIso(now, timezone).slice(0, 10))) if (await scheduler.pullForward(card, now)) resumed.push(card);
   return resumed;
 };
 

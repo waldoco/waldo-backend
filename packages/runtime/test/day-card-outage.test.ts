@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyDayPlan, dayPlanBook, resumeWaitingCards, runDayCard, type DayPlanBook } from '../src/channels/day-cards';
+import { applyDayPlan, cardFreshUntil, cardFor, dayPlanBook, resumeWaitingCards, runDayCard, type DayPlanBook } from '../src/channels/day-cards';
 import { ModelUnavailableError } from '../src/llm/provider';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
@@ -59,10 +59,10 @@ describe('a model outage over a day-card slot', () => {
       expect(brief(book)?.state).toBe('waiting_on_model');
 
       outage.modelUp = true;
-      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual(['card:brief']);
+      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual(['card:brief']);
       await scheduler.dispatchDue(executors);
       // A second recovery signal and the rest of the morning add nothing.
-      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual([]);
+      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual([]);
       await tick(local('07:00'));
 
       expect(outage.generated).toEqual([local('05:00')]);
@@ -77,7 +77,7 @@ describe('a model outage over a day-card slot', () => {
       expect(outage.quarantined).toBe(false);
 
       outage.modelUp = true;
-      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual([]);
+      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual([]);
       await scheduler.dispatchDue(executors);
       await tick(local('15:00'), 5 * MINUTE);
 
@@ -101,5 +101,35 @@ describe('a model outage over any other job', () => {
       }
       expect(scheduler.read('reminder:r')?.status).toBe('quarantined');
     });
+  });
+});
+
+describe('which cards come back when the model does', () => {
+  it('pulls forward only today\'s waiting cards, never a row left waiting on an earlier day', async () => {
+    await withOutage(async ({ scheduler, book, clock }) => {
+      book.waitingOnModel('2026-10-26', 'card:close');
+      await scheduler.schedule({ id: 'card:close', kind: 'brief', payloadRefs: { id: 'card:close' }, occurrenceAt: local('21:30'), dueAt: local('21:30'), recurrence: null });
+      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual([]);
+      expect(scheduler.read('card:close')?.due_at).toBe(local('21:30'));
+    });
+  });
+});
+
+describe('how late a card that waited may still go out', () => {
+  const brief = cardFor('card:brief')!, checkIn = cardFor('card:midday')!, close = cardFor('card:close')!;
+  const endOfDay = Date.parse('2026-10-28T00:00:00+05:30');
+  it('the Brief until local midday', () => {
+    expect(cardFreshUntil(brief, local('04:30'), tz, { closeDue: null, quietStart: null })).toBe(local('12:00'));
+  });
+  it('the Check-in until the Close is due, else the end of its day', () => {
+    expect(cardFreshUntil(checkIn, local('14:00'), tz, { closeDue: local('21:30'), quietStart: null })).toBe(local('21:30'));
+    expect(cardFreshUntil(checkIn, local('14:00'), tz, { closeDue: null, quietStart: null })).toBe(endOfDay);
+    // A Close already behind the Check-in bounds nothing.
+    expect(cardFreshUntil(checkIn, local('14:00'), tz, { closeDue: local('13:00'), quietStart: null })).toBe(endOfDay);
+  });
+  it('the Close until quiet hours start, and to the end of its day when quiet hours start after midnight or are unset', () => {
+    expect(cardFreshUntil(close, local('21:30'), tz, { closeDue: null, quietStart: '23:00' })).toBe(local('23:00'));
+    expect(cardFreshUntil(close, local('21:30'), tz, { closeDue: null, quietStart: '01:00' })).toBe(endOfDay);
+    expect(cardFreshUntil(close, local('21:30'), tz, { closeDue: null, quietStart: null })).toBe(endOfDay);
   });
 });
