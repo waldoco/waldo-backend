@@ -76,7 +76,7 @@ const debtOf = (answer: unknown, day: string): Debt | null => {
 const rising = (newest: Debt | null, middle: Debt | null, oldest: Debt | null): boolean =>
   newest !== null && middle !== null && oldest !== null && newest.version === middle.version && middle.version === oldest.version && newest.minutes > middle.minutes && middle.minutes > oldest.minutes;
 
-// Sleep debt is building the day the row's own direction word first says so. A row with no readable word, from before the
+// Sleep debt is building the day the row's own direction word first says so, against yesterday's word of the same version. A row with no readable word, from before the
 // producer wrote one, is judged by its figures: they have risen on each of the last two steps and were not already doing so
 // a day earlier, so a long run of worse nights is one wake. Only whole days of one method on consecutive local days count; a
 // missing, partial or figureless row ends the question. Rows are read by calendar day and only as far as the answer needs.
@@ -84,7 +84,11 @@ const debtBuilding = async (today: string, read: (day: string) => Promise<unknow
   const at = async (back: number) => { const day = shiftDay(today, -back); return debtOf(await read(day), day); };
   const latest = await at(0);
   if (!latest) return false;
-  if (latest.trend !== undefined) return latest.trend === 'building' && (await at(1))?.trend !== 'building';
+  if (latest.trend !== undefined) {
+    if (latest.trend !== 'building') return false;
+    const before = await at(1);
+    return !(before?.version === latest.version && before.trend === 'building');
+  }
   const middle = await at(1);
   if (!middle || middle.version !== latest.version || latest.minutes <= middle.minutes) return false;
   const oldest = await at(2);

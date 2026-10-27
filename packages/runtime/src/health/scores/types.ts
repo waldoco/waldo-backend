@@ -1,4 +1,4 @@
-import type { FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
+import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -114,7 +114,7 @@ export interface SleepDebtResult {
   // blended_average is the owner's own mean shrunk toward a prior, which is not their own average.
   readonly need_basis: 'owner_confirmed' | 'own_average' | 'blended_average';
   // Which way the debt has been going over the last two steps. Only on a provisionally computed debt.
-  readonly trend?: 'building' | 'easing' | 'steady';
+  readonly trend?: DerivedSleepDebtTrend;
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
