@@ -4,8 +4,9 @@ import {
   checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
-  healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1,
+  healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
+import { healthHistoryView, historyWindowOf } from './app-health-history';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
@@ -178,6 +179,17 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   return answer(healthScoresView(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)), query.data.day ?? null, Date.now(), revision));
 };
 
+// Score history exists only for a build that names health revision 4; below it the route is not there, as with the provider routes.
+// It spends the same per-owner health budget as every route under /app/v1/health.
+const scoresHistory = async ({ request, url, doName, rpc }: AppHealthInput): Promise<Response> => {
+  if (appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') < HEALTH_SCORES_HISTORY_REVISION_V1) return refuse('invalid_request', 404);
+  if (request.method !== 'GET') return refuse('unavailable', 405);
+  const days = historyWindowOf(url);
+  if (!days) return refuse('invalid_request');
+  const readers = { pillar: (pillar: Pillar, stored: unknown) => pillarView(pillar, stored, HEALTH_SCORES_HISTORY_REVISION_V1), failure: failureCode };
+  return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })), days, readers));
+};
+
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
 const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
@@ -231,6 +243,7 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   if (route === '/consents' && request.method === 'GET') {
     return answer(healthConsentView(await invokeHealth(rpc, doName, 'consent_list', '{}'), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health')));
   }
+  if (route === '/scores/history') return scoresHistory(input);
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
   const write = writes[route];
   if (!write) return refuse('unavailable', 404);
