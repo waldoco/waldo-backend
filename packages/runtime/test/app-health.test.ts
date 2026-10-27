@@ -549,6 +549,24 @@ describe('app health scores: revision 4', () => {
     expect(error).toHaveBeenCalledWith('app health scores drivers shape');
     expect(error).toHaveBeenCalledWith('app health scores windows shape');
   });
+  // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
+  it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {
+    const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    const own = { ...blended, need_basis: 'own_average' };
+    for (const header of [{}, contracts('health=1'), contracts('health=2'), contracts('health=3'), contracts('approvals=4,health=3')]) {
+      const body = await json({ ...plain, sleep_debt: blended }, header);
+      expect('sleep_debt' in body, JSON.stringify(header)).toBe(false);
+      expect(pinnedScores.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      expect(await text({ ...plain, sleep_debt: blended }, header), JSON.stringify(header)).toEqual(await text(plain, header));
+    }
+    for (const header of [contracts('health=4'), contracts('health=5')]) {
+      const body = await json({ ...plain, sleep_debt: blended }, header);
+      expect(healthScoresV1Schema.safeParse(body).success).toBe(true);
+      expect(body.sleep_debt).toEqual(blended);
+    }
+    expect((await json({ ...plain, sleep_debt: own }, contracts('health=3'))).sleep_debt).toEqual(own);
+    expect((await json({ ...plain, sleep_debt: { ...blended, need_basis: 'guessed' } }, contracts('health=4'))).sleep_debt).toBeUndefined();
+  });
   it('keeps the sleep debt rule: shown from revision 2, and the same at revision 4', async () => {
     const debt = { state: 'unavailable', reason: 'missing_sleep' };
     expect((await json({ ...plain, sleep_debt: debt }, contracts('health=4'))).sleep_debt).toEqual(debt);

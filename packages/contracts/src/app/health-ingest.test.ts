@@ -435,6 +435,14 @@ describe('health revision 4: baseline label, drivers and energy windows', () => 
     const nine = healthDriverPhraseV1Schema.options.slice(0, 9);
     rejected(healthScoresV1Schema, [{ ...scores, drivers: nine }, { ...scores, drivers: ['feeling tired'] }, { ...scores, drivers: 'blood oxygen below usual' }, { ...scores, drivers: null }]);
   });
+  it('names a need that leans on the prior as blended_average, beside the two it had, and nothing else', () => {
+    const version = { algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    const debt = { state: 'available', debt_minutes: 630, need_basis: 'blended_average', ...version };
+    for (const need_basis of ['owner_confirmed', 'own_average', 'blended_average']) {
+      expect(healthScoresV1Schema.safeParse({ ...scores, sleep_debt: { ...debt, need_basis } }).success, need_basis).toBe(true);
+    }
+    rejected(healthScoresV1Schema, [{ ...scores, sleep_debt: { ...debt, need_basis: 'blended' } }, { ...scores, sleep_debt: { ...debt, need_basis: 'Blended_Average' } }, { ...scores, sleep_debt: { ...debt, need_basis: 'population_average' } }, { ...scores, sleep_debt: { ...debt, need_basis: null } }]);
+  });
   it('takes an energy window as two 24-hour clock times and a kind, and nothing else', () => {
     const window = { start: '09:30', end: '11:45', kind: 'peak' };
     for (const ok of [window, { start: '00:00', end: '23:59', kind: 'dip' }]) expect(healthEnergyWindowV1Schema.safeParse(ok).success, JSON.stringify(ok)).toBe(true);
