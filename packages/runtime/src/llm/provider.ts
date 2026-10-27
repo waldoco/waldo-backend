@@ -1291,12 +1291,36 @@ function templateUnavailableFailure(
     ok: false,
     ...(detail ? { detail } : {}),
     error: route.floor === 'template' ? 'template fallback unavailable' : `route ${route.floor}`,
-    code: 'transient',
+    // A provider that refused the key keeps that code through the floor: read as transient, a dead key looks like a blip
+    // and nobody replaces it.
+    code: attempts.some((attempt) => attempt.outcome === 'failure' && attempt.code === 'auth_failed') ? 'auth_failed' : 'transient',
     reason: route.floor === 'template' ? 'template_unavailable' : 'gateway_exhausted',
     fallback_step: route.floor,
     attempts,
     routing_logs: routingLogs,
   };
+}
+
+// A job that failed because no model could answer (modelDownReason). It says nothing about the job, so a scheduled run that can
+// wait out the outage returns 'waiting_on_model' for it instead of counting a failure.
+export class ModelUnavailableError extends Error {
+  constructor(readonly reason: ModelDownReason, message = `model unavailable: ${reason}`) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+  }
+}
+
+// Why no model could answer, when the failure says nothing about this request: the provider refused the key, every provider on
+// the route was open-circuited, or every one failed for its own health. A turn out of time, a hook halt or a request a provider
+// refused (rejected, oversize, not found) is none of these: it would fail the same way on a healthy provider. A key without
+// model access (forbidden) is the key's outage, so it counts.
+export type ModelDownReason = 'auth_failed' | 'breaker_open' | 'template_unavailable' | 'gateway_exhausted';
+export function modelDownReason(failure: RuntimeLLMFailure): ModelDownReason | null {
+  if ((failure.reason !== 'template_unavailable' && failure.reason !== 'gateway_exhausted') || failure.detail === 'turn_deadline') return null;
+  if (failure.attempts.some((attempt) => attempt.outcome === 'failure' && !PROVIDER_HEALTH_CODES.has(attempt.code))) return null;
+  if (failure.code === 'auth_failed') return 'auth_failed';
+  if (failure.attempts.length > 0 && failure.attempts.every((attempt) => attempt.outcome === 'skipped')) return 'breaker_open';
+  return failure.reason;
 }
 
 function failFromHook(
