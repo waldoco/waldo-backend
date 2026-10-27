@@ -51,9 +51,10 @@ export const priorDays = (targetDay: string, byDay: ReadonlyMap<string, DayRecor
   [...byDay.values()].filter(record => { const age = daysBetween(record.day, targetDay); return age >= 1 && age <= BASELINE_WINDOW_DAYS; });
 
 // Which way the debt is going: building when it rose on both of the last two steps, easing when it fell on both, steady
-// otherwise and whenever a figure cannot be computed for any of the three days. The three figures use the target day's need, so
-// a need that drifts as nights accrue is never read as the debt moving.
-export const sleepDebtTrend = (targetDay: string, byDay: ReadonlyMap<string, DayRecord>, sleepNeedMinutes: number | null): NonNullable<SleepDebtResult['trend']> => {
+// otherwise. When a figure cannot be computed for any of the three days there is no direction to give, so none is: steady
+// would be a claim the nights cannot back. The three figures use the target day's need, so a need that drifts as nights
+// accrue is never read as the debt moving.
+export const sleepDebtTrend = (targetDay: string, byDay: ReadonlyMap<string, DayRecord>, sleepNeedMinutes: number | null): SleepDebtResult['trend'] => {
   const need = sleepNeedMinutes ?? sleepNeed(priorDays(targetDay, byDay).flatMap(day => (day.sleep ? [day.sleep.asleepMinutes] : [])));
   const figure = (back: number): number | null => {
     const day = shiftDay(targetDay, -back);
@@ -61,14 +62,16 @@ export const sleepDebtTrend = (targetDay: string, byDay: ReadonlyMap<string, Day
     return debt.state === 'available' ? debt.debt_minutes : null;
   };
   const [now, before, earlier] = [figure(0), figure(1), figure(2)];
-  if (now === null || before === null || earlier === null) return 'steady';
+  if (now === null || before === null || earlier === null) return undefined;
   return now > before && before > earlier ? 'building' : now < before && before < earlier ? 'easing' : 'steady';
 };
 
 export const sleepDebt = (targetDay: string, byDay: ReadonlyMap<string, DayRecord>, prior: readonly DayRecord[], sleepNeedMinutes: number | null, provisional = false): SleepDebtResult | Unavailable => {
   if (provisional) {
     const debt = provisionalSleepDebt(targetDay, byDay, prior, sleepNeedMinutes);
-    return debt.state === 'unavailable' ? debt : { ...debt, trend: sleepDebtTrend(targetDay, byDay, sleepNeedMinutes) };
+    if (debt.state === 'unavailable') return debt;
+    const trend = sleepDebtTrend(targetDay, byDay, sleepNeedMinutes);
+    return trend === undefined ? debt : { ...debt, trend };
   }
   const nights = recency.map((share, age) => ({ share, day: shiftDay(targetDay, -age), minutes: byDay.get(shiftDay(targetDay, -age))?.sleep?.asleepMinutes ?? null }));
   if (nights.every(night => night.minutes === null)) return { state: 'unavailable', reason: 'missing_sleep' };
