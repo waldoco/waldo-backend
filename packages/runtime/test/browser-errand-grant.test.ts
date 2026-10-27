@@ -61,3 +61,10 @@ it('a grant does not admit a POST form whose action is another origin',async()=>
  const refused=await submit(f,RUN);
  expect(refused).toMatchObject({ok:false,code:'rejected'});expect(JSON.stringify(refused)).toContain('native_submit_requires_card');expect(commonBrowserFixture.effects).toBe(0);await f.host.cancel();
 });
+it('under the run\'s live grant a step marked send may submit to the approved origin; any other run marked send is still refused before dispatch',async()=>{
+ const f=hostFixture();commonBrowserFixture.form=true;commonBrowserFixture.formAction=`${ORIGIN}/check-in`;granted(f.storage,Date.now());
+ const send=async(runId:string)=>{const first=await f.host.handler.handle({url:`${ORIGIN}/a`,instruction:'Read A.'},f.ctx(runId)) as any;
+  return f.host.actionHandler.handle({url:first.data.url,task:'Check in',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,key:'Enter',intent:'send'}},f.ctx(runId));};
+ expect(await send('task:other-job')).toMatchObject({ok:false});expect(commonBrowserFixture.effects).toBe(0);
+ expect(await send(RUN)).toMatchObject({ok:true});expect(commonBrowserFixture.effects).toBe(1);await f.host.cancel();
+});

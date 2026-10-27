@@ -265,7 +265,8 @@ export function commonBrowserHost(options:Readonly<{
     }
     else {
      if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
-     if('intent' in command&&command.intent==='send')throw Error('browser approval required');
+     // A step the model marks as sending runs only as a click or key press of the run its owner granted this site to.
+     if('intent' in command&&command.intent==='send'&&!((command.operation==='click'||command.operation==='type'&&command.key==='Enter')&&ctx.runScope&&browserErrandAdmits(options.storage,ctx.runScope.runId,before.state.url,options.now())))throw Error('browser approval required');
      const prepare=async(prepared:string)=>{
        await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
        options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser effect custody changed');save({...latest,action:{digest:prepared,state:'prepared'}},storageKey!);digest=prepared;});
