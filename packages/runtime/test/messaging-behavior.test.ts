@@ -288,6 +288,22 @@ describe('the voice block', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Never give medication, supplement or dose instructions.');
   });
 
+  // The owner may have a label or prescription read back. The dose boundary stays its own line, so it can still be told
+  // apart from the permission, and the permission names the two lines it would otherwise collide with.
+  it('lets Waldo read a label back word for word and keeps every dose instruction with the doctor or pharmacist', () => {
+    const lines = MESSAGING_BEHAVIOR.split('\n');
+    const boundary = lines.findIndex((line) => line === '- Never give medication, supplement or dose instructions.');
+    const readBack = lines.findIndex((line) => line.startsWith('- Reading back') && line.includes('label'));
+    expect(boundary).toBeGreaterThan(-1);
+    expect(readBack).toBe(boundary + 1);
+    const line = lines[readBack]!;
+    expect(line).toContain('word for word');
+    expect(line).toContain("the label's");
+    expect(line).toContain('is not the near-medicine case');
+    for (const change of ['take', 'change', 'double', 'skip', 'stop']) expect(line).toContain(change);
+    expect(line).toContain('doctor or pharmacist');
+  });
+
   // "Use a number when it helps, inline" pulled against "never raw numbers in chat"; zone words win, a number on request.
   it('has one rule for health numbers in chat', () => {
     expect(MESSAGING_BEHAVIOR).not.toContain('Use a number when it helps');
