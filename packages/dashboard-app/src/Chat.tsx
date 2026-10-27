@@ -67,7 +67,7 @@ function WaldoMessage({ message, zone, arrived, replies, onReply, shown }: { mes
   return <article className={`chat-msg waldo${arrived ? ' arrived' : ''}`} aria-label="Waldo">
     <span className="chat-avatar" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
-      {text && <div className="chat-prose"><ChatText text={text} reveal={shown === undefined ? undefined : { shown }}/></div>}
+      {text && <div className="chat-prose"><ChatText text={text} reveal={shown === undefined ? undefined : { shown, key: message.id }}/></div>}
       {message.parts.map((part, i) => part.type === 'approval' ? <Approval key={i} part={part} zone={zone}/>
         : part.type === 'receipt' ? <Trace key={i} part={part} zone={zone}/>
           : part.type === 'artifact' ? <p key={i} className="meta">File: {part.title}. Open it in the Waldo app.</p>
@@ -95,15 +95,13 @@ function localStatus(item: LocalMessage, store: ChatStore) {
   return null;
 }
 
-const LIVE = { live: true } as const;
-
 // The reply as it is written, laid out as the reply that will take its place, so that one lands where these words are. The words stay out
 // of the live log: a screen reader hears the reply once, when it lands. `foot` is what shows under them while the turn runs.
-function Draft({ text, foot }: { text: string; foot?: ReactNode }) {
+function Draft({ id, text, foot }: { id: string; text: string; foot?: ReactNode }) {
   return <article className="chat-msg waldo streaming" aria-label="Waldo">
     <span className={`chat-avatar${foot ? ' pulse-ring' : ''}`} aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
-      <div className="chat-prose chat-draft" aria-hidden="true"><ChatText text={text} reveal={LIVE}/></div>
+      <div className="chat-prose chat-draft" aria-hidden="true"><ChatText text={text} reveal={{ live: true, key: `draft-${id}` }}/></div>
       {foot}
     </div>
   </article>;
@@ -141,7 +139,7 @@ function Working({ item, queued, store, now }: { item: LocalMessage; queued: num
       {ms > 45_000 && <p className="meta">Bigger errands can take a few minutes. You can leave this page; the reply will be here.</p>}
       <button type="button" className="quiet" disabled={item.stopping || item.state === 'sending'} onClick={() => void store.stop(item.clientId)}>{item.stopping ? 'Stopping…' : 'Stop'}</button>
   </>;
-  if (item.draft) return <Draft text={item.draft} foot={<div className="chat-draft-foot" role="status" aria-live="polite">{status}</div>}/>;
+  if (item.draft) return <Draft id={item.clientId} text={item.draft} foot={<div className="chat-draft-foot" role="status" aria-live="polite">{status}</div>}/>;
   return <div className="chat-msg waldo working" role="status" aria-live="polite">
     <span className="chat-avatar pulse-ring" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">{status}</div>
@@ -222,7 +220,7 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
       })}
       {unlanded.map(item => <div key={item.clientId} className="chat-row local"><OwnerMessage text={item.text} at={item.sentAt} zone={zone} status={localStatus(item, store)}/>{item.state !== 'sending' && item.state !== 'failed' && <Closure item={item} store={store}/>}</div>)}
       {closures.map(item => <Closure key={item.clientId} item={item} store={store}/>)}
-      {holding.map(item => <Draft key={item.clientId} text={item.draft!}/>)}
+      {holding.map(item => <Draft key={item.clientId} id={item.clientId} text={item.draft!}/>)}
       {first && <Working item={first} queued={working.length - 1} store={store} now={now}/>}
     </div>
     <div className="chat-dock">
