@@ -9,10 +9,11 @@
 --     windows never outlive the recompute that found none.
 --   - sleep_debt.trend: one of building, easing or steady, optional, on an available or partial sleep debt only.
 -- - waldo.health_scores_read is re-created whole from its last definition (20261027130000) and adds windows, left out when the
---   row has none. The version stays on the row: the app's answer never carries it. The trend is not named there either, and the
+--   row has none and when the row is not for the owner's own today by the zone it was computed in, since they are today's
+--   windows and a row of an earlier day is still the newest one until the first upload of the new day. The version stays on the row: the app's answer never carries it. The trend is not named there either, and the
 --   Worker removes it from the stored sleep debt before the app sees it, since the app's sleep debt is a strict object.
--- - waldo.health_context_read is re-created whole from its last definition (20261027130000) and adds windows beside the sleep
---   debt it already returns whole, trend included. The consent check is unchanged.
+-- - waldo.health_context_read is re-created whole from its last definition (20261027130000) and adds windows, on the same
+--   terms, beside the sleep debt it already returns whole, trend included. The consent check is unchanged.
 -- Signatures, security definer, search_path and grants are unchanged. Apply this before turning the producer's provisional
 -- switch on, or every row with windows or a trend is refused as invalid_request.
 
@@ -206,7 +207,7 @@ begin
         'compiled_at', c.updated_at,
         'basis', b.consent_basis
       ) || case when c.sleep_debt is null then '{}'::jsonb else jsonb_build_object('sleep_debt', c.sleep_debt) end
-        || case when c.windows is null then '{}'::jsonb else jsonb_build_object('windows', c.windows) end,
+        || case when c.windows is null or c.day <> (now() at time zone b.timezone)::date then '{}'::jsonb else jsonb_build_object('windows', c.windows) end,
       'previous', (
         select jsonb_build_object('day', p2.day, 'form_score', (p2.form ->> 'score')::numeric,
           'recovery_zone', p2.recovery ->> 'zone', 'weight_zone', p2.weight ->> 'zone', 'basis', pb.consent_basis)
@@ -252,7 +253,7 @@ begin
       'freshness', v_row.freshness, 'form', v_row.form, 'recovery', v_row.recovery, 'weight', v_row.weight)
       || case when v_row.sleep_debt is null then '{}'::jsonb else jsonb_build_object('sleep_debt', v_row.sleep_debt) end
       || jsonb_build_object('drivers', v_row.drivers)
-      || case when v_row.windows is null then '{}'::jsonb else jsonb_build_object('windows', v_row.windows) end);
+      || case when v_row.windows is null or v_row.day <> (now() at time zone v_row.timezone)::date then '{}'::jsonb else jsonb_build_object('windows', v_row.windows) end);
   end if;
   -- No row to show: say why, so the app can tell a missing grant from missing readings.
   return jsonb_build_object('unavailable', case

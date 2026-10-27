@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(29);
+select plan(32);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -103,6 +103,12 @@ select is((select count(*)::int from unnest(array[
   pg_temp.debt('available','{"trend":"steady","extra":1}'),pg_temp.debt('partial','{"trend":"flat"}'),pg_temp.debt('partial','{"trend":null}')
 ]) bad where pg_temp.refused(jsonb_build_object('sleep_debt',bad))),10,'a trend outside the three words, or on an unavailable debt, or with another key beside it, is refused');
 select is(pg_temp.model_read('win-owner')->'context'->'sleep_debt'->>'state','available','and a refused write leaves the sleep debt as it was');
+
+-- They are today's windows: a row of an earlier day, still the newest until the first upload of the new day, shows none.
+select is(pg_temp.write(jsonb_build_object('day',to_char((now() at time zone 'UTC')::date - 1,'YYYY-MM-DD'),'windows',pg_temp.w3(),'windows_version','energy-windows.v1'))->>'written','true','an earlier day''s row with windows is written');
+select ok(not (pg_temp.h('scores_read','win-owner',jsonb_build_object('day',to_char((now() at time zone 'UTC')::date - 1,'YYYY-MM-DD')))->'scores' ? 'windows'),'and the scores read leaves the windows out of that earlier day''s row');
+delete from public.health_context_daily where user_id='e1000000-0000-0000-0000-0000000000e1' and day = (now() at time zone 'UTC')::date;
+select ok(not (pg_temp.model_read('win-owner')->'context' ? 'windows'),'and the model''s read, whose newest row is now that earlier day''s, leaves them out too');
 
 select * from finish();
 rollback;
