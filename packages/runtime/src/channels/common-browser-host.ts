@@ -78,9 +78,11 @@ export function commonBrowserHost(options:Readonly<{
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
  const snapshot=()=>options.source();
  const checked=async()=>{await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
+ // Cloudflare's keep_alive is an idle window capped at ten minutes; a vendor's session timeout is its whole life, which
+ // the grant's expiry and its full reservation already bound.
  const granted=async()=>{
   const task=await checked();const supplied=await options.config.grant(task,options.ownerId);const grant=Object.freeze({...supplied,allowedOrigins:Object.freeze([...supplied.allowedOrigins])});await checked();
-  if(grant.ownerId!==options.ownerId||grant.taskId!==task.taskId||grant.expiresAt<=options.now()||!grant.ref||!Number.isSafeInteger(grant.expiresAt)||!Number.isSafeInteger(grant.lifetimeMs)||grant.lifetimeMs<10000||!Number.isSafeInteger(grant.keepAliveMs??grant.lifetimeMs)||(grant.keepAliveMs??grant.lifetimeMs)<10000||(grant.keepAliveMs??grant.lifetimeMs)>600000||!Number.isSafeInteger(grant.maxScreenshotBytes)||grant.maxScreenshotBytes<1||!grant.allowedOrigins.length||grant.allowedOrigins.some(origin=>{if(origin===PUBLIC_WEB_ORIGIN)return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common browser grant rejected');
+  if(grant.ownerId!==options.ownerId||grant.taskId!==task.taskId||grant.expiresAt<=options.now()||!grant.ref||!Number.isSafeInteger(grant.expiresAt)||!Number.isSafeInteger(grant.lifetimeMs)||grant.lifetimeMs<10000||!Number.isSafeInteger(grant.keepAliveMs??grant.lifetimeMs)||(grant.keepAliveMs??grant.lifetimeMs)<10000||!options.config.provider&&(grant.keepAliveMs??grant.lifetimeMs)>600000||!Number.isSafeInteger(grant.maxScreenshotBytes)||grant.maxScreenshotBytes<1||!grant.allowedOrigins.length||grant.allowedOrigins.some(origin=>{if(origin===PUBLIC_WEB_ORIGIN)return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common browser grant rejected');
   await options.config.assertGrantCurrent(grant);return grant;
  };
  type Record=BrowserRecord;

@@ -51,6 +51,9 @@ export function cdpVendorBinding(vendor: CdpVendor, fetcher: typeof fetch = fetc
   } } as BrowserWorker;
 }
 
+// Browserbase's per-browser-hour overage on the Developer plan (https://docs.browserbase.com/guides/plans-and-pricing).
+// Hours inside the plan are already paid for, so metering every hour at this rate errs on the safe side of the cap.
+export const BROWSERBASE_MICROUSD_PER_HOUR = 120_000;
 const BROWSERBASE_API = 'https://api.browserbase.com/v1/sessions';
 type BrowserbaseSession = Readonly<{ id?: unknown; connectUrl?: unknown }>;
 

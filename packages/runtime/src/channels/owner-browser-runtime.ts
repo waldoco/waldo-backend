@@ -1,6 +1,7 @@
 import {browserHandoffConsole} from './browser-handoff-console';
 import { browsePageArgsSchema, browseActArgsSchema, OPENAI_GPT_6_LUNA_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import type { BrowserWorker } from '@cloudflare/playwright';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs } from './common-browser-host';
@@ -14,6 +15,7 @@ import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../i
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PublicReadRefusal,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
+import {BROWSERBASE_MICROUSD_PER_HOUR,browserbaseVendor,cdpVendorBinding} from './browser-vendor-cdp';
 import {OwnerPublicBrowserCeilingExceeded,reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
@@ -28,6 +30,8 @@ const spendRefusal=(cause:unknown)=>{
 
 // A browser refusal the model can act on: it names the open session's handle and the ways forward.
 class BrowserSessionRefusal extends Error {}
+const ESCALATION_UNAVAILABLE='The escalated browser is not available here, so nothing was opened. Continue with the standard browser, or tell the owner the site could not be reached. Browser diagnostic: {"browser_code":"escalation_unavailable"}';
+const ESCALATION_NEEDS_NEW_SESSION='This browser session runs on the standard browser and cannot move to the escalated one, so nothing changed. End it with browse_act cancel, then call browse_page with retain_session:true, browser:"escalated" and no session_handle. Browser diagnostic: {"browser_code":"escalation_needs_new_session"}';
 const heldElsewhere=(handle:string)=>`An interactive browser session from an earlier turn is still open (session_handle ${handle}). Continue it by passing that session_handle, or end it with browse_act command cancel and that session_handle, then start a new one. A read without retain_session works now.`;
 
 // The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
@@ -101,18 +105,28 @@ export function ownerBrowserRuntime(options: Readonly<{
     const admit=async()=>{await assertCurrent();scope?.admit();if(scope&&options.activeScope()!==scope||options.storage.kv.get('do_name')!==doName)throw new ClosedRunError();const owner=await assertOwner();if(ownerId!==owner.directoryOwnerId&&ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`)throw new ClosedRunError();const bound=workspaceMetadata(options.storage,scope).transaction(state=>state.binding);if(bound&&bound.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();await assertCurrent();};
     await admit();const workspace=await workspaceOwnerHost(options.env,options.storage,options.actualDoId,doName,fetch,scope,admit);await admit();const origin=options.storage.kv.get<string>('origin');if(!origin)throw new ClosedRunError();return {workspace,origin};
   };
-  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false,freshTaskId?:string)=>{
+  // The escalated browser: Browserbase driven over CDP by the same host and tools, on staging, when its keys are set.
+  let escalatedBinding:BrowserWorker|undefined;
+  const escalation=()=>{
+    if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSERBASE_API_KEY||!options.env.BROWSERBASE_PROJECT_ID)return undefined;
+    return escalatedBinding??=cdpVendorBinding(browserbaseVendor({apiKey:options.env.BROWSERBASE_API_KEY,projectId:options.env.BROWSERBASE_PROJECT_ID}));
+  };
+  const onVendor=(taskId?:string)=>!!taskId&&options.storage.kv.get<{session?:{provider?:string}}>(`common-browser:${taskId}`)?.session?.provider==='browserbase_cdp';
+  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false,freshTaskId?:string,escalate=false)=>{
     const assertCurrent=current(ctx);await assertCurrent();
     const scope=options.activeScope()!,pointerBefore=retainedTask();
-    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${freshTaskId??(sessionHandle?pointerBefore?.taskId??active?.taskId:active?.taskId??scope.runId)}`);
+    const taskKey=freshTaskId??(sessionHandle?pointerBefore?.taskId??active?.taskId:active?.taskId??scope.runId);
+    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${taskKey}`),vendor=escalate||onVendor(taskKey);
     let config;
-    if(!ordinary){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
+    if(!ordinary&&!vendor){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
     let expiredSpend=false;
     if(options.env.COMMON_BROWSER_REGISTRATION)expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();
-    if(ordinary||retainSession&&(!config||config.expiresAt<=Date.now()||expiredSpend)){
-      const sdk=commonBrowserSdk();if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSER||!sdk)throw new ClosedRunError();
+    if(vendor||ordinary||retainSession&&(!config||config.expiresAt<=Date.now()||expiredSpend)){
+      const sdk=commonBrowserSdk(),binding=vendor?escalation():options.env.BROWSER;
+      if(vendor&&!binding)throw new BrowserSessionRefusal(ESCALATION_UNAVAILABLE);
+      if(options.env.WALDO_ENVIRONMENT!=='staging'||!binding||!sdk)throw new ClosedRunError();
       const owner=await assertOwner();await assertCurrent();
-      config=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:options.env.BROWSER,loadSdk:sdk,owner:{ownerId:`prn_${owner.directoryOwnerId.replaceAll('-','')}`,custodyDigest:owner.custodyDigest},deadline:scope.deadline,now:Date.now,assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
+      config=ordinaryPublicBrowserConfiguration({storage:options.storage,binding,loadSdk:sdk,...(vendor?{vendor:{provider:'browserbase_cdp' as const,rateMicrousdPerHour:BROWSERBASE_MICROUSD_PER_HOUR}}:{}),owner:{ownerId:`prn_${owner.directoryOwnerId.replaceAll('-','')}`,custodyDigest:owner.custodyDigest},deadline:scope.deadline,now:Date.now,assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
         declaredLimitMicrousd:options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined,
         assertOwner:async()=>{const fresh=await assertOwner();return {ownerId:`prn_${fresh.directoryOwnerId.replaceAll('-','')}`,custodyDigest:fresh.custodyDigest};}});
     }
@@ -218,7 +232,14 @@ export function ownerBrowserRuntime(options: Readonly<{
               return held&&result.ok?{...result,data:{...result.data,open_browser_session:{session_handle:held.sessionHandle,notice:'An interactive browser session from an earlier turn is still open. This read used a separate page and did not see or change it. Continue that session with its session_handle, or end it with browse_act command cancel.'}}}:result;
             }
           }
-          const bound=await bindHost(ctx,args.session_handle,args.retain_session);
+          let bound;
+          if(args.browser==='escalated'){
+            // The model chose the escalated browser; a standard session never quietly stands in for it.
+            const scope=options.activeScope()!,named=args.session_handle?retainedTask()?.sessionHandle===args.session_handle?retainedTask()!.taskId:active?.host.sessionHandle()===args.session_handle?active.taskId:undefined:undefined;
+            if(named&&!onVendor(named)||!args.session_handle&&active&&active.scope===scope&&!onVendor(active.taskId))return {ok:false,code:'rejected',error:ESCALATION_NEEDS_NEW_SESSION,source_taint:'external'};
+            bound=await bindHost(ctx,args.session_handle,true,args.session_handle?undefined:`${scope.runId}:escalated`,!args.session_handle);
+          }
+          else bound=await bindHost(ctx,args.session_handle,args.retain_session);
           const result=await bound.active.host.handler.handle(args,bound.context);if(result.ok){publishPointer();return result;}
           return await restartRead(ctx,bound.active,result,{url:args.url,instruction:args.instruction});
         } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: cause instanceof BrowserSessionRefusal?cause.message:`The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
@@ -313,6 +334,10 @@ export function ownerBrowserRuntime(options: Readonly<{
         if(config)await maintainCommonBrowsers(options.storage,config,Date.now());
         const sdk=commonBrowserSdk();if(options.env.BROWSER&&sdk){
           const cleanup=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:options.env.BROWSER,loadSdk:sdk,now:Date.now,assertCurrent:async()=>{throw new ClosedRunError();},assertOwner:async()=>{throw new ClosedRunError();}});
+          await maintainCommonBrowsers(options.storage,cleanup,Date.now());
+        }
+        const vendorBinding=escalation();if(vendorBinding&&sdk){
+          const cleanup=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:vendorBinding,loadSdk:sdk,vendor:{provider:'browserbase_cdp',rateMicrousdPerHour:BROWSERBASE_MICROUSD_PER_HOUR},now:Date.now,assertCurrent:async()=>{throw new ClosedRunError();},assertOwner:async()=>{throw new ClosedRunError();}});
           await maintainCommonBrowsers(options.storage,cleanup,Date.now());
         }
       })().finally(()=>{maintenance=undefined;});
