@@ -1,4 +1,5 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
@@ -264,7 +265,8 @@ const localDay = (at: number, timeZone: string): string =>
 const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted: boolean }>): object => {
   if (debt.state === 'unavailable') return { state: 'unavailable', reason: debt.reason };
   const version = { algorithm_version: debt.algorithm_version, activation: basis.accepted ? debt.activation : 'candidate_unaccepted' };
-  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
+  const trend = debt.trend ? { trend: debt.trend } : {};
+  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version, ...trend } : { state: 'partial', confidence: debt.coverage, ...version, ...trend };
 };
 
 // The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
@@ -288,11 +290,13 @@ type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_ver
 type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
 // A pillar computed provisionally carries its baseline label, the signals and days it used, and, from an acceptable source,
 // a confidence that is its coverage times the source's confidence. From any other it is a candidate, and it is never more
-// confident than the lowest source would be: its coverage times the lowest factor. A coverage that is not a number is an
-// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+// confident than the lowest source would be: its coverage times the lowest factor. In such a pillar a coverage that is not a number is an
+// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence, a non-finite
+// one written as the null it always was.
 const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number => {
+  if (!pillar.baseline) return pillar.coverage;
   if (!Number.isFinite(pillar.coverage)) throw new Error('coverage is not a number');
-  return pillar.baseline ? round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage;
+  return round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE));
 };
 const activationOf = (activation: string, basis: RowSource): string => (basis.accepted ? activation : 'candidate_unaccepted');
 const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): object => ({
@@ -300,7 +304,12 @@ const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): obj
   activation: activationOf(result.activation, basis), hrv_method: result.hrv_method, ...(result.baseline ? { baseline: result.baseline, used: result.used } : {}),
 });
 
-const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[]): object => {
+// Today's windows ride only an accepted row: they come from the same provisional engine, so a row from a source nothing has
+// validated carries none, and a day other than today never does.
+const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): object =>
+  forToday && basis.accepted && scores.windows && scores.windows.length > 0 ? { windows: scores.windows, windows_version: ENERGY_WINDOWS_VERSION } : {};
+
+const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
@@ -310,7 +319,7 @@ const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason) : pillarRow(toRowZone('weight', weight.zone), weight, basis),
     ...(recovery.state === 'available' ? { confidence: confidenceOf(recovery, basis) } : {}),
     sleep_debt: sleepDebtOf(scores.sleep_debt, basis), drivers: scores.drivers,
-    freshness: 'fresh', tags,
+    freshness: 'fresh', tags, ...windowsOf(scores, basis, forToday),
   };
 };
 
@@ -341,6 +350,12 @@ const steadied = (scores: DailyScores, before: Record<string, unknown> | null): 
 
 // The writer names the pillars whose zone word changed; only whether any did leaves this function.
 const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
+
+// The only trace of a written row: that it was written, and whether a pillar of it was provisional. No owner, day or value.
+const logWritten = (row: object): void => {
+  const provisional = (['recovery', 'form', 'weight'] as const).some(pillar => asRecord(asRecord((row as Record<string, unknown>)[pillar])?.baseline)?.state === 'provisional');
+  console.log(JSON.stringify({ hop: 'health_scores', code: 'written', provisional }));
+};
 
 const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'failed' => {
   const a = asRecord(answer);
@@ -393,9 +408,10 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags);
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
+      if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;

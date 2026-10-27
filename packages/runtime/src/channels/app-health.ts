@@ -149,7 +149,9 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   const shown = revision >= HEALTH_SLEEP_DEBT_REVISION_V1;
   // A need that leans on the prior is a word a build pinned before the baseline revision cannot parse, so it never reaches one.
   const priorLed = revision < HEALTH_BASELINE_REVISION_V1 && asObject(stored?.sleep_debt)?.need_basis === 'blended_average';
-  const debt = shown && !priorLed && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(stored.sleep_debt) : null;
+  // The row's trend word is for the model and the backend. The app's sleep debt is strict, so it never carries one.
+  const { trend: _trend, ...storedDebt } = asObject(stored?.sleep_debt) ?? {};
+  const debt = shown && !priorLed && stored && 'sleep_debt' in stored ? healthSleepDebtV1Schema.safeParse(asObject(stored.sleep_debt) ? storedDebt : stored.sleep_debt) : null;
   if (debt && !debt.success) console.error('app health scores sleep debt shape');
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
