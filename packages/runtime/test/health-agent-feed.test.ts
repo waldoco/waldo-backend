@@ -56,15 +56,27 @@ describe('renderHealth tells the model what its health context is made of', () =
     expect(block).not.toMatch(/\n[ \t]*\n/);
     expect(block).toContain('Recovery: solid. Load: heavy.');
     expect(block).toContain('Baseline: Recovery and Form provisional: their personal baseline is still forming, so read these as a first estimate, not their settled norm. Load on their own baseline.');
-    expect(block).toContain('Sleep debt: building up over recent nights.');
+    expect(block).toContain('Sleep debt: carrying some.');
     expect(block).toContain(WINDOW_LINE);
+  });
+
+  it('states a sleep-debt direction only when the row names one, and never calls a debt building on its size', () => {
+    const debt = (extra: Record<string, unknown>, minutes = 642.5) => ({ sleep_debt: { state: 'available', debt_minutes: minutes, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted', ...extra } });
+    const line = (extra: Record<string, unknown>, minutes?: number) => renderHealth(material(debt(extra, minutes))).split('\n').find(part => part.startsWith('Sleep debt:'));
+    expect(line({})).toBe('Sleep debt: carrying some.');
+    expect(line({ trend: 'building' })).toBe('Sleep debt: carrying some, building over recent nights.');
+    expect(line({ trend: 'easing' })).toBe('Sleep debt: carrying some, easing.');
+    expect(line({ trend: 'steady' })).toBe('Sleep debt: carrying some, holding steady.');
+    expect(line({ trend: 'easing' }, 30)).toBe('Sleep debt: little or none, easing.');
+    expect(line({ trend: 'sideways' })).toBe('Sleep debt: carrying some.');
+    expect(renderHealth(material(debt({})))).not.toMatch(/building|easing|steady, not/);
   });
 
   it('words each baseline and each sleep-debt state, and keeps silent about what the row does not carry', () => {
     const only = (extra: Record<string, unknown>) => renderHealth(material(extra));
     expect(only({ weight: { score: 81.29, zone: 'good', algorithm_version: 'weight.v5' } })).not.toContain('Load on their own baseline');
     expect(only({ recovery: { score: 73.58, zone: 'good', algorithm_version: 'recovery.v5', baseline: baseline('personal', 30) }, form: null })).toContain('Baseline: Recovery and Load on their own baseline.');
-    expect(only({ sleep_debt: { state: 'available', debt_minutes: 30, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' } })).toContain('Sleep debt: steady, not building.');
+    expect(only({ sleep_debt: { state: 'available', debt_minutes: 30, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' } })).toContain('Sleep debt: little or none.');
     expect(only({ sleep_debt: { state: 'partial', confidence: 0.6, algorithm_version: 'sleep-debt.v2', activation: 'accepted' } })).toContain('Sleep debt: only partly known');
     expect(only({ sleep_debt: { state: 'unavailable', reason: 'missing_sleep' } })).toContain('Sleep debt: unknown.');
     const quiet = only({ sleep_debt: undefined, windows: undefined, form: { score: 41.37, zone: 'moderate', algorithm_version: 'form.v9' }, recovery: { score: 73.58, zone: 'good', algorithm_version: 'recovery.v5' }, weight: null });
@@ -158,7 +170,7 @@ describe('an owner turn asking to plan tomorrow around their energy', () => {
     expect(block).toContain('Form zone: flagging.');
     expect(block).toContain('Recovery: solid. Load: heavy.');
     expect(block).toContain('Baseline: Recovery and Form provisional');
-    expect(block).toContain('Sleep debt: building up over recent nights.');
+    expect(block).toContain('Sleep debt: carrying some.');
     expect(block).toContain(WINDOW_LINE);
     expect(composed.prompt).not.toContain('Active goals');
     for (const seeded of SEEDED) expect(composed.prompt).not.toContain(seeded);
@@ -173,7 +185,7 @@ describe('an owner turn asking to plan tomorrow around their energy', () => {
     });
     const told = lastTold();
     expect(told.split(WINDOW_LINE).length - 1).toBe(1);
-    expect(told).toContain('Sleep debt: building up over recent nights.');
+    expect(told).toContain('Sleep debt: carrying some.');
     expect(told).not.toContain(ABSENT);
     for (const seeded of SEEDED) expect(told).not.toContain(seeded);
     const block = healthBlock(told);

@@ -1301,6 +1301,15 @@ function templateUnavailableFailure(
   };
 }
 
+// A job that failed because no model could answer (modelDownReason). It says nothing about the job, so a scheduled run that can
+// wait out the outage returns 'waiting_on_model' for it instead of counting a failure.
+export class ModelUnavailableError extends Error {
+  constructor(readonly reason: ModelDownReason, message = `model unavailable: ${reason}`) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+  }
+}
+
 // Why no model could answer, when the failure says nothing about this request: the provider refused the key, every provider on
 // the route was open-circuited, or every one failed. A turn out of time, a hook halt or a refused request is none of these.
 export type ModelDownReason = 'auth_failed' | 'breaker_open' | 'template_unavailable' | 'gateway_exhausted';

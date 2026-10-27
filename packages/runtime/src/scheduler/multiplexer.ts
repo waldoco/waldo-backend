@@ -13,7 +13,6 @@ import {
 import type { Deps } from '../seams/deps';
 import { FINAL_OUTBOX_KEY, standingOrderFinalId, type FinalRecord } from '../channels/telegram-final-outbox';
 import { rearmSharedAlarm } from './alarm-slot';
-import type { ModelDownReason } from '../llm/provider';
 
 const MAX_MISSED_CHAIN = 64;
 // Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
@@ -61,18 +60,11 @@ export class UnreadableScheduleRowError extends Error {
 }
 
 // One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
-// A run that failed because no model could answer: the provider refused the key, its breaker is open, or every route and the
-// floor failed. It says nothing about the job, so it never counts toward quarantine; the row waits and probes again.
-export class ModelUnavailableError extends Error {
-  constructor(readonly reason: ModelDownReason, message = `model unavailable: ${reason}`) {
-    super(message);
-    this.name = 'ModelUnavailableError';
-  }
-}
-
 export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
+// 'waiting_on_model': no model could answer. The row waits and probes again on MODEL_PROBE_MS, and the run never counts
+// toward quarantine. Only an executor that decides its own staleness returns it; any other failure throws.
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending' | 'waiting_on_model'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -262,6 +254,11 @@ export class Scheduler {
             throw new Error(`no scheduler executor for ${bumped.kind}`);
           }
           const delivery = await executor(bumped);
+          if (delivery === 'waiting_on_model') {
+            this.waitForModel(bumped, now);
+            this.settleRun(runId, 'failed', 'run', now);
+            continue;
+          }
           this.complete(bumped, now);
           if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
           else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
@@ -276,11 +273,6 @@ export class Scheduler {
             this.markHeartbeatDecision(runId, 'acted');
             this.markDelivery(runId, 'pending');
             dispatched.push(bumped);
-            continue;
-          }
-          if (err instanceof ModelUnavailableError) {
-            this.waitForModel(bumped, now);
-            this.settleRun(runId, 'failed', 'run', now);
             continue;
           }
           const disposition = this.applyFailurePolicy(bumped, now);
