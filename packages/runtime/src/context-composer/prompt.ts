@@ -227,14 +227,17 @@ function renderBaseline(state: ContextHealthMaterial['view']['baseline_state']):
   return parts.length === 0 ? [] : [`Baseline: ${parts.join(' ')}`];
 }
 
-const SLEEP_DEBT_WORDS = {
-  building: 'building up over recent nights',
-  steady: 'steady, not building',
+const SLEEP_DEBT_AMOUNTS = {
+  little: 'little or none',
+  some: 'carrying some',
   partial: 'only partly known, too few recent nights to say how much',
   unknown: 'unknown',
 } as const;
-function renderSleepDebt(word: ContextHealthMaterial['view']['sleep_debt']): string[] {
-  return word === undefined ? [] : [`Sleep debt: ${SLEEP_DEBT_WORDS[word]}.`];
+const SLEEP_DEBT_TRENDS = { building: 'building over recent nights', easing: 'easing', steady: 'holding steady' } as const;
+function renderSleepDebt(debt: ContextHealthMaterial['view']['sleep_debt']): string[] {
+  if (debt === undefined) return [];
+  const direction = debt.trend === undefined ? '' : `, ${SLEEP_DEBT_TRENDS[debt.trend]}`;
+  return [`Sleep debt: ${SLEEP_DEBT_AMOUNTS[debt.amount]}${direction}.`];
 }
 
 // On its own line, apart from any pillar word, and as validated clock ranges: a time of day is not a reading.

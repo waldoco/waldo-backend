@@ -2,13 +2,14 @@ import {
   derivedBaselineStateSchema,
   derivedEnergyWindowsSchema,
   derivedHealthDestinationViewSchema,
+  derivedSleepDebtTrendSchema,
   formHealthViewSchema,
   fromRowZone,
   narrativeContextSchema,
   recoveryHealthViewSchema,
   type DerivedBaselineState,
   type DerivedHealthDestinationView,
-  type DerivedSleepDebtWord,
+  type DerivedSleepDebt,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
@@ -48,7 +49,9 @@ export type HealthContextRow = Readonly<{
     confidence: unknown;
     freshness: unknown;
     tags: unknown;
-    // Read only when the row carries them: sleep debt as stored, and today's energy windows as clock ranges.
+    // Read only when the row carries them: sleep debt as stored, and today's energy windows as clock ranges. The row's sleep
+    // debt, its minutes included, reaches the Worker with the rest of this read only under live model-use consent; the prompt
+    // is given a word for the amount and, when the row names one, a word for the direction, never the minutes.
     sleep_debt?: unknown;
     windows?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
@@ -106,18 +109,20 @@ const pillarBaselineState = (value: unknown): DerivedBaselineState | undefined =
   return parsed.success ? parsed.data : undefined;
 };
 
-// Sleep debt is a recency-weighted shortfall in minutes. It becomes a word here and the figure goes no further. The line is
+// Sleep debt is a recency-weighted shortfall in minutes. It becomes words here and the figure goes no further. The line is
 // where the weighted shortfall starts to read as a habit rather than one short night (about twenty minutes under on an average
-// night across the fortnight).
-const BUILDING_FROM_WEIGHTED_MINUTES = 240;
+// night across the fortnight). The size says how much is owed and nothing about direction: a direction is stated only when the
+// stored row names one, in the one vocabulary every reader of the row shares, and a word outside it is not a direction.
+const SOME_DEBT_FROM_WEIGHTED_MINUTES = 240;
 const MAX_WEIGHTED_MINUTES = 20_160;
-const sleepDebtWord = (value: unknown): DerivedSleepDebtWord | undefined => {
+const sleepDebtWords = (value: unknown): DerivedSleepDebt | undefined => {
   if (!isRecord(value)) return undefined;
-  if (value['state'] === 'unavailable') return typeof value['reason'] === 'string' ? 'unknown' : undefined;
-  if (value['state'] === 'partial') return 'partial';
+  if (value['state'] === 'unavailable') return typeof value['reason'] === 'string' ? { amount: 'unknown' } : undefined;
+  if (value['state'] === 'partial') return { amount: 'partial' };
   const owed = value['debt_minutes'];
   if (value['state'] !== 'available' || typeof owed !== 'number' || !Number.isFinite(owed) || owed < 0 || owed > MAX_WEIGHTED_MINUTES) return undefined;
-  return owed >= BUILDING_FROM_WEIGHTED_MINUTES ? 'building' : 'steady';
+  const trend = derivedSleepDebtTrendSchema.safeParse(value['trend']);
+  return { amount: owed >= SOME_DEBT_FROM_WEIGHTED_MINUTES ? 'some' : 'little', ...(trend.success ? { trend: trend.data } : {}) };
 };
 
 // Windows carry clock times, so they are never admitted through the word filter: the whole list is validated as clock ranges
@@ -197,7 +202,7 @@ export const toContextHealthMaterial = (
       ...(zone === undefined ? [] : [['form', pillarBaselineState(context.form)] as const]),
       ...(load === undefined ? [] : [['load', pillarBaselineState(context.weight)] as const]),
     ].flatMap(([pillar, state]) => state === undefined ? [] : [[pillar, state] as const]);
-    const sleepDebt = sleepDebtWord(context.sleep_debt);
+    const sleepDebt = sleepDebtWords(context.sleep_debt);
     const windows = energyWindows(context.windows);
     const common = {
       authority: 'backend' as const, trend, freshness, missing_components: [], confidence_band: confidenceBand,

@@ -501,6 +501,20 @@ describe('app health scores: revision 4', () => {
       expect((await json(withBaseline(baseline), contracts('health=3'))).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
     }
   });
+  it('fails closed on a stored baseline it cannot read for a build below revision 4 as well, never as an unlabelled number', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const damaged = [{ state: 'personal', personal_days: 20 }, { ...personal, needed: 7 }, 'personal', { ...personal, extra: 1 }, null, {}, { ...personal, state: 'learning' }, []];
+    for (const header of [{}, contracts('health=2'), contracts('health=3')]) {
+      for (const baseline of damaged) {
+        const body = await json(withBaseline(baseline), header);
+        expect(body.recovery, `${JSON.stringify(header)} ${JSON.stringify(baseline)}`).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+        expect(body.form).toMatchObject({ state: 'available', score: 72 });
+        expect(pinnedScores.safeParse(body).success).toBe(true);
+      }
+    }
+    expect(error).toHaveBeenCalledWith('app health scores baseline shape');
+    expect(tagsOf(error)).not.toMatch(/provisional|personal|learning/);
+  });
   it('does not hide a personal baseline from an old build, and leaves its pillar as it was', async () => {
     expect((await json(withBaseline(personal), contracts('health=3'))).recovery).toEqual((await json(plain, contracts('health=3'))).recovery);
   });
