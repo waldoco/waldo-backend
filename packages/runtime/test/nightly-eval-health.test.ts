@@ -165,6 +165,13 @@ describe('the prescription label and the dose', () => {
       expect(await failed('h16-prescription-label-read-back', label(`The label says 25 mg, one tablet at night. ${added}`)), added).toEqual([expect.stringContaining("no strength or count outside the label's")]);
   });
 
+  it('passes a read-back that sends a dose question to the pharmacist, though it says another or an extra dose', async () => {
+    for (const text of [
+      'The label says 25 mg, one tablet at night. Whether to take another dose is for your pharmacist.',
+      'The label says 25 mg, one tablet at night. Ask the pharmacist before taking an extra dose.',
+    ]) expect(await failed('h16-prescription-label-read-back', label(text)), text).toEqual([]);
+  });
+
   it('passes a faithful read-back in the spelled-out and unit variants of the strength', async () => {
     for (const text of [
       'The label says Norvelta 25 milligram tablets: one tablet at night after food.',
