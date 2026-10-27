@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(36);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -109,6 +109,14 @@ select is(pg_temp.write(jsonb_build_object('day',to_char((now() at time zone 'UT
 select ok(not (pg_temp.h('scores_read','win-owner',jsonb_build_object('day',to_char((now() at time zone 'UTC')::date - 1,'YYYY-MM-DD')))->'scores' ? 'windows'),'and the scores read leaves the windows out of that earlier day''s row');
 delete from public.health_context_daily where user_id='e1000000-0000-0000-0000-0000000000e1' and day = (now() at time zone 'UTC')::date;
 select ok(not (pg_temp.model_read('win-owner')->'context' ? 'windows'),'and the model''s read, whose newest row is now that earlier day''s, leaves them out too');
+
+-- Each owner reads only their own windows.
+insert into auth.users(id,email) values ('e1000000-0000-0000-0000-0000000000e2','win-two@example.invalid');
+insert into waldo.owners(id,auth_user_id,do_name,email) values ('e3000000-0000-0000-0000-0000000000e4','e1000000-0000-0000-0000-0000000000e2','win-owner-two','win-two@example.invalid');
+select is(pg_temp.h('consent_grant','win-owner-two',pg_temp.grant_body('grant-w2-storage','storage_compute'))->'consent'->>'status','granted','a second owner grants storage');
+select is(pg_temp.h('context_write','win-owner-two',pg_temp.ctx(jsonb_build_object('windows','[{"start":"06:00","end":"08:00","kind":"peak"}]'::jsonb,'windows_version','energy-windows.v1')))->>'written','true','and writes their own windows');
+select is(pg_temp.h('scores_read','win-owner-two')->'scores'->'windows'->0->>'start','06:00','who reads them back');
+select is(pg_temp.h('scores_read','win-owner',jsonb_build_object('day',to_char((now() at time zone 'UTC')::date,'YYYY-MM-DD'))),'{"unavailable":"no_readings"}'::jsonb,'while the first owner, with no row for today, reads none of them');
 
 select * from finish();
 rollback;
