@@ -15,10 +15,11 @@ begin
 end $$;
 create function pg_temp.grant_body(rid text,purpose text) returns jsonb language sql as $$
   select jsonb_build_object('request_id',rid,'source','apple','purpose',purpose,'version',2,'expected_epoch',0,'age_attested_18_plus',true) $$;
+create function pg_temp.day(back int) returns text language sql as $$ select to_char((now() at time zone 'UTC')::date - back,'YYYY-MM-DD') $$;
 create function pg_temp.label(state text default 'provisional',n int default 3) returns jsonb language sql as $$
   select jsonb_build_object('state',state,'personal_days',n,'needed',14,'prior','adults') $$;
 create function pg_temp.used() returns jsonb language sql as $$
-  select '{"signals":["sleep","hrv","resting_heart_rate"],"days":["2026-03-18","2026-03-19","2026-03-20"]}'::jsonb $$;
+  select jsonb_build_object('signals',jsonb_build_array('sleep','hrv','resting_heart_rate'),'days',jsonb_build_array(pg_temp.day(2),pg_temp.day(1),pg_temp.day(0))) $$;
 create function pg_temp.recovery(extra jsonb default '{}') returns jsonb language sql as $$
   select jsonb_build_object('score',72,'zone','good','algorithm_version','recovery.v5','activation','accepted','hrv_method','rmssd','confidence',0.8) || extra $$;
 create function pg_temp.ctx(recovery jsonb, debt jsonb default null) returns jsonb language sql as $$
@@ -44,7 +45,7 @@ select is(pg_temp.scores()->'recovery'->'baseline',pg_temp.label(),'the label re
 select is(pg_temp.scores()->'recovery'->'used',pg_temp.used(),'and the provenance');
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label('personal',14),'used',pg_temp.used()))->>'written','true','a personal pillar at fourteen days is written');
 select is(pg_temp.write(jsonb_build_object('baseline',jsonb_build_object('state','personal','personal_days',30,'needed',14,'prior','none'),'used',pg_temp.used()))->>'written','true','a pillar with no prior at thirty days is written');
-select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label('provisional',0),'used',jsonb_build_object('signals',array['calendar','tasks','messages','physical_load','sleep_midpoint','daylight','movement','stress'],'days',array['2026-03-20'])))->>'written','true','every signal name of the closed list is admitted');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label('provisional',0),'used',jsonb_build_object('signals',array['calendar','tasks','messages','physical_load','sleep_midpoint','daylight','movement','stress'],'days',array[pg_temp.day(0)])))->>'written','true','every signal name of the closed list is admitted');
 
 -- Everything outside that shape is refused whole, so a refused write leaves the row as it was.
 select is((select count(*)::int from unnest(array[
@@ -82,9 +83,9 @@ select is((select count(*)::int from unnest(array[
   '{"signals":["sleep"],"days":["2026-3-20"]}',
   '{"signals":["sleep"],"days":["2026-13-45"]}',
   '{"signals":["sleep"],"days":["2026-03-20T00:00:00Z"]}'
-]::jsonb[]) bad where pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',bad))->>'error' = 'invalid_request'),21,'every provenance outside its shape is refused');
-select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','sleep'],'days',array['2026-03-20'])))->>'error','invalid_request','a provenance with more than twelve signals is refused');
-select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',(select jsonb_agg(to_char(date '2026-02-01' + g,'YYYY-MM-DD')) from generate_series(0,31) g))))->>'error','invalid_request','a provenance with more than thirty-one days is refused');
+]::jsonb[]) bad where pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',replace(bad::text,'2026-03-20',pg_temp.day(0))::jsonb))->>'error' = 'invalid_request'),21,'every provenance outside its shape is refused');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','sleep'],'days',array[pg_temp.day(0)])))->>'error','invalid_request','a provenance with more than twelve signals is refused');
+select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',(select jsonb_agg(to_char((now() at time zone 'UTC')::date - g,'YYYY-MM-DD')) from generate_series(0,31) g))))->>'error','invalid_request','a provenance with more than thirty-one days is refused');
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label()))->>'error','invalid_request','a label without its provenance is refused');
 select is(pg_temp.write(jsonb_build_object('used',pg_temp.used()))->>'error','invalid_request','and a provenance without its label');
 select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(jsonb_build_object('reason','missing_sleep','baseline',pg_temp.label(),'used',pg_temp.used())))->>'error','invalid_request','an unavailable pillar carries nothing but its reason');
@@ -101,7 +102,6 @@ select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),
 select is(pg_temp.h('context_write','prov-owner',pg_temp.ctx(pg_temp.recovery(),pg_temp.debt('guessed')))->>'error','invalid_request','a basis outside the closed set is refused');
 
 -- The days a pillar names are the days it was computed from: the row's own day and the thirty before it, never another time.
-create function pg_temp.day(back int) returns text language sql as $$ select to_char((now() at time zone 'UTC')::date - back,'YYYY-MM-DD') $$;
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(0),pg_temp.day(31)])))->>'written','true','the row''s own day and the thirty-one before it are admitted');
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(32)])))->>'error','invalid_request','a day more than thirty-one before the row''s is refused');
 select is(pg_temp.write(jsonb_build_object('baseline',pg_temp.label(),'used',jsonb_build_object('signals',array['sleep'],'days',array[pg_temp.day(-1)])))->>'error','invalid_request','and a day after it');

@@ -7,10 +7,14 @@
 --   thirty-one distinct day strings), so no reading can ride the provenance.
 -- - need_basis of a sleep debt also admits blended_average: the owner's own nights shrunk toward a prior, which is not their
 --   own average.
--- - waldo.health_series_read returns each reading's writer as origin_package, the package name of the app that wrote it,
---   when the stored sample recorded one as a string. Nothing else of the origin leaves the database. A Health Connect row
---   is accepted only when every reading it is computed from was written by Samsung Health, which the producer cannot tell
---   without it.
+-- - used.days must lie between thirty-one days before the row's day and the day itself, and a labelled pillar must carry a
+--   numeric confidence, so a value that was not finite and became null is refused, not written.
+-- - A pillar or sleep debt with activation accepted is refused for any source outside apple, oura, whoop, samsung and
+--   health_connect. Which writer inside Health Connect may be accepted is decided by the producer, the computation
+--   authority, not by this function.
+-- - waldo.health_series_read returns samsung_writer: true on a reading whose stored origin names Samsung Health as its
+--   writer, and nothing else of the origin, so no package name leaves the database. A Health Connect row is accepted only
+--   when every reading it is computed from was written by Samsung Health, which the producer cannot tell without it.
 -- Today's energy windows are not admitted here: they need a column of their own and the migration that adds it.
 -- waldo.health_context_write is re-created whole from its last definition (20261023140000); signature, security definer,
 -- search_path and grants are unchanged, and every earlier check is as it was. Apply this before turning the producer's
@@ -72,6 +76,7 @@ begin
       -- the owner's own days against the fourteen needed, and a prior named only from the closed set. The provenance names the
       -- signals the pillar used from the closed list and the days they came from, as day strings only, so no reading rides it.
       or (v_p ? 'baseline') <> (v_p ? 'used')
+      or (v_p ? 'baseline' and jsonb_typeof(v_p->'confidence') is distinct from 'number')
       or (v_p ? 'baseline' and (
         jsonb_typeof(v_p->'baseline') is distinct from 'object'
         or (select array_agg(k order by k) from jsonb_object_keys(v_p->'baseline') k) is distinct from array['needed','personal_days','prior','state']
@@ -89,7 +94,8 @@ begin
           or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load'))
         or (select count(distinct s) from jsonb_array_elements(v_p #> '{used,signals}') s) <> jsonb_array_length(v_p #> '{used,signals}')
         or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and 31
-        or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' or (d #>> '{}')::date is null)
+        or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          or (d #>> '{}')::date not between v_day - 31 and v_day)
         or (select count(distinct d) from jsonb_array_elements(v_p #> '{used,days}') d) <> jsonb_array_length(v_p #> '{used,days}')))
       then return '{"error":"invalid_request"}'; end if;
   end loop;
@@ -116,6 +122,10 @@ begin
       or (v_p->>'state' = 'available' and (jsonb_typeof(v_p->'debt_minutes') is distinct from 'number' or (v_p->>'debt_minutes')::numeric not between 0 and 20160
         or jsonb_typeof(v_p->'need_basis') is distinct from 'string' or (v_p->>'need_basis') not in ('owner_confirmed','own_average','blended_average'))) then return '{"error":"invalid_request"}'; end if;
   end if;
+  -- Accepted is for the sources the amendment names. Which writer inside Health Connect may be accepted is decided by the
+  -- computation authority, the producer, not here.
+  if exists (select 1 from (select v_body->'recovery' as p union all select v_body->'form' union all select v_body->'weight' union all select v_body->'sleep_debt') x where x.p->>'activation' = 'accepted')
+    and exists (select 1 from jsonb_array_elements(v_body->'basis') b where b->>'source' not in ('apple','oura','whoop','samsung','health_connect')) then return '{"error":"invalid_request"}'; end if;
   for v_entry in select value from jsonb_array_elements(v_body->'basis') loop
     select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_entry->>'source' and purpose = 'storage_compute';
     select * into v_consent from waldo.health_consents where id = v_scope.consent_id;
@@ -214,7 +224,7 @@ begin
               'end_at', to_char(p.end_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
               'utc_offset_minutes', p.utc_offset_minutes, 'timezone', p.timezone,
               'value', p.payload->'value', 'method', p.payload->'method', 'activity', p.payload->'activity',
-              'origin_package', case when jsonb_typeof(p.payload #> '{origin,source_package_name}') = 'string' then left(p.payload #>> '{origin,source_package_name}', 200) end,
+              'samsung_writer', case when (p.payload #>> '{origin,source_package_name}') = 'com.sec.android.app.shealth' then true end,
               'stages', case when p.signal = 'sleep_duration' then p.payload->'stages' end)) order by p.day, p.start_at, p.signal, p.sample_id)
             from picked p where p.source = l.source and p.n <= v_cap), '[]'::jsonb)) order by l.source) from live l), '[]'::jsonb))
   );

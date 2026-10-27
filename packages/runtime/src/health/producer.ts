@@ -41,8 +41,8 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
-// writer is the package name of the app that wrote the reading, as the read returns it; null when none was recorded.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; writer: string | null }>;
+// samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -62,7 +62,7 @@ const reading = (raw: unknown): Reading | null => {
     signal: r.signal, day: r.day, value: r.value, startAt: instant(r.start_at), endAt: instant(r.end_at),
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
-    writer: typeof r.origin_package === 'string' && r.origin_package.length > 0 ? r.origin_package : null,
+    samsungWriter: r.samsung_writer === true,
   };
 };
 
@@ -270,7 +270,7 @@ const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted
 // The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
 // source: its readings enter a canonical score only from Samsung Health, at the Samsung confidence.
 const SOURCE_CONFIDENCE: Readonly<Record<string, number>> = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 };
-const SAMSUNG_HEALTH = 'com.sec.android.app.shealth';
+const LOWEST_SOURCE_CONFIDENCE = 0.6;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 
 // Whether a row computed from this source may carry activation accepted. An unknown source never may. A Health Connect row
@@ -279,7 +279,7 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const acceptable = (source: Source): boolean => {
   if (source.source === 'health_connect') {
     const scored = source.readings.filter(r => SIGNALS.includes(r.signal));
-    return scored.length > 0 && scored.every(r => r.writer === SAMSUNG_HEALTH);
+    return scored.length > 0 && scored.every(r => r.samsungWriter);
   }
   return Object.hasOwn(SOURCE_CONFIDENCE, source.source);
 };
@@ -287,10 +287,13 @@ const acceptable = (source: Source): boolean => {
 type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_version: string; activation: string; hrv_method: HrvMethod | null; baseline?: unknown; used: unknown }>;
 type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
 // A pillar computed provisionally carries its baseline label, the signals and days it used, and, from an acceptable source,
-// a confidence that is its coverage times the source's confidence. From any other it is a candidate whose confidence is its
-// coverage. The earlier engine's pillar keeps its keys and its coverage as the confidence.
-const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number =>
-  (pillar.baseline && basis.accepted ? round3(pillar.coverage * SOURCE_CONFIDENCE[basis.source]!) : pillar.coverage);
+// a confidence that is its coverage times the source's confidence. From any other it is a candidate, and it is never more
+// confident than the lowest source would be: its coverage times the lowest factor. A coverage that is not a number is an
+// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number => {
+  if (!Number.isFinite(pillar.coverage)) throw new Error('coverage is not a number');
+  return pillar.baseline ? round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage;
+};
 const activationOf = (activation: string, basis: RowSource): string => (basis.accepted ? activation : 'candidate_unaccepted');
 const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): object => ({
   score: result.score, zone, confidence: confidenceOf(result, basis), algorithm_version: result.algorithm_version,
