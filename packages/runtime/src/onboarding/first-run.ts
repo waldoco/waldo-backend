@@ -61,7 +61,7 @@ const SETUP_PINS: Readonly<Record<SetupAnswer, Readonly<{ block: 'profile' | 'fa
 const HEALTH_PART = ', health';
 const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress'];
 const HEALTH_PICKS: ReadonlySet<string> = new Set([...BODY_MATTERS, ...appSetupSpotV1Schema.options.filter(spot => BODY_MATTERS.includes(spot.slice(0, spot.indexOf('-'))))]);
-const healthPick = (answer: SetupAnswer, pick: string) => answer !== 'protect' && HEALTH_PICKS.has(pick);
+
 const setupParts = (answer: SetupAnswer) => [SETUP_REFS[answer], `${SETUP_REFS[answer]}${HEALTH_PART}`];
 // Whether a claim is a setup answer, by the ref this module writes it under.
 export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && (Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref));
@@ -128,7 +128,7 @@ const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullabl
 const setupFacts = (answer: SetupAnswer, value: NonNullable<AppSetupAnswersRequestV1[SetupAnswer]>, day: string): readonly [SetupFact | null, SetupFact | null] => {
   const choices = Array.isArray(value) ? null : typeof value === 'object' && 'picked' in value ? value as { picked: readonly string[]; own_words: string } : null;
   const picks: readonly string[] = Array.isArray(value) ? value : choices?.picked ?? [];
-  const health = picks.filter(pick => healthPick(answer, pick));
+  const health = picks.filter(pick => HEALTH_PICKS.has(pick));
   if (!health.length) return [setupFact(answer, value, day), null];
   const rest = picks.filter(pick => !health.includes(pick));
   const main = choices ? setupFact(answer, { ...choices, picked: rest } as never, day) : rest.length ? setupFact(answer, rest as never, day) : null;
@@ -292,11 +292,12 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
       setupParts(name).forEach((ref, index) => {
         const fact = parts[index];
         if (!fact) { for (const retired of live(ref)) claims.setStatus(retired.id, 'dismissed'); return; }
-        const saved = answer(ref, fact.kind, fact.text, fact.evidence);
+        // A reading the owner stated is kept as they said it, as health, so every path that leaves health out leaves it out; and,
+        // as in the profile view, it is left to recall rather than shown on every turn: get_health is current.
+        const reading = numericHealthIn(fact.text);
+        const saved = answer(ref, reading ? 'health' : fact.kind, fact.text, fact.evidence);
         if (!saved) throw new Error('setup answer not saved');
-        // A reading the owner stated is kept as they said it, but, as in the profile view, left to recall rather than shown on
-        // every turn: get_health is current.
-        if (numericHealthIn(fact.text)) claims.unpin(saved.id);
+        if (reading) claims.unpin(saved.id);
         else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
       });
     }

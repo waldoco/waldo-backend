@@ -374,7 +374,7 @@ describe('setup answers, onboarding revision 2', () => {
     };
     expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, ...answers }, 'POST', REVISION_2)).status).toBe(200);
     const stated = facts(storage).filter(claim => claim.text.includes(said));
-    expect(stated.map(claim => [claim.source_ref, claim.kind, claim.pinned])).toEqual(Object.keys(answers).map(answer => [`owner, first run: ${answer}`, 'health', null]));
+    expect(stated.map(claim => [claim.source_ref, claim.kind, claim.pinned]).sort()).toEqual(Object.keys(answers).map(answer => [`owner, first run: ${answer}`, 'health', null]).sort());
     // The background decision's and an externally built job's recall: owner claims that are not health.
     const memory = store(storage);
     expect(memory.recall('resting HR', 20).filter(claim => claim.text.includes(said))).toHaveLength(6);
