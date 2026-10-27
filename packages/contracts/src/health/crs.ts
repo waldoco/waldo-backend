@@ -52,9 +52,16 @@ export type DerivedHealthDestinationEligibility = z.infer<
 export const derivedBaselineStateSchema = z.enum(['provisional', 'personal']);
 export type DerivedBaselineState = z.infer<typeof derivedBaselineStateSchema>;
 
-// Sleep debt reaches the model as a word, never as minutes.
-export const derivedSleepDebtWordSchema = z.enum(['building', 'steady', 'partial', 'unknown']);
-export type DerivedSleepDebtWord = z.infer<typeof derivedSleepDebtWordSchema>;
+// Sleep debt reaches the model as words, never as minutes: how much is owed, and only when the stored row itself names one,
+// which way it is going. The direction words are the stored row's vocabulary and mean the same to every reader.
+export const derivedSleepDebtAmountSchema = z.enum(['little', 'some', 'partial', 'unknown']);
+export const derivedSleepDebtTrendSchema = z.enum(['building', 'easing', 'steady']);
+export const derivedSleepDebtSchema = z.strictObject({
+  amount: derivedSleepDebtAmountSchema,
+  trend: derivedSleepDebtTrendSchema.optional(),
+});
+export type DerivedSleepDebtTrend = z.infer<typeof derivedSleepDebtTrendSchema>;
+export type DerivedSleepDebt = z.infer<typeof derivedSleepDebtSchema>;
 
 // A stretch of the owner's local day as clock times. A time of day is not a reading, and this is the only shape in which a
 // digit reaches the derived view, so the format is fixed here and never taken from free text.
@@ -82,7 +89,7 @@ const derivedViewCommon = {
       load: derivedBaselineStateSchema.optional(),
     })
     .optional(),
-  sleep_debt: derivedSleepDebtWordSchema.optional(),
+  sleep_debt: derivedSleepDebtSchema.optional(),
   energy_windows: derivedEnergyWindowsSchema.optional(),
 } as const;
 
