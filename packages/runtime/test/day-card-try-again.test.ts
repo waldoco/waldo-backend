@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
+import { dayCardFinalId, FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -53,9 +54,9 @@ type Act = (action: { action: string; id?: string; value?: string }) => Promise<
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown>; act: Act }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type AppDay = Readonly<{ revision: string; cards: readonly Record<string, unknown>[] }>;
 type Day = Readonly<{
-  appDay(contract?: string): Promise<AppDay>; appAction(body: Record<string, string>): Promise<{ status: number; body: { receipt?: { state: string } } }>;
+  appDay(contract?: string): Promise<AppDay>; appAction(body: Record<string, string>, contract?: string): Promise<{ status: number; body: { receipt?: { state: string }; error?: string } }>;
   act: Act; alarm(): Promise<void>; at(ms: number): void; chatRows(): Promise<number>;
-  brief(): { state?: string } | undefined; row(): { status: string; attempts: number } | undefined; sql: SqlStorage;
+  brief(): { state?: string } | undefined; row(): { status: string; attempts: number } | undefined; sql: SqlStorage; kv: DurableObjectStorage['kv'];
 }>;
 
 // An app-only owner whose Brief comes due now and runs once on the first alarm.
@@ -85,9 +86,9 @@ const withBriefDue = (name: string, work: (day: Day) => Promise<void>) =>
           const body = await read.json() as { revision: string; data: { cards: Record<string, unknown>[] } };
           return { revision: body.revision, cards: body.data.cards };
         },
-        appAction: async body => {
-          const posted = await owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
-          return { status: posted.status, body: await posted.json() as { receipt?: { state: string } } };
+        appAction: async (body, contract) => {
+          const posted = await owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers: { ...headers, 'content-type': 'application/json', ...(contract ? { 'x-waldo-app-contract': contract } : {}) }, body: JSON.stringify(body) }));
+          return { status: posted.status, body: await posted.json() as { receipt?: { state: string }; error?: string } };
         },
         act: action => app.act({ id: '', value: '', ...action }),
         alarm: async () => { state.storage.kv.put('owner_alarm_last_v1', 1); await owner.alarm(); },
@@ -96,6 +97,7 @@ const withBriefDue = (name: string, work: (day: Day) => Promise<void>) =>
         brief: () => dayPlanBook(state.storage.sql).read(DAY).find(row => row.card === 'card:brief'),
         row: () => state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = 'card:brief'").toArray()[0],
         sql: state.storage.sql,
+        kv: state.storage.kv,
       });
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
@@ -190,11 +192,15 @@ it('the app reads the failed Brief at controls=3, an older build reads it as pen
     const v3 = await day.appDay('controls=3');
     expect(brief(v3)).toMatchObject({ sent: false, state: 'failed', state_reason: "Waldo couldn't reach its model this morning", retries_left: 3 });
     model.down = false;
-    const posted = await day.appAction({ view: 'day', action: 'card.retry', id: 'card:brief', revision: v3.revision, request_id: 'retry-app-0001' });
+    const posted = await day.appAction({ view: 'day', action: 'card.retry', id: 'card:brief', revision: v3.revision, request_id: 'retry-app-0001' }, 'controls=3');
     expect(posted).toMatchObject({ status: 200, body: { receipt: { state: 'recorded' } } });
-    expect(brief(await day.appDay('controls=3'))).toMatchObject({ state: 'generating', state_reason: 'Waldo is making it now', retries_left: 2 });
+    const making = brief(await day.appDay('controls=3'));
+    expect(making).toMatchObject({ state: 'generating', state_reason: 'Waldo is making it now' });
+    expect(making).not.toHaveProperty('retries_left');
     await day.alarm();
-    expect(brief(await day.appDay('controls=3'))).toMatchObject({ sent: true, state: 'sent', retries_left: 2 });
+    const sent = brief(await day.appDay('controls=3'));
+    expect(sent).toMatchObject({ sent: true, state: 'sent' });
+    expect(sent).not.toHaveProperty('retries_left');
     expect(await day.chatRows()).toBe(1);
   });
 });
@@ -211,5 +217,83 @@ it('a Try again that meets the outage waits like any card, and is skipped once i
     await day.alarm();
     expect(day.brief()).toMatchObject({ state: 'skipped', reason: "Waldo couldn't reach its model this morning" });
     expect(await day.chatRows()).toBe(0);
+  });
+});
+
+// Try again is offered and accepted only for a card that is stuck: waiting for the model, or paused. Anything that went out,
+// is on its way, finished for the day, or simply has not come due is not tried again, whoever asks and however stale the ask.
+const brief = (view: AppDay) => view.cards.find(card => card.id === 'card:brief')!;
+
+it('card.retry is a controls=3 action: an older build that names it gets 400, as before it existed', async () => {
+  await withBriefDue('try-again-revision', async (day) => {
+    model.down = true;
+    await day.alarm();
+    const v3 = await day.appDay('controls=3');
+    for (const contract of ['controls=2', undefined]) {
+      const refused = await day.appAction({ view: 'day', action: 'card.retry', id: 'card:brief', revision: v3.revision, request_id: 'retry-old-0001' }, contract);
+      expect([refused.status, refused.body.error]).toEqual([400, 'invalid_action']);
+    }
+    expect(day.row()?.status).toBe('armed');
+  });
+});
+
+it('a card finished before outcomes were recorded is not written again, and the day view still reads', async () => {
+  await withBriefDue('try-again-legacy-sent', async (day) => {
+    day.sql.exec("UPDATE day_plan SET sent = 1, outcome = NULL WHERE day = ? AND card = 'card:brief'", DAY);
+    day.sql.exec("DELETE FROM schedule WHERE id = 'card:brief'");
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe('card.retry.sent');
+    expect(day.row()).toBeUndefined();
+    const card = brief(await day.appDay('controls=3'));
+    expect(card).toMatchObject({ sent: true });
+    expect(card.state).not.toBe('generating');
+    expect(card).not.toHaveProperty('retries_left');
+    const calls = model.calls;
+    await day.alarm();
+    expect(model.calls).toBe(calls);
+  });
+});
+
+it('a card with a delivery still in the outbox is not tried again, so it never goes out twice', async () => {
+  await withBriefDue('try-again-queued', async (day) => {
+    model.down = true;
+    await day.alarm();
+    expect(day.brief()?.state).toBe('waiting_on_model');
+    // Stuck, but something for it may still go out (or may have): no Try again.
+    for (const status of ['pending', 'attempting', 'accepted', 'quarantined']) {
+      day.kv.put(FINAL_OUTBOX_KEY, [{ id: `${dayCardFinalId(DAY, 'card:brief')}:try:${DAY}.1`, status }]);
+      expect(await day.act({ action: 'card.retry', id: 'card:brief' }), status).toBe('card.retry.not_needed');
+      expect(brief(await day.appDay('controls=3')), status).not.toHaveProperty('retries_left');
+    }
+    // A card written and waiting for its surface reads unsent and pending: not stuck, so not tried again either.
+    day.kv.put(FINAL_OUTBOX_KEY, [{ id: dayCardFinalId(DAY, 'card:brief'), status: 'pending' }]);
+    dayPlanBook(day.sql).waiting(DAY, 'card:brief');
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe('card.retry.not_needed');
+    // A delivery the surface refused outright left nothing on its way: the stuck card may be tried again.
+    day.kv.put(FINAL_OUTBOX_KEY, [{ id: dayCardFinalId(DAY, 'card:brief'), status: 'blocked' }]);
+    dayPlanBook(day.sql).waitingOnModel(DAY, 'card:brief');
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe(true);
+  });
+});
+
+it('a card that has not come due is not fired early, from the console or from a stale app read', async () => {
+  await withBriefDue('try-again-not-due', async (day) => {
+    day.sql.exec('UPDATE schedule SET due_at = ?, occurrence_at = ? WHERE id = ?', AT + 3_600_000, AT + 3_600_000, 'card:brief');
+    const v3 = await day.appDay('controls=3');
+    expect(brief(v3)).not.toHaveProperty('retries_left');
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe('card.retry.not_needed');
+    const stale = await day.appAction({ view: 'day', action: 'card.retry', id: 'card:brief', revision: v3.revision, request_id: 'retry-stale-0001' }, 'controls=3');
+    expect(stale.status).toBe(409);
+    expect(day.row()).toMatchObject({ status: 'armed' });
+    expect(model.calls).toBe(0);
+  });
+});
+
+it('a skipped card offers no Try again and refuses one, and still says why it was skipped', async () => {
+  await withBriefDue('try-again-skipped', async (day) => {
+    dayPlanBook(day.sql).skipped(DAY, 'card:brief', "Waldo couldn't reach its model this morning");
+    const card = brief(await day.appDay('controls=3'));
+    expect(card).toMatchObject({ state: 'skipped', state_reason: "Waldo couldn't reach its model this morning" });
+    expect(card).not.toHaveProperty('retries_left');
+    expect(await day.act({ action: 'card.retry', id: 'card:brief' })).toBe('card.retry.not_needed');
   });
 });

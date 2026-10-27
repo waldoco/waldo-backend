@@ -25,6 +25,13 @@ describe('the console Brief card, from the same day view the app reads', () => {
     expect(renderToStaticMarkup(<BriefCardView card={brief({ sent: true, state: 'sent', retries_left: 3 })} busy={false} onRetry={() => {}}/>)).not.toContain('Try again');
   });
 
+  it('says why a skipped Brief was skipped, with no Try again: the server gives a skipped card no tries', () => {
+    const html = renderToStaticMarkup(<BriefCardView card={brief({ sent: true, state: 'skipped', state_reason: reason })} busy={false} onRetry={() => {}}/>);
+    expect(html).toContain('Couldn’t make your Brief');
+    expect(html).toContain(reason);
+    expect(html).not.toContain('Try again');
+  });
+
   it('disables Try again while a try is being sent', () => {
     expect(renderToStaticMarkup(<BriefCardView card={brief({ state: 'failed', state_reason: reason, retries_left: 1 })} busy onRetry={() => {}}/>)).toMatch(/<button[^>]*disabled/);
   });

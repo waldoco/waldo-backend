@@ -173,7 +173,13 @@ it('the console says a card could not be made, why, and offers Try again while t
   expect(html).toContain('Waldo couldn&#39;t reach its model this morning');
   expect(html).toContain('value="card.retry"');
   expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, retriesLeft: 0 }] }, 'day')).not.toContain('value="card.retry"');
-  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, state: 'sent' as const, sent: true }] }, 'day')).not.toContain('value="card.retry"');
+  // A card that is not stuck carries no tries left (cardStatus), so it offers no Try again: one that went out, and one skipped
+  // for an outage, which still says why.
+  const { retriesLeft: _left, ...unstuck } = failed;
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'sent' as const, sent: true }] }, 'day')).not.toContain('value="card.retry"');
+  const skipped = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'skipped' as const, sent: true }] }, 'day');
+  expect(skipped).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(skipped).not.toContain('value="card.retry"');
 });
 
 it('the console offers Resume on each paused job, by its schedule id', () => {
