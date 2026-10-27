@@ -41,7 +41,8 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null }>;
+// samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
@@ -61,6 +62,7 @@ const reading = (raw: unknown): Reading | null => {
     signal: r.signal, day: r.day, value: r.value, startAt: instant(r.start_at), endAt: instant(r.end_at),
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
+    samsungWriter: r.samsung_writer === true,
   };
 };
 
@@ -259,25 +261,55 @@ const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
 // Sleep debt in the shape the app reads. A window with a missing night is partial and carries no figure.
-const sleepDebtOf = (debt: DailyScores['sleep_debt']): object => {
+const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted: boolean }>): object => {
   if (debt.state === 'unavailable') return { state: 'unavailable', reason: debt.reason };
-  const version = { algorithm_version: debt.algorithm_version, activation: debt.activation };
+  const version = { algorithm_version: debt.algorithm_version, activation: basis.accepted ? debt.activation : 'candidate_unaccepted' };
   return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
 };
 
-const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, tags: readonly string[]): object => {
+// The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
+// source: its readings enter a canonical score only from Samsung Health, at the Samsung confidence.
+const SOURCE_CONFIDENCE: Readonly<Record<string, number>> = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 };
+const LOWEST_SOURCE_CONFIDENCE = 0.6;
+const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+// Whether a row computed from this source may carry activation accepted. An unknown source never may. A Health Connect row
+// may only when every reading it was computed from was written by Samsung Health, and none without a writer recorded
+// counts; otherwise it is computed the same and written as a candidate.
+const acceptable = (source: Source): boolean => {
+  if (source.source === 'health_connect') {
+    const scored = source.readings.filter(r => SIGNALS.includes(r.signal));
+    return scored.length > 0 && scored.every(r => r.samsungWriter);
+  }
+  return Object.hasOwn(SOURCE_CONFIDENCE, source.source);
+};
+
+type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_version: string; activation: string; hrv_method: HrvMethod | null; baseline?: unknown; used: unknown }>;
+type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
+// A pillar computed provisionally carries its baseline label, the signals and days it used, and, from an acceptable source,
+// a confidence that is its coverage times the source's confidence. From any other it is a candidate, and it is never more
+// confident than the lowest source would be: its coverage times the lowest factor. A coverage that is not a number is an
+// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number => {
+  if (!Number.isFinite(pillar.coverage)) throw new Error('coverage is not a number');
+  return pillar.baseline ? round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage;
+};
+const activationOf = (activation: string, basis: RowSource): string => (basis.accepted ? activation : 'candidate_unaccepted');
+const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): object => ({
+  score: result.score, zone, confidence: confidenceOf(result, basis), algorithm_version: result.algorithm_version,
+  activation: activationOf(result.activation, basis), hrv_method: result.hrv_method, ...(result.baseline ? { baseline: result.baseline, used: result.used } : {}),
+});
+
+const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[]): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
     day, timezone, read_at: readAt, basis: [{ source: basis.source, consent_epoch: basis.epoch }],
-    recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason)
-      : { score: recovery.score, zone: toRowZone('recovery', recovery.zone), confidence: recovery.coverage, algorithm_version: recovery.algorithm_version, activation: recovery.activation, hrv_method: recovery.hrv_method },
-    form: form.state === 'unavailable' ? unavailable(form.reason)
-      : { score: form.score, zone: toRowZone('form', form.zone), confidence: form.coverage, algorithm_version: form.algorithm_version, activation: form.activation, hrv_method: form.hrv_method },
-    weight: weight.state === 'unavailable' ? unavailable(weight.reason)
-      : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
-    ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
-    sleep_debt: sleepDebtOf(scores.sleep_debt), drivers: scores.drivers,
+    recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason) : pillarRow(toRowZone('recovery', recovery.zone), recovery, basis),
+    form: form.state === 'unavailable' ? unavailable(form.reason) : pillarRow(toRowZone('form', form.zone), form, basis),
+    weight: weight.state === 'unavailable' ? unavailable(weight.reason) : pillarRow(toRowZone('weight', weight.zone), weight, basis),
+    ...(recovery.state === 'available' ? { confidence: confidenceOf(recovery, basis) } : {}),
+    sleep_debt: sleepDebtOf(scores.sleep_debt, basis), drivers: scores.drivers,
     freshness: 'fresh', tags,
   };
 };
@@ -361,7 +393,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), chosen, series.readAt, at.timezone, tags);
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));

@@ -67,6 +67,8 @@ export interface DailyScoresInput {
   readonly sleepNeedMinutes: number | null;
   // The newest instant the inputs were read, used only to judge freshness of intraday data.
   readonly asOf: string | null;
+  // Off unless true. On, each component reads against the shared baseline from the owner's first day.
+  readonly provisional?: boolean;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
@@ -74,16 +76,26 @@ export interface UsedBasis {
   readonly signals: readonly string[];
   readonly days: readonly string[];
 }
+// Whether the owner's own days carry the pillar yet. Present only on a pillar computed provisionally.
+export interface BaselineLabel {
+  readonly state: 'provisional' | 'personal';
+  // The fewest own days among the components the pillar used.
+  readonly personal_days: number;
+  readonly needed: number;
+  // Whether a population prior took part in any used component.
+  readonly prior: 'adults' | 'none';
+}
 export interface Available<Zone> {
   readonly state: 'available';
   readonly score: number;
   readonly zone: Zone;
   readonly algorithm_version: string;
-  readonly activation: 'candidate_unaccepted';
+  readonly activation: 'candidate_unaccepted' | 'accepted';
   // Share of the pillar's total weight that had usable inputs, 0 to 1.
   readonly coverage: number;
   readonly hrv_method: HrvMethod | null;
   readonly used: UsedBasis;
+  readonly baseline?: BaselineLabel;
 }
 export type RecoveryResult = Available<RecoveryZone> | Unavailable;
 export type FormResult = Available<FormZone> | Unavailable;
@@ -91,15 +103,16 @@ export type WeightResult = Available<LoadZone> | Unavailable;
 export interface SleepDebtResult {
   readonly state: 'available' | 'partial';
   readonly algorithm_version: string;
-  readonly activation: 'candidate_unaccepted';
-  // Null while any of the 14 nights is missing.
+  readonly activation: 'candidate_unaccepted' | 'accepted';
+  // Null while fewer nights than the version requires are observed.
   readonly debt_minutes: number | null;
   readonly observed_weighted_shortfall_minutes: number;
   readonly observed_nights: number;
   readonly coverage: number;
   readonly missing_nights: readonly string[];
   readonly sleep_need_minutes: number;
-  readonly need_basis: 'owner_confirmed' | 'own_average';
+  // blended_average is the owner's own mean shrunk toward a prior, which is not their own average.
+  readonly need_basis: 'owner_confirmed' | 'own_average' | 'blended_average';
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
