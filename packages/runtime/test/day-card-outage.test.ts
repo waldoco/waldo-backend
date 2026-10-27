@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { applyDayPlan, dayPlanBook, resumeWaitingCards, runDayCard, type DayPlanBook } from '../src/channels/day-cards';
-import { ModelUnavailableError, Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
+import { ModelUnavailableError } from '../src/llm/provider';
+import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 
 // A provider outage that spans the Brief slot: every model call fails as it did on 26 Oct (a dead key, auth_failed).
@@ -83,6 +84,22 @@ describe('a model outage over a day-card slot', () => {
       expect(outage.generated).toEqual([]);
       expect(scheduler.read('card:brief')).toBeNull();
       expect(brief(book)).toMatchObject({ state: 'skipped', reason: "Waldo couldn't reach its model this morning" });
+    });
+  });
+});
+
+describe('a model outage over any other job', () => {
+  it('still pauses it after QUARANTINE_AFTER_ATTEMPTS failures: only a day card waits for the model', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`day-card-outage-${seq++}`)), async (_instance, state) => {
+      const clock = { now: local('03:00') };
+      const scheduler = new Scheduler(state.storage.sql, state.storage, { now: () => clock.now, newRunId: () => 'run', newOutboxId: () => 'outbox', sha256Hex: async () => '0'.repeat(64) });
+      await scheduler.schedule({ id: 'reminder:r', kind: 'reminder', payloadRefs: { reminder_id: 'reminder:r' }, occurrenceAt: clock.now, dueAt: clock.now, recurrence: null });
+      const executors: ScheduleExecutors = { reminder: async () => { throw new ModelUnavailableError('auth_failed'); } };
+      for (let step = 0; step < 10 && scheduler.read('reminder:r')?.status === 'armed'; step += 1) {
+        clock.now += 5 * MINUTE;
+        await scheduler.dispatchDue(executors);
+      }
+      expect(scheduler.read('reminder:r')?.status).toBe('quarantined');
     });
   });
 });

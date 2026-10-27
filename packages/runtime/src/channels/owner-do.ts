@@ -287,7 +287,7 @@ type OwnerRuntime = Readonly<{
   healthChanged(day: string): Promise<void>;
   healthTrigger(entry: ScheduleEntry): Promise<void>;
   watches(entry: ScheduleEntry): Promise<void>;
-  cards(entry: ScheduleEntry): Promise<void>;
+  cards(entry: ScheduleEntry): Promise<void | 'waiting_on_model'>;
   updateCheck(trace: string): Promise<void>;
   calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
   // How the jobs lane applies each machine job this runtime started.

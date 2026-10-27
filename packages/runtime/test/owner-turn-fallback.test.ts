@@ -12,8 +12,7 @@ import {
 } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { MODEL_UNREACHABLE_REPLY, ownerModelGateway, ownerRoutePolicy, type FloorTurn } from '../src/llm/owner-routes';
-import { InMemoryCircuitBreaker, type CircuitBreaker } from '../src/llm/provider';
-import { ModelUnavailableError } from '../src/scheduler/multiplexer';
+import { InMemoryCircuitBreaker, ModelUnavailableError, type CircuitBreaker } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { getContextHandler } from '../src/tools/live/get-context';

@@ -2,7 +2,8 @@ import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIAR
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
-import { ModelUnavailableError, QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
+import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
+import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
@@ -182,11 +183,11 @@ const MODEL_OUTAGE_SKIP: Readonly<Record<CardId, string>> = {
 };
 
 // One scheduled run of a day card. A card that waited for the model and is now too late is skipped with the reason, never
-// sent stale; a run no model could answer leaves the card waiting, and the scheduler probes again without counting it.
+// sent stale. A run no model could answer leaves the card waiting, and the scheduler probes again without counting it.
 export const runDayCard = async (input: Readonly<{
   entry: ScheduleEntry; book: DayPlanBook; timezone: string; now: number; freshness: CardFreshness;
   generate: (card: DayCard, day: string) => Promise<void>;
-}>): Promise<void> => {
+}>): Promise<void | 'waiting_on_model'> => {
   const card = cardFor(input.entry.id);
   if (card === null) return;
   const day = localIso(input.entry.occurrence_at, input.timezone).slice(0, 10);
@@ -199,8 +200,9 @@ export const runDayCard = async (input: Readonly<{
   try {
     await input.generate(card, day);
   } catch (error) {
-    if (error instanceof ModelUnavailableError) input.book.waitingOnModel(day, card.id);
-    throw error;
+    if (!(error instanceof ModelUnavailableError)) throw error;
+    input.book.waitingOnModel(day, card.id);
+    return 'waiting_on_model';
   }
 };
 
