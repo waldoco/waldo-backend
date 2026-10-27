@@ -45,6 +45,13 @@ describe('handleTelegramWebhook', () => {
     });
   });
 
+  it('forwards the configured public origin, not the host the update reached', async () => {
+    const { fetch, ns } = namespace();
+    await run(post('s3cret'), { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' });
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get('x-waldo-origin')).toBe('https://staging.fixture.invalid');
+  });
+
   it('routes each sender to their own owner Durable Object', async () => {
     const { fetch, idFromName, ns } = namespace();
     const directory: OwnerDirectory = {
