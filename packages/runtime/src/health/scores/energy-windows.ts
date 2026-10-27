@@ -1,4 +1,4 @@
-import type { RecoveryZone } from '../../../../contracts/src/health/crs';
+import type { DerivedSleepDebtTrend, RecoveryZone } from '../../../../contracts/src/health/crs';
 import { circularDelta } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import type { DayRecord } from './types';
@@ -32,14 +32,13 @@ const DAY_END_CUT = '23:30';
 const PEAK_SHARE_STEPS = [1, 2 / 3, 1 / 2, 1 / 3] as const;
 const STEPS_BY_ZONE: Readonly<Record<RecoveryZone, number>> = { excellent: 0, solid: 0, mixed: 1, compromised: 2 };
 
-export type SleepDebtTrend = 'building' | 'easing' | 'steady';
 export type EnergyWindow = Readonly<{ start: string; end: string; kind: 'peak' | 'dip' }>;
 export type EnergyWindowsInput = Readonly<{
   targetDay: string;
   // The target day and the days before it, each already held to its own local day.
   days: readonly DayRecord[];
   recoveryZone: RecoveryZone | null;
-  sleepTrend: SleepDebtTrend;
+  sleepTrend: DerivedSleepDebtTrend;
 }>;
 
 const median = (values: readonly number[]): number => {

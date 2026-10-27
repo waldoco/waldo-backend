@@ -22,7 +22,7 @@ const snapshot = (day: string, over: Record<string, unknown> = {}) => healthSnap
 const loadScore = (score: number, zone = 'moderate', version = 'weight.candidate.v3') => ({ weight: { score, zone, algorithm_version: version, activation: 'candidate_unaccepted' } });
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
-type Debt = { minutes: number; version?: string } | 'partial' | 'unavailable' | null;
+type Debt = { minutes: number; version?: string; trend?: unknown } | 'partial' | 'unavailable' | null;
 // The stored row for each day back from today, newest first; null is a day with no row.
 const debts = (...days: Debt[]) => {
   const reads: string[] = [];
@@ -32,7 +32,7 @@ const debts = (...days: Debt[]) => {
     if (spot === undefined || spot === null) return { unavailable: 'no_readings' };
     const sleep_debt = spot === 'unavailable' ? { state: 'unavailable', reason: 'missing_sleep' }
       : spot === 'partial' ? { state: 'partial', confidence: 0.5, algorithm_version: 'sleep-debt.v1', activation: 'candidate_unaccepted' }
-        : { state: 'available', debt_minutes: spot.minutes, need_basis: 'own_average', algorithm_version: spot.version ?? 'sleep-debt.v1', activation: 'candidate_unaccepted' };
+        : { state: 'available', debt_minutes: spot.minutes, need_basis: 'own_average', algorithm_version: spot.version ?? 'sleep-debt.v1', activation: 'candidate_unaccepted', ...('trend' in spot ? { trend: spot.trend } : {}) };
     return { scores: { day, timezone: 'Asia/Kolkata', compiled_at: `${day}T03:00:00Z`, freshness: 'fresh', sleep_debt } };
   };
   return { readDebt, reads };
@@ -152,6 +152,57 @@ describe('sleep debt that the stored rows say is building', () => {
     const building = debts({ minutes: 150 }, { minutes: 90 }, { minutes: 40 }, { minutes: 10 });
     await wakes({ debt: building });
     expect(building.reads).toEqual([TODAY, addDays(TODAY, -1), addDays(TODAY, -2), addDays(TODAY, -3)]);
+  });
+});
+
+describe('sleep debt that a stored row names as building', () => {
+  const trended = (trend: unknown, ...minutes: number[]) => debts(...minutes.map((figure, step) => (step === 0 ? { minutes: figure, trend } : { minutes: figure })));
+
+  it('wakes on the row\'s own word, whatever the last two figures did', async () => {
+    expect(await wakes({ debt: trended('building', 150, 160, 170) })).toEqual(['sleep_debt_building']);
+    expect(await wakes({ debt: trended('building', 150) })).toEqual(['sleep_debt_building']);
+  });
+
+  it('does not wake on any other word, even when the figure has risen on each of the last two steps', async () => {
+    for (const trend of ['easing', 'steady']) expect(await wakes({ debt: trended(trend, 150, 90, 40) }), trend).toEqual([]);
+  });
+
+  it('wakes only the day the word first says building, so a run of building rows is one wake', async () => {
+    const days = (...trend: unknown[]) => debts(...trend.map(word => ({ minutes: 150, trend: word })));
+    expect(await wakes({ debt: days('building', 'building') })).toEqual([]);
+    expect(await wakes({ debt: days('building', 'steady') })).toEqual(['sleep_debt_building']);
+    expect(await wakes({ debt: days('building', undefined) })).toEqual(['sleep_debt_building']);
+    expect(await wakes({ debt: debts({ minutes: 150, trend: 'building' }, null) })).toEqual(['sleep_debt_building']);
+  });
+
+  // The version of the figure is the version of the word: a word under another version is another measure, as it is for figures.
+  it('reads yesterday\'s building word only when it came from the same algorithm version', async () => {
+    const days = (today: string, yesterday: string) => debts({ minutes: 150, trend: 'building', version: today }, { minutes: 150, trend: 'building', version: yesterday });
+    expect(await wakes({ debt: days('sleep-debt.v2', 'sleep-debt.v2') })).toEqual([]);
+    expect(await wakes({ debt: days('sleep-debt.v2', 'sleep-debt.v1') })).toEqual(['sleep_debt_building']);
+  });
+
+  it('ignores a word outside the three, and then decides from the figures as it does for a row with no word', async () => {
+    for (const trend of ['rising', 'Building', '', 7, null, {}]) {
+      expect(await wakes({ debt: trended(trend, 150, 90, 40) }), JSON.stringify(trend)).toEqual(['sleep_debt_building']);
+      expect(await wakes({ debt: trended(trend, 150, 160, 170) }), JSON.stringify(trend)).toEqual([]);
+    }
+  });
+
+  it('still needs a whole-day figure: a partial or figureless row with the word wakes nothing', async () => {
+    const stored = (sleep_debt: unknown) => ({ readDebt: async (day: string) => ({ scores: { day, timezone: 'Asia/Kolkata', sleep_debt } }) });
+    for (const sleep_debt of [{ state: 'partial', confidence: 0.5, trend: 'building' }, { state: 'unavailable', reason: 'missing_sleep', trend: 'building' }, { state: 'available', trend: 'building' }]) {
+      expect(await wakes({ debt: { ...stored(sleep_debt), reads: [] } }), JSON.stringify(sleep_debt)).toEqual([]);
+    }
+  });
+
+  it('reads one row for a word that is not building and two for one that is', async () => {
+    const steady = trended('steady', 150, 90, 40);
+    await wakes({ debt: steady });
+    expect(steady.reads).toEqual([TODAY]);
+    const building = trended('building', 150, 90, 40);
+    await wakes({ debt: building });
+    expect(building.reads).toEqual([TODAY, addDays(TODAY, -1)]);
   });
 });
 
