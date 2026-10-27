@@ -1,22 +1,19 @@
-// A reply's words arriving as the model writes them, in the app's setup-chat motion: each word that just arrived fades and rises in over
-// 220 ms on cubic-bezier(.23,1,.32,1), a short beat after the one before. Words already on screen are never drawn in again, and nothing
-// waits to be typed: every word that has arrived is in the page at once, its fade delayed at most REVEAL_SPREAD_MS.
+// A reply's text arriving as the model writes it, as streaming chat apps show it: each chunk that arrives fades in as one over REVEAL_MS,
+// with no word-by-word stagger (which tires on a long reply) and nothing waiting to be typed. Text already on screen is never drawn in again.
 //
 // Words are counted in drawing order. A word that is still fading is its own span, keyed by that count, so React keeps the same node while
 // later words arrive and its CSS animation (which runs once, on mount) is never restarted. Once its fade is over it is plain text again.
 
-export const REVEAL_MS = 220;
-const REVEAL_STEP_MS = 45;
-export const REVEAL_SPREAD_MS = 200;
+export const REVEAL_MS = 180;
 
 /** `live`: the reply being written. `shown`: the settled reply, drawn after these words were already on screen. `key` names the message. */
 export type RevealMode = ({ live: true } | { shown: string }) & { key: string };
-/** The fade delay, in ms, for the word at this count while it is still fading, else null. */
-export type Reveal = (word: number) => number | null;
+/** Whether the word at this count is still fading in. */
+export type Reveal = (word: number) => boolean;
 
-type Chunk = { from: number; to: number; at: number; step: number };
-const chunk = (from: number, to: number, at: number): Chunk => ({ from, to, at, step: to - from > 1 ? Math.min(REVEAL_STEP_MS, REVEAL_SPREAD_MS / (to - from - 1)) : 0 });
-const doneAt = (c: Chunk) => c.at + Math.max(0, c.to - c.from - 1) * c.step + REVEAL_MS;
+type Chunk = { from: number; to: number; at: number };
+const chunk = (from: number, to: number, at: number): Chunk => ({ from, to, at });
+const doneAt = (c: Chunk) => c.at + REVEAL_MS;
 const reduced = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 // What each message has shown, by its key, so a row drawn again (the chat opened again) carries on where it was rather than fading in
@@ -61,8 +58,5 @@ export function wordReveal(text: string, words: number, mode: RevealMode | undef
   }
   const live = seen!.chunks.filter(c => doneAt(c) > now);
   if (!live.length) return undefined;
-  return word => {
-    const c = live.find(candidate => word >= candidate.from && word < candidate.to);
-    return c ? Math.round((word - c.from) * c.step) : null;
-  };
+  return word => live.some(c => word >= c.from && word < c.to);
 }
