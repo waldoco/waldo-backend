@@ -8,7 +8,8 @@ import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
 // The answers the app's setup conversation saves reach the owner's next app turn as owner facts in the system prompt,
-// without the owner sending them as a chat message.
+// without the owner sending them as a chat message: the first four in the profile with how Waldo should bring things up,
+// the rest of the conversation in the facts block.
 const model = vi.hoisted(() => ({ requests: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -47,11 +48,14 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const app = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
-      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'b'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'b'.repeat(64), 'content-type': 'application/json', 'x-waldo-app-contract': 'onboarding=2' }, body: JSON.stringify(body) }));
     try {
       const saved = await app('/app/v1/onboarding/answers', { request_id: 'setup-answers-app-1', name: 'Asha',
-        day: { shape: 'focus', own_words: 'Mornings are for writing' }, slips: { picked: ['promises'], own_words: '' }, wearable: 'samsung' });
-      expect([saved.status, await saved.json()]).toEqual([200, { request_id: 'setup-answers-app-1', held: { name: true, day: true, slips: true, wearable: true }, replayed: false }]);
+        day: { shape: 'focus', own_words: 'Mornings are for writing' }, slips: { picked: ['promises'], own_words: '' }, wearable: 'samsung',
+        matters: { picked: ['energy'], own_words: '' }, spots: ['energy-lunch'], protect: { picked: ['mornings'], own_words: '' }, rope: 'draft',
+        season: { choice: 'busy', own_words: '' }, low: { picked: ['push'], own_words: '' } });
+      expect([saved.status, await saved.json()]).toEqual([200, { request_id: 'setup-answers-app-1', replayed: false,
+        held: { name: true, day: true, slips: true, wearable: true, matters: true, spots: true, protect: true, rope: true, season: true, low: true } }]);
 
       const sent = await app('/app/v1/chat/main/messages', { client_message_id: 'setup-client-01', text: 'What should I do first today?' });
       expect(sent.status).toBe(202);
@@ -60,7 +64,11 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
       const turn = model.requests.join('\n').replaceAll('\\"', '"');
       const profile = turn.slice(turn.indexOf('<owner_profile>'), turn.indexOf('</owner_profile>'));
       for (const fact of ['Wants to be called Asha', 'Needs long stretches of focus at work, and they are easy to break. In their own words: "Mornings are for writing"',
-        "Things that tend to slip, for Waldo to watch first: things they said they'd do.", 'Wears a Samsung Galaxy Watch.']) expect(profile).toContain(fact);
+        "Things that tend to slip, for Waldo to watch first: things they said they'd do.", 'Wears a Samsung Galaxy Watch.',
+        'When Waldo spots something, wants it ready to approve; nothing goes anywhere until they say so.']) expect(profile).toContain(fact);
+      const known = turn.slice(turn.indexOf('<owner_facts>'), turn.indexOf('</owner_facts>'));
+      for (const fact of ["Wants Waldo's help most with: their energy.", 'Where it is hardest for them: energy dips after lunch.', 'Never to be moved or booked over: their mornings before work.',
+        `At setup on ${new Date().toISOString().slice(0, 10)}: a busy stretch at work.`, 'When running low: they push through anyway.']) expect(known).toContain(fact);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
