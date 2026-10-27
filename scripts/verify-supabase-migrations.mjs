@@ -92,6 +92,7 @@ const expectedMigrations = [
   '20261026155000_waldo_revoke_user_session_reads.sql',
   '20261026160000_waldo_signin_identities.sql',
   '20261027090000_waldo_app_push_session_lifecycle.sql',
+  '20261027120000_waldo_apple_signin_grants.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

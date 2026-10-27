@@ -2,6 +2,7 @@ import { withRequestTimeout } from './request-timeout';
 import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 import { openValue, sealValue } from './sealed-value';
+import { appleSignInKey, exchangeAppleCode, revokeAppleGrant, type AppleSignInEnv } from './apple-signin';
 
 export const OWNER_COOKIE = 'waldo_owner';
 // A console sign-in stays signed in while it is used: it ends 7 days after its last signed-in request, and 30 days
@@ -77,8 +78,9 @@ export type ConsoleAuth = Readonly<{
   // resolves from the email it confirms as verifyOrJoin resolves it. An identity signs an existing owner in only once it
   // is trusted: it created the owner through an invite, or the owner confirmed it with an email code. Supabase links a new
   // identity to the Auth user holding the same verified email, and a provider's verified flag is the provider's view of the
-  // address (Google's covers whoever held a custom domain's address before), so the mailbox decides.
-  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string): Promise<IdentitySignIn>;
+  // address (Google's covers whoever held a custom domain's address before), so the mailbox decides. An Apple sign-in that
+  // reaches an owner exchanges its authorization code for the refresh token deleteOwner revokes; that never decides the sign-in.
+  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string, authorizationCode?: string): Promise<IdentitySignIn>;
   // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
   signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
   issueLinkCode(doName: string): Promise<string | null>;
@@ -101,6 +103,7 @@ export type ConsoleAuth = Readonly<{
   whatsAppHandleHint?(doName: string): Promise<string | null>;
   // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
   assertChannelPresence(doName: string, provider: string, subject: string): Promise<boolean>;
+  // Revokes every Apple grant held for the owner with Apple first; a revocation that fails is logged and never stops the deletion.
   deleteOwner(doName: string): Promise<boolean>;
   // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
   // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
@@ -120,11 +123,11 @@ export type ConsoleAuth = Readonly<{
   signOutAll(doName: string): Promise<number>;
 }>;
 
-// The sub claim of a compact JWT; null when the payload is not JSON or carries no usable subject.
-const tokenSubject = (token: string): string | null => {
+// The sub and aud claims of a compact JWT; null when the payload is not JSON or carries no usable subject.
+const tokenClaims = (token: string): Readonly<{ sub: string; aud: string | null }> | null => {
   try {
-    const { sub } = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(token.split('.')[1]!.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0)))) as { sub?: unknown };
-    return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? sub : null;
+    const { sub, aud } = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(token.split('.')[1]!.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0)))) as { sub?: unknown; aud?: unknown };
+    return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? { sub, aud: typeof aud === 'string' && /^[A-Za-z0-9.-]{1,255}$/.test(aud) ? aud : null } : null;
   } catch { return null; } // Not a JWT payload: the sign-in is refused as an unusable token.
 };
 
@@ -148,7 +151,7 @@ export const presenceRecheck = (
     ? undefined
     : async () => doName !== undefined && subject !== undefined && (await auth.assertChannelPresence(doName, provider, subject));
 
-export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConsoleAuth | null => {
+export const consoleAuth = (env: OwnerDirectoryEnv & AppleSignInEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConsoleAuth | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
   if (!base || !key || !secret || !rpc) return null;
@@ -313,6 +316,38 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return { state: 'confirm', email: user.email, link: await sealValue(secret, SIGNIN_LINK_PURPOSE, { user: user.id, email: user.email, provider, subject: sub, expires: Math.floor(now() / 1000) + SIGNIN_LINK_SECONDS }) };
     return { state: 'owner', doName: owner.doName };
   };
+  // The token's aud is the client Apple issued it to (the app's bundle id, or a Services ID), and Supabase accepted these
+  // exact bytes, so the code is exchanged under that client. Apple's answer must name the same subject, so a code from
+  // another Apple account is never kept against this owner.
+  const keepAppleGrant = async (doName: string, idToken: string, code: string) => {
+    const outcome = await (async () => {
+      const key = await appleSignInKey(env), claims = tokenClaims(idToken);
+      if (!key) return 'not_configured';
+      if (!claims?.aud) return 'no_client';
+      const granted = await exchangeAppleCode(fetcher, key, claims.aud, code, now());
+      if (!granted) return 'code_refused';
+      if (granted.subject !== claims.sub) return 'subject_mismatch';
+      const tokenHash = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(granted.refreshToken)));
+      return (await rpc('apple_grant_keep', `applegrant.keep.${doName}.${claims.sub}.${claims.aud}.${tokenHash}`,
+        { p_do_name: doName, p_subject: claims.sub, p_client_id: claims.aud, p_token: granted.refreshToken })) === true ? 'kept' : 'not_kept';
+    })().catch(() => 'unavailable');
+    (outcome === 'kept' ? console.log : console.error)(JSON.stringify({ hop: 'apple_grant', ok: outcome === 'kept', code: outcome }));
+  };
+  type HeldGrant = Readonly<{ client_id: string; token: string }>;
+  const heldGrant = (row: unknown): row is HeldGrant => typeof row === 'object' && row !== null
+    && typeof (row as HeldGrant).client_id === 'string' && typeof (row as HeldGrant).token === 'string';
+  const revokeAppleGrants = async (doName: string) => {
+    let outcome: string;
+    try {
+      const held = await rpc('apple_grants_held', `applegrant.held.${doName}`, { p_do_name: doName });
+      const grants = Array.isArray(held) ? held.filter(heldGrant) : [];
+      if (grants.length === 0) return;
+      const key = await appleSignInKey(env);
+      outcome = !key ? 'not_configured'
+        : (await Promise.all(grants.map(grant => revokeAppleGrant(fetcher, key, grant.client_id, grant.token, now())))).every(result => result === 'revoked') ? 'revoked' : 'failed';
+    } catch { outcome = 'unavailable'; }
+    (outcome === 'revoked' ? console.log : console.error)(JSON.stringify({ hop: 'apple_revoke', ok: outcome === 'revoked', code: outcome }));
+  };
   return {
     async throttle(key, limit, windowSeconds) {
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
@@ -332,8 +367,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     verifyOrJoin: (email, code, inviteCode, phone = '', link = '') => resolveOwner(email, code, inviteCode, true, phone, link),
     // The identity is the token's own subject. Supabase accepted these exact bytes, so the claim is authentic; the grant's
     // identity list cannot name it, because Supabase leaves an identity it links in this call out of that list.
-    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '') =>
-      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone),
+    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '', authorizationCode = '') => {
+      const signedIn = await signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenClaims(idToken)?.sub ?? null, inviteCode, true, phone);
+      if (signedIn.state === 'owner' && provider === 'apple' && authorizationCode) await keepAppleGrant(signedIn.doName, idToken, authorizationCode);
+      return signedIn;
+    },
     // Google names the account behind this flow's token; it must be one of this user's Google identities.
     signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', async grant => {
       const sub = await googleSubject(grant.providerToken);
@@ -376,7 +414,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     unlinkWhatsApp: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.whatsapp`, { p_do_name: doName, p_provider: 'whatsapp' })) === true,
     whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
-    deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
+    deleteOwner: async (doName) => {
+      await revokeAppleGrants(doName);
+      return (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true;
+    },
     async ownerCookie(doName, presented) {
       const previous = presented ? await readSession(presentedOwnerCookie(presented), cookieSig) : null;
       if (previous) await capSession(previous.doName, previous.sessionHash);

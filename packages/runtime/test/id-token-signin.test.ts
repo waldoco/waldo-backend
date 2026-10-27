@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { appIdTokenResultV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
 import { handleConsole } from '../src/channels/console-signin';
+import { appleClientSecret, appleSignInKey } from '../src/identity/apple-signin';
 import { consoleAuth } from '../src/identity/console-auth';
 import { GOOGLE_PKCE_COOKIE, GOOGLE_PKCE_PURPOSE } from '../src/identity/google-pkce';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
@@ -10,7 +11,7 @@ import { sealValue } from '../src/identity/sealed-value';
 
 const SECRET = 'fictional-id-token-router-secret-000000000000', DIRECTORY = 'https://id-token.fixture.invalid', KEY = 'fictional-public-key';
 const INVITE = 'ABCDEFGHJKLMNPQRSTUV', INVITED = 'new.member@example.test', MEMBER = 'member@example.test';
-const NONCE = 'raw-nonce-0123456789abcdef', CODE = '123456';
+const NONCE = 'raw-nonce-0123456789abcdef', CODE = '123456', APPLE_CLIENT = 'com.heywaldo.app';
 
 const hex = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(b => b.toString(16).padStart(2, '0')).join('');
 const base64url = (bytes: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -26,7 +27,7 @@ type Granted = { id: string; provider: string; last_sign_in_at: string };
 // email; a new identity links to the user holding the same verified email, else gets a user of its own; and an identity
 // linked to an existing user in this very grant is missing from the response's identities. The owner directory matches
 // the Auth user and the email together, as the SQL does, and trusts only a subject Supabase links to that Auth user.
-const supabase = async () => {
+const supabase = async (extra: Record<string, string> = {}) => {
   const inviteHash = await linkCodeHash(INVITE);
   let minted = 0, clock = Date.parse('2026-10-26T12:00:00Z');
   const state = {
@@ -39,9 +40,12 @@ const supabase = async () => {
     otp: [] as string[], denySend: false, live: new Set<string>(), outage: false, google: 'ok' as 'ok' | 'refuses' | 'down',
     // Runs inside the next join, before it reads the owners: another sign-in committing first.
     beforeSignup: undefined as ((a: Record<string, string>) => void) | undefined,
+    // Apple's token and revoke endpoints: what each request carried, and how Apple answers.
+    apple: [] as { path: string; form: Record<string, string> }[], appleToken: 'ok' as 'ok' | 'refuses' | 'down' | 'other_subject', appleRevoke: 'ok' as 'ok' | 'refuses',
+    appleGrants: new Map<string, { doName: string; subject: string; client: string; token: string }>(), calls: [] as string[], heldDown: false,
   };
   const token = (t: Token) => {
-    const jwt = `fixture.${base64url(new TextEncoder().encode(JSON.stringify({ sub: t.sub ?? `${t.provider}:${t.email}`, n: minted += 1 })))}.signature`;
+    const jwt = `fixture.${base64url(new TextEncoder().encode(JSON.stringify({ sub: t.sub ?? `${t.provider}:${t.email}`, aud: t.provider === 'apple' ? APPLE_CLIENT : 'fictional-web-client', n: minted += 1 })))}.signature`;
     state.tokens.set(jwt, t);
     return jwt;
   };
@@ -74,6 +78,18 @@ const supabase = async () => {
   };
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    if (url.origin === 'https://appleid.apple.com') {
+      const fields = Object.fromEntries(new URLSearchParams(String(init?.body)));
+      state.apple.push({ path: url.pathname, form: fields });
+      state.calls.push(`apple${url.pathname}`);
+      if (url.pathname === '/auth/revoke') return new Response('', { status: state.appleRevoke === 'ok' ? 200 : 400 });
+      expect(url.pathname).toBe('/auth/token');
+      if (state.appleToken === 'down') return new Response('', { status: 503 });
+      if (state.appleToken === 'refuses' || !fields.code?.startsWith('apple-code-for.')) return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      const subject = state.appleToken === 'other_subject' ? 'apple:someone-else' : fields.code.slice('apple-code-for.'.length);
+      return Response.json({ access_token: 'apple-access', token_type: 'Bearer', expires_in: 3600, refresh_token: `apple-refresh-${crypto.randomUUID()}`,
+        id_token: `apple.${base64url(new TextEncoder().encode(JSON.stringify({ sub: subject, aud: fields.client_id })))}.signature` });
+    }
     if (url.origin === 'https://www.googleapis.com') {
       expect(url.pathname).toBe('/userinfo/v2/me');
       if (state.google === 'down') return new Response('', { status: 503 });
@@ -121,11 +137,28 @@ const supabase = async () => {
       console_session_open: `consolesess.open.${a.p_do_name}.${a.p_session_hash}`, console_session_inventory: `consolesess.inventory.${a.p_do_name}`,
       console_session_open_for: `consolesess.openfor.${a.p_do_name}.${a.p_session_hash}.${a.p_lifetime_seconds}.${a.p_idle_seconds}`,
       app_session_rotate: `appsess.rotate.${a.p_do_name}.${a.p_session_hash}.${a.p_new_session_hash}`,
+      apple_grant_keep: `applegrant.keep.${a.p_do_name}.${a.p_subject}.${a.p_client_id}.${await hex(a.p_token ?? '')}`,
+      apple_grants_held: `applegrant.held.${a.p_do_name}`, delete_owner: `delown.${a.p_do_name}`,
     };
     expect(signed[fn], `unlisted fixture RPC ${fn}`).toBeDefined();
     expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, signed[fn]!));
     const ownerOf = (auth: string, email: string) => { const owner = state.owners.get(email); return owner && owner.auth === auth ? owner : null; };
     if (fn === 'console_auth_throttle') return Response.json(!(state.denySend && String(a.p_key).startsWith('send:')));
+    // As the SQL does: a token is kept only for an Apple identity this owner trusts, one row per subject and client.
+    if (fn === 'apple_grant_keep') {
+      if (!state.trusted.has(`${a.p_do_name}|apple|${a.p_subject}`)) return Response.json(false);
+      state.appleGrants.set(`${a.p_do_name}|${a.p_subject}|${a.p_client_id}`, { doName: a.p_do_name, subject: a.p_subject, client: a.p_client_id, token: a.p_token });
+      return Response.json(true);
+    }
+    if (fn === 'apple_grants_held') {
+      if (state.heldDown) return new Response('', { status: 503 });
+      return Response.json([...state.appleGrants.values()].filter(g => g.doName === a.p_do_name).map(g => ({ client_id: g.client, token: g.token })));
+    }
+    if (fn === 'delete_owner') {
+      state.calls.push('delete_owner');
+      for (const [key, grant] of state.appleGrants) if (grant.doName === a.p_do_name) state.appleGrants.delete(key);
+      return Response.json(true);
+    }
     if (fn === 'signin_allowed') return Response.json(state.owners.has(a.p_email));
     if (fn === 'owner_for_auth') { state.lookups.push(a); return Response.json(ownerOf(a.p_auth_user, a.p_email)?.doName ?? null); }
     if (fn === 'signin_identity_trusted') { const owner = ownerOf(a.p_auth_user, a.p_email); return Response.json(Boolean(owner && state.trusted.has(`${owner.doName}|${a.p_provider}|${a.p_subject}`))); }
@@ -166,6 +199,7 @@ const supabase = async () => {
     ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, CONSOLE_GOOGLE_SIGNIN: '1', APP_ID_TOKEN_SIGNIN: '1',
     RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !limited.value }) },
     OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: grantFetch }) } as unknown as DurableObjectNamespace,
+    ...extra,
   };
   const auth = consoleAuth(settings, fetcher as typeof fetch, () => Date.now() + now.offset)!;
   const app = async (path: string, body: unknown, overrides: Record<string, unknown> = {}) => {
@@ -584,5 +618,139 @@ describe('console sign-in with Google', () => {
     expect(done.status).toBe(200);
     expect(await done.text()).toContain('Google sign-in did not finish');
     expect(sandbox.state.grants).toEqual([]);
+  });
+});
+
+// A Sign in with Apple key made for the test: the .p8 Apple downloads is a PKCS #8 P-256 key in PEM.
+const appleKeyPair = async () => {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']) as CryptoKeyPair;
+  const body = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey))));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g)!.join('\n')}\n-----END PRIVATE KEY-----`;
+  return { pem, publicKey: pair.publicKey, env: { APPLE_SIGNIN_P8: pem, APPLE_KEY_ID: 'FIXTUREKID', APPLE_TEAM_ID: 'FIXTURETEAM' } };
+};
+const decodePart = (part: string) => JSON.parse(atob(part.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (part.length % 4)) % 4))) as Record<string, unknown>;
+const verifiesUnder = async (jwt: string, publicKey: CryptoKey) => {
+  const [header, payload, signature] = jwt.split('.') as [string, string, string];
+  const raw = Uint8Array.from(atob(signature.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (signature.length % 4)) % 4)), c => c.charCodeAt(0));
+  return crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, raw, new TextEncoder().encode(`${header}.${payload}`));
+};
+
+describe('Apple grants kept at sign-in and revoked at account deletion', () => {
+  it('reads the .p8 with its newlines, with them escaped, or with none, and signs a client secret Apple can verify', async () => {
+    const { pem, publicKey, env: keyEnv } = await appleKeyPair();
+    for (const variant of [pem, pem.replaceAll('\n', '\\n'), pem.replace(/-----[A-Z ]+-----/g, '').replaceAll('\n', '')]) {
+      const key = await appleSignInKey({ ...keyEnv, APPLE_SIGNIN_P8: variant });
+      expect(key).not.toBeNull();
+      const secret = await appleClientSecret(key!, APPLE_CLIENT, Date.parse('2026-10-27T06:00:00Z'));
+      expect(decodePart(secret.split('.')[0]!)).toEqual({ alg: 'ES256', kid: 'FIXTUREKID' });
+      expect(decodePart(secret.split('.')[1]!)).toEqual({ iss: 'FIXTURETEAM', iat: 1793080800, exp: 1793081100, aud: 'https://appleid.apple.com', sub: APPLE_CLIENT });
+      expect(await verifiesUnder(secret, publicKey)).toBe(true);
+    }
+    for (const missing of ['APPLE_SIGNIN_P8', 'APPLE_KEY_ID', 'APPLE_TEAM_ID']) expect(await appleSignInKey({ ...keyEnv, [missing]: '' })).toBeNull();
+    const logs = captureLogs();
+    try { expect(await appleSignInKey({ ...keyEnv, APPLE_SIGNIN_P8: 'not-a-key' })).toBeNull(); } finally { logs.restore(); }
+    expect(logs.lines).toEqual([JSON.stringify({ hop: 'apple_signin_key', ok: false, code: 'key_unreadable' })]);
+  });
+
+  it('exchanges a joining Apple member\'s code under the token\'s client and keeps the refresh token for that identity, logging no token', async () => {
+    const { publicKey, env: keyEnv } = await appleKeyPair();
+    const { app, state, token } = await supabase(keyEnv);
+    const sub = 'apple-sub-joiner';
+    const logs = captureLogs();
+    let signedIn;
+    try { signedIn = await app('/auth/id_token', apple(token({ provider: 'apple', email: INVITED, sub }), { invite: INVITE, authorization_code: `apple-code-for.${sub}` })); } finally { logs.restore(); }
+    expect(signedIn.body).toMatchObject({ state: 'active' });
+    const exchange = state.apple.find(call => call.path === '/auth/token')!;
+    expect(Object.keys(exchange.form).sort()).toEqual(['client_id', 'client_secret', 'code', 'grant_type']);
+    expect(exchange.form).toMatchObject({ client_id: APPLE_CLIENT, code: `apple-code-for.${sub}`, grant_type: 'authorization_code' });
+    expect(decodePart(exchange.form.client_secret!.split('.')[1]!)).toMatchObject({ iss: 'FIXTURETEAM', sub: APPLE_CLIENT });
+    expect(await verifiesUnder(exchange.form.client_secret!, publicKey)).toBe(true);
+    const owner = state.owners.get(INVITED)!;
+    const kept = [...state.appleGrants.values()];
+    expect(kept).toEqual([{ doName: owner.doName, subject: sub, client: APPLE_CLIENT, token: expect.stringMatching(/^apple-refresh-/) }]);
+    expect(logs.lines.filter(line => line.includes('apple_grant'))).toEqual([JSON.stringify({ hop: 'apple_grant', ok: true, code: 'kept' })]);
+    expect(logs.lines.join('\n')).not.toContain(kept[0]!.token);
+    expect(logs.lines.join('\n')).not.toContain('apple-code-for');
+  });
+
+  it('signs the owner in whatever Apple does with the code, and keeps nothing when Apple refuses it, is down, or names another account', async () => {
+    const { env: keyEnv } = await appleKeyPair();
+    for (const answer of ['refuses', 'down', 'other_subject'] as const) {
+      const { app, state, token } = await supabase(keyEnv);
+      state.appleToken = answer;
+      const sub = `apple-sub-${answer}`;
+      const logs = captureLogs();
+      let signedIn;
+      try { signedIn = await app('/auth/id_token', apple(token({ provider: 'apple', email: INVITED, sub }), { invite: INVITE, authorization_code: `apple-code-for.${sub}` })); } finally { logs.restore(); }
+      expect(signedIn.body, answer).toMatchObject({ state: 'active' });
+      expect(state.appleGrants.size, answer).toBe(0);
+      expect(logs.lines.filter(line => line.includes('apple_grant')), answer).toEqual([JSON.stringify({ hop: 'apple_grant', ok: false,
+        code: { refuses: 'code_refused', down: 'unavailable', other_subject: 'subject_mismatch' }[answer] })]);
+    }
+  });
+
+  it('asks Apple nothing without the key, without a code, or before the owner confirms a new Apple identity', async () => {
+    const { env: keyEnv } = await appleKeyPair();
+    const unkeyed = await supabase();
+    const logs = captureLogs();
+    try {
+      expect((await unkeyed.app('/auth/id_token', apple(unkeyed.token({ provider: 'apple', email: INVITED, sub: 'apple-a' }), { invite: INVITE, authorization_code: 'apple-code-for.apple-a' }))).body).toMatchObject({ state: 'active' });
+    } finally { logs.restore(); }
+    expect(unkeyed.state.apple).toEqual([]);
+    expect(logs.lines.filter(line => line.includes('apple_grant'))).toEqual([JSON.stringify({ hop: 'apple_grant', ok: false, code: 'not_configured' })]);
+
+    const keyed = await supabase(keyEnv);
+    expect((await keyed.app('/auth/id_token', apple(keyed.token({ provider: 'apple', email: INVITED, sub: 'apple-b' }), { invite: INVITE }))).body).toMatchObject({ state: 'active' });
+    await keyed.member();
+    expect((await keyed.app('/auth/id_token', apple(keyed.token({ provider: 'apple', email: MEMBER, sub: 'apple-c' }), { authorization_code: 'apple-code-for.apple-c' }))).body).toMatchObject({ state: 'confirm_with_email_code' });
+    expect(keyed.state.apple).toEqual([]);
+    expect(keyed.state.appleGrants.size).toBe(0);
+  });
+
+  it('revokes every Apple grant held for the owner with Apple, each under its own client, before the owner is deleted', async () => {
+    const { env: keyEnv } = await appleKeyPair();
+    const { app, state, token, auth } = await supabase(keyEnv);
+    await app('/auth/id_token', apple(token({ provider: 'apple', email: INVITED, sub: 'apple-d' }), { invite: INVITE, authorization_code: 'apple-code-for.apple-d' }));
+    const owner = state.owners.get(INVITED)!;
+    state.appleGrants.set(`${owner.doName}|apple-d|in.heywaldo.console`, { doName: owner.doName, subject: 'apple-d', client: 'in.heywaldo.console', token: 'apple-refresh-web-0000000001' });
+    const held = [...state.appleGrants.values()].map(grant => ({ client_id: grant.client, token: grant.token }));
+    state.calls.length = 0;
+    const logs = captureLogs();
+    try { expect(await auth.deleteOwner(owner.doName)).toBe(true); } finally { logs.restore(); }
+    expect(state.calls).toEqual(['apple/auth/revoke', 'apple/auth/revoke', 'delete_owner']);
+    const revoked = state.apple.filter(call => call.path === '/auth/revoke').map(call => call.form);
+    expect(revoked.map(form => ({ client_id: form.client_id, token: form.token, token_type_hint: form.token_type_hint })).sort((x, y) => x.client_id!.localeCompare(y.client_id!)))
+      .toEqual(held.map(grant => ({ ...grant, token_type_hint: 'refresh_token' })).sort((x, y) => x.client_id.localeCompare(y.client_id)));
+    for (const form of revoked) expect(decodePart(form.client_secret!.split('.')[1]!)).toMatchObject({ sub: form.client_id });
+    expect(state.appleGrants.size).toBe(0);
+    expect(logs.lines).toEqual([JSON.stringify({ hop: 'apple_revoke', ok: true, code: 'revoked' })]);
+  });
+
+  it('deletes the owner even when Apple refuses the revocation, the key is gone or the directory cannot list the grants, and logs which', async () => {
+    const { env: keyEnv } = await appleKeyPair();
+    for (const failure of ['refuses', 'unkeyed', 'held_down'] as const) {
+      const signIn = await supabase(keyEnv);
+      await signIn.app('/auth/id_token', apple(signIn.token({ provider: 'apple', email: INVITED, sub: 'apple-e' }), { invite: INVITE, authorization_code: 'apple-code-for.apple-e' }));
+      const doName = signIn.state.owners.get(INVITED)!.doName;
+      const deleting = failure === 'unkeyed' ? consoleAuth({ ...signIn.settings, APPLE_SIGNIN_P8: '' }, signIn.fetcher as typeof fetch)! : signIn.auth;
+      if (failure === 'refuses') signIn.state.appleRevoke = 'refuses';
+      if (failure === 'held_down') signIn.state.heldDown = true;
+      signIn.state.calls.length = 0;
+      const logs = captureLogs();
+      try { expect(await deleting.deleteOwner(doName), failure).toBe(true); } finally { logs.restore(); }
+      expect(signIn.state.calls.at(-1), failure).toBe('delete_owner');
+      expect(signIn.state.calls.filter(call => call.startsWith('apple')).length, failure).toBe(failure === 'refuses' ? 1 : 0);
+      expect(logs.lines, failure).toEqual([JSON.stringify({ hop: 'apple_revoke', ok: false, code: { refuses: 'failed', unkeyed: 'not_configured', held_down: 'unavailable' }[failure] })]);
+    }
+  });
+
+  it('asks Apple nothing at deletion for an owner with no Apple grant', async () => {
+    const { env: keyEnv } = await appleKeyPair();
+    const { state, auth, member } = await supabase(keyEnv);
+    const doName = await member();
+    const logs = captureLogs();
+    try { expect(await auth.deleteOwner(doName)).toBe(true); } finally { logs.restore(); }
+    expect(state.calls).toEqual(['delete_owner']);
+    expect(logs.lines).toEqual([]);
   });
 });
