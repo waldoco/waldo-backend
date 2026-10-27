@@ -1,7 +1,7 @@
 import {
   APP_ONBOARDING_SKIPPABLE_V1, appOnboardingStepV1Schema, appOnboardingV1Schema,
   type AppChatProviderV1, type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
-  type AppSetupAnswersRequestV1, type AppSetupAnswersResultV1,
+  appSetupSpotV1Schema, type AppSetupAnswersRequestV1, type AppSetupAnswersResultV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
@@ -55,8 +55,16 @@ const SETUP_PINS: Readonly<Record<SetupAnswer, Readonly<{ block: 'profile' | 'fa
   rope: { block: 'profile', order: 4 }, matters: { block: 'facts', order: 0 }, spots: { block: 'facts', order: 1 }, protect: { block: 'facts', order: 2 },
   season: { block: 'facts', order: 3 }, low: { block: 'facts', order: 4 },
 };
+// The picks about the owner's body (sleep, energy, stress) are the health part of an answer: a claim of kind health under its own
+// ref, so every path that leaves health out (the background decision, a job built from external data) leaves them out too. These
+// are the app's closed choices, not a reading of text; the owner's own words stay with the rest of the answer.
+const HEALTH_PART = ', health';
+const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress'];
+const HEALTH_PICKS: ReadonlySet<string> = new Set([...BODY_MATTERS, ...appSetupSpotV1Schema.options.filter(spot => BODY_MATTERS.includes(spot.slice(0, spot.indexOf('-'))))]);
+const healthPick = (answer: SetupAnswer, pick: string) => answer !== 'protect' && HEALTH_PICKS.has(pick);
+const setupParts = (answer: SetupAnswer) => [SETUP_REFS[answer], `${SETUP_REFS[answer]}${HEALTH_PART}`];
 // Whether a claim is a setup answer, by the ref this module writes it under.
-export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && Object.values(SETUP_REFS).includes(ref);
+export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && (Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref));
 const DAY_TEXT = {
   meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
   fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
@@ -116,6 +124,17 @@ const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSe
 };
 const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string): SetupFact | null =>
   (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string) => SetupFact | null)(value, day);
+// An answer as its parts, main then health: the health picks as a health claim of their own, the rest of the answer as before.
+const setupFacts = (answer: SetupAnswer, value: NonNullable<AppSetupAnswersRequestV1[SetupAnswer]>, day: string): readonly [SetupFact | null, SetupFact | null] => {
+  const choices = Array.isArray(value) ? null : typeof value === 'object' && 'picked' in value ? value as { picked: readonly string[]; own_words: string } : null;
+  const picks: readonly string[] = Array.isArray(value) ? value : choices?.picked ?? [];
+  const health = picks.filter(pick => healthPick(answer, pick));
+  if (!health.length) return [setupFact(answer, value, day), null];
+  const rest = picks.filter(pick => !health.includes(pick));
+  const main = choices ? setupFact(answer, { ...choices, picked: rest } as never, day) : rest.length ? setupFact(answer, rest as never, day) : null;
+  const part = setupFact(answer, (choices ? { picked: health, own_words: '' } : health) as never, day);
+  return [main, part && { ...part, kind: 'health' }];
+};
 
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.
@@ -269,16 +288,19 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
     for (const name of Object.keys(SETUP_REFS) as SetupAnswer[]) {
       const value = request[name];
       if (value === undefined) continue;
-      const fact = value === null ? null : setupFact(name, value, day);
-      if (!fact) { for (const retired of live(SETUP_REFS[name])) claims.setStatus(retired.id, 'dismissed'); continue; }
-      const saved = answer(SETUP_REFS[name], fact.kind, fact.text, fact.evidence);
-      if (!saved) throw new Error('setup answer not saved');
-      // A reading the owner stated is kept as they said it, but, as in the profile view, left to recall rather than shown on
-      // every turn: get_health is current.
-      if (numericHealthIn(fact.text)) claims.unpin(saved.id);
-      else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
+      const parts = value === null ? [null, null] : setupFacts(name, value, day);
+      setupParts(name).forEach((ref, index) => {
+        const fact = parts[index];
+        if (!fact) { for (const retired of live(ref)) claims.setStatus(retired.id, 'dismissed'); return; }
+        const saved = answer(ref, fact.kind, fact.text, fact.evidence);
+        if (!saved) throw new Error('setup answer not saved');
+        // A reading the owner stated is kept as they said it, but, as in the profile view, left to recall rather than shown on
+        // every turn: get_health is current.
+        if (numericHealthIn(fact.text)) claims.unpin(saved.id);
+        else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
+      });
     }
-    return Object.fromEntries(Object.entries(SETUP_REFS).map(([name, ref]) => [name, live(ref).length > 0])) as Required<AppSetupAnswersResultV1['held']>;
+    return Object.fromEntries((Object.keys(SETUP_REFS) as SetupAnswer[]).map(name => [name, setupParts(name).some(ref => live(ref).length > 0)])) as Required<AppSetupAnswersResultV1['held']>;
   };
   // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
   const agreementsAccepted = (): void => {
