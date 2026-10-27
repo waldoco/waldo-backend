@@ -4,8 +4,9 @@ import type { PhoneSmsEnv } from '../identity/phone-sms';
 import {parseCodedSetup} from './telegram-link-command';
 import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
-export type TelegramWebhookEnv = Readonly<{
+export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
@@ -141,7 +142,7 @@ const handle = async (
   const subject = sender(update);
   if (!subject) return outcome('no_sender', new Response('ok'));
   const owners = env.OWNER_DO;
-  const origin = new URL(request.url).origin;
+  const origin = publicOrigin(env, request.url);
   const coded = parseCodedSetup(update);
   if (coded) {
     const bot = env.TELEGRAM_BOT_TOKEN?.split(':')[0];

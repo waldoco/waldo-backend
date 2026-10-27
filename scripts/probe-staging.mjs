@@ -5,7 +5,7 @@
 //
 // Mac command (Codex, from the repo root at latest beta-mvp):
 //   WALDO_PROBE_TOKEN=<the staging value> node scripts/probe-staging.mjs
-// Optional: --url <origin> (default https://waldo-runtime-staging.piyushfulper3210.workers.dev)
+// Optional: --url <origin> (default: the staging WALDO_PUBLIC_ORIGIN in packages/runtime/wrangler.jsonc)
 //           --burst   include the 22-probe rate-limit burst (spends ~22 cheap model calls)
 //           --live    include the live-send receipt probe (sends ONE real Telegram message to
 //                     the designated synthetic probe owner; capture mode never sends). Off by default.

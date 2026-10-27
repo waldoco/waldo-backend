@@ -241,6 +241,7 @@ import { promiseRetry, RETRY_FIRST_TRY_MS } from '../tasks/retry-turn';
 import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
 import type { ProviderOutcome, TaskOutcome, TaskSpend } from '../tasks/worker-loop';
 import type { LoopToolResult } from '../conversation/tool-loop';
+import { configuredPublicOrigin } from '../connectors/public-origin';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
 
@@ -393,6 +394,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly browserTrial: BrowserTrialPreparation | undefined;
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
+    // Alarm work (Calendar watch renewals, scheduled cards, connect offers) reads the stored origin, so an owner who sends
+    // nothing after a host move takes the configured one here rather than at their next request.
+    // Because the stored origin already matches, no request sees an origin change, so the Telegram webhook is never re-pointed
+    // automatically after a move; the move runs that setWebhook as its own scripted step.
+    const configuredOrigin = configuredPublicOrigin(env);
+    if (configuredOrigin && ctx.storage.kv.get<string>('origin') !== configuredOrigin) ctx.storage.kv.put('origin', configuredOrigin);
     this.browserTrial = browserTrial;
     this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => (this.typedBrowserHost = config?.enabled === true, browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),

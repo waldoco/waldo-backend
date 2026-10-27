@@ -54,6 +54,12 @@ describe('console chat', () => {
     expect(response!.headers.get('cache-control')).toBe('private, no-store');
   });
 
+  it('forwards the configured public origin, not the host the console was opened on', async () => {
+    const { env, forwards } = setup();
+    await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages`, { method: 'POST', body: send }), { ...(env as object), WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' } as never, fakeAuth());
+    expect(forwards[0]!.headers.get('x-waldo-app-origin')).toBe('https://staging.fixture.invalid');
+  });
+
   it('reads the main chat with only the cursor and limit the app takes', async () => {
     const { env, forwards, keys } = setup();
     await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}?cursor=before%3Aapp-8&limit=30&owner=someone-else`), env, fakeAuth());

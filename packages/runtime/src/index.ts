@@ -12,6 +12,7 @@ import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth
 import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
+import { canonicalRedirect } from './channels/canonical-host';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH, consoleCookie } from './channels/console';
 import { consoleCrossSiteRefusal, isolateConsolePage } from './channels/console-cross-site';
@@ -66,6 +67,7 @@ declare global {
       IMESSAGE_CONNECTOR_POLICY?: string;
       IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
       WALDO_ENVIRONMENT?: string;
+      WALDO_PUBLIC_ORIGIN?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       WALDO_OAUTH_STATE_SECRET?: string;
@@ -131,6 +133,8 @@ const worker = {
     oauthStateSecret(env);
     const crossSite = consoleCrossSiteRefusal(request);
     if (crossSite) return crossSite;
+    const canonical = canonicalRedirect(request, env);
+    if (canonical) return canonical;
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));

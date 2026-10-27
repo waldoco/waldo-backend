@@ -78,6 +78,12 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards the configured public origin, not the host the app called', async () => {
+    forwards.length = 0;
+    const configured = { ...(env() as object), WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' } as never;
+    await handleApp(post('/app/v1/chat/main/messages', { client_message_id: 'c1', text: 'hi' }, { authorization: `Bearer ${CREDENTIAL}` }), configured, fakeAuth().auth);
+    expect(forwards[0]!.headers.get('x-waldo-app-origin')).toBe('https://staging.fixture.invalid');
+  });
   it('forwards a stop to the owner DO and counts it as a read, not a send', async () => {
     forwards.length = 0;
     const keys: string[] = [];

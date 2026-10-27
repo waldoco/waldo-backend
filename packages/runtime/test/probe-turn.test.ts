@@ -55,6 +55,12 @@ describe('handleProbeTurn', () => {
     expect(await response.json()).toEqual({ trace: 'tg--1', outcome: 'answered' });
   });
 
+  it('forwards the configured public origin, not the host the probe reached', async () => {
+    const { fetch, ns } = namespace();
+    await handleProbeTurn(post('probe-secret'), { ...staging(ns), WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' }, directory);
+    expect(fetch).toHaveBeenCalledWith(PROBE_TURN_DO_URL, expect.objectContaining({ headers: expect.objectContaining({ 'x-waldo-origin': 'https://staging.fixture.invalid' }) }));
+  });
+
   it('passes live:true through and rejects a non-boolean live flag', async () => {
     const { fetch, ns } = namespace();
     expect((await handleProbeTurn(post('probe-secret', { text: 'receipt check', live: true }), staging(ns), directory)).status).toBe(200);
