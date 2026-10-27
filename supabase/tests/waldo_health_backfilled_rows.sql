@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(30);
+select plan(31);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -43,7 +43,8 @@ select col_is_null('public','health_context_daily','backfilled','which is nullab
 
 -- A late day is written, never raises a change, and the history says it is backfilled.
 select is(pg_temp.w(pg_temp.live(0,70,'good'))->>'written','true','a live row for today is written');
-select is(pg_temp.w(pg_temp.late(5,55,'moderate')),'{"written":true,"changed":[]}'::jsonb,'a backfilled row for an older day is written and names no pillar that moved, though its zone differs from the live row''s');
+select is(pg_temp.w(pg_temp.live(7,70,'good'))->>'written','true','a live row for a day older still is written, the newest live row before the late day');
+select is(pg_temp.w(pg_temp.late(5,55,'moderate')),'{"written":true,"changed":[]}'::jsonb,'a backfilled row for an older day is written and names no pillar that moved, though its zone differs from the live row before it');
 select is(pg_temp.day_in_history(5)->'backfilled','true'::jsonb,'and the history marks that day backfilled');
 select ok(not (pg_temp.day_in_history(0) ? 'backfilled'),'while the live day carries no such key, never a false');
 

@@ -25,8 +25,8 @@ const series = (nights: number, source = 'apple') => ({
 type Row = Record<string, any>;
 type Run = Readonly<{ rows: Row[]; zoneNotices: string[]; scoreReads: string[]; outcome: string }>;
 // `stored` is the set of days that already hold a row; the fake writer adds to it, as the database would.
-const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string } = {}): Promise<Run> => {
-  const samples = series(nights, over.source);
+const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown } = {}): Promise<Run> => {
+  const samples = over.samples ? { access: 'granted', read_at: READ_AT, sources: [{ source: over.source ?? 'apple', consent_epoch: 3, truncated: false, samples: over.samples }] } : series(nights, over.source);
   const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [];
   const stored = over.stored ?? new Set<string>();
   const outcome = await produceHealthScores({
@@ -34,6 +34,7 @@ const run = async (flag: string | undefined, nights: number, over: Partial<Produ
     writeContext: async payload => {
       const row = JSON.parse(payload) as Row;
       rows.push(row);
+      if (row.backfilled === true && over.lateAnswer !== undefined) return over.lateAnswer;
       if (row.backfilled === true && stored.has(row.day)) return { written: false, stale: true };
       stored.add(row.day);
       return { written: true, changed: over.changed ?? [] };
@@ -130,5 +131,29 @@ describe('backfilled rows: the written-row log', () => {
     expect(logged).toHaveLength(rows.length);
     expect(late(rows).length).toBeGreaterThan(0);
     for (const line of logged) expect(Object.keys(line).sort()).toEqual(['code', 'hop', 'provisional']);
+  });
+});
+
+describe('backfilled rows: a day with nothing to score', () => {
+  // The oldest candidate holds a night's duration and nothing else, with no night before it: no Recovery and no sleep debt
+  // can be said of it. It gets no row, and the scan goes on to the days after it.
+  const sparse = (): Sample[] => [
+    ...[0, 1, 2, 3, 7, 8].flatMap(back => dayOfReadings(addDays(TODAY, -back), back)),
+    sample('sleep_duration', addDays(TODAY, -10), { start_at: at(addDays(TODAY, -11), 23), end_at: at(addDays(TODAY, -10), 7), value: 450, method: 'asleep_duration' }),
+  ];
+  it('writes no backfilled row for it and still writes the days after it', async () => {
+    const { rows } = await run('1', 0, { samples: sparse() });
+    const days = late(rows).map(r => r.day);
+    expect(days).not.toContain(addDays(TODAY, -10));
+    expect(days).toEqual([addDays(TODAY, -8), addDays(TODAY, -7), addDays(TODAY, -3), addDays(TODAY, -2)]);
+  });
+});
+
+describe('backfilled rows: a refused write ends the scan', () => {
+  it('stops at the first backfilled write the database refuses, and the live rows stand', async () => {
+    const { rows, outcome } = await run('1', 25, { lateAnswer: { error: 'consent_required' } });
+    expect(late(rows)).toHaveLength(1);
+    expect(live(rows)).toHaveLength(2);
+    expect(outcome).toBe('written');
   });
 });
