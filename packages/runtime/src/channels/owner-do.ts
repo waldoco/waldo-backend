@@ -395,6 +395,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     super(ctx, env);
     // Alarm work (Calendar watch renewals, scheduled cards, connect offers) reads the stored origin, so an owner who sends
     // nothing after a host move takes the configured one here rather than at their next request.
+    // Because the stored origin already matches, no request sees an origin change, so the Telegram webhook is never re-pointed
+    // automatically after a move; the move runs that setWebhook as its own scripted step.
     const configuredOrigin = configuredPublicOrigin(env);
     if (configuredOrigin && ctx.storage.kv.get<string>('origin') !== configuredOrigin) ctx.storage.kv.put('origin', configuredOrigin);
     this.browserTrial = browserTrial;
