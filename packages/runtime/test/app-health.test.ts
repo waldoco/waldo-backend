@@ -519,18 +519,26 @@ describe('app health scores: revision 4', () => {
     expect(JSON.stringify(body)).not.toMatch(/baseline|drivers|windows/);
     expect(Object.keys(body)).toEqual(['day', 'timezone', 'compiled_at', 'freshness', 'recovery', 'form', 'weight']);
   });
-  it('drops a stored baseline, drivers or windows it cannot read, tells the log only a tag, and still serves the pillar and the scores', async () => {
+  it('fails closed on a stored baseline it cannot read: the pillar is served as not yet learned, never as a score without its label', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const damaged = [
-      withBaseline({ state: 'provisional', personal_days: 5 }, extras), withBaseline({ ...provisional, needed: 7 }, extras), withBaseline('provisional', extras), withBaseline({ ...provisional, extra: 1 }, extras),
-    ];
-    for (const stored of damaged) {
-      const body = await json(stored, contracts('health=4'));
-      expect(healthScoresV1Schema.safeParse(body).success).toBe(true);
-      expect(body.recovery).toMatchObject({ state: 'available', score: 64 });
-      expect('baseline' in body.recovery).toBe(false);
+    const damaged = [{ state: 'provisional', personal_days: 5 }, { ...provisional, needed: 7 }, 'provisional', { ...provisional, extra: 1 }, null, {}, { ...personal, state: 'learning' }];
+    for (const baseline of damaged) {
+      const body = await json(withBaseline(baseline, { ...extras, form: available({ baseline: personal }) }), contracts('health=4'));
+      expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(baseline)).toBe(true);
+      expect(body.recovery, JSON.stringify(baseline)).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+      expect(body.form).toMatchObject({ state: 'available', baseline: personal });
       expect([body.drivers, body.windows]).toEqual([drivers, windows]);
     }
+    expect(error).toHaveBeenCalledWith('app health scores baseline shape');
+    expect(tagsOf(error)).not.toMatch(/provisional|personal|learning/);
+  });
+  it('serves a pillar with no baseline key exactly as before, at revision 4 too', async () => {
+    const body = await json(plain, contracts('health=4'));
+    expect(body.recovery).toMatchObject({ state: 'available', score: 64 });
+    expect('baseline' in body.recovery).toBe(false);
+  });
+  it('drops stored drivers or windows it cannot read, tells the log only a tag, and still serves the pillars and the scores', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const badDrivers = await json(withBaseline(personal, { drivers: ['feeling tired near 1234'], windows }), contracts('health=4'));
     const badWindows = await json(withBaseline(personal, { drivers, windows: [{ start: '9:30 secret', end: '11:45', kind: 'peak' }] }), contracts('health=4'));
     const tooMany = await json(withBaseline(personal, { drivers: [...healthDriverPool, ...healthDriverPool], windows }), contracts('health=4'));
@@ -538,7 +546,6 @@ describe('app health scores: revision 4', () => {
     expect([badWindows.windows, badWindows.drivers]).toEqual([undefined, drivers]);
     expect(tooMany.drivers).toBeUndefined();
     expect(tagsOf(error)).not.toMatch(/1234|secret|feeling|provisional|personal/);
-    expect(error).toHaveBeenCalledWith('app health scores baseline shape');
     expect(error).toHaveBeenCalledWith('app health scores drivers shape');
     expect(error).toHaveBeenCalledWith('app health scores windows shape');
   });

@@ -76,7 +76,7 @@ describe('owner health read', () => {
   });
   // The console page reads the latest revision, so it gets the baseline label, the drivers and the windows, and a provisional
   // pillar is shown as the labelled score it is rather than as unavailable.
-  it('shows the baseline label, the drivers and the windows of the latest revision, and leaves out any it cannot read', async () => {
+  it('shows the baseline label, the drivers and the windows of the latest revision, and withholds a pillar whose label cannot be read', async () => {
     const baseline = { state: 'provisional', personal_days: 5, needed: 14, prior: 'adults' };
     const drivers = ['blood oxygen below usual'], windows = [{ start: '09:30', end: '11:45', kind: 'peak' }];
     const scoresFor = async (extra: Record<string, unknown>, label: unknown = baseline) => {
@@ -87,7 +87,7 @@ describe('owner health read', () => {
     const shown = await scoresFor({ drivers, windows });
     expect([shown.recovery, shown.drivers, shown.windows]).toMatchObject([{ score: RECOVERY, baseline }, drivers, windows]);
     const damaged = await scoresFor({ drivers: ['feeling tired'], windows: [{ start: 'noon', end: '13:00', kind: 'peak' }] }, { state: 'provisional' });
-    expect([damaged.recovery.score, 'baseline' in damaged.recovery, 'drivers' in damaged, 'windows' in damaged]).toEqual([RECOVERY, false, false, false]);
+    expect([damaged.recovery, 'drivers' in damaged, 'windows' in damaged]).toEqual([{ state: 'unavailable', reason: 'baseline_immature' }, false, false]);
   });
   it('ages the newest row when it is read: fresh, stale after six hours, expired after three days', async () => {
     const freshnessAt = async (compiledAt: number, day?: string) => ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: stored(compiledAt, day) })).response).json()) as { scores: { freshness: string } }).scores.freshness;
