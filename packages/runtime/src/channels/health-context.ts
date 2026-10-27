@@ -1,8 +1,14 @@
 import {
+  derivedBaselineStateSchema,
+  derivedEnergyWindowsSchema,
   derivedHealthDestinationViewSchema,
+  formHealthViewSchema,
   fromRowZone,
   narrativeContextSchema,
+  recoveryHealthViewSchema,
+  type DerivedBaselineState,
   type DerivedHealthDestinationView,
+  type DerivedSleepDebtWord,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
@@ -42,6 +48,9 @@ export type HealthContextRow = Readonly<{
     confidence: unknown;
     freshness: unknown;
     tags: unknown;
+    // Read only when the row carries them: sleep debt as stored, and today's energy windows as clock ranges.
+    sleep_debt?: unknown;
+    windows?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
@@ -78,6 +87,46 @@ const pillarZone = (value: unknown): string | null => {
   return typeof zone === 'string' ? zone : null;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// A row written before pillars named their version carries none; those read as the names the view used then. A version the
+// row names that is not a version name makes the pillar unreadable, never another version.
+const LEGACY_VERSION = { form: 'form.safte-fast.v1', recovery: 'recovery.v1' } as const;
+const pillarVersion = (value: unknown, pillar: 'form' | 'recovery'): string | null => {
+  const named = isRecord(value) ? value['algorithm_version'] : undefined;
+  if (named === undefined) return LEGACY_VERSION[pillar];
+  const schema = pillar === 'form' ? formHealthViewSchema.shape.algorithm_version : recoveryHealthViewSchema.shape.algorithm_version;
+  const parsed = schema.safeParse(named);
+  return parsed.success ? parsed.data : null;
+};
+
+const pillarBaselineState = (value: unknown): DerivedBaselineState | undefined => {
+  const baseline = isRecord(value) ? value['baseline'] : undefined;
+  const parsed = derivedBaselineStateSchema.safeParse(isRecord(baseline) ? baseline['state'] : undefined);
+  return parsed.success ? parsed.data : undefined;
+};
+
+// Sleep debt is a recency-weighted shortfall in minutes. It becomes a word here and the figure goes no further. The line is
+// where the weighted shortfall starts to read as a habit rather than one short night (about twenty minutes under on an average
+// night across the fortnight).
+const BUILDING_FROM_WEIGHTED_MINUTES = 240;
+const MAX_WEIGHTED_MINUTES = 20_160;
+const sleepDebtWord = (value: unknown): DerivedSleepDebtWord | undefined => {
+  if (!isRecord(value)) return undefined;
+  if (value['state'] === 'unavailable') return typeof value['reason'] === 'string' ? 'unknown' : undefined;
+  if (value['state'] === 'partial') return 'partial';
+  const owed = value['debt_minutes'];
+  if (value['state'] !== 'available' || typeof owed !== 'number' || !Number.isFinite(owed) || owed < 0 || owed > MAX_WEIGHTED_MINUTES) return undefined;
+  return owed >= BUILDING_FROM_WEIGHTED_MINUTES ? 'building' : 'steady';
+};
+
+// Windows carry clock times, so they are never admitted through the word filter: the whole list is validated as clock ranges
+// and one malformed entry drops the list, since a partial list could name the wrong best window.
+const energyWindows = (value: unknown): DerivedHealthDestinationView['energy_windows'] => {
+  const parsed = derivedEnergyWindowsSchema.safeParse(value);
+  return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
+};
+
 const pillarDrivers = (value: unknown): readonly string[] =>
   value !== null && typeof value === 'object' ? wordList((value as Record<string, unknown>)['drivers'], 4) : [];
 
@@ -91,10 +140,16 @@ export const toContextHealthMaterial = (
     if (context === null) return null;
     const recovery = fromRowZone('recovery', pillarZone(context.recovery));
     if (recovery === null) return null;
+    const recoveryVersion = pillarVersion(context.recovery, 'recovery');
+    if (recoveryVersion === null) {
+      onError?.(new Error('health context recovery names no valid version'));
+      return null;
+    }
     // Form's zone is the word the backend stored, which holds through a steady move, so the prompt and the app say the
-    // same; a row whose Form score is unreadable has no Form.
+    // same; a row whose Form score or version is unreadable has no Form.
     const formScore = pillarScore(context.form);
-    const zone = formScore === null ? undefined : fromRowZone('form', pillarZone(context.form)) ?? undefined;
+    const formVersion = formScore === null ? null : pillarVersion(context.form, 'form');
+    const zone = formVersion === null ? undefined : fromRowZone('form', pillarZone(context.form)) ?? undefined;
     const load = fromRowZone('weight', pillarZone(context.weight)) ?? undefined;
 
     const previousScore =
@@ -136,13 +191,24 @@ export const toContextHealthMaterial = (
     const confidenceBand: DerivedHealthDestinationView['confidence_band'] =
       confidence === null ? 'low' : confidence >= 0.66 ? 'high' : confidence >= 0.33 ? 'medium' : 'low';
 
+    // Only the pillars the prompt names are labelled, and only when the row labels them.
+    const states = [
+      ['recovery', pillarBaselineState(context.recovery)],
+      ...(zone === undefined ? [] : [['form', pillarBaselineState(context.form)] as const]),
+      ...(load === undefined ? [] : [['load', pillarBaselineState(context.weight)] as const]),
+    ].flatMap(([pillar, state]) => state === undefined ? [] : [[pillar, state] as const]);
+    const sleepDebt = sleepDebtWord(context.sleep_debt);
+    const windows = energyWindows(context.windows);
     const common = {
       authority: 'backend' as const, trend, freshness, missing_components: [], confidence_band: confidenceBand,
       provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`], destination_eligibility: ['trigger_prompt' as const],
+      ...(states.length === 0 ? {} : { baseline_state: Object.fromEntries(states) }),
+      ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),
+      ...(windows === undefined ? {} : { energy_windows: windows }),
     };
-    const view: DerivedHealthDestinationView = zone === undefined
-      ? { ...common, algorithm_version: 'recovery.v1', recovery_zone: recovery }
-      : { ...common, algorithm_version: 'form.safte-fast.v1', form_zone: zone };
+    const view: DerivedHealthDestinationView = zone === undefined || formVersion === null
+      ? { ...common, algorithm_version: recoveryVersion, recovery_zone: recovery }
+      : { ...common, algorithm_version: formVersion, form_zone: zone };
 
     const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
     const tags = wordList(context.tags, 4);

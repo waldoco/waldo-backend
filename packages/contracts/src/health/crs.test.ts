@@ -308,3 +308,57 @@ describe('recovery.v1 derived health view', () => {
     ).toBe(false);
   });
 });
+
+describe('derived health view carries the row\'s own version and what the model must be told about it', () => {
+  const parse = (value: unknown) => derivedHealthDestinationViewSchema.safeParse(value);
+  const form = (extra: Record<string, unknown> = {}) => ({ ...baseDestinationView, ...extra });
+  const recovery = (extra: Record<string, unknown> = {}) => {
+    const { form_zone: _zone, ...rest } = baseDestinationView;
+    return { ...rest, recovery_zone: 'solid', algorithm_version: 'recovery.v5', ...extra };
+  };
+
+  it('accepts the version a stored row names, for its own pillar only', () => {
+    for (const algorithm_version of ['form.v9', 'form.candidate.v8', 'form.safte-fast.v1']) expect(parse(form({ algorithm_version })).success, algorithm_version).toBe(true);
+    for (const algorithm_version of ['recovery.v5', 'recovery.candidate.v4', 'recovery.v1']) expect(parse(recovery({ algorithm_version })).success, algorithm_version).toBe(true);
+  });
+
+  it('rejects a version that is not a stored version name, or names the other pillar', () => {
+    for (const algorithm_version of ['', 'form', 'form.9', 'form.v', 'Form.v9', 'form v9', 'form.v9; drop', 'recovery.v5', `form.${'a'.repeat(64)}.v1`]) {
+      expect(parse(form({ algorithm_version })).success, algorithm_version).toBe(false);
+    }
+    for (const algorithm_version of ['form.v9', 'recovery', 'recovery.v5 ', 'recovery..v5']) expect(parse(recovery({ algorithm_version })).success, algorithm_version).toBe(false);
+  });
+
+  it('keeps the pillar the view is about without reading any version name', () => {
+    expect(parse({ ...recovery(), form_zone: 'steady' }).success).toBe(false);
+    const { form_zone: _zone, ...noZone } = form();
+    expect(parse(noZone).success).toBe(false);
+  });
+
+  it('takes the baseline state of each pillar as a word, and nothing else', () => {
+    expect(parse(form({ baseline_state: { recovery: 'provisional', form: 'provisional', load: 'personal' } })).success).toBe(true);
+    expect(parse(recovery({ baseline_state: { recovery: 'personal' } })).success).toBe(true);
+    for (const baseline_state of [{ recovery: 'forming' }, { recovery: 'provisional', form: 3 }, { weight: 'personal' }, { recovery: { state: 'provisional', personal_days: 3 } }, 'provisional', null]) {
+      expect(parse(form({ baseline_state })).success, JSON.stringify(baseline_state)).toBe(false);
+    }
+  });
+
+  it('takes sleep debt as a word, never minutes', () => {
+    for (const sleep_debt of ['building', 'steady', 'partial', 'unknown']) expect(parse(form({ sleep_debt })).success, sleep_debt).toBe(true);
+    for (const sleep_debt of [310, '310', 'a lot', { state: 'available', debt_minutes: 310 }, null, '']) expect(parse(form({ sleep_debt })).success, JSON.stringify(sleep_debt)).toBe(false);
+  });
+
+  it('takes up to four energy windows as validated clock ranges', () => {
+    const window = { start: '09:30', end: '11:30', kind: 'peak' } as const;
+    expect(parse(form({ energy_windows: [window, { start: '14:00', end: '15:30', kind: 'dip' }] })).success).toBe(true);
+    expect(parse(form({ energy_windows: [] })).success).toBe(true);
+    expect(parse(form({ energy_windows: Array(4).fill(window) })).success).toBe(true);
+    const bad: unknown[] = [
+      Array(5).fill(window),
+      [{ ...window, start: '9:30' }], [{ ...window, start: '24:00' }], [{ ...window, end: '11:60' }], [{ ...window, end: '11:30:00' }],
+      [{ ...window, start: 'resting heart rate 61' }], [{ ...window, kind: 'high' }], [{ ...window, score: 70 }], [{ start: '09:30', end: '11:30' }],
+      [{ ...window, start: '09:30–11:30' }], '09:30–11:30', [['09:30', '11:30']],
+    ];
+    for (const energy_windows of bad) expect(parse(form({ energy_windows })).success, JSON.stringify(energy_windows)).toBe(false);
+  });
+});

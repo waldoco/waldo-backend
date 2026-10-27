@@ -191,16 +191,56 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
   const highStakes = health.narrative.upcoming_high_stakes.length === 0
     ? []
     : [`Upcoming high-stakes: ${health.narrative.upcoming_high_stakes.join('; ')}`];
+  // Every line stays in this one paragraph: the trace scrub withholds a health block by its opening, paragraph by paragraph.
   return [
-    health.view.algorithm_version === 'form.safte-fast.v1'
+    'form_zone' in health.view
       ? `Form zone: ${health.view.form_zone}.`
       : `Recovery zone: ${health.view.recovery_zone}.`,
     `Trend: ${health.view.trend}. Freshness: ${health.view.freshness}.`,
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
+    ...renderBaseline(health.view.baseline_state),
+    ...renderSleepDebt(health.view.sleep_debt),
+    ...renderEnergyWindows(health.view.energy_windows),
     `Day summary: ${health.narrative.day_summary}`,
     ...highStakes,
   ].join('\n');
+}
+
+const PILLAR_NAMES = { recovery: 'Recovery', form: 'Form', load: 'Load' } as const;
+const joinNames = (names: readonly string[]): string =>
+  names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
+// A provisional pillar leans on a population prior until the owner has enough days of their own; the model is told so in words.
+function renderBaseline(state: ContextHealthMaterial['view']['baseline_state']): string[] {
+  if (state === undefined) return [];
+  const named = (wanted: 'provisional' | 'personal') =>
+    (Object.keys(PILLAR_NAMES) as (keyof typeof PILLAR_NAMES)[]).filter((pillar) => state[pillar] === wanted).map((pillar) => PILLAR_NAMES[pillar]);
+  const provisional = named('provisional');
+  const personal = named('personal');
+  const parts = [
+    ...(provisional.length === 0
+      ? []
+      : [`${joinNames(provisional)} provisional: their personal baseline is still forming, so read ${provisional.length === 1 ? 'this' : 'these'} as a first estimate, not their settled norm.`]),
+    ...(personal.length === 0 ? [] : [`${joinNames(personal)} on their own baseline.`]),
+  ];
+  return parts.length === 0 ? [] : [`Baseline: ${parts.join(' ')}`];
+}
+
+const SLEEP_DEBT_WORDS = {
+  building: 'building up over recent nights',
+  steady: 'steady, not building',
+  partial: 'only partly known, too few recent nights to say how much',
+  unknown: 'unknown',
+} as const;
+function renderSleepDebt(word: ContextHealthMaterial['view']['sleep_debt']): string[] {
+  return word === undefined ? [] : [`Sleep debt: ${SLEEP_DEBT_WORDS[word]}.`];
+}
+
+// On its own line, apart from any pillar word, and as validated clock ranges: a time of day is not a reading.
+function renderEnergyWindows(windows: ContextHealthMaterial['view']['energy_windows']): string[] {
+  if (windows === undefined || windows.length === 0) return [];
+  return [`Energy windows today (their local time): ${windows.map((window) => `${window.kind} ${window.start}–${window.end}`).join('; ')}.`];
 }
 
 function renderToolOutputs(toolOutputs: readonly ContextFragment[]): string {

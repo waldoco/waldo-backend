@@ -89,7 +89,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           deps.recall,
           owner,
           recallKey,
-          health?.view.algorithm_version === 'form.safte-fast.v1' ? health.view.form_zone : undefined,
+          health !== null && 'form_zone' in health.view ? health.view.form_zone : undefined,
           skills.selected[0]?.trigger_condition,
           inputs,
           provenance,

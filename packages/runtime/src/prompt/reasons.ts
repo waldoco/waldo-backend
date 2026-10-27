@@ -114,12 +114,7 @@ function renderMemoryContext(recall: string): string {
 
 function renderHealthContext(canvas: RuntimePromptCanvas): string {
   const health = canvas.healthContext;
-  if (health === null) {
-    return [
-      'No derived health context is available for this invocation.',
-      'Active goals: unavailable in this phase.',
-    ].join('\n');
-  }
+  if (health === null) return 'No derived health context is available for this invocation.';
 
   const upcoming =
     health.upcoming_high_stakes.length === 0
@@ -131,7 +126,6 @@ function renderHealthContext(canvas: RuntimePromptCanvas): string {
     `Load: ${health.load_descriptor ?? 'unavailable'}.`,
     `Day summary: ${health.day_summary}`,
     ...upcoming,
-    'Active goals: unavailable in this phase.',
   ].join('\n');
 }
 
