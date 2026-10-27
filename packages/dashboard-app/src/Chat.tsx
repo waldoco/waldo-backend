@@ -110,7 +110,8 @@ function Draft({ id, text, foot }: { id: string; text: string; foot?: ReactNode 
 // A turn that closed without a normal reply says so, with what can be done next, under any words it had shown, which are kept as they
 // were and offer nothing to copy: they are not a reply Waldo finished.
 function Closure({ item, store }: { item: LocalMessage; store: ChatStore }) {
-  const stopped = item.state === 'revoked' && item.closedReason === 'cancelled';
+  // The server closes a stopped turn as interrupted, with this reason, whether it was stopped here or in the app.
+  const stopped = item.closedReason === 'cancelled';
   const ended = item.closedReason === 'session_revoked';
   if (item.state === 'sending' || item.state === 'failed' || item.state === 'admitted' || item.state === 'running' || (item.state === 'completed' && !item.effectsUnconfirmed)) return null;
   const words = stopped ? 'You stopped this one.' : ended ? 'This sign-in ended before Waldo finished.' : item.state === 'interrupted' ? 'Waldo didn’t finish this one.' : item.state === 'revoked' ? 'Waldo stopped before replying.' : '';
