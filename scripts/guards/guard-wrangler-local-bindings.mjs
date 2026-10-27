@@ -81,9 +81,12 @@ if (cfg.browser !== undefined) bad.push('the top-level (production) config must 
 // 6. Wrangler turns workers.dev off for any config with routes unless workers_dev is set (getSubdomainValues:
 //    `routes.length === 0`). While callbacks still name the workers.dev host, adding a custom domain must not drop it,
 //    so a config with routes states workers_dev explicitly, either way.
+// 7. A config with routes serves more than one host, so an empty WALDO_PUBLIC_ORIGIN would let each request's host
+//    become the owner's stored origin; it must name one.
 for (const [name, node] of [['top level', cfg], ...Object.entries(cfg?.env ?? {}).map(([envName, envCfg]) => [`env.${envName}`, envCfg])]) {
   if ((node?.routes ?? []).length && typeof node.workers_dev !== 'boolean') bad.push(`${name} declares routes, so it must set workers_dev explicitly`);
   const origin = node?.vars?.WALDO_PUBLIC_ORIGIN;
+  if ((node?.routes ?? []).length && !origin) bad.push(`${name} declares routes, so WALDO_PUBLIC_ORIGIN must be set`);
   if (!origin) continue;
   let parsed = null;
   try { parsed = new URL(origin); } catch { /* reported below */ }
