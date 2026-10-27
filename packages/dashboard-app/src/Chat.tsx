@@ -61,12 +61,13 @@ function Trace({ part, zone }: { part: Extract<ChatPart, { type: 'receipt' }>; z
   </details>;
 }
 
-function WaldoMessage({ message, zone, arrived, replies, onReply }: { message: ChatMessage; zone: string; arrived: boolean; replies: boolean; onReply: (text: string) => void }) {
+// `shown`: the draft this reply replaces, whose words stay as they were while only what came after them fades in.
+function WaldoMessage({ message, zone, arrived, replies, onReply, shown }: { message: ChatMessage; zone: string; arrived: boolean; replies: boolean; onReply: (text: string) => void; shown?: string }) {
   const text = visibleText(message);
   return <article className={`chat-msg waldo${arrived ? ' arrived' : ''}`} aria-label="Waldo">
     <span className="chat-avatar" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
-      {text && <div className="chat-prose"><ChatText text={text}/></div>}
+      {text && <div className="chat-prose"><ChatText text={text} reveal={shown === undefined ? undefined : { shown }}/></div>}
       {message.parts.map((part, i) => part.type === 'approval' ? <Approval key={i} part={part} zone={zone}/>
         : part.type === 'receipt' ? <Trace key={i} part={part} zone={zone}/>
           : part.type === 'artifact' ? <p key={i} className="meta">File: {part.title}. Open it in the Waldo app.</p>
@@ -94,14 +95,35 @@ function localStatus(item: LocalMessage, store: ChatStore) {
   return null;
 }
 
-// A turn that closed without a normal reply says so, with what can be done next.
+const LIVE = { live: true } as const;
+
+// The reply as it is written, laid out as the reply that will take its place, so that one lands where these words are. The words stay out
+// of the live log: a screen reader hears the reply once, when it lands. `foot` is what shows under them while the turn runs.
+function Draft({ text, foot }: { text: string; foot?: ReactNode }) {
+  return <article className="chat-msg waldo streaming" aria-label="Waldo">
+    <span className={`chat-avatar${foot ? ' pulse-ring' : ''}`} aria-hidden="true"><WaldoMark size={14}/></span>
+    <div className="chat-body">
+      <div className="chat-prose chat-draft" aria-hidden="true"><ChatText text={text} reveal={LIVE}/></div>
+      {foot}
+    </div>
+  </article>;
+}
+
+// A turn that closed without a normal reply says so, with what can be done next, under any words it had shown, which are kept as they
+// were and offer nothing to copy: they are not a reply Waldo finished.
 function Closure({ item, store }: { item: LocalMessage; store: ChatStore }) {
   const stopped = item.state === 'revoked' && item.closedReason === 'cancelled';
   const ended = item.closedReason === 'session_revoked';
   if (item.state === 'sending' || item.state === 'failed' || item.state === 'admitted' || item.state === 'running' || (item.state === 'completed' && !item.effectsUnconfirmed)) return null;
   const words = stopped ? 'You stopped this one.' : ended ? 'This sign-in ended before Waldo finished.' : item.state === 'interrupted' ? 'Waldo didn’t finish this one.' : item.state === 'revoked' ? 'Waldo stopped before replying.' : '';
-  return <div className="chat-closure" role="status"><Icon name="warning"/><div><p>{words}{item.effectsUnconfirmed ? ' Something Waldo had already started may have happened. Check before you rely on it.' : ''}</p>
-    <div className="chat-closure-actions">{!stopped && <button type="button" className="quiet-link" onClick={() => store.askAgain(item.clientId)}>Ask again</button>}<button type="button" className="quiet-link" onClick={() => store.dismiss(item.clientId)}>Dismiss</button></div></div></div>;
+  return <>
+    {item.draft && <article className="chat-msg waldo chat-unfinished" aria-label="Waldo, unfinished">
+      <span className="chat-avatar" aria-hidden="true"><WaldoMark size={14}/></span>
+      <div className="chat-body"><div className="chat-prose"><ChatText text={item.draft}/></div></div>
+    </article>}
+    <div className="chat-closure" role="status"><Icon name="warning"/><div><p>{words}{item.effectsUnconfirmed ? ' Something Waldo had already started may have happened. Check before you rely on it.' : ''}</p>
+      <div className="chat-closure-actions">{!stopped && <button type="button" className="quiet-link" onClick={() => store.askAgain(item.clientId)}>Ask again</button>}<button type="button" className="quiet-link" onClick={() => store.dismiss(item.clientId)}>Dismiss</button></div></div></div>
+  </>;
 }
 
 // What the working row says while the turn's tools run and no reply is written yet.
@@ -113,15 +135,16 @@ const ACTIVITY_WORDS: Record<ChatActivityKind, string> = {
 
 function Working({ item, queued, store, now }: { item: LocalMessage; queued: number; store: ChatStore; now: number }) {
   const ms = now - item.sentAt;
-  return <div className="chat-msg waldo working" role="status" aria-live="polite">
-    <span className="chat-avatar pulse-ring" aria-hidden="true"><WaldoMark size={14}/></span>
-    <div className="chat-body">
-      {item.draft && <div className="chat-prose chat-draft"><ChatText text={item.draft}/></div>}
+  const status = <>
       <p className="chat-working"><span className="typing" aria-hidden="true"><i/><i/><i/></span><span className="shimmer">{item.state !== 'running' ? 'Waldo has your message' : item.activity && !item.draft ? ACTIVITY_WORDS[item.activity.kind] : 'Working on it'}</span>
         <span className="meta time" aria-label={`${Math.floor(ms / 1000)} seconds`}>{elapsed(ms)}</span>{queued > 0 && <span className="meta">· {queued} more queued</span>}</p>
       {ms > 45_000 && <p className="meta">Bigger errands can take a few minutes. You can leave this page; the reply will be here.</p>}
       <button type="button" className="quiet" disabled={item.stopping || item.state === 'sending'} onClick={() => void store.stop(item.clientId)}>{item.stopping ? 'Stopping…' : 'Stop'}</button>
-    </div>
+  </>;
+  if (item.draft) return <Draft text={item.draft} foot={<div className="chat-draft-foot" role="status" aria-live="polite">{status}</div>}/>;
+  return <div className="chat-msg waldo working" role="status" aria-live="polite">
+    <span className="chat-avatar pulse-ring" aria-hidden="true"><WaldoMark size={14}/></span>
+    <div className="chat-body">{status}</div>
   </div>;
 }
 
@@ -172,6 +195,8 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
 
   const unlanded = chat.local.filter(item => !item.landed);
   const closures = chat.local.filter(item => item.landed && (item.state === 'interrupted' || item.state === 'revoked' || item.effectsUnconfirmed));
+  // A closed turn whose reply has not landed yet: its last words hold the reply's place.
+  const holding = chat.local.filter(item => item.state === 'completed' && item.draft && !item.effectsUnconfirmed);
   const lastAssistant = [...chat.messages].reverse().find(message => message.role === 'assistant');
   const repliesOn = lastAssistant !== undefined && chat.messages.at(-1)?.id === lastAssistant.id && !chat.local.some(item => !item.landed || item.state === 'admitted' || item.state === 'running');
   const length = chat.draft.trim().length, over = length > CHAT_TEXT_MAX;
@@ -193,10 +218,11 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
         lastDay = day;
         return <div key={message.id} className="chat-row">{divider}{message.role === 'user'
           ? <OwnerMessage text={message.text} at={message.created_at} zone={zone} channel={message.channel}/>
-          : <WaldoMessage message={message} zone={zone} arrived={chat.arrived.has(message.id)} replies={repliesOn && message.id === lastAssistant!.id} onReply={reply}/>}</div>;
+          : <WaldoMessage message={message} zone={zone} arrived={chat.arrived.has(message.id)} replies={repliesOn && message.id === lastAssistant!.id} onReply={reply} shown={chat.streamed.get(message.id)}/>}</div>;
       })}
       {unlanded.map(item => <div key={item.clientId} className="chat-row local"><OwnerMessage text={item.text} at={item.sentAt} zone={zone} status={localStatus(item, store)}/>{item.state !== 'sending' && item.state !== 'failed' && <Closure item={item} store={store}/>}</div>)}
       {closures.map(item => <Closure key={item.clientId} item={item} store={store}/>)}
+      {holding.map(item => <Draft key={item.clientId} text={item.draft!}/>)}
       {first && <Working item={first} queued={working.length - 1} store={store} now={now}/>}
     </div>
     <div className="chat-dock">

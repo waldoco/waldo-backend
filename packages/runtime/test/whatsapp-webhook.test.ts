@@ -91,6 +91,13 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('forwards the configured public origin, not the host the webhook reached', async () => {
+    const { fetch, ns } = namespace();
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
+    await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' }, directory);
+    expect(new Headers(fetch.mock.calls[0]![1]!.headers).get('x-waldo-origin')).toBe('https://staging.fixture.invalid');
+  });
+
   it('admission: a definite refusal (400, 403 such as a sender the owner has not bound, 404) is acknowledged; anything else answers 503', async () => {
     const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);

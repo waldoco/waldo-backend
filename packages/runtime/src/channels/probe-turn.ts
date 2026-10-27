@@ -1,6 +1,7 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { sameSecret } from './telegram-webhook';
 import { toolsWhere } from '../tools/records';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
 // Staging-only synthetic turn trigger: lets the probe harness run one real owner turn on
 // waldo-runtime-staging without the Telegram webhook secret and without touching the update-id
@@ -43,7 +44,7 @@ export const PROBE_STRIPPED_TOOLS: readonly string[] = [...toolsWhere((record) =
 export const PROBE_RATE_LIMIT_PER_MINUTE = 20;
 export const PROBE_RATE_WINDOW_MS = 60_000;
 
-export type ProbeTurnEnv = Readonly<{
+export type ProbeTurnEnv = PublicOriginEnv & Readonly<{
   WALDO_ENVIRONMENT?: string;
   WALDO_PROBE_TOKEN?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
@@ -91,7 +92,7 @@ export const handleProbeTurn = async (
   const doName = route.doName;
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    'x-waldo-origin': new URL(request.url).origin,
+    'x-waldo-origin': publicOrigin(env, request.url),
     'x-waldo-telegram-subject': route?.subject ?? subject,
   };
   const timezone = route?.timezone ?? env.WALDO_OWNER_TIMEZONE;

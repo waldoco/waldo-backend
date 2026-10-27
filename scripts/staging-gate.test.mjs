@@ -145,7 +145,11 @@ test('the staging target constants are shared with the probe suite and migration
   const preflight = await import('./staging-migration-preflight.mjs');
   assert.equal(preflight.STAGING_PROJECT, 'togdshayyxycitzckpqv');
   assert.match(readFileSync(new URL('./probe-staging.mjs', import.meta.url), 'utf8'), /import \{ STAGING_WORKER_URL \} from '\.\/staging-gate\.mjs'/);
-  assert.equal(STAGING_WORKER_URL, 'https://waldo-runtime-staging.piyushfulper3210.workers.dev');
+  const { parseJsonc } = await import('./jsonc.mjs');
+  const staging = parseJsonc(readFileSync(new URL('../packages/runtime/wrangler.jsonc', import.meta.url), 'utf8')).env.staging.vars.WALDO_PUBLIC_ORIGIN;
+  assert.equal(STAGING_WORKER_URL, staging, 'the gate probes the origin the staging Worker issues, from one config value');
+  assert.equal(new URL(STAGING_WORKER_URL).origin, STAGING_WORKER_URL);
+  assert.match(readFileSync(new URL('../packages/runtime/scripts/staging-sweep.mjs', import.meta.url), 'utf8'), /import \{ STAGING_WORKER_URL \} from '\.\.\/\.\.\/\.\.\/scripts\/staging-gate\.mjs'/);
 });
 
 test('deploy-staging runs the gate after every deploy and as a read-only operation', async () => {

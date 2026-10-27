@@ -20,7 +20,7 @@ import { DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_SIGNIN_PATH}/google`;
-const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
+export const CONSOLE_GOOGLE_CALLBACK_PATH = `${CONSOLE_GOOGLE_PATH}/callback`;
 
 // Auth-specific fixed-window limits (per email, and per IP across both endpoints), enforced in
 // the owner directory so they hold globally: OTP send 5 per 15 min, verify 10 per 15 min,
