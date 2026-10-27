@@ -165,7 +165,9 @@ the owner's yes first.
 
 New registrations name the new host from the start:
 - Slack (`/oauth/mcp/callback`, see `PRE_REGISTERED_OAUTH_CLIENTS.md`);
-- WHOOP (`WHOOP_REDIRECT_URI=https://staging.heywaldo.in/oauth/whoop/callback`);
+- WHOOP: register `https://staging.heywaldo.in/oauth/whoop/callback` in the WHOOP developer portal. The Worker derives its redirect and the
+  start page the app opens from `WALDO_PUBLIC_ORIGIN`, and the app accepts a start page on either reviewed staging host, so WHOOP moves
+  with the cutover. If WHOOP is set up before cutover, register both hosts' callbacks;
 - any MCP server, which registers itself with the current origin.
 
 `waldo.oauth_clients` had no rows on 27 Oct 2026, so there was nothing to migrate.

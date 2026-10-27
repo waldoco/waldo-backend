@@ -13,7 +13,7 @@ import { webhookBody } from './fixtures/whoop-synthetic';
 const SECRET = 'fictional-router-secret-00000000000000000';
 const CLIENT_SECRET = 'whoop-client-secret-fixture';
 const STATE_SECRET = 'fictional-oauth-state-secret';
-const ENV_BASE = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: CLIENT_SECRET, WHOOP_REDIRECT_URI: 'https://worker.example.invalid/oauth/whoop/callback', WALDO_OAUTH_STATE_SECRET: STATE_SECRET };
+const ENV_BASE = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: CLIENT_SECRET, WALDO_PUBLIC_ORIGIN: 'https://worker.example.invalid', WALDO_OAUTH_STATE_SECRET: STATE_SECRET };
 
 // The Worker's call to an owner's object, captured instead of sent.
 type Sent = { request: Request; text: string };
@@ -78,7 +78,7 @@ describe('the provider route between the Worker and an owner object', () => {
 describe('the WHOOP configuration', () => {
   it('runs only with all three values set', () => {
     expect(whoopConfig(ENV_BASE)).toEqual({ clientId: 'client-id-fixture', clientSecret: CLIENT_SECRET, redirectUri: 'https://worker.example.invalid/oauth/whoop/callback' });
-    for (const missing of ['WHOOP_CLIENT_ID', 'WHOOP_CLIENT_SECRET', 'WHOOP_REDIRECT_URI']) expect(whoopConfig({ ...ENV_BASE, [missing]: undefined }), missing).toBeNull();
+    for (const missing of ['WHOOP_CLIENT_ID', 'WHOOP_CLIENT_SECRET', 'WALDO_PUBLIC_ORIGIN']) expect(whoopConfig({ ...ENV_BASE, [missing]: undefined }), missing).toBeNull();
   });
 });
 
@@ -234,7 +234,7 @@ describe('the WHOOP callback', () => {
   });
 
   it('is absent without its configuration, throttles per address, and takes only GET', async () => {
-    expect((await callback('code=x&state=AbCd1234', { env: { WHOOP_REDIRECT_URI: undefined } })).response.status).toBe(404);
+    expect((await callback('code=x&state=AbCd1234', { env: { WALDO_PUBLIC_ORIGIN: undefined } })).response.status).toBe(404);
     const limited = await callback('code=x&state=AbCd1234', { limited: true });
     expect([limited.response.status, rpcs.length]).toEqual([429, 0]);
     const post = await handleWhoopCallback(new Request(`https://w.test${WHOOP_CALLBACK_PATH}?code=x&state=AbCd1234`, { method: 'POST' }), { ...ENV_BASE, OWNER_DO: capture(() => Response.json({})).owners } as never);
@@ -336,7 +336,7 @@ describe('the WHOOP start link', () => {
 
   it('is absent without its configuration, throttles per address, and takes only GET and POST', async () => {
     sessionAnswer = LIVE;
-    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { env: { WHOOP_REDIRECT_URI: undefined } })).status).toBe(404);
+    expect((await start(`${WHOOP_START_PATH}AbCd1234`, { env: { WALDO_PUBLIC_ORIGIN: undefined } })).status).toBe(404);
     expect((await start(`${WHOOP_START_PATH}AbCd1234`, { method: 'PUT' })).status).toBe(404);
     const limited = await start(`${WHOOP_START_PATH}AbCd1234`, { limited: true, method: 'POST' });
     expect([limited.status, setCookies(limited), rpcs.length]).toEqual([429, [], 0]);

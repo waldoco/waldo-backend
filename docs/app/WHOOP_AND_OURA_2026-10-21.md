@@ -115,10 +115,10 @@ Set no WHOOP secret and enter no client for the edge until all three hold: the a
 1. Register a WHOOP developer app (Sandbox tier lets 10 members connect; Build lets 100). Scopes requested:
    `offline read:profile read:sleep read:recovery read:workout`.
 2. Set the redirect URL to `https://<worker host>/oauth/whoop/callback` and the webhook URL to `https://<worker host>/events/whoop` (v2 webhooks).
-3. Only once the three conditions under "WHOOP consent copy" hold, set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and
-   `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). The Worker
-   uses the client secret only to verify `X-WHOOP-Signature`; the owner object uses the client id and redirect address only. Without all
-   three the routes answer `not_configured` and nothing is sent to WHOOP.
+3. Only once the three conditions under "WHOOP consent copy" hold, set Worker secrets `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET`.
+   The redirect address is `WALDO_PUBLIC_ORIGIN` followed by `/oauth/whoop/callback`, so `<worker host>` above is that origin's host.
+   The Worker uses the client secret only to verify `X-WHOOP-Signature`; the owner object uses the client id and redirect address only.
+   Without both secrets and `WALDO_PUBLIC_ORIGIN` the routes answer `not_configured` and nothing is sent to WHOOP.
 4. Enter the client for the edge once, with the same id, secret and redirect address. The edge reads it by issuer and redirect address,
    the client id must match, and its secret is sent only to the pinned token endpoint. Use `oauth_client_seed`; seeding again rotates
    the secret. Steps are in `docs/ops/PRE_REGISTERED_OAUTH_CLIENTS.md`:

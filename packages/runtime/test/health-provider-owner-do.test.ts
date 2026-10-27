@@ -21,7 +21,7 @@ const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const START = Date.parse('2026-10-21T08:00:00Z');
 const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_ROUTER_HMAC_SECRET: SECRET,
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable',
-  WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: 'client-secret-fixture', WHOOP_REDIRECT_URI: 'https://worker.example.invalid/oauth/whoop/callback' };
+  WHOOP_CLIENT_ID: 'client-id-fixture', WHOOP_CLIENT_SECRET: 'client-secret-fixture', WALDO_PUBLIC_ORIGIN: 'https://worker.example.invalid' };
 
 const models = vi.hoisted(() => ({ formats: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (params?: { text?: { format?: { name?: unknown } } }) => {

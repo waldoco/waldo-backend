@@ -3,6 +3,7 @@ import { constantTimeEqual } from '../../connectors/constant-time';
 import { confirmedHere, confirmPage, handOff, ownerHint, releaseHandOff, UNHANDED, type HandOff } from '../../channels/connect-confirm';
 import { checkBrowser, releaseBrowser, startRedirect } from '../../connectors/oauth-browser-binding';
 import { oauthStateSecret, type OAuthStateEnv } from '../../connectors/oauth-state-secret';
+import { configuredPublicOrigin, type PublicOriginEnv } from '../../connectors/public-origin';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../../identity/owner-directory';
 import { callOwnerProvider } from './provider-route';
 import { whoopAuthorizeUrl, WHOOP_ATTEMPT_TTL_MS, WHOOP_CALLBACK_PATH, WHOOP_START_PATH, type WhoopConfig } from './whoop-client';
@@ -17,14 +18,17 @@ export const WHOOP_WEBHOOK_PATH = '/events/whoop';
 const MAX_WEBHOOK_BYTES = 8_192;
 
 type OwnerNamespace = Parameters<typeof callOwnerProvider>[0];
-export type WhoopRoutesEnv = OwnerDirectoryEnv & OAuthStateEnv & Readonly<{
-  WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string;
+export type WhoopRoutesEnv = OwnerDirectoryEnv & OAuthStateEnv & PublicOriginEnv & Readonly<{
+  WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string;
   OWNER_DO?: OwnerNamespace; RESPONSIBILITY_RATE_LIMITER?: Readonly<{ limit(options: { key: string }): Promise<{ success: boolean }> }>;
 }>;
-// All three or none: a deploy that sets only some of them runs no WHOOP at all. The Worker keeps the client secret only to
-// verify WHOOP's webhook signature; the token exchange and refresh use the copy the edge holds in Vault.
-export const whoopConfig = (env: Readonly<{ WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string }>): (WhoopConfig & Readonly<{ clientSecret: string }>) | null =>
-  env.WHOOP_CLIENT_ID && env.WHOOP_CLIENT_SECRET && env.WHOOP_REDIRECT_URI ? { clientId: env.WHOOP_CLIENT_ID, clientSecret: env.WHOOP_CLIENT_SECRET, redirectUri: env.WHOOP_REDIRECT_URI } : null;
+// All three or none: a deploy that sets only some of them runs no WHOOP at all. The redirect, and the start page the app
+// opens, are on WALDO_PUBLIC_ORIGIN, so WHOOP moves hosts with every other callback. The Worker keeps the client secret
+// only to verify WHOOP's webhook signature; the token exchange and refresh use the copy the edge holds in Vault.
+export const whoopConfig = (env: Readonly<{ WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string }> & PublicOriginEnv): (WhoopConfig & Readonly<{ clientSecret: string }>) | null => {
+  const origin = configuredPublicOrigin(env);
+  return env.WHOOP_CLIENT_ID && env.WHOOP_CLIENT_SECRET && origin ? { clientId: env.WHOOP_CLIENT_ID, clientSecret: env.WHOOP_CLIENT_SECRET, redirectUri: `${origin}${WHOOP_CALLBACK_PATH}` } : null;
+};
 
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 const notFound = () => new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });

@@ -64,7 +64,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   GOOGLE_CLIENT_SECRET?: string;
   WHOOP_CLIENT_ID?: string;
   WHOOP_CLIENT_SECRET?: string;
-  WHOOP_REDIRECT_URI?: string;
   WHATSAPP_VERIFY_TOKEN?: string;
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
