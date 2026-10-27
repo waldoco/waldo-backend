@@ -1624,7 +1624,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path.startsWith(APP_FILES_PATH+'/')){const deps=this.exportDownloadDeps();return deps?(await appFileDownload(request,deps))!:fail(404);}
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
-      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId));}catch{return fail(503);}
+      try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,chatRevision(request)));}catch{return fail(503);}
     }
     // Main's receipt and Stop read only main's chain; a thread's message answers through its thread's routes.
     const mainRef=ownerChainRef('app',principal);
@@ -1694,14 +1694,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       this.recoverApp();
       const at={step:'context'},url=new URL(request.url);
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,chatRevision(request)),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
   }
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }) {
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, revision: number) {
     const now=Date.now(),abort=new AbortController();
     const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
     try{
@@ -1712,7 +1712,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
       at.step='transcript';
       const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
-      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null);
+      return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,revision);
     }finally{abort.abort();}
   }
   // The text the chat shows for each of a thread's messages that has any, from rows whose witness matches.
@@ -1728,7 +1728,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
-  private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
+  private threadsHost(name: string, hash: string, ownerId: string, revision: number): AppThreadsHost {
     const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
@@ -1746,7 +1746,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.appInbox.receipt(name,clientId,ref);
       },
       history:async(thread,cursor,limit)=>{
-        try{return await this.appChatPage(name,hash,thread,cursor,limit,at);}
+        try{return await this.appChatPage(name,hash,thread,cursor,limit,at,revision);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
       // The newest shown text, cut at read time.

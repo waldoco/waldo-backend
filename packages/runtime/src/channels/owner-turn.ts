@@ -12,11 +12,12 @@ import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_REASONING, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   TOOL_ERRORS, toolError, type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
 } from '@waldo/contracts';
-import type { ConversationModelMessage } from '@waldo/contracts';
+import type { ConversationFile, ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
+import { exportedFile } from './artifact-exports';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
 import type { LoopEventLike } from '../hooks/claim-hook';
@@ -86,6 +87,8 @@ export const spendHold = (now: Date): ToolError => {
 export const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 const EXTERNAL_DATA_MAX_BYTES = 4096;
+// A reply names at most as many files as the model may read at once; the app opens each by itself.
+const TURN_FILES_MAX = 4;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -667,6 +670,8 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           // Loaded definitions are the turn's own catalogue: no receipt, and nothing a later turn should read back as a result.
           const loaded = event.call.name === FIND_TOOLS;
+          const file = event.call.name === 'export_artifact' && event.ok ? exportedFile(event.data) : null;
+          if (file && turnFiles.length < TURN_FILES_MAX && !turnFiles.some(kept => kept.ref === file.ref)) turnFiles.push(file);
           if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), ...(event.blocked ? { blocked_reason: event.blocked } : {}), text: { input: event.call.arguments, output: event.output } });
@@ -688,6 +693,7 @@ export const createOwnerResponder = (
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
+  let turnFiles: ConversationFile[] = [];
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
     try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
@@ -783,6 +789,7 @@ export const createOwnerResponder = (
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
     turnToolEvents = [];
+    turnFiles = [];
     control.begin(fromOwner);
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
@@ -806,7 +813,7 @@ export const createOwnerResponder = (
       // The receipt line stays last: the app and the console hide it only where it ends the text.
       const out = [reply, notice?.line, receipt?.line].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}), ...(fromOwner && turnFiles.length ? { files: turnFiles } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
