@@ -26,7 +26,7 @@ const row = (overrides: Partial<HealthContextRow> = {}): HealthContextRow => ({
 });
 
 const formZoneOf = (material: { view: DerivedHealthDestinationView }): string | undefined =>
-  material.view.algorithm_version === 'form.safte-fast.v1' ? material.view.form_zone : undefined;
+  'form_zone' in material.view ? material.view.form_zone : undefined;
 
 describe('toContextHealthMaterial', () => {
   it('redacts a full row to the zone-word material (ADR-0024)', () => {
@@ -175,6 +175,92 @@ describe('toContextHealthMaterial', () => {
       toContextHealthMaterial(row({ context: { ...row().context!, compiled_at: '2026-09-28T10:00:01.000Z' } }), clock, (error) => errors.push(error)),
     ).toBeNull();
     expect(errors).toHaveLength(2);
+  });
+});
+
+describe('toContextHealthMaterial reads what the stored row says about its own scores', () => {
+  const baseline = (state: string, personal_days: number) => ({ state, personal_days, needed: 14, prior: 'adults' });
+  const rich = (extra: Record<string, unknown> = {}): HealthContextRow => {
+    const context = row().context!;
+    return row({
+      context: {
+        ...context,
+        form: { score: 41, zone: 'moderate', algorithm_version: 'form.v9', activation: 'accepted', confidence: 0.61, baseline: baseline('provisional', 3) },
+        recovery: { score: 70, zone: 'good', algorithm_version: 'recovery.v5', activation: 'accepted', confidence: 0.61, baseline: baseline('provisional', 3) },
+        weight: { score: 77, zone: 'good', algorithm_version: 'weight.v5', activation: 'accepted', confidence: 0.61, baseline: baseline('personal', 21) },
+        sleep_debt: { state: 'available', debt_minutes: 640, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' },
+        windows: [{ start: '09:30', end: '11:30', kind: 'peak' }, { start: '14:00', end: '15:30', kind: 'dip' }],
+        ...extra,
+      },
+    });
+  };
+  const at = (extra: Record<string, unknown> = {}, onError?: (error: unknown) => void) => toContextHealthMaterial(rich(extra), clock, onError);
+
+  it('carries the version the row names, its baseline state, sleep debt in words and the day\'s windows', () => {
+    const material = at();
+    expect(material!.view).toMatchObject({
+      algorithm_version: 'form.v9', form_zone: 'flagging',
+      baseline_state: { recovery: 'provisional', form: 'provisional', load: 'personal' },
+      sleep_debt: 'building',
+      energy_windows: [{ start: '09:30', end: '11:30', kind: 'peak' }, { start: '14:00', end: '15:30', kind: 'dip' }],
+    });
+  });
+
+  it('names the Recovery version when Form has no score, and states no minutes, days or scores anywhere', () => {
+    const material = at({ form: null });
+    expect(material!.view).toMatchObject({ algorithm_version: 'recovery.v5', recovery_zone: 'solid', baseline_state: { recovery: 'provisional', load: 'personal' } });
+    expect(material!.view).not.toHaveProperty('baseline_state.form');
+    const text = JSON.stringify(material).replace(/"(?:start|end)":"\d\d:\d\d"/g, '');
+    for (const value of ['640', 'personal_days', '0.61', '"needed"', 'debt_minutes']) expect(text).not.toContain(value);
+  });
+
+  it('produces the material it always did for a row without the new fields', () => {
+    const material = toContextHealthMaterial(row(), clock);
+    expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
+  });
+
+  it('words sleep debt as building, steady, partial or unknown', () => {
+    const word = (sleep_debt: unknown) => (at({ sleep_debt })!.view as { sleep_debt?: string }).sleep_debt;
+    expect(word({ state: 'available', debt_minutes: 640, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('building');
+    expect(word({ state: 'available', debt_minutes: 30, need_basis: 'owner_confirmed', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('steady');
+    expect(word({ state: 'available', debt_minutes: 0, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('steady');
+    expect(word({ state: 'partial', confidence: 0.6, algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('partial');
+    expect(word({ state: 'unavailable', reason: 'missing_sleep' })).toBe('unknown');
+  });
+
+  it('drops only the line a malformed field would have made', () => {
+    for (const sleep_debt of [{ state: 'available', debt_minutes: 'a lot' }, { state: 'available', debt_minutes: -5 }, { state: 'soon' }, 640, 'building', []]) {
+      const view = at({ sleep_debt })!.view;
+      expect(view, JSON.stringify(sleep_debt)).not.toHaveProperty('sleep_debt');
+      expect(view).toMatchObject({ energy_windows: [{ kind: 'peak' }, { kind: 'dip' }], baseline_state: { recovery: 'provisional' } });
+    }
+    const badWindows: unknown[] = [
+      [{ start: '9:30', end: '11:30', kind: 'peak' }], [{ start: '09:30', end: '11:30', kind: 'peak' }, { start: '14:00', end: '15:30', kind: 'high' }],
+      Array(5).fill({ start: '09:30', end: '11:30', kind: 'peak' }), [{ start: 'resting heart rate 61', end: '11:30', kind: 'peak' }], 'peak 09:30-11:30', {}, [],
+    ];
+    for (const windows of badWindows) {
+      const view = at({ windows })!.view;
+      expect(view, JSON.stringify(windows)).not.toHaveProperty('energy_windows');
+      expect(view).toMatchObject({ sleep_debt: 'building', baseline_state: { recovery: 'provisional' } });
+    }
+    const forming = at({ recovery: { score: 70, zone: 'good', algorithm_version: 'recovery.v5', baseline: { state: 'forming' } } })!.view;
+    expect(forming).not.toHaveProperty('baseline_state.recovery');
+    expect(forming).toMatchObject({ baseline_state: { form: 'provisional', load: 'personal' }, sleep_debt: 'building' });
+  });
+
+  it('reads a pillar whose version is not a stored version name as unreadable, never as another version', () => {
+    const errors: unknown[] = [];
+    const formBad = at({ form: { score: 41, zone: 'moderate', algorithm_version: 'recovery.v5' } }, (error) => errors.push(error));
+    expect(formBad!.view).toMatchObject({ algorithm_version: 'recovery.v5', recovery_zone: 'solid' });
+    expect(formBad!.view).not.toHaveProperty('form_zone');
+    expect(at({ recovery: { score: 70, zone: 'good', algorithm_version: 'v5; drop table' } }, (error) => errors.push(error))).toBeNull();
+    expect(errors).toHaveLength(1);
+  });
+
+  it('keeps app-authored strings word-only beside the new fields', () => {
+    const material = at({ drivers: ['wrist temperature above usual', 'breathing rate 14 above usual'], tags: ['sick-day-2'] });
+    expect(material!.narrative.day_summary).toContain('wrist temperature above usual');
+    expect(material!.narrative.day_summary).not.toMatch(/\d/);
   });
 });
 

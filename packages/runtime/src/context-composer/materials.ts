@@ -293,7 +293,7 @@ function viewMatchesNarrative(
   view: DerivedHealthDestinationView,
   narrative: NarrativeContext,
 ): boolean {
-  return view.algorithm_version === 'form.safte-fast.v1'
+  return 'form_zone' in view
     ? narrative.zone === view.form_zone
     : narrative.recovery_descriptor === view.recovery_zone;
 }

@@ -54,7 +54,8 @@ export const SANITISE_DESTINATION_POLICIES = {
     payload_kind: 'text_or_structured',
     max_chars: MODEL_CONTEXT_MAX_CHARS,
     max_depth: 4,
-    max_object_fields: 9,
+    // The derived health view is nine fixed fields and up to three the model is told in words (baseline, sleep debt, windows).
+    max_object_fields: 12,
     max_array_items: 16,
     max_key_chars: 128,
   },

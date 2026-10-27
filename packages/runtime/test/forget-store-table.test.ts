@@ -36,6 +36,7 @@ const TABLES: Record<string, Row> = {
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
   schedule_settings: exempt('a setting key and an enum value (the health proposal mode); no owner text'),
   health_trigger_pending: exempt('an owner-local day and the time it was marked; no owner text, zone word or reading'),
+  health_trigger_wakes: exempt('an owner-local day, a wake reason code, the time it was noted and a taken flag; no owner text, zone word, driver phrase or reading'),
   health_trigger_runs: exempt('run id, time, local day, mode, outcome code, approval id and verdict code; no owner text, zone word or reading'),
   mcp_connections: exempt('a connected MCP server: the https URL the owner entered, Waldo\'s name for it, issuer, granted scopes, status, token version and expiry; no conversation text and no token'),
   mcp_tools: exempt('server-written tool definitions with their digests; no owner text'),

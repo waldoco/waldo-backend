@@ -1056,6 +1056,42 @@ describe('Scribe sanitiser', () => {
     expect(inspect('not_base64_*', 'send_message')).toMatchObject({ ok: true });
   });
 
+  describe('the system_prompt object-field cap', () => {
+    // A derived health view carrying everything it can: nine fixed fields and the three the model is told in words.
+    const FULL_VIEW = {
+      ...VIEW,
+      destination_eligibility: ['trigger_prompt'],
+      baseline_state: { recovery: 'provisional', form: 'provisional', load: 'personal' },
+      sleep_debt: 'building',
+      energy_windows: [{ start: '09:30', end: '11:30', kind: 'peak' }],
+    } as const;
+    const fieldsOf = (value: object) => Object.keys(value).length;
+    const withExtraFields = (count: number): SanitiseInput['payload'] => ({
+      ...FULL_VIEW,
+      ...Object.fromEntries(Array.from({ length: count }, (_, index) => [`extra_${index}`, 'x'])),
+    }) as unknown as SanitiseInput['payload'];
+
+    it('admits the view at twelve fields', () => {
+      expect(fieldsOf(FULL_VIEW)).toBe(12);
+      expect(inspect(FULL_VIEW as unknown as SanitiseInput['payload'], 'system_prompt')).toMatchObject({ ok: true, source_taint: null, redactions: [] });
+    });
+
+    it('fails closed at thirteen fields', () => {
+      const thirteen = withExtraFields(1);
+      expect(fieldsOf(thirteen as object)).toBe(13);
+      expect(inspect(thirteen, 'system_prompt')).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic: { stage: 'policy' } });
+    });
+
+    // A structured payload reaches system_prompt only as an eligible derived health view, so the cap raises nothing for any
+    // other payload: twelve or thirteen fields, it is refused before the cap is read.
+    it('admits no other structured payload at twelve fields or thirteen', () => {
+      for (const length of [1, 9, 12, 13]) {
+        const payload = Object.fromEntries(Array.from({ length }, (_, index) => [`k${index}`, 'x']));
+        expect(inspect(payload, 'system_prompt'), `${length} fields`).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic: { stage: 'policy' } });
+      }
+    });
+  });
+
   it('enforces destination payload kind and every rejecting structural cap', () => {
     expect(inspect({ text: 'not prompt text' }, 'system_prompt')).toEqual({
       ok: false,

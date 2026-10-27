@@ -1,6 +1,7 @@
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from '../channels/reminders';
 import { produceHealthScores, type ProducerDeps, type ProducerOutcome } from './producer';
+import { detectHealthWakes, healthSnapshot, type HealthSnapshot, type HealthWakeReason } from './wakes';
 
 // The owner's derived rows are recomputed in the owner's own object, one recompute at a time. Every upload that changed a
 // reading, every wearable sync, and every calendar change on the owner's today asks for one; the asks inside one window
@@ -19,11 +20,30 @@ export type HealthRecomputeDeps = Readonly<{
   producer: ProducerDeps;
   // Drops the cached calendar demand for one local day, so the next recompute reads that day's busy minutes again.
   forgetDemand?(day: string): void;
+  // After a run that wrote rows, the stored rows are read back and compared with the newest row before the run, so a wake
+  // beyond a zone change reaches the trigger. The read is the model-use consented one: with that consent withdrawn it
+  // returns nothing and nothing wakes. It is skipped while the owner has health proposals off.
+  wakes?: Readonly<{
+    enabled(): boolean;
+    readContext(): Promise<unknown>;
+    woken(day: string, reasons: readonly HealthWakeReason[]): Promise<void>;
+  }>;
 }>;
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
+const read = async (readContext: () => Promise<unknown>): Promise<HealthSnapshot | null> => healthSnapshot(await readContext());
+
 export const healthRecompute = (deps: HealthRecomputeDeps) => {
+  // A wake that cannot be read or noted never fails the recompute: a retry would only run the producer again.
+  const wake = async (wakes: NonNullable<HealthRecomputeDeps['wakes']>, before: HealthSnapshot | null, today: string): Promise<void> => {
+    try {
+      const after = await read(wakes.readContext);
+      if (!after || after.day !== today) return;
+      const reasons = await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day) });
+      if (reasons.length) await wakes.woken(today, reasons);
+    } catch { console.error('health wake check failed'); }
+  };
   const ask = async (): Promise<void> => {
     const now = deps.now(), found = deps.scheduler.lookup(HEALTH_RECOMPUTE_ID);
     // One already waiting takes this upload too. One that is due or running may have read before this batch committed, and
@@ -47,8 +67,11 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     },
     // A recompute that failed throws, so the scheduler retries it and then pauses it; the next upload asks again.
     async run(): Promise<ProducerOutcome> {
-      const outcome = await produceHealthScores(deps.producer, { now: deps.now(), timezone: deps.ownerZone() });
+      const now = deps.now(), timezone = deps.ownerZone(), today = localIso(now, timezone).slice(0, 10), wakes = deps.wakes?.enabled() ? deps.wakes : null;
+      const before = wakes ? await read(wakes.readContext).catch((): null => null) : null;
+      const outcome = await produceHealthScores(deps.producer, { now, timezone });
       if (outcome === 'failed') throw new Error('health recompute failed');
+      if (outcome === 'written' && wakes) await wake(wakes, before, today);
       return outcome;
     },
   };

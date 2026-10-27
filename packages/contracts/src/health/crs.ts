@@ -48,6 +48,25 @@ export type DerivedHealthDestinationEligibility = z.infer<
   typeof derivedHealthDestinationEligibilitySchema
 >;
 
+// Whether a pillar's score leans on the owner's own history yet, in the words the model is given.
+export const derivedBaselineStateSchema = z.enum(['provisional', 'personal']);
+export type DerivedBaselineState = z.infer<typeof derivedBaselineStateSchema>;
+
+// Sleep debt reaches the model as a word, never as minutes.
+export const derivedSleepDebtWordSchema = z.enum(['building', 'steady', 'partial', 'unknown']);
+export type DerivedSleepDebtWord = z.infer<typeof derivedSleepDebtWordSchema>;
+
+// A stretch of the owner's local day as clock times. A time of day is not a reading, and this is the only shape in which a
+// digit reaches the derived view, so the format is fixed here and never taken from free text.
+const clockTimeSchema = z.string().regex(/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/);
+export const derivedEnergyWindowSchema = z.strictObject({
+  start: clockTimeSchema,
+  end: clockTimeSchema,
+  kind: z.enum(['peak', 'dip']),
+});
+export type DerivedEnergyWindow = z.infer<typeof derivedEnergyWindowSchema>;
+export const derivedEnergyWindowsSchema = z.array(derivedEnergyWindowSchema).max(4);
+
 const derivedViewCommon = {
   authority: z.literal('backend'),
   trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
@@ -55,31 +74,43 @@ const derivedViewCommon = {
   confidence_band: z.enum(['high', 'medium', 'low']),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
   destination_eligibility: z.array(derivedHealthDestinationEligibilitySchema).min(1),
+  // Each pillar the view tells the model about, by its own baseline state; a pillar the row did not label is absent.
+  baseline_state: z
+    .strictObject({
+      recovery: derivedBaselineStateSchema.optional(),
+      form: derivedBaselineStateSchema.optional(),
+      load: derivedBaselineStateSchema.optional(),
+    })
+    .optional(),
+  sleep_debt: derivedSleepDebtWordSchema.optional(),
+  energy_windows: derivedEnergyWindowsSchema.optional(),
 } as const;
+
+// A version name as a stored row carries it, e.g. form.v9 or recovery.candidate.v4: the pillar's own name, optional middle
+// parts and a numbered revision. The pillar prefix stops a Form view naming a Recovery version.
+const versionOf = (pillar: 'form' | 'recovery') =>
+  z.string().max(64).regex(new RegExp(`^${pillar}(?:\\.[a-z0-9-]+)*\\.v[0-9]+$`));
 
 export const formHealthViewSchema = z.strictObject({
   ...derivedViewCommon,
-  algorithm_version: z.literal('form.safte-fast.v1'),
+  algorithm_version: versionOf('form'),
   form_zone: formZoneSchema,
   missing_components: z.array(crsPillarSchema),
 });
 export type FormHealthView = z.infer<typeof formHealthViewSchema>;
 
-// Recovery is the only Stage 1 score. It is built from sleep and HRV, so those are the only
-// components that can be reported missing.
+// Recovery is built from sleep and HRV, so those are the only components that can be reported missing.
 export const recoveryComponentSchema = z.enum(['sleep', 'hrv']);
 export const recoveryHealthViewSchema = z.strictObject({
   ...derivedViewCommon,
-  algorithm_version: z.literal('recovery.v1'),
+  algorithm_version: versionOf('recovery'),
   recovery_zone: recoveryZoneSchema,
   missing_components: z.array(recoveryComponentSchema),
 });
 export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
 
-export const derivedHealthDestinationViewSchema = z.discriminatedUnion('algorithm_version', [
-  formHealthViewSchema,
-  recoveryHealthViewSchema,
-]);
+// Which pillar a view is about is which zone it carries; no version name is read to decide it.
+export const derivedHealthDestinationViewSchema = z.union([formHealthViewSchema, recoveryHealthViewSchema]);
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test
