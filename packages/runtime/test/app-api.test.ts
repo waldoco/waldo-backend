@@ -106,6 +106,22 @@ describe('app sign-in and main chat routes', () => {
       ['GET', '/app/v1/threads?state=active', 'owner-1'], ['POST', '/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', 'owner-1']]);
     expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
   });
+  it('forwards the calendar day to the credential owner DO as a read, and refuses it without a credential or over the limit', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, day = (headers: Record<string, string>) => new Request('https://w.test/app/v1/calendar/day?day=2026-10-27', { headers });
+    expect(await (await handleApp(day({ authorization: `Bearer ${CREDENTIAL}` }), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(r => [r.method, new URL(r.url).pathname + new URL(r.url).search, r.headers.get('x-waldo-do-name')])).toEqual([['GET', '/app/v1/calendar/day?day=2026-10-27', 'owner-1']]);
+    expect(keys).toEqual(['app-read:owner-1']);
+    expect((await handleApp(day({}), counted, auth))!.status).toBe(401);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(day({ authorization: `Bearer ${CREDENTIAL}` }), limited, auth))!.status).toBe(429);
+    expect(forwards).toHaveLength(1);
+    expect((await handleApp(post('/app/v1/calendar/day', {}, { authorization: `Bearer ${CREDENTIAL}` }), counted, auth))!.status).toBe(405);
+    expect(forwards).toHaveLength(1);
+    expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
