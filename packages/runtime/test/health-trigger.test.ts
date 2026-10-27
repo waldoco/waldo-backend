@@ -618,3 +618,116 @@ describe('the health card budget', () => {
     });
   });
 });
+
+describe('telling the app a health card is up', () => {
+  const dayOfNow = () => localIso(NOW, TZ).slice(0, 10);
+  const mark = (h: Harness, at = NOW) => h.deps().book.mark(dayOfNow(), at - 60_000);
+  const notifying = () => { const told: string[] = []; return { told, notify: async (id: string) => { told.push(id); } }; };
+
+  it('tells the app once, with the approval id, after the card is up and its budget booked', async () => {
+    await withTrigger(async h => {
+      const { told, notify } = notifying();
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, charge: key => { h.charged.push(key); expect(told).toEqual([]); } }))).toBe('proposed');
+      expect(told).toEqual(['p1']);
+      expect(h.charged).toEqual(['health:2026-10-21']);
+    });
+  });
+
+  it('stays silent whenever no card goes up: no consent, nothing coming, no_op, quiet hours, the gate, shadow, a refused title, an off switch', async () => {
+    const quiet: Proactivity = { quiet_start: '07:00', quiet_end: '12:00', volume: 'normal' };
+    const create = (title: string) => async () => JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T15:00', end: '2026-10-21T16:00', title, notify_guests: null, reason: 'Protect an hour.' });
+    const scenarios: readonly (readonly [HealthTriggerOutcome, Partial<HealthTriggerDeps>])[] = [
+      ['no_health', { readHealth: async () => null }],
+      ['nothing_coming', { comingItems: async () => [] }],
+      ['no_op', { decide: async () => noOp }],
+      ['held_quiet', { proactivity: () => quiet }],
+      ['budget_gate', { admit: () => ({ verdict: 'spent' }) }],
+      ['held_cooldown', { admit: () => ({ verdict: 'wait', until: NOW + HEALTH_TRIGGER_FLOOR_MS }) }],
+      ['shadow_proposed', { modeSetting: () => 'shadow' }],
+      ['egress_refused', { decide: create('Recovery block') }],
+      ['invalid', { decide: async () => 'not json' }],
+      ['opted_out', { enabled: () => false }],
+    ];
+    for (const [outcome, over] of scenarios) {
+      await withTrigger(async h => {
+        const { told, notify } = notifying();
+        mark(h);
+        expect([outcome, await runHealthTrigger(h.deps({ ...over, notify }))]).toEqual([outcome, outcome]);
+        expect([outcome, told]).toEqual([outcome, []]);
+      });
+    }
+  });
+
+  it('stays silent for a run with nothing pending and for a change already waiting on its card', async () => {
+    await withTrigger(async h => {
+      h.sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)');
+      const { told, notify } = notifying();
+      const propose = async (args: ProposeCalendarChangeArgs) => {
+        h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES ('p1', 'calendar_change', 'card_unconfirmed', 's', ?, ?)", JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+        return 'p1';
+      };
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('idle');
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('proposed');
+      mark(h, NOW + 1_000);
+      expect(await runHealthTrigger(h.deps({ notify, propose, now: () => NOW + 1_000 }))).toBe('duplicate');
+      expect(told).toEqual(['p1']);
+    });
+  });
+
+  const LEDGER = 'CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)';
+  const waiting = (h: Harness, cards: { n: number }) => async (args: ProposeCalendarChangeArgs) => {
+    const id = `p${++cards.n}`;
+    h.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES (?, 'calendar_change', 'card_unconfirmed', 's', ?, ?)", id, JSON.stringify({ ...args, account: 'owner@example.test', operation_ref: 'health:x', time_zone: TZ }), NOW);
+    return id;
+  };
+  const recorded = (h: Harness) => h.sql.exec<{ outcome: string; approval_id: string | null }>('SELECT outcome, approval_id FROM health_trigger_runs').toArray();
+
+  it('records the run and clears the mark before it tells the app, so nothing the push does can lose the run', async () => {
+    await withTrigger(async h => {
+      mark(h);
+      const seen: unknown[] = [];
+      const notify = async () => { seen.push([recorded(h), h.deps().book.pending(NOW)]); };
+      expect(await runHealthTrigger(h.deps({ notify }))).toBe('proposed');
+      expect(seen).toEqual([[[{ outcome: 'proposed', approval_id: 'p1' }], null]]);
+    });
+  });
+
+  it('a push that hangs leaves the run recorded and the mark cleared', async () => {
+    await withTrigger(async h => {
+      mark(h);
+      let reached!: () => void;
+      const called = new Promise<void>(resolve => { reached = resolve; });
+      void runHealthTrigger(h.deps({ notify: () => { reached(); return new Promise<void>(() => undefined); } }));
+      await called;
+      expect(recorded(h)).toEqual([{ outcome: 'proposed', approval_id: 'p1' }]);
+      expect(h.deps().book.pending(NOW)).toBeNull();
+    });
+  });
+
+  it('a push that throws never fails the run, and the next run puts up no second card and sends no second push', async () => {
+    await withTrigger(async h => {
+      h.sql.exec(LEDGER);
+      const cards = { n: 0 }, propose = waiting(h, cards), told: string[] = [];
+      const notify = async (id: string) => { told.push(id); throw new Error('push directory unavailable'); };
+      mark(h);
+      expect(await runHealthTrigger(h.deps({ notify, propose }))).toBe('proposed');
+      expect(h.charged).toEqual(['health:2026-10-21']);
+      expect(h.reschedules).toEqual([]);
+      mark(h, NOW + 1_000);
+      expect(await runHealthTrigger(h.deps({ notify, propose, now: () => NOW + 1_000 }))).toBe('duplicate');
+      expect([cards.n, told, recorded(h).map(row => row.outcome)]).toEqual([1, ['p1'], ['proposed', 'duplicate']]);
+    });
+  });
+
+  it('a throwing re-arm after a run that landed is logged as a failure and never thrown, so the scheduler does not retry before the floor', async () => {
+    await withTrigger(async h => {
+      const book = h.deps().book;
+      book.mark('2026-10-21', NOW - 60_000);
+      const decide = async () => { book.mark('2026-10-21', NOW + 5_000); return noOp; };
+      await expect(runHealthTrigger(h.deps({ decide, reschedule: async () => { throw new Error('scheduler unavailable'); } }))).resolves.toBe('no_op');
+      expect(h.logs.at(-1)).toContain('"code":"failed"');
+    });
+  });
+});
