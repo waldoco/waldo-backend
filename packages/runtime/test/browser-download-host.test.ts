@@ -3,15 +3,15 @@ import {workspaceStore,type WorkspaceState} from '@waldo/workspace';
 import {commonBrowserHost} from '../src/channels/common-browser-host';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 import {generalDigest} from '../src/channels/general-browser-observation';
-const probe=vi.hoisted(()=>({dispatches:0}));
+const probe=vi.hoisted(()=>({dispatches:0,file:{filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'}}));
 vi.mock('../src/channels/cloudflare-general-browser',async load=>{
  const actual=await load<typeof import('../src/channels/cloudflare-general-browser')>();
  return {...actual,cloudflareGeneralBrowser:(options:any)=>({...actual.cloudflareGeneralBrowser(options),download:async(_session:any,_snapshot:any,_reference:string,prepare:()=>Promise<void>,consume:any)=>{
-  await prepare();probe.dispatches++;const bytes=new TextEncoder().encode('owner,amount\nfictional,7\n');await consume({filename:'report.csv',mime:'text/csv',byte_size:bytes.length,sha256:await generalDigest(bytes)},bytes);
+  await prepare();probe.dispatches++;const bytes=new TextEncoder().encode(probe.file.body);await consume({filename:probe.file.filename,mime:probe.file.mime,byte_size:bytes.length,sha256:await generalDigest(bytes)},bytes);
  }})};
 });
 async function fixture(){
- commonBrowserFixture.reset();probe.dispatches=0;let live=true,now=Date.now(),failReady=false,replaceAt:'prepared'|'importing'|undefined,filesStalled=false,taskDeadline=now+60000;
+ commonBrowserFixture.reset();probe.dispatches=0;probe.file={filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'};let live=true,now=Date.now(),failReady=false,replaceAt:'prepared'|'importing'|undefined,filesStalled=false,taskDeadline=now+60000;
  const rows=new Map<string,any>(),state:WorkspaceState={binding:null,files:[],bodies:[],operations:[]},bodies=new Map<string,Uint8Array>();
  const admitted=async()=>{if(!live)throw Error('owner revoked');};
  const storage={kv:{get:(key:string)=>structuredClone(rows.get(key)),put:(key:string,value:any)=>{if(failReady&&value?.download?.state==='ready')throw Error('runtime interrupted after workspace commit');rows.set(key,structuredClone(value));},list:({prefix}:{prefix:string})=>new Map([...rows].filter(([key])=>key.startsWith(prefix)))},transactionSync:<T>(work:()=>T)=>{const current=rows.get('common-browser:download-task');if(replaceAt&&current?.download?.state===replaceAt){replaceAt=undefined;rows.set('common-browser:download-task',{...current,session:{...current.session,generation:current.session.generation+1}});}return work();}} as unknown as DurableObjectStorage;
@@ -51,3 +51,12 @@ it('concurrent requests reserve and dispatch one download, without overwriting i
 it('stalled workspace acquisition settles at the funded deadline without a ready receipt',async()=>{
  const f=await fixture();f.stallFiles();expect(await f.host.actionHandler.handle(f.args,f.ctx)).toMatchObject({ok:false});expect(f.state.files).toHaveLength(0);expect(f.rows.get('common-browser:download-task').download.state).toBe('importing');await f.host.cancel();
 },200);
+it('a downloaded PDF reaches the model as a document to read; other downloads stay in the workspace only',async()=>{
+ const f=await fixture();f.host.resetAttachments();
+ expect(await f.host.actionHandler.handle(f.args,f.ctx)).toMatchObject({ok:true,data:{download:{filename:'report.csv'}}});
+ expect(f.host.attachments().filter(file=>file.kind==='file')).toHaveLength(0);await f.host.cancel();
+ const pdf='%PDF-1.4 fictional boarding pass, seat 12A';
+ const g=await fixture();probe.file={filename:'boarding-pass.pdf',mime:'application/pdf',body:pdf};g.host.resetAttachments();
+ expect(await g.host.actionHandler.handle(g.args,g.ctx)).toMatchObject({ok:true,data:{download:{filename:'boarding-pass.pdf'}}});
+ expect(g.host.attachments()).toContainEqual({kind:'file',mime_type:'application/pdf',filename:'boarding-pass.pdf',data_base64:btoa(pdf)});await g.host.cancel();
+});

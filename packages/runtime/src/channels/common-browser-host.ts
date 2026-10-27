@@ -1,5 +1,5 @@
 import type {NativeHandoffMetadata} from './native-browser-handoff';
-import { triggerTypeSchema, TOOL_PERMISSIONS, browserSessionSchema, browsePageArgsSchema, browseActArgsSchema, type BrowseActArgs, type BrowserSession, type ToolHandler, type BrowsePageArgs, type LLMAttachment } from '@waldo/contracts';
+import { triggerTypeSchema, TOOL_PERMISSIONS, browserSessionSchema, browsePageArgsSchema, browseActArgsSchema, type BrowseActArgs, type BrowserSession, type ToolHandler, type BrowsePageArgs, type LLMAttachment, LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
 import type { BrowserWorker } from '@cloudflare/playwright';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareGeneralBrowser,GeneralBrowserError } from './cloudflare-general-browser';
@@ -32,6 +32,7 @@ export type CommonBrowserConfiguration = Readonly<{
 // key/value limit. Measure UTF-8 JSON, including the envelope, and reserve room
 // for the bounded intent/cleanup metadata added after observation publication.
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
+const MODEL_PDF_BYTES=8*1024*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
@@ -64,7 +65,8 @@ export function commonBrowserHost(options:Readonly<{
  files?(assertCurrent:()=>Promise<void>,ownerId:string):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
- let images:LLMAttachment[]=[];
+ let modelFiles:LLMAttachment[]=[];
+ const attach=(file:LLMAttachment)=>{if(modelFiles.length>=LLM_ATTACHMENTS_MAX)modelFiles.shift();modelFiles.push(file);};
  // Set when the last read failed because its retained session has ended and nothing on that session is unresolved,
  // so the caller may replace the session once. An effect never sets it: its outcome stays fenced on the old session.
  let sessionEnded=false;
@@ -125,8 +127,7 @@ export function commonBrowserHost(options:Readonly<{
   save(checkpoint,key(grant.taskId));
   if(observed.image){
    let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
-   if(images.length>=4)images.shift();
-   images.push({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
+   attach({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
   }
   return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
    field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
@@ -221,6 +222,8 @@ export function commonBrowserHost(options:Readonly<{
       },async(metadata,bytes)=>{
        await assertDownload();options.storage.transactionSync(()=>{const latest=currentDownload();save({...latest,download:{...latest.download!,state:'importing',metadata}},storageKey!);});
        receipt=await importFile(metadata,bytes);
+       // A PDF (a boarding pass, a ticket) is read by the model as a document; other files stay in the workspace.
+       if(metadata.mime==='application/pdf'&&bytes&&bytes.byteLength<=MODEL_PDF_BYTES){let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);attach({kind:'file',mime_type:'application/pdf',filename:metadata.filename,data_base64:btoa(binary)});}
       });
      }
      if(!receipt)throw Error('download receipt unavailable');await assertDownload();
@@ -230,7 +233,7 @@ export function commonBrowserHost(options:Readonly<{
     }
     if(command.operation==='owner_login'){
      if(!options.config.assertHandoffCurrent||!(ctx.runScope?.runId??ctx.turnId))throw Error('owner login unavailable');
-     images=[];handoffSession={...record.session};
+     modelFiles=[];handoffSession={...record.session};
      save({...record,observation:undefined,tabs:[],handoff:{version:1,state:'starting',targetId:before.targetId,origin:new URL(before.observation.url).origin,reason:command.reason,requestRunId:(ctx.runScope?.runId??ctx.turnId)!}},storageKey);
      try {
       human=await driver.beginOwnerHandoff(record.session,before,command.reason,async()=>{await handoffCurrent(grant);});
@@ -303,7 +306,7 @@ export function commonBrowserHost(options:Readonly<{
    await api.cancel();
   }
  },
-resetAttachments(){images=[];},sessionEnded:()=>sessionEnded,sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
+resetAttachments(){modelFiles=[];},sessionEnded:()=>sessionEnded,sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...modelFiles],async cancel(){modelFiles=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
   if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
