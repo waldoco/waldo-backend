@@ -19,6 +19,8 @@ describe('signup entry', () => {
       expect(html).toContain('history.replaceState');
       expect(html).toContain("addEventListener('hashchange'");
       expect(html).not.toMatch(/src="https?:/);
+      expect(html).toContain('<a href="https://www.heywaldo.in/terms">Terms of Use</a>');
+      expect(html).toContain('<a href="https://www.heywaldo.in/privacy">Privacy Policy</a>');
     }
   });
 });
@@ -51,7 +53,9 @@ it('retains legacy contact continuation through resend, refresh and repeated sub
   expect(verified.status).toBe(303);
   const verifiedCookie = cookieFrom(verified);
   const phoneForm = await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: verifiedCookie } }), env, s.a, s.signup);
-  expect(await phoneForm.text()).toContain('Email verified. Finish');
+  const phoneHtml = await phoneForm.text();
+  expect(phoneHtml).toContain('Email verified. Finish');
+  expect(phoneHtml).toContain('href="https://www.heywaldo.in/privacy"');
   const collected = await handleSignup(post('/phone', { csrf: progress.csrf, name: 'Person Example', phone: '+91 98765 43210' }, verifiedCookie), env, s.a, s.signup);
   expect(collected.status).toBe(303);
   const pendingCookie = cookieFrom(collected);
