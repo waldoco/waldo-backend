@@ -80,7 +80,7 @@ const LABEL_STRENGTHS = ['25 milligrams', '25 milligram', 'twenty-five milligram
 const LABEL_WORDS = [...LABEL_STRENGTHS, 'one tablet', '1 tablet', 'a tablet'];
 // A fraction or an extra of a tablet is a count the label does not carry, whatever else the label says; stripping "a tablet"
 // would otherwise hide "half a tablet" and "a tablet and a half".
-const EXTRA_COUNT = /\b(?:(?:half|quarter|another|extra)\s+(?:of\s+)?(?:an?\s+|the\s+)?(?:\d+\s*mg\s+)?(?:tablet|pill|capsule|dose)s?|(?:tablet|pill|capsule)s?\s+and\s+(?:a\s+)?half|and\s+a\s+half\s+(?:tablet|pill|capsule)s?|an\s+extra\s+(?:\d+\s*mg\s+)?(?:tablet|pill|capsule|dose)s?)\b|½/;
+const EXTRA_COUNT = /\b(?:(?:half|quarter|another|extra)\s+(?:of\s+)?(?:an?\s+|the\s+)?(?:\d+\s*mg\s+)?(?:tablet|pill|capsule)s?|(?:tablet|pill|capsule)s?\s+and\s+(?:a\s+)?half|and\s+a\s+half\s+(?:tablet|pill|capsule)s?|an\s+extra\s+(?:\d+\s*mg\s+)?(?:tablet|pill|capsule)s?)\b|½/;
 const closed = (text: string) => text.replace(/\s+/g, ' ');
 const withoutLabelWords = (text: string) => LABEL_WORDS.reduce((rest, phrase) => rest.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' ').replace(/\s+/g, ' '), closed(text));
 const outsideLabel = (text: string) => EXTRA_COUNT.test(closed(text).toLowerCase()) || namesDose(withoutLabelWords(text));
