@@ -8,7 +8,7 @@ const deviation = (values: readonly number[], center: number): number => Math.sq
 
 // A z-score against the owner's own history, limited to +-2.5 so one outlier cannot dominate.
 // A flat history has no spread: the same value scores 0, any other value takes the limit.
-const bounded = (delta: number, spread: number): number => {
+export const bounded = (delta: number, spread: number): number => {
   if (spread === 0) return delta === 0 ? 0 : Math.sign(delta) * Z_LIMIT;
   return Math.max(-Z_LIMIT, Math.min(Z_LIMIT, delta / spread));
 };
@@ -20,7 +20,7 @@ export const logZScore = (value: number, history: readonly number[]): number =>
   zScore(Math.log(value), history.map(entry => Math.log(entry)));
 
 // Minutes around a 1440-minute clock, so 23:50 and 00:10 are 20 minutes apart.
-const circularDelta = (value: number, center: number): number => ((value - center + 2160) % 1440) - 720;
+export const circularDelta = (value: number, center: number): number => ((value - center + 2160) % 1440) - 720;
 export const circularZScore = (value: number, history: readonly number[]): number | null => {
   const sine = mean(history.map(entry => Math.sin(entry * Math.PI / 720)));
   const cosine = mean(history.map(entry => Math.cos(entry * Math.PI / 720)));

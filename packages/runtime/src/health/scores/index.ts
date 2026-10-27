@@ -1,6 +1,7 @@
+import { labelOf } from './baseline';
 import { driversOf } from './drivers';
 import { formScore } from './form';
-import { ALGORITHM, recoveryBasis } from './recovery';
+import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { sleepDebt } from './sleep-debt';
 import { BASELINE_WINDOW_DAYS, combine } from './stats';
 import { daysBetween, isTimeZone, localDayWindow } from './time';
@@ -42,18 +43,27 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     return age >= 1 && age <= BASELINE_WINDOW_DAYS;
   });
 
-  const basis = recoveryBasis(target, prior, input.sleepNeedMinutes);
+  const provisional = input.provisional === true;
+  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes) : recoveryBasis(target, prior, input.sleepNeedMinutes);
   let recovery: RecoveryResult;
   if ('reason' in basis) recovery = { state: 'unavailable', reason: basis.reason };
   else {
     const { score, coverage } = combine(basis.components);
-    recovery = { state: 'available', score, zone: recoveryZone(score), algorithm_version: ALGORITHM.recovery, activation: 'candidate_unaccepted', coverage, hrv_method: basis.hrvMethod, used: { signals: basis.signals, days: basis.days } };
+    const used = { signals: basis.signals, days: basis.days };
+    recovery = provisional
+      ? { state: 'available', score, zone: recoveryZone(score), algorithm_version: PROVISIONAL_ALGORITHM.recovery, activation: 'accepted', coverage, hrv_method: basis.hrvMethod, used, baseline: labelOf(basis.own ?? [], basis.usedPrior === true) }
+      : { state: 'available', score, zone: recoveryZone(score), algorithm_version: ALGORITHM.recovery, activation: 'candidate_unaccepted', coverage, hrv_method: basis.hrvMethod, used };
   }
   return {
     recovery,
     drivers: driversOf(target, prior),
-    sleep_debt: sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes),
-    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf),
-    weight: weightScore(target, prior),
+    sleep_debt: sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional),
+    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional),
+    weight: weightScore(target, prior, provisional),
   };
 };
+
+// The engine the owner's recompute runs, chosen by the HEALTH_PROVISIONAL_SCORES variable: only the exact value "1" turns
+// provisional scores on, and anything else is the earlier engine itself.
+export const dailyScoresFor = (flag: string | undefined): ((input: DailyScoresInput) => DailyScores) =>
+  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true }) : computeDailyScores);

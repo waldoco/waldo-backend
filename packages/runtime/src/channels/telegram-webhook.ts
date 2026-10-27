@@ -37,6 +37,9 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_TOOL_LOADER?: string;
   // 'on' shows owner replies while they are written (Telegram drafts, the app's receipt draft). Off when unset.
   WALDO_STREAM_REPLIES?: string;
+  // "1" scores from the owner's first day against the shared baseline and writes the provisional versions; anything else keeps
+  // the earlier engine. Apply the derived-row migration that admits the new keys before turning it on.
+  HEALTH_PROVISIONAL_SCORES?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;

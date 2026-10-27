@@ -94,6 +94,7 @@ const expectedMigrations = [
   '20261027090000_waldo_app_push_session_lifecycle.sql',
   '20261027130000_health_reads_drivers_sleep_debt.sql',
   '20261027140000_health_scores_history.sql',
+  '20261027150000_health_provisional_row.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

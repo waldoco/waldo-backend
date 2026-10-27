@@ -1,4 +1,5 @@
-import { ALGORITHM } from './recovery';
+import { labelOf, standing } from './baseline';
+import { ALGORITHM, PROVISIONAL_ALGORITHM } from './recovery';
 import { BASELINE_DAYS, combine, higherIsBetter, zScore, type Component } from './stats';
 import { weightZone } from './zones';
 import type { DayRecord, DemandInputs, WeightResult } from './types';
@@ -21,8 +22,42 @@ const LOAD_MEASURES: readonly ((day: DayRecord) => number | null)[] = [activeEne
 const history = (prior: readonly DayRecord[], read: (day: DayRecord) => number | null | undefined) =>
   prior.flatMap(day => { const value = read(day); return value === null || value === undefined ? [] : [{ day: day.day, value }]; });
 
+// Weight on the shared baseline: any one component with a baseline of its own gives Weight, and coverage shows what is
+// missing. With no demand and no load reading at all there is nothing to read; with some but no baseline yet, the baseline
+// is still forming.
+const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[]): WeightResult => {
+  const components: Component[] = [];
+  const signals: string[] = [];
+  const own: number[] = [];
+  const days = new Set<string>([target.day]);
+  const demand = target.demand;
+  let anyReading = false;
+  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number): boolean => {
+    anyReading = true;
+    const at = standing(value, past.map(entry => entry.value), null);
+    if (at === null) return false;
+    components.push({ name, score: higherIsBetter(at.z), weight: share });
+    signals.push(name);
+    own.push(at.own);
+    past.forEach(entry => days.add(entry.day));
+    return true;
+  };
+  for (const [name, field, share] of FIELDS) {
+    const value = demand?.[field];
+    if (value !== null && value !== undefined) add(name, value, history(prior, day => day.demand?.[field]), share);
+  }
+  for (const measure of LOAD_MEASURES) {
+    const value = measure(target);
+    if (value !== null && add('physical_load', value, history(prior, measure), PHYSICAL_LOAD_SHARE)) break;
+  }
+  if (!components.length) return { state: 'unavailable', reason: anyReading ? 'baseline_immature' : 'calendar_demand_unavailable' };
+  const { score, coverage } = combine(components);
+  return { state: 'available', score, zone: weightZone(score), algorithm_version: PROVISIONAL_ALGORITHM.weight, activation: 'accepted', coverage, hrv_method: null, used: { signals, days: [...days].sort() }, baseline: labelOf(own, false) };
+};
+
 // The day's demand against the owner's own usual. Calendar is the anchor: without it there is no Weight.
-export const weightScore = (target: DayRecord, prior: readonly DayRecord[]): WeightResult => {
+export const weightScore = (target: DayRecord, prior: readonly DayRecord[], provisional = false): WeightResult => {
+  if (provisional) return provisionalWeight(target, prior);
   const demand = target.demand;
   if (demand?.meetingMinutes === null || demand === null) return { state: 'unavailable', reason: 'calendar_demand_unavailable' };
   const components: Component[] = [];
