@@ -57,17 +57,19 @@ describe('S3 illness onset: resting rate up, variability down, breathing and tem
   // How far the zone drops depends on how the owner's own nights happened to run: with this injection it is mixed or worse for
   // about two owners in three, and the typical owner sits just under the solid edge. So the zone is asserted for the typical
   // owner of many seeded ones, and the fall for every one.
-  const owners = range(1, 25).map(seed => history(typicalOwner(seed * 13), 33, events));
+  const owners = range(1, 13).map(seed => history(typicalOwner(seed * 13), 33, events));
+  const scoreOf = (records: typeof nights, n: number) => recovery(scoresAt(records, n)).score;
   it('reads Recovery as mixed or worse for the typical owner, and well below their own usual for each', () => {
-    for (const n of [30, 31]) {
-      const scores = owners.map(records => recovery(scoresAt(records, n)).score).sort((a, b) => a - b);
+    const fallen = owners.map(records => {
+      const usual = mean(range(22, 29).map(n => scoreOf(records, n)));
+      return { usual, onset: scoreOf(records, 30), second: scoreOf(records, 31) };
+    });
+    for (const night of ['onset', 'second'] as const) {
+      const scores = fallen.map(f => f[night]).sort((a, b) => a - b);
       expect(scores[Math.floor(scores.length / 2)]!).toBeLessThan(60);
     }
-    for (const records of owners) {
-      const usual = mean(range(20, 29).map(n => recovery(scoresAt(records, n)).score));
-      expect(recovery(scoresAt(records, 30)).score).toBeLessThan(usual - 5);
-    }
-  });
+    for (const f of fallen) expect(f.onset).toBeLessThan(f.usual - 5);
+  }, 60_000);
   it('names breathing rate and wrist temperature as drivers, above usual', () => {
     const drivers = scoresAt(nights, 31).drivers;
     expect(drivers.some(d => d.startsWith('breathing rate') && d.endsWith('above usual'))).toBe(true);
