@@ -402,6 +402,35 @@ export const healthScoresUnavailableV1Schema = z.strictObject({
 });
 export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healthScoresUnavailableV1Schema]);
 
+// Score history for the app's chart: the last 7, 30 or 90 local days, ending on the owner's own today, served only to a build
+// that names revision 4 (below it the route is not there). A day is its three pillars as /scores shows them, with the baseline
+// label, and nothing else of the day: no reading, driver, window or sleep debt. A day with no row is left out, so the chart
+// shows a gap and never a zero. backfilled is present only on a day recomputed from history that arrived late.
+export const HEALTH_SCORES_HISTORY_REVISION_V1 = HEALTH_BASELINE_REVISION_V1;
+export const HEALTH_SCORES_HISTORY_WINDOWS_V1 = [7, 30, 90] as const;
+export const healthScoresHistoryQueryV1Schema = z.strictObject({ days: z.enum(['7', '30', '90']) });
+const historyWindowDays = z.union([z.literal(7), z.literal(30), z.literal(90)]);
+const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86_400_000;
+export const healthScoresHistoryDayV1Schema = z.strictObject({
+  day: healthDayV1Schema,
+  recovery: pillar(healthRecoveryZoneV1Schema),
+  form: pillar(healthFormZoneV1Schema),
+  weight: pillar(healthWeightZoneV1Schema),
+  backfilled: z.literal(true).optional(),
+});
+export const healthScoresHistoryV1Schema = z.strictObject({
+  state: z.literal('available'),
+  window_days: historyWindowDays,
+  from: healthDayV1Schema,
+  to: healthDayV1Schema,
+  days: z.array(healthScoresHistoryDayV1Schema).max(90),
+}).refine(history => dayNumber(history.to) - dayNumber(history.from) + 1 === history.window_days, { error: 'from to to spans the window', path: ['to'] })
+  .refine(history => history.days.every((row, i) => row.day >= history.from && row.day <= history.to && (i === 0 || history.days[i - 1]!.day < row.day)),
+    { error: 'days fall inside the window, oldest first, once each', path: ['days'] });
+// Nothing to show names no day: the window is the whole question.
+export const healthScoresHistoryUnavailableV1Schema = healthScoresUnavailableV1Schema.extend({ day: z.null() });
+export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresHistoryUnavailableV1Schema]);
+
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
@@ -414,6 +443,7 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/consents/withdraw', request: healthConsentWithdrawV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;

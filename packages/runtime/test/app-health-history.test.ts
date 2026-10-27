@@ -30,7 +30,8 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const contracts = (revision: string): Record<string, string> => ({ 'x-waldo-app-contract': revision });
-const call = (path: string, extra: Record<string, string> = {}, method = 'GET') => handleApp(new Request(`https://w.test${path}`, { method, headers: { authorization: `Bearer ${CREDENTIAL}`, ...extra } }), env(), auth) as Promise<Response>;
+type Reply = Omit<Response, 'json'> & { json(): Promise<any> };
+const call = (path: string, extra: Record<string, string> = {}, method = 'GET') => handleApp(new Request(`https://w.test${path}`, { method, headers: { authorization: `Bearer ${CREDENTIAL}`, ...extra } }), env(), auth) as Promise<Reply>;
 const HISTORY = '/app/v1/health/scores/history';
 const REV4 = contracts('health=4');
 
