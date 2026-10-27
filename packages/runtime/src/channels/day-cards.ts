@@ -222,8 +222,8 @@ export type CardRetry = 'started' | 'running' | 'sent' | 'not_needed' | 'limit' 
 
 // Try again on one of today's cards, as the owner. The card's own schedule row is armed to run now, so the scheduled card
 // job writes it and an upsert lifts a quarantine on the row. Each try carries its own retry_id, which keys the card's
-// delivery apart from the day's earlier attempt. A card already sent today is not written again. A card already armed for a
-// try that is due, or with a run in flight, is left alone, so a double tap makes one card. Three tries a day per owner.
+// delivery apart from the day's earlier attempt. Only a stuck card is tried (cardStatus gives it tries left); one being made
+// now is left alone, so a double tap makes one card. Three tries a day per owner.
 export const retryDayCard = async (deps: CardDeps, id: string): Promise<CardRetry> => {
   const card = cardFor(id);
   if (card === null) return 'unknown_card';
