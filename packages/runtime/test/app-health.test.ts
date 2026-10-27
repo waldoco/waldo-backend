@@ -555,11 +555,12 @@ describe('app health scores: revision 4', () => {
     const debt = { state: 'available', debt_minutes: 95, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
     for (const trend of ['building', 'easing', 'steady']) {
       const stored = withBaseline(personal, { ...extras, windows_version: 'energy-windows.v1', sleep_debt: { ...debt, trend } });
-      for (const header of [{}, contracts('health=2'), contracts('health=3'), contracts('health=4'), contracts('approvals=3,health=4'), contracts('health=5')]) {
+      const headers: [Record<string, string>, boolean][] = [[{}, false], [contracts('health=2'), false], [contracts('health=3'), false], [contracts('health=4'), true], [contracts('approvals=3,health=4'), true], [contracts('health=5'), true]];
+      for (const [header, fromFour] of headers) {
         const [, bytes] = await text(stored, header);
         expect(bytes, JSON.stringify(header)).not.toMatch(/trend|windows_version|energy-windows/);
         const body = JSON.parse(bytes) as Record<string, unknown>;
-        if ('sleep_debt' in body) expect(Object.keys(body.sleep_debt as object).sort()).toEqual(['activation', 'algorithm_version', 'debt_minutes', 'need_basis', 'state']);
+        if (fromFour) expect(body.sleep_debt, JSON.stringify(header)).toEqual(debt);
         expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
       }
     }

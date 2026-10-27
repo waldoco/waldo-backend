@@ -16,7 +16,7 @@ const TWO_PEAKS = (h: number): number => 70 + ((h >= 3 && h <= 5) || (h >= 13 &&
 const INVERTED = (h: number): number => 140 - TWO_PEAKS(h);
 const FLAT = (): number => 70;
 
-type DayShape = Readonly<{ wake?: string; curve?: (h: number) => number; movement?: (h: number) => number | null; workouts?: readonly Readonly<{ from: number; to: number }>[]; hours?: number; zone?: string; sleepStart?: string | null }>;
+type DayShape = Readonly<{ wake?: string; curve?: (h: number) => number; movement?: (h: number) => number | null; workouts?: readonly Readonly<{ from: number; to: number }>[]; hours?: number; zone?: string; sleepStart?: string | null; bed?: string }>;
 // One day whose waking hours start at `wake` UTC, each hour a bucket on the whole hour.
 const dayAt = (day: string, shape: DayShape = {}): DayRecord => {
   const wake = shape.wake ?? '07:00';
@@ -27,7 +27,7 @@ const dayAt = (day: string, shape: DayShape = {}): DayRecord => {
     startAt: new Date(wakeMs + k * HOUR).toISOString(), heartRate: curve(k + 1), hrv: null, hrvMethod: null,
     daylightMinutes: null, movementMinutes: movement(k + 1), activeEnergyKcal: null,
   }));
-  const asleepFrom = shape.sleepStart === undefined ? new Date(wakeMs - 8 * HOUR).toISOString() : shape.sleepStart;
+  const asleepFrom = shape.sleepStart === undefined ? (shape.bed ? instant(addDays(day, -1), shape.bed) : new Date(wakeMs - 8 * HOUR).toISOString()) : shape.sleepStart;
   return {
     day, timezone: shape.zone ?? 'UTC',
     sleep: asleepFrom === null ? null : { startAt: asleepFrom, endAt: new Date(wakeMs).toISOString(), asleepMinutes: 450, midpointMinute: 180 },
@@ -79,7 +79,7 @@ describe('energy windows: waking alignment', () => {
   });
 
   it('reads the owner\'s days by hours since waking, not by the clock', () => {
-    const waking = (i: number) => ({ wake: ['06:00', '07:00', '08:00'][i % 3]! });
+    const waking = (i: number) => ({ wake: ['06:00', '07:00', '08:00'][i % 3]!, bed: '23:00' });
     expect(windowsOf(run(12, waking))).toEqual(CLEAN);
   });
 });

@@ -1,4 +1,5 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
 import type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, HrvMethod, MethodReading, RestingMethod, Span, TemperatureMethod } from './scores/types';
@@ -264,7 +265,8 @@ const localDay = (at: number, timeZone: string): string =>
 const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted: boolean }>): object => {
   if (debt.state === 'unavailable') return { state: 'unavailable', reason: debt.reason };
   const version = { algorithm_version: debt.algorithm_version, activation: basis.accepted ? debt.activation : 'candidate_unaccepted' };
-  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version } : { state: 'partial', confidence: debt.coverage, ...version };
+  const trend = debt.trend ? { trend: debt.trend } : {};
+  return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version, ...trend } : { state: 'partial', confidence: debt.coverage, ...version, ...trend };
 };
 
 // The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
@@ -300,7 +302,12 @@ const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): obj
   activation: activationOf(result.activation, basis), hrv_method: result.hrv_method, ...(result.baseline ? { baseline: result.baseline, used: result.used } : {}),
 });
 
-const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[]): object => {
+// Today's windows ride only an accepted row: they come from the same provisional engine, so a row from a source nothing has
+// validated carries none, and a day other than today never does.
+const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): object =>
+  forToday && basis.accepted && scores.windows && scores.windows.length > 0 ? { windows: scores.windows, windows_version: ENERGY_WINDOWS_VERSION } : {};
+
+const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
@@ -310,7 +317,7 @@ const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason) : pillarRow(toRowZone('weight', weight.zone), weight, basis),
     ...(recovery.state === 'available' ? { confidence: confidenceOf(recovery, basis) } : {}),
     sleep_debt: sleepDebtOf(scores.sleep_debt, basis), drivers: scores.drivers,
-    freshness: 'fresh', tags,
+    freshness: 'fresh', tags, ...windowsOf(scores, basis, forToday),
   };
 };
 
@@ -393,7 +400,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(travelled.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
-      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags);
+      const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));

@@ -138,7 +138,7 @@ describe('provisional rows: sleep debt', () => {
     expect(debt.algorithm_version).toBe('sleep-debt.v2');
     expect(debt.activation).toBe('accepted');
     expect(['available', 'partial']).toContain(debt.state);
-    if (debt.state === 'available') expect(Object.keys(debt)).toEqual(['state', 'debt_minutes', 'need_basis', 'algorithm_version', 'activation']);
+    if (debt.state === 'available') expect(Object.keys(debt)).toEqual(['state', 'debt_minutes', 'need_basis', 'algorithm_version', 'activation', 'trend']);
     // The need is the owner's own mean shrunk toward eight hours, so the row says so rather than calling it their own average.
     if (debt.state === 'available') expect(debt.need_basis).toBe('blended_average');
   });

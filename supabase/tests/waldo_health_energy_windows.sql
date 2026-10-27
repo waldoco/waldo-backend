@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(29);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -87,9 +87,12 @@ select is((select count(*)::int from unnest(array[
 select is(pg_temp.scores()->'windows'->0->>'kind','dip','a refused write leaves the row as it was');
 
 -- The sleep debt trend: one of three words on an available or partial debt, optional, and nothing else.
-select is((select count(*)::int from unnest(array['building','easing','steady']) t
-  where pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt('available',jsonb_build_object('trend',t))))->>'written' = 'true'
-    and pg_temp.model_read('win-owner')->'context'->'sleep_debt'->>'trend' = t),3,'each trend word is written on an available sleep debt and read back by the model''s read');
+select is(pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt('available','{"trend":"building"}')))->>'written','true','an available sleep debt with the trend building is written');
+select is(pg_temp.model_read('win-owner')->'context'->'sleep_debt'->>'trend','building','and the model''s read returns it');
+select is(pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt('available','{"trend":"easing"}')))->>'written','true','an available sleep debt with the trend easing is written');
+select is(pg_temp.model_read('win-owner')->'context'->'sleep_debt'->>'trend','easing','and the model''s read returns it');
+select is(pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt('available','{"trend":"steady"}')))->>'written','true','an available sleep debt with the trend steady is written');
+select is(pg_temp.model_read('win-owner')->'context'->'sleep_debt'->>'trend','steady','and the model''s read returns it');
 select is(pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt('partial',jsonb_build_object('trend','steady'))))->>'written','true','and on a partial one');
 select is(pg_temp.write(jsonb_build_object('sleep_debt',pg_temp.debt()))->>'written','true','a sleep debt with no trend is written as ever');
 select ok(not (pg_temp.model_read('win-owner')->'context'->'sleep_debt' ? 'trend'),'and holds none');

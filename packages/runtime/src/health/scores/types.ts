@@ -113,6 +113,8 @@ export interface SleepDebtResult {
   readonly sleep_need_minutes: number;
   // blended_average is the owner's own mean shrunk toward a prior, which is not their own average.
   readonly need_basis: 'owner_confirmed' | 'own_average' | 'blended_average';
+  // Which way the debt has been going over the last two steps. Only on a provisionally computed debt.
+  readonly trend?: 'building' | 'easing' | 'steady';
 }
 export interface DailyScores {
   readonly recovery: RecoveryResult;
@@ -121,4 +123,6 @@ export interface DailyScores {
   readonly sleep_debt: SleepDebtResult | Unavailable;
   readonly form: FormResult;
   readonly weight: WeightResult;
+  // Today's energy windows, clock times in the target day's zone. Only on a provisional computation; empty when there are none.
+  readonly windows?: readonly { readonly start: string; readonly end: string; readonly kind: 'peak' | 'dip' }[];
 }
