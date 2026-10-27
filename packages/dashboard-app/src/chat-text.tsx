@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { useWordReveal, type Reveal, type RevealMode } from './chat-reveal';
+import { wordReveal, type Reveal, type RevealMode } from './chat-reveal';
 
 // The Markdown Waldo's replies use, drawn as React elements: never as HTML, so a reply cannot inject markup.
 // Paragraphs, line breaks, lists, quotes, headings as strong lines, fenced and inline code, bold, italic and
@@ -89,6 +89,6 @@ const wordCount = (text: string) => { const w: Words = { n: 0 }; draw(text, w); 
 export function ChatText({ text, reveal: mode }: { text: string; reveal?: RevealMode }) {
   const streaming = !!mode;
   const count = useMemo(() => (streaming ? wordCount(text) : 0), [text, streaming]);
-  const reveal = useWordReveal(text, count, mode, wordCount);
+  const reveal = wordReveal(text, count, mode, wordCount);
   return <>{draw(text, { n: 0, reveal })}</>;
 }
