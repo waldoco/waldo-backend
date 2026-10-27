@@ -290,11 +290,13 @@ type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_ver
 type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
 // A pillar computed provisionally carries its baseline label, the signals and days it used, and, from an acceptable source,
 // a confidence that is its coverage times the source's confidence. From any other it is a candidate, and it is never more
-// confident than the lowest source would be: its coverage times the lowest factor. A coverage that is not a number is an
-// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence.
+// confident than the lowest source would be: its coverage times the lowest factor. In such a pillar a coverage that is not a number is an
+// error, never a null on the row. The earlier engine's pillar keeps its keys and its coverage as the confidence, a non-finite
+// one written as the null it always was.
 const confidenceOf = (pillar: AvailablePillar, basis: RowSource): number => {
+  if (!pillar.baseline) return pillar.coverage;
   if (!Number.isFinite(pillar.coverage)) throw new Error('coverage is not a number');
-  return pillar.baseline ? round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE)) : pillar.coverage;
+  return round3(pillar.coverage * (basis.accepted ? SOURCE_CONFIDENCE[basis.source]! : LOWEST_SOURCE_CONFIDENCE));
 };
 const activationOf = (activation: string, basis: RowSource): string => (basis.accepted ? activation : 'candidate_unaccepted');
 const pillarRow = (zone: string, result: AvailablePillar, basis: RowSource): object => ({
