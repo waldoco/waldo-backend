@@ -16,7 +16,7 @@ assigns each user the pool number they text. The Worker does that enrollment, so
 
 Enrollment proves nothing about the phone, so it locks nothing. Several owners may enroll the same number until one of
 them links it with `waldo CODE` from the phone. After that, other owners get a refusal. Until a link happens, a text
-from an enrolled number gets one reply pointing at `IMESSAGE_CONSOLE_URL`. Like the waitlist reply, it is sent at most
+from an enrolled number gets one reply pointing at `/console/imessage` on `WALDO_PUBLIC_ORIGIN`. Like the waitlist reply, it is sent at most
 once per 30 days and reaches no Waldo.
 
 Waldo removes a Photon user only when all of these hold:
@@ -41,7 +41,7 @@ is shared by every Worker that names it.
    - Scopes: `openid offline_access projects:read projects:write spectrum:read spectrum:write`.
    Keep the client secret. Photon shows it once.
 2. Configure the Worker:
-   - Vars: `PHOTON_PROJECT_ID`, `IMESSAGE_CONSOLE_URL`.
+   - Vars: `PHOTON_PROJECT_ID`, `WALDO_PUBLIC_ORIGIN` (without it, an enrolled sender gets no console reply).
    - Secrets: `wrangler secret put PHOTON_OAUTH_CLIENT_ID --env <env>` and
      `wrangler secret put PHOTON_OAUTH_CLIENT_SECRET --env <env>`. Both are secrets, so setting them turns Photon on
      without a code change.

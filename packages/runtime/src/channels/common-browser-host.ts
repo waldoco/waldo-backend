@@ -32,6 +32,7 @@ export type CommonBrowserConfiguration = Readonly<{
 // key/value limit. Measure UTF-8 JSON, including the envelope, and reserve room
 // for the bounded intent/cleanup metadata added after observation publication.
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
+const OBSERVATION_ELEMENT_LIMIT=64;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
@@ -53,6 +54,7 @@ const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
  cleanup_unconfirmed:'The browser could not confirm this step closed cleanly, so nothing from it is claimed. Read the page again; if the session is gone, start a new one.',
  stale_observation:'The page changed since it was read. Read it again with browse_act read and use the new refs.',
  outcome_uncertain:'The step may or may not have taken effect, and it cannot be repeated. Read the page with browse_act read to see what changed.',
+ native_submit_requires_card:'This submits a form the browser may not send on its own: only a GET form whose target is a page this session may open can be submitted. Open the results page directly with goto if its address is known; otherwise tell the owner what the form would send, because this browser cannot submit it.',
  turn_deadline:'This turn ran out of time before the browser step finished, so nothing from it is claimed. The session stays open: continue it with its session_handle on the next turn.',
 };
 // Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
@@ -86,10 +88,11 @@ export function commonBrowserHost(options:Readonly<{
   return !!row&&!row.cleanup&&!row.cleanupFailed&&!row.handoff&&row.allocation==='observed'&&row.action?.state!=='prepared'&&row.action?.state!=='uncertain'&&(!row.download||row.download.state==='ready');
  };
  const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
+ const readableUrl=(grant:CommonBrowserGrant,url:string,method:string)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}};
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
-  authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}}});
+  authorizeRequest:async(url,method)=>readableUrl(grant,url,method)});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
@@ -114,7 +117,10 @@ export function commonBrowserHost(options:Readonly<{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
   if(!latest||latest.cleanup||!sameSession(latest,record))throw Error('common browser custody changed');
-  const {image:_,...observation}=observed;
+  // The checkpoint holds what a later action needs: the refs the model is shown and their native targets.
+  // Page text and the accessibility snapshot reach the model only, so a long page never outgrows storage.
+  const {image:_,state,observation:shown,...identity}=observed;
+  const observation={...identity,state:{...state,text:'',elements:state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)},observation:{...shown,text:'',accessibility_snapshot:undefined,elements:shown.elements.slice(0,OBSERVATION_ELEMENT_LIMIT)}};
   const checkpoint={...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
   if(encodedCheckpointBytes(checkpoint)>COMMON_BROWSER_CHECKPOINT_BYTES-1024){
    // Do not truncate native refs/state or leave an older observation actionable.
@@ -128,8 +134,8 @@ export function commonBrowserHost(options:Readonly<{
    if(images.length>=4)images.shift();
    images.push({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
   }
-  return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
-   field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
+  return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,OBSERVATION_ELEMENT_LIMIT),tabs:observed.observation.tabs.slice(0,8),
+   field_values:observed.state.elements.slice(0,OBSERVATION_ELEMENT_LIMIT).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
    ...(observed.image?{}:{text_only:true,image_notice:'The screenshot was over the size limit, so no image of this page is attached. Use its text, accessibility_snapshot and element refs; any attached images are from earlier pages.'}),
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
  };
@@ -262,7 +268,7 @@ export function commonBrowserHost(options:Readonly<{
       const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='select'?{operation:'select',element_ref:command.element_ref,value:command.value}:command.operation==='set_checked'?{operation:'set_checked',element_ref:command.element_ref,checked:command.checked}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
       if(!action)throw Error('unsupported current browser command');
       const element=action.operation==='scroll'?undefined:before.state.elements[before.observation.elements.findIndex(row=>row.ref===action.element_ref)];
-      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type))))throw Error('native browser submit approval required');
+      if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type)))&&!(element.formMethod==='get'&&element.formAction&&readableUrl(grant,element.formAction,'GET')))throw new GeneralBrowserError('native_submit_requires_card');
       observed=await driver.act(record.session,before,action,prepare);
      }
     }
@@ -280,7 +286,7 @@ export function commonBrowserHost(options:Readonly<{
    }catch(error){
     if(!digest&&['read','inspect','back'].includes(args.command?.operation??''))sessionEnded=ended(error);
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
-    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
+    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText(error instanceof GeneralBrowserError&&error.code==='native_submit_requires_card'?'The browser refused this form submission before sending anything.':'The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
    }
   }};
  const api={handler,actionHandler,

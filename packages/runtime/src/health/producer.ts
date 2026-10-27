@@ -356,6 +356,12 @@ const steadied = (scores: DailyScores, before: Record<string, unknown> | null): 
 // The writer names the pillars whose zone word changed; only whether any did leaves this function.
 const pillarMoved = (answer: unknown): boolean => { const changed = asRecord(answer)?.changed; return Array.isArray(changed) && changed.length > 0; };
 
+// The only trace of a written row: that it was written, and whether a pillar of it was provisional. No owner, day or value.
+const logWritten = (row: object): void => {
+  const provisional = (['recovery', 'form', 'weight'] as const).some(pillar => asRecord(asRecord((row as Record<string, unknown>)[pillar])?.baseline)?.state === 'provisional');
+  console.log(JSON.stringify({ hop: 'health_scores', code: 'written', provisional }));
+};
+
 const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'failed' => {
   const a = asRecord(answer);
   if (a?.written === true) return 'written';
@@ -434,6 +440,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const row = rowOf(targetDay, steadied(scores, await storedBefore(deps.readScores, targetDay)), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today);
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
+      if (writeOutcome(answer) === 'written') logWritten(row);
       if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     if (provisional && deps.readScores) {

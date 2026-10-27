@@ -5,7 +5,8 @@ import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired,
 export type LocalMessage = {
   clientId: string; text: string; sentAt: number; state: 'sending' | 'failed' | RunState; messageId: string | null;
   error: string | null; closedReason: string | null; effectsUnconfirmed: boolean; stopping: boolean; landed: boolean;
-  // The reply written so far, while the turn runs and the server streams replies; before it, what the turn's tools are on.
+  // The reply written so far, while the turn runs and the server streams replies; before it, what the turn's tools are on. A closed
+  // turn keeps its last draft until its reply lands (or, closed without one, beside the closure).
   draft?: string; activity?: ChatActivity;
   // The newest history row when this was sent: only a row after it can be this message's server copy.
   after: string | null;
@@ -18,6 +19,9 @@ export type ChatSnapshot = {
   notice: string | null;
   // Replies that arrived while the page was open, drawn with an arrival motion once.
   arrived: ReadonlySet<string>;
+  // Replies that took the place of a draft shown while they were written, by reply id, with the draft's last words: drawn where the
+  // draft was, with no arrival motion.
+  streamed: ReadonlyMap<string, string>;
 };
 
 export type ChatDeps = {
@@ -43,6 +47,9 @@ const RECEIPT_DELAYS = [700, 1000, 1500, 2000, 3000, 4000];
 const RECEIPT_STEADY = 5000;
 // While a reply is being written the receipt carries it, so it is checked every second: still inside the shared budget.
 const RECEIPT_DRAFTING = 1000;
+// A closed turn's reply row can land a moment after its receipt closes: history is read again this often, this many times, while its
+// last draft holds the reply's place.
+const SETTLE_EVERY = 2000, SETTLE_TRIES = 8;
 // After ten minutes a turn is a long errand: one check every 15 s is still timely.
 const RECEIPT_LONG_AFTER = 10 * 60_000, RECEIPT_LONG = 15_000;
 const HISTORY_DURING_RUN = 15_000;
@@ -59,7 +66,7 @@ export const browserDeps = (): ChatDeps => ({
 });
 
 export function createChatStore(deps: ChatDeps) {
-  let snap: ChatSnapshot = { phase: 'idle', error: null, messages: [], nextCursor: null, older: 'idle', local: [], draft: '', notice: null, arrived: new Set() };
+  let snap: ChatSnapshot = { phase: 'idle', error: null, messages: [], nextCursor: null, older: 'idle', local: [], draft: '', notice: null, arrived: new Set(), streamed: new Map() };
   const listeners = new Set<() => void>();
   const set = (next: Partial<ChatSnapshot>) => { snap = { ...snap, ...next }; listeners.forEach(listener => listener()); };
   const setLocal = (clientId: string, change: Partial<LocalMessage>) => set({ local: snap.local.map(item => item.clientId === clientId ? { ...item, ...change } : item) });
@@ -70,6 +77,16 @@ export function createChatStore(deps: ChatDeps) {
 
   const signedOut = (error: unknown) => { if (error instanceof ChatSignInRequired) { set({ phase: 'signed-out', error: error.message }); stopAll(); return true; } return false; };
   const stopAll = () => { for (const poll of polls.values()) deps.clearTimer(poll.timer); polls.clear(); if (idleTimer !== null) deps.clearTimer(idleTimer); idleTimer = null; };
+
+  // The reply to a local message: the assistant row naming it as parent, else the first one after its own row.
+  const replyTo = (item: LocalMessage, messages: readonly ChatMessage[]) => {
+    if (!item.messageId) return undefined;
+    const own = messages.findIndex(message => message.role === 'user' && message.id === item.messageId);
+    return messages.find(message => message.role === 'assistant' && message.parent_id === item.messageId)
+      ?? (own >= 0 ? messages.slice(own + 1).find(message => message.role === 'assistant') : undefined);
+  };
+  // A closed turn whose draft still holds the place of a reply that hasn't landed.
+  const holding = (item: LocalMessage, messages: readonly ChatMessage[]) => item.state === 'completed' && !!item.draft && !replyTo(item, messages);
 
   // A user row in history that is this local message: its run id, or the same words in a row that arrived after it was
   // sent and that no earlier local message has already claimed.
@@ -82,7 +99,7 @@ export function createChatStore(deps: ChatDeps) {
         ?? messages.slice(from).find(message => message.role === 'user' && !claimed.has(message.id) && message.text.trim() === item.text.trim());
       if (row) claimed.add(row.id);
       return row ? { ...item, landed: true } : item;
-    }).filter(item => !(item.landed && closed(item.state) && !item.effectsUnconfirmed && item.closedReason === null));
+    }).filter(item => !(item.landed && closed(item.state) && !item.effectsUnconfirmed && item.closedReason === null && !holding(item, messages)));
   };
 
   // The newest page replaces the tail it overlaps, so an edited row (a card that was decided) shows its new form.
@@ -97,9 +114,15 @@ export function createChatStore(deps: ChatDeps) {
       const page = await deps.page(null, PAGE);
       lastHistory = deps.now();
       const known = new Set(snap.messages.map(message => message.id));
-      const arrived = snap.phase === 'ready' ? new Set(page.messages.filter(message => message.role === 'assistant' && !known.has(message.id)).map(message => message.id)) : new Set<string>();
       const messages = snap.phase === 'ready' ? mergeNewest(page.messages) : page.messages;
-      set({ phase: 'ready', error: null, messages, nextCursor: snap.phase === 'ready' && snap.messages.length ? snap.nextCursor : page.next_cursor, local: reconcile(messages), arrived, notice: snap.notice && polls.size === 0 ? null : snap.notice });
+      // Only this read's: a reply drawn again later (the page opened anew) has nothing left to reveal.
+      const streamed = new Map<string, string>();
+      for (const item of snap.local) {
+        const reply = item.draft && item.state === 'completed' ? replyTo(item, messages) : undefined;
+        if (reply && !known.has(reply.id)) streamed.set(reply.id, item.draft!);
+      }
+      const arrived = snap.phase === 'ready' ? new Set(page.messages.filter(message => message.role === 'assistant' && !known.has(message.id) && !streamed.has(message.id)).map(message => message.id)) : new Set<string>();
+      set({ phase: 'ready', error: null, messages, nextCursor: snap.phase === 'ready' && snap.messages.length ? snap.nextCursor : page.next_cursor, local: reconcile(messages), arrived, streamed, notice: snap.notice && polls.size === 0 ? null : snap.notice });
     } catch (error) {
       if (signedOut(error)) return;
       if (snap.phase !== 'ready') set({ phase: 'error', error: error instanceof Error ? error.message : 'Waldo couldn’t be reached.' });
@@ -133,9 +156,13 @@ export function createChatStore(deps: ChatDeps) {
     try {
       const receipt = await deps.receipt(clientId);
       entry.failures = 0;
-      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false, draft: receipt.draft, activity: receipt.activity });
+      // A running receipt without a draft means none is shown, or the one shown was withdrawn. A closed one carries none: the last
+      // words stay until the reply lands.
+      const ended = closed(receipt.state);
+      setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false,
+        draft: ended ? find(clientId)?.draft : receipt.draft, activity: ended ? undefined : receipt.activity });
       if (snap.notice) set({ notice: null });
-      if (closed(receipt.state)) { polls.delete(clientId); await refresh(); scheduleIdle(); deps.settled?.(); return; }
+      if (ended) { polls.delete(clientId); await refresh(); awaitReply(clientId, 0); scheduleIdle(); deps.settled?.(); return; }
       // Progress notes and earlier replies land in history while a long turn runs.
       if (deps.now() - lastHistory > HISTORY_DURING_RUN) void refresh();
       poll(clientId, nextDelay(clientId));
@@ -148,6 +175,14 @@ export function createChatStore(deps: ChatDeps) {
       const wait = limited ? Math.min(((error as ChatRequestError).retryAfter ?? 30) * 1000, 60_000) : Math.min(RECEIPT_STEADY * 2 ** (entry.failures - 1), BACKOFF_MAX);
       poll(clientId, wait);
     }
+  };
+
+  // While a closed turn's draft holds the place of its reply, history is read again until the reply lands; then the words are let go.
+  const awaitReply = (clientId: string, tries: number) => {
+    const item = find(clientId);
+    if (!item || !holding(item, snap.messages)) return;
+    if (tries >= SETTLE_TRIES) { setLocal(clientId, { draft: undefined }); void refresh(); return; }
+    deps.setTimer(() => void refresh().then(() => awaitReply(clientId, tries + 1)), SETTLE_EVERY);
   };
 
   const deliver = async (clientId: string) => {

@@ -6,11 +6,13 @@
 //   node scripts/staging-gate.mjs [--expect-sha <7-40 hex>]
 // Optional env: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (Worker), SUPABASE_ACCESS_TOKEN (edge functions, migrations).
 import { execFileSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { compareHistory, localManifest, readHistory, STAGING_PROJECT as PROJECT } from './staging-migration-preflight.mjs';
+import { parseJsonc } from './jsonc.mjs';
 
-export const STAGING_WORKER_URL = 'https://waldo-runtime-staging.piyushfulper3210.workers.dev';
+// The origin the staging Worker issues its links and callbacks on (WALDO_PUBLIC_ORIGIN), so the gate probes that host.
+export const STAGING_WORKER_URL = parseJsonc(readFileSync(new URL('../packages/runtime/wrangler.jsonc', import.meta.url), 'utf8')).env.staging.vars.WALDO_PUBLIC_ORIGIN;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA = /^[0-9a-f]{7,40}$/;
 

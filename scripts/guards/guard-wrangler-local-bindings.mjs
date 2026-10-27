@@ -76,6 +76,16 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
 if (JSON.stringify(staging?.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging must bind Cloudflare Browser Rendering as BROWSER');
 if (cfg.browser !== undefined) bad.push('the top-level (production) config must not bind a browser');
 
+// 5. WALDO_PUBLIC_ORIGIN is what every owner object and webhook route issues; the runtime refuses anything but a bare
+//    https origin, at owner startup too, so a bad value is caught here before a deploy rather than by every owner.
+for (const [name, node] of [['top level', cfg], ...Object.entries(cfg?.env ?? {}).map(([envName, envCfg]) => [`env.${envName}`, envCfg])]) {
+  const origin = node?.vars?.WALDO_PUBLIC_ORIGIN;
+  if (!origin) continue;
+  let parsed = null;
+  try { parsed = new URL(origin); } catch { /* reported below */ }
+  if (parsed?.protocol !== 'https:' || parsed.origin !== origin) bad.push(`${name} WALDO_PUBLIC_ORIGIN must be empty or a bare https origin`);
+}
+
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
   process.exit(1);
