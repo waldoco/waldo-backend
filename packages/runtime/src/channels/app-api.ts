@@ -11,6 +11,7 @@ import { dailyScoresFor } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
+import { APP_FILES_PATH } from './app-files';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
 import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -291,9 +292,10 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || onboarding) {
+  const fileRead = url.pathname.startsWith(`${APP_FILES_PATH}/`);
+  if (fileRead || url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
+    if (!['GET', 'POST'].includes(request.method) || ((fileRead || url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
