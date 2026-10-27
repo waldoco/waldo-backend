@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 
 const M = 1_000_000;
@@ -13,6 +13,23 @@ it('prices Sol at $2 input, $0.10 cached input and $10 output per million tokens
     output: expect.closeTo((100 * 10) / M, 12),
     total: expect.closeTo((500 * 2 + 1_500 * 0.1 + 100 * 10) / M, 12),
   });
+});
+
+it('prices Terra at $1 input, $0.05 cached input and $5 output per million tokens', () => {
+  expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: M, output: 0, cached: 0 })?.total).toBeCloseTo(1, 10);
+  expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: M, output: 0, cached: M })?.total).toBeCloseTo(0.05, 10);
+  expect(modelCost({ model: OPENAI_GPT_6_1_TERRA_MODEL, input: 0, output: M, cached: 0 })?.total).toBeCloseTo(5, 10);
+});
+
+it('prices Sonnet at $2 input, $0.10 cached input and $10 output per million tokens', () => {
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: M, output: 0, cached: 0 })?.total).toBeCloseTo(2, 10);
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: M, output: 0, cached: M })?.total).toBeCloseTo(0.1, 10);
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 0, output: M, cached: 0 })?.total).toBeCloseTo(10, 10);
+});
+
+it('prices the chat model and its fallback, so the owner spend ceiling accrues on it', () => {
+  expect(modelCost({ model: WALDO_CHAT_MODEL, input: 1, output: 1, cached: 0 })).not.toBeNull();
+  expect(modelCost({ model: WALDO_CHAT_FALLBACK_MODEL, input: 1, output: 1, cached: 0 })).not.toBeNull();
 });
 
 it('keeps Luna at $0.10 input, $0.01 cached input and $0.50 output per million tokens', () => {

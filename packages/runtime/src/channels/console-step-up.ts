@@ -57,6 +57,8 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'mcp.disconnect': { gated: false, why: 'Disconnects a tool server; removes access.' },
   'granola.connect': { gated: true, why: 'Connects Granola, whose meeting notes Waldo keeps reading after this session.' },
   'granola.disconnect': { gated: false, why: 'Disconnects Granola; removes access.' },
+  'app.connect': { gated: false, why: 'Opens a catalogue app\'s own sign-in; once the owner approves there, that app\'s read-only tools run without asking.' },
+  'app.disconnect': { gated: false, why: 'Disconnects a catalogue app; removes access.' },
   'mcp.runs': { gated: true, why: 'Lets a connected tool run without asking: a standing grant.' },
   'telegram.link': { gated: true, why: 'Issues a code that binds a Telegram chat, which can then send console sign-in links.' },
   'telegram.unlink': { gated: false, why: 'Unlinks Telegram; removes access.' },

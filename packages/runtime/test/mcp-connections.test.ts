@@ -725,7 +725,56 @@ describe('Official servers from the catalogue', () => {
     });
   }));
 
+  const WISPR = { url: 'https://api.wisprflow.ai/connect/mcp', issuer: 'https://mcp-auth.wisprflow.com' };
+  // Wispr Flow as its metadata reads: the endpoint under /connect, its protected-resource document at the origin root, a
+  // sign-in service on another domain that lists openid and offline_access. Its tool names are unknown before sign-in.
+  const wispr = {
+    origin: 'https://api.wisprflow.ai', path: '/connect/mcp', rootMetadata: true, issuer: WISPR.issuer,
+    challengeScope: 'openid offline_access', resourceScopes: ['openid', 'offline_access'], serverScopes: ['email', 'offline_access', 'openid', 'profile'], revocation: false,
+    tools: [
+      { name: 'search_transcripts', description: 'Search dictations and notes.', inputSchema: query, annotations: { readOnlyHint: true } },
+      { name: 'delete_note', description: 'Delete a note.', inputSchema: query, annotations: { readOnlyHint: false, destructiveHint: true } },
+    ],
+  };
+
+  it('connects Wispr Flow from its tile: openid and offline_access, its labelled reads run without asking, and its grant refreshes', withRig('official-wispr', wispr, async (rig) => {
+    const { mcp, world, tick } = rig;
+    const { authorize, outcome } = await connect(rig, WISPR.url, 'allow', 'wispr');
+    expect(authorize.origin).toBe(WISPR.issuer);
+    expect(Object.fromEntries(authorize.searchParams)).toMatchObject({ client_id: `${WALDO_ORIGIN}/oauth/mcp/client.json`, resource: WISPR.url, scope: 'openid offline_access', code_challenge_method: 'S256' });
+    expect(outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'wisprflow', official: 'wispr' });
+    expect(mcp.list()[0]).toMatchObject({ host: 'api.wisprflow.ai', issuer: WISPR.issuer, registration: 'cimd', runs_without_asking: 1 });
+    expect((await mcp.search({ server: 'wisprflow', ownerTurn: () => true })).tools.map((tool) => [tool.tool, tool.runs])).toEqual([['delete_note', 'asks_first'], ['search_transcripts', 'without_asking']]);
+    // The access token lapses; the refresh token the offline_access scope earned keeps the read working.
+    tick(2 * 60 * 60_000);
+    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'wisprflow', tool: 'search_transcripts', args: { query: 'standup' }, ownerTurn: true }))).toMatchObject({ content: [{ text: 'search_transcripts ran with {"query":"standup"}' }] });
+    expect(world.hits.filter((hit) => hit === `POST ${WISPR.issuer}/token`)).toHaveLength(2);
+    // Wispr names no revocation endpoint: disconnect forgets the server and says the provider could not be asked.
+    expect(await mcp.disconnect(mcp.list()[0]!.id)).toEqual({ ok: true, provider: 'unsupported' });
+    expect(mcp.list()).toEqual([]);
+  }));
+
+  it('grants nothing for a Wispr Flow address or sign-in service that is not the pinned one', withRig('official-wispr-elsewhere', { ...wispr, issuer: 'https://mcp-auth.wisprflow.ai' }, async (rig) => {
+    expect((await connect(rig, WISPR.url, 'allow', 'wispr')).outcome).toEqual({ kind: 'linked', id: expect.any(String), name: 'wisprflow' });
+    expect(rig.mcp.list()[0]).toMatchObject({ runs_without_asking: 0 });
+    expect(await rig.mcp.begin('https://api.wisprflow.ai/mcp', WALDO_ORIGIN, 'wispr')).toEqual({ kind: 'failed', reason: 'catalogue_mismatch' });
+  }));
+
   it('pins each entry to the exact address and issuer', () => {
+    expect(catalogueEntry(WISPR.url, WISPR.issuer)?.id).toBe('wispr');
+    expect(catalogueEntry(WISPR.url, `${WISPR.issuer}/`)?.id).toBe('wispr');
+    expect(catalogueEntry(WISPR.url, 'https://mcp-auth.wisprflow.ai')).toBeUndefined();
+    expect(catalogueEntry(WISPR.url, 'https://api.wisprflow.ai')).toBeUndefined();
+    expect(catalogueEntry('https://api.wisprflow.ai/mcp', WISPR.issuer)).toBeUndefined();
+    expect(catalogueEntry('https://api.wisprflow.com/connect/mcp', WISPR.issuer)).toBeUndefined();
+    expect(catalogueEntry('https://api.wisprflow.ai/connect/mcp/', WISPR.issuer)).toBeUndefined();
+    expect(catalogueTiles([]).find((tile) => tile.id === 'wispr')).toMatchObject({ label: 'Wispr Flow', url: WISPR.url, connected: false });
+    // Wispr's tools are unreviewed, so its tile carries the consent its connect click gives, unlike reviewed Granola's.
+    const wisprConsent = catalogueTiles([]).find((tile) => tile.id === 'wispr')!.consent;
+    expect(wisprConsent).not.toBeNull();
+    expect(wisprConsent).toContain('Connecting here lets the tools Wispr Flow labels read-only run without asking');
+    expect(catalogueTiles([]).find((tile) => tile.id === 'granola')!.consent).toBeNull();
+    expect(catalogueTiles([]).find((tile) => tile.id === 'wispr')!.about).toContain('Connecting here lets the tools Wispr Flow labels read-only run without asking');
     expect(catalogueEntry(NOTION.url, NOTION.issuer)?.id).toBe('notion');
     expect(catalogueEntry(NOTION.url, null)).toBeUndefined();
     expect(catalogueEntry(NOTION.url, 'https://mcp.notion.com/')?.id).toBe('notion');

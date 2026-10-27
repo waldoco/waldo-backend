@@ -17,7 +17,7 @@ const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.ch
 
 // Where the completion page sends the owner back. The surface comes from the signed OAuth
 // state; anything missing or unrecognized lands on the console, never on an arbitrary URL.
-const returnAction = (surface: ConsentSurface | undefined, bot: string | null): string => {
+export const returnAction = (surface: ConsentSurface | undefined, bot: string | null): string => {
   switch (surface) {
     case 'telegram':
       return bot

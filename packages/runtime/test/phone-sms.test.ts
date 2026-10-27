@@ -296,4 +296,17 @@ describe('setting the number', () => {
     for (const number of ['9800000002', '+91 98000 00002', '+0919800000002', '']) expect(await phoneSms(env, f.fetcher, () => NOW).set('owner-a', number)).toEqual({ kind: 'invalid' });
     expect(f.fetcher).not.toHaveBeenCalled();
   });
+  it('with the switch off sets a number the owner can prove by a link code, under the same country codes, and texts nothing', async () => {
+    const f = setLedger(() => ({ kind: 'set', unlinked: [] }));
+    const off = phoneSms({ ...env, PHONE_SMS_VERIFY: '0' }, f.fetcher, () => NOW);
+    expect(off.offered).toBe(false);
+    expect(await off.set('owner-a', '+919800000002', true)).toEqual({ kind: 'set', unlinked: [] });
+    expect(f.calls.map((c) => c.url)).toEqual([expect.stringMatching(/\/rpc\/owner_phone_set$/)]);
+    expect(await off.send('owner-a')).toEqual({ kind: 'disabled' });
+    for (const countries of ['', '91', '+91,x']) {
+      expect(await phoneSms({ ...env, PHONE_SMS_VERIFY: '0', PHONE_SMS_COUNTRIES: countries }, f.fetcher, () => NOW).set('owner-a', '+919800000002', true)).toEqual({ kind: 'disabled' });
+    }
+    expect(await phoneSms({ ...env, PHONE_SMS_VERIFY: '0', WALDO_ROUTER_HMAC_SECRET: undefined }, f.fetcher, () => NOW).set('owner-a', '+919800000002', true)).toEqual({ kind: 'disabled' });
+    expect(f.calls).toHaveLength(1);
+  });
 });

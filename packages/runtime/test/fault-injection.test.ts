@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
-  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   ANTHROPIC_PROVIDER,
-  OPENAI_GPT_6_1_SOL_MODEL,
+  OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
 } from '@waldo/contracts';
@@ -42,18 +42,18 @@ describe('an owner turn while the primary is failing', () => {
     ['an overloaded provider (529)', { fault: 'server_error', status: 529 }],
     ['requests that never answer', { fault: 'timeout' }],
     ['empty replies', { fault: 'empty' }],
-  ])('is answered by Opus during %s, after one resend of the primary', async (_name, fault) => {
+  ])('is answered by Sonnet during %s, after one resend of the primary', async (_name, fault) => {
     const { gateway, models } = faultInjectedProviders({ [OPENAI_PROVIDER]: [fault], [ANTHROPIC_PROVIDER]: [answered] }, { timeoutMs: 5 });
     await expect(ask(owner(gateway))).resolves.toBe('Here is your day.');
-    expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+    expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   });
 
-  it('is answered by Opus during a 429 storm without sitting out the provider\'s retry-after', async () => {
+  it('is answered by Sonnet during a 429 storm without sitting out the provider\'s retry-after', async () => {
     const { gateway, models } = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ fault: 'rate_limited', retryAfterS: 30 }], [ANTHROPIC_PROVIDER]: [answered] });
     const started = Date.now();
     await expect(ask(owner(gateway))).resolves.toBe('Here is your day.');
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+    expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   });
 
   it('a 429 storm across turns opens the shared breaker, and later turns stop asking OpenAI', async () => {
@@ -82,16 +82,16 @@ describe('an OpenAI 429 asking for a 20 s wait', () => {
     expect(calls.map((call) => call.provider)).toEqual([OPENAI_PROVIDER]);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(reply).resolves.toBe('Here is your day.');
-    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
   });
 
-  it('with an Anthropic key, is not waited out: Opus answers at once', async () => {
+  it('with an Anthropic key, is not waited out: Sonnet answers at once', async () => {
     vi.useFakeTimers();
     const { gateway, calls } = faultInjectedProviders({ [OPENAI_PROVIDER]: limited, [ANTHROPIC_PROVIDER]: [answered] });
     const reply = ask(owner(gateway));
     await vi.advanceTimersByTimeAsync(RATE_LIMIT_BACKOFF_MS);
     await expect(reply).resolves.toBe('Here is your day.');
-    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   });
 });
 
@@ -99,7 +99,7 @@ describe('an owner turn when every provider is failing', () => {
   it('reads the floor line when the floor is on', async () => {
     const { gateway, models } = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ fault: 'server_error' }], [ANTHROPIC_PROVIDER]: [{ fault: 'rate_limited' }] });
     await expect(ask(owner(gateway))).resolves.toBe(MODEL_UNREACHABLE_REPLY);
-    expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+    expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   });
 
   it('fails to the channel, as before, when the floor is off', async () => {

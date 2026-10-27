@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { ownerBrowserRuntime } from '../src/channels/owner-browser-runtime';
 import { configureCommonPublicBrowser } from '../src/channels/common-public-browser-configuration';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
@@ -9,7 +9,7 @@ vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority:
 
 // The manual trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
 // the meter takes an ordinal or a reservation.
-it('a funded run under a live manual trial meters Luna and refuses Sol before the meter', async () => {
+it('a funded run under a live manual trial meters Luna and refuses Sol and Terra before the meter', async () => {
   const rows = new Map<string, any>([['do_name', 'trial-owner'], ['telegram_subject', '81104'], ['common-browser:funded-run', { allocation: 'observed' }]]);
   const storage = { kv: { get: (key: string) => rows.get(key), put: (key: string, value: unknown) => rows.set(key, structuredClone(value)), list: ({ prefix }: { prefix: string }) => [...rows].filter(([key]) => key.startsWith(prefix)) }, transactionSync: <T>(work: () => T) => work(), getAlarm: async () => null, setAlarm: async () => {}, deleteAlarm: async () => {} } as never;
   const now = Date.now(), ownerId = 'prn_10000000000000000000000000000004';
@@ -19,7 +19,9 @@ it('a funded run under a live manual trial meters Luna and refuses Sol before th
   const scope: RunEffectScope = { runId: 'funded-run', attempt: 'a1', deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   const gateway = ownerBrowserRuntime({ env, storage, actualDoId: 'physical-owner', activeScope: () => scope }).gateway()!;
   const before = structuredClone([...rows]);
-  expect(await gateway.complete({ runScope: scope, request: { model: OPENAI_GPT_6_1_SOL_MODEL, max_tokens: 16 } } as never)).toEqual({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
+  for (const model of [OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]) {
+    expect(await gateway.complete({ runScope: scope, request: { model, max_tokens: 16 } } as never)).toEqual({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
+  }
   expect(complete).not.toHaveBeenCalled();
   expect([...rows]).toEqual(before);
   await expect(gateway.complete({ runScope: scope, request: { model: OPENAI_GPT_6_LUNA_MODEL, max_tokens: 16 } } as never)).resolves.toEqual({ ok: true });

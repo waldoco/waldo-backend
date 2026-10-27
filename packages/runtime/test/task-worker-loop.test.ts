@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
+import { ANTHROPIC_PROVIDER, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
 import { DROPPED_STEPS_NOTE, leadingNote, type LoopToolResult } from '../src/conversation/tool-loop';
@@ -188,13 +188,25 @@ describe('the production task model step', () => {
     const deep = { ...input, claim: { ...claim, brief: { ...brief, effort: 'deep' as const } } };
     const open = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
     await taskModel({ openaiApiKey: 'fixture-openai' }, open.gateway)(deep);
-    expect(open.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+    expect(open.models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
     const capped = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
     await taskModel({ openaiApiKey: 'fixture-openai' }, capped.gateway)({ ...deep, claim: { ...deep.claim, spend: { spentUsd: 26, ceilingUsd: 25 } } });
     expect(capped.models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
     const under = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
     await taskModel({ openaiApiKey: 'fixture-openai' }, under.gateway)({ ...deep, claim: { ...deep.claim, spend: { spentUsd: 3, ceilingUsd: 25 } } });
-    expect(under.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+    expect(under.models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL]);
+  });
+
+  // Reasoning tokens count against the output cap: a deep task on the chat model needs room for them, a standard task on the auxiliary model keeps its route cap.
+  it('gives a deep task on the chat model 25,000 output tokens of room and keeps a standard task at its route cap', async () => {
+    const asked = (effort: 'deep' | 'standard') => {
+      const { gateway } = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
+      const caps: Array<number | undefined> = [];
+      const spy: Parameters<typeof taskModel>[1] = { complete: request => { caps.push(request.request.max_tokens); return gateway.complete(request); } };
+      return taskModel({ openaiApiKey: 'fixture-openai' }, spy)({ ...input, claim: { ...claim, brief: { ...brief, effort } } }).then(() => caps);
+    };
+    expect(await asked('deep')).toEqual([25_000]);
+    expect(await asked('standard')).toEqual([4_096]);
   });
 
   it('every provider failing is unavailability, typed, with no usage', async () => {

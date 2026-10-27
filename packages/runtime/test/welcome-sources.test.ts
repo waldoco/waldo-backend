@@ -12,7 +12,7 @@ const book = (consent: Awaited<ReturnType<HealthReadBook['consent']>>, raw: unkn
   return { asked, consent: async () => consent, series: async (range) => { asked.push(range); return raw; } };
 };
 const granted = (...sources: string[]) => ({ kind: 'granted' as const, sources: new Set(sources) });
-const health = (b: HealthReadBook) => healthStage(b, () => 'Europe/London', () => NOW)();
+const health = (b: HealthReadBook) => healthStage(b, () => 'Europe/London', () => NOW, () => true)();
 
 describe('welcome health stage', () => {
   // The welcome read is get_health's read: time asleep only, a stage from its own share of the night, one method per signal.
@@ -41,10 +41,17 @@ describe('welcome health stage', () => {
     expect(await health(book(granted('apple'), { error: 'boom' }))).toEqual({ kind: 'settled', state: 'unavailable' });
   });
 
-  it('reads ninety local days, and settles empty when there is nothing', async () => {
+  it('reads the last thirty local days, today included, and settles empty when there is nothing', async () => {
     const b = book(granted('apple'));
     expect(await health(b)).toEqual({ kind: 'settled', state: 'empty' });
-    expect(b.asked[0]).toMatchObject({ from: '2026-07-28', to: '2026-10-25' });
+    expect(b.asked).toEqual([expect.objectContaining({ from: '2026-09-26', to: '2026-10-25' })]);
+  });
+
+  it('is skipped when the owner keeps health out of memory, and reads nothing then', async () => {
+    const b = book(granted('apple'), series([{ source: 'apple', readings: [reading('sleep_midpoint', '2026-10-24', 240)] }]));
+    let consentRead = false;
+    expect(await healthStage({ ...b, consent: async () => { consentRead = true; return b.consent(); } }, () => 'Europe/London', () => NOW, () => false)()).toEqual({ kind: 'settled', state: 'skipped' });
+    expect([consentRead, b.asked]).toEqual([false, []]);
   });
 
   it('gives the model the owner\'s readings per signal and source, only from sources with live consent, and never WHOOP', async () => {

@@ -2,9 +2,9 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
-  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_5_5_MODEL,
   ANTHROPIC_PROVIDER,
-  OPENAI_GPT_6_1_SOL_MODEL,
+  OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
   type ErrorCode,
@@ -62,18 +62,18 @@ it('an owner turn whose primary dies after round 2 of 4 is finished by the Anthr
   // Three tool rounds ran: one effect each, none repeated by the provider that took over.
   expect(executed.map((input) => JSON.parse(input).topic)).toEqual(['one', 'two', 'three']);
   const anthropicRequests = requests.filter((request) => request.step.provider === ANTHROPIC_PROVIDER);
-  expect(anthropicRequests.map((request) => request.request.model)).toEqual([ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(anthropicRequests.map((request) => request.request.model)).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   // The fallback saw the earlier rounds' calls and results, so it continued the turn instead of restarting it.
   expect(anthropicRequests[0]!.request.tool_turns?.map((turn) => JSON.parse(turn.call.arguments).topic)).toEqual(['one', 'two']);
   expect(anthropicRequests[1]!.request.tool_turns?.map((turn) => JSON.parse(turn.call.arguments).topic)).toEqual(['one', 'two', 'three']);
 });
 
-it('an owner turn tries Sol with full then reduced context, then Opus, then the floor', async () => {
+it('an owner turn tries Terra with full then reduced context, then Sonnet, then the floor', async () => {
   const { gateway, models } = scriptedProviders({});
   const hops: TurnLogEntry[] = [];
   const owner = responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); });
   const reply = await owner.respond(ownerTyped({ traceId: 'fallback-turn-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
   expect(hops).toHaveLength(1);
   // No provider answered the floor line: the hop names none, says the ladder fell back, carries the failure that drove it,
@@ -99,7 +99,7 @@ it('a reply the fallback provider answered names that provider and no floor code
   const hops: TurnLogEntry[] = [];
   const owner = responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); });
   await owner.respond(ownerTyped({ traceId: 'served-by-anthropic', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
-  expect(hops).toEqual([expect.objectContaining({ ok: true, provider: ANTHROPIC_PROVIDER, fallback_fired: true, usage: expect.objectContaining({ model: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL }) })]);
+  expect(hops).toEqual([expect.objectContaining({ ok: true, provider: ANTHROPIC_PROVIDER, fallback_fired: true, usage: expect.objectContaining({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL }) })]);
   expect(hops[0]).not.toHaveProperty('code');
 });
 
@@ -107,7 +107,7 @@ it('an owner turn without the floor reply fails the way it did before, once ever
   const { gateway, models } = scriptedProviders({});
   const owner = responder(gateway, undefined, false);
   await expect(owner.respond(ownerTyped({ traceId: 'fallback-turn-3', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).rejects.toThrow(/live model failed/);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
 });
 
 it('a side job tries Luna with full then reduced context, then Haiku, and never answers from a template', async () => {
@@ -124,8 +124,13 @@ it('a side job answered by Haiku returns its answer', async () => {
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_LUNA_MODEL, ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]);
 });
 
+it('the owner turn route falls back to Sonnet with provider caching and room for thinking, and never to Opus', () => {
+  const [step] = ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }).routes[0]!.fallback;
+  expect(step).toMatchObject({ provider: ANTHROPIC_PROVIDER, model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, cache: 'anthropic_native', max_tokens: 16_000 });
+});
+
 it('the owner gateway fails a step without its provider key as auth_failed, before any network call', async () => {
-  const route = ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }).routes[0]!;
+  const route = ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }).routes[0]!;
   const step = route.fallback[0]!;
   const request = {
     request: { model: step.model, system: 'Be concise.', messages: [{ role: 'user' as const, content: 'hello' }], max_tokens: 32, temperature: 0.2 },
@@ -139,12 +144,12 @@ it('with no second-provider key deployed the route has no fallback step, so a fa
   const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai' }];
   args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway;
   await expect(createOwnerResponder(...args).respond(ownerTyped({ traceId: 'no-key-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).rejects.toThrow(/live model failed/);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(models()).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
   // A malformed key counts as no key: the adapter would refuse it without a call.
-  expect(ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, { openaiApiKey: 'k', anthropicApiKey: 'bad key' }).routes[0]!.fallback).toEqual([]);
+  expect(ownerRoutePolicy(OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, { openaiApiKey: 'k', anthropicApiKey: 'bad key' }).routes[0]!.fallback).toEqual([]);
 });
 
-it('provider health outlives the responder: three OpenAI misses across turns open its breaker, and later turns go straight to Opus', async () => {
+it('provider health outlives the responder: three OpenAI misses across turns open its breaker, and later turns go straight to Sonnet', async () => {
   const { gateway, requests } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'transient' }], [ANTHROPIC_PROVIDER]: [{ text: 'Answered by the second provider.' }] });
   const health = new InMemoryCircuitBreaker();
   const hops: TurnLogEntry[] = [];
@@ -155,10 +160,10 @@ it('provider health outlives the responder: three OpenAI misses across turns ope
     await expect(owner.respond(ownerTyped({ traceId: `health-turn-${n}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).resolves.toBe('Answered by the second provider.');
     return requests.slice(before).map((request) => request.request.model);
   };
-  expect(await turn(1)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(await turn(1)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   // The third miss opens OpenAI's breaker, so this turn's reduced-context retry is skipped.
-  expect(await turn(2)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
-  expect(await turn(3)).toEqual([ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(await turn(2)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+  expect(await turn(3)).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
   // The breaker opening is logged once, on the turn where it happened.
   expect(hops).toEqual([expect.objectContaining({ trace: 'health-turn-2', hop: 'provider_breaker', ok: false, code: 'circuit_open', detail: OPENAI_PROVIDER })]);
 });

@@ -1,9 +1,10 @@
 // The app's phone view on the one controls path: GET /app/v1/controls?view=phone reads the number on file, and
 // POST /app/v1/actions sets it, texts or checks a code through the same control-action receipt book the app already reads back.
 import { env, runInDurableObject } from 'cloudflare:test';
-import { afterEach, expect, it, vi } from 'vitest';
-import { APP_PHONE_SET_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appControlsRequest, type AppControlsHost } from '../src/channels/app-controls';
+import { phoneControlAct, type IMessageProof, type IMessageReach } from '../src/channels/dashboard-phone';
 
 const SERVICE = `VA${'a'.repeat(32)}`, SID = `VE${'b'.repeat(32)}`, TOKEN = 'synthetic-twilio-token-for-app', CODE = '424242', PHONE = '+919800000001';
 // Synthetic numbers: NEW is free, TAKEN is verified on another owner in the fake ledger.
@@ -56,12 +57,12 @@ function world() {
   });
   return { ledger, twilio, sets, failSets: () => { failSet = true; } };
 }
-const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString()) =>
+const app = (on: string, run: (o: { read(): Promise<{ status: number; body: Record<string, unknown> }>; act(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>; storage: DurableObjectStorage }) => Promise<void>, signedInAt = new Date().toISOString(), imessageProof?: IMessageProof) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-phone-${crypto.randomUUID()}`)), async (_i, state) => {
     const host: AppControlsHost = { csrf: 'c'.repeat(64), expires: Date.now() + 60_000, signedInAt, storage: state.storage, assertCurrent: async () => {},
       sessions: async () => [{ csrf: 'c'.repeat(64), expires: Date.now() + 60_000 }], view: unused, act: unused,
       account: { owner: 'owner-app-phone', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
-      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; } };
+      phone: phoneEnv(on), whatsappUnlinked: async () => { whatsappUnlinks++; }, ...(imessageProof ? { imessageProof } : {}) };
     const call = async (request: Request) => { const response = await appControlsRequest(request, host); return { status: response.status, body: await response.json() as Record<string, unknown> }; };
     await run({
       read: () => call(new Request('https://app.fixture.invalid/app/v1/controls?view=phone')),
@@ -220,5 +221,154 @@ it('an iMessage-only unlink is the directory\'s alone, and a change with no link
     expect(appControlResultV1Schema.parse((await act({ view: 'phone', action: 'phone.set', value: PHONE, revision: second.revision, request_id: 'phone-request-15' })).body).receipt)
       .toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
     expect(whatsappUnlinks).toBe(0);
+  });
+});
+
+// iMessage proves a number when the owner sends their link code from it. reach: the address this owner texts (the shared one, or once
+// enrolled their Photon number), whether Photon is in use and the owner can enroll, and the number enrolled; true is the shared
+// address, false nothing. hint: the last characters of the handle their iMessage is linked from (an Apple ID email ends in letters).
+// enrolls: what each Photon enrollment was asked for and answered.
+let enrolls: string[] = [];
+const imessage = (reach: boolean | 'unknown' | Partial<IMessageReach>, hint: string | null = null, enroll?: IMessageProof['enroll']): IMessageProof => ({
+  read: async () => {
+    if (reach === 'unknown') throw new Error('directory unreadable');
+    const base: IMessageReach = { address: null, photon: false, enrollable: false, enrolled: null };
+    return reach === true ? { ...base, address: 'woof@fixture.invalid' } : reach === false ? base : { ...base, ...reach };
+  },
+  hint: async () => hint,
+  ...(enroll ? { enroll } : {}),
+});
+const photon = (answer: Awaited<ReturnType<NonNullable<IMessageProof['enroll']>>> = 'enrolled') => async (phone: string) => { enrolls.push(phone); return answer; };
+
+it.each([
+  ['0', false, [], []],
+  ['1', false, ['phone.sms_send', 'phone.set'], ['sms']],
+  ['0', true, ['phone.set'], ['imessage']],
+  ['1', true, ['phone.sms_send', 'phone.set'], ['sms', 'imessage']],
+] as const)('with texting %s and iMessage linking %s the number can be set where it can be proven, and only texting sends a code', async (on, linkable, actions, proof) => {
+  world();
+  await app(on, async ({ read }) => {
+    expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { phone: PHONE, verified: false, actions, proof } });
+  }, undefined, imessage(linkable));
+});
+
+it('with texting off and iMessage linking on, a new number is saved and no code is texted', async () => {
+  const w = world();
+  await app('0', async ({ read, act }) => {
+    const projection = appControlProjectionV1Schema.parse((await read()).body);
+    const set = appControlResultV1Schema.parse((await act({ view: 'phone', action: 'phone.set', value: NEW, revision: projection.revision, request_id: 'phone-request-30' })).body);
+    expect(set.receipt).toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
+    expect(w.ledger.phone).toBe(NEW);
+    const after = appControlProjectionV1Schema.parse((await read()).body);
+    expect(after).toMatchObject({ data: { phone: NEW, sms: false, actions: ['phone.set'] } });
+    expect((await act({ view: 'phone', action: 'phone.sms_send', revision: after.revision, request_id: 'phone-request-31' })).body).toMatchObject({ error: 'no_longer_eligible' });
+    expect(w.twilio).toEqual([]);
+  }, undefined, imessage(true));
+});
+
+it('reads iMessage linking it cannot confirm as off, and still answers the phone view', async () => {
+  world();
+  await app('0', async ({ read }) => {
+    const response = await read();
+    expect(response.status).toBe(200);
+    expect(appControlProjectionV1Schema.parse(response.body)).toMatchObject({ data: { actions: [], proof: [] } });
+  }, undefined, imessage('unknown'));
+});
+
+it.each([
+  [null, 'none'], ['.com', 'email'], ['d.me', 'email'], ['0001', 'number'], ['9999', 'other_number'],
+] as const)('says how the linked iMessage relates to the number on file (hint %s: %s), never the handle itself', async (hint, from) => {
+  world();
+  await app('0', async ({ read }) => {
+    const response = await read();
+    expect(appControlProjectionV1Schema.parse(response.body)).toMatchObject({ data: { imessage_from: from } });
+    if (hint && !PHONE.endsWith(hint)) expect(JSON.stringify(response.body)).not.toContain(hint);
+  }, undefined, imessage(true, hint));
+});
+
+it('re-checks at act time that the number can be proven, so neither texting nor iMessage means no number is set', async () => {
+  const w = world();
+  const act: Parameters<typeof phoneControlAct>[2] = { action: 'phone.set', id: '', value: NEW };
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage(false))).toEqual(APP_PHONE_SET_RECEIPTS_V1.unavailable);
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage('unknown'))).toEqual(APP_PHONE_SET_RECEIPTS_V1.unavailable);
+  expect(w.sets).toEqual([]);
+  expect(await phoneControlAct(phoneEnv('0'), 'owner-app-phone', act, {}, async () => {}, imessage(true))).toEqual(APP_PHONE_SET_RECEIPTS_V1.set);
+  expect(w.sets).toHaveLength(1);
+});
+
+describe('iMessage set-up where Waldo\'s iMessage runs on Photon', () => {
+  const unenrolled = { photon: true, enrollable: true };
+  it('offers setting the number and setting it up for iMessage, with no texting, to an owner not enrolled yet', async () => {
+    world();
+    await app('0', async ({ read }) => {
+      expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { actions: ['phone.set', 'imessage.enroll'], proof: ['imessage'] } });
+    }, undefined, imessage(unenrolled, null, photon()));
+  });
+  it('enrolls the number on file at the owner\'s tap, and nothing else', async () => {
+    const w = world();
+    enrolls = [];
+    await app('0', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const result = appControlResultV1Schema.parse((await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-40' })).body);
+      expect(result.receipt).toEqual(APP_IMESSAGE_ENROLL_RECEIPTS_V1.enrolled);
+      expect(enrolls).toEqual([PHONE]);
+      expect(w.twilio).toEqual([]);
+    }, undefined, imessage(unenrolled, null, photon()));
+  });
+  it('is not offered once the number on file is enrolled, without Photon, without a number, or once proven', async () => {
+    for (const [reach, ledger] of [
+      [{ photon: true, enrollable: true, address: '+15550000001', enrolled: PHONE }, {}],
+      [true, {}],
+      [unenrolled, { phone: null }],
+      [unenrolled, { verified: true }],
+    ] as const) {
+      const w = world();
+      Object.assign(w.ledger, ledger);
+      await app('0', async ({ read }) => {
+        expect(appControlProjectionV1Schema.parse((await read()).body).data).not.toMatchObject({ actions: expect.arrayContaining(['imessage.enroll']) });
+      }, undefined, imessage(reach, null, photon()));
+    }
+  });
+  it('offers it again for a new number, once the enrolled one changed', async () => {
+    world();
+    await app('0', async ({ read }) => {
+      expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { actions: ['phone.set', 'imessage.enroll'] } });
+    }, undefined, imessage({ photon: true, enrollable: true, address: '+15550000001', enrolled: NEW }, null, photon()));
+  });
+  it('is never offered where the host cannot enroll, as on the console', async () => {
+    world();
+    await app('0', async ({ read }) => {
+      expect(appControlProjectionV1Schema.parse((await read()).body)).toMatchObject({ data: { actions: ['phone.set'], proof: ['imessage'] } });
+    }, undefined, imessage(unenrolled));
+  });
+  it.each([
+    ['phone_taken', APP_IMESSAGE_ENROLL_RECEIPTS_V1.phone_taken], ['refused', APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable],
+    ['photon_disconnected', APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable], ['disabled', APP_IMESSAGE_ENROLL_RECEIPTS_V1.unavailable],
+    ['invalid', APP_IMESSAGE_ENROLL_RECEIPTS_V1.invalid], ['throttled', APP_IMESSAGE_ENROLL_RECEIPTS_V1.throttled], ['unknown', APP_IMESSAGE_ENROLL_RECEIPTS_V1.unknown],
+  ] as const)('answers a failed enrollment (%s) with its fixed receipt, never repeating the number', async (answer, receipt) => {
+    world();
+    await app('0', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const body = (await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: `phone-request-${answer}` })).body;
+      expect(appControlResultV1Schema.parse(body).receipt).toEqual(receipt);
+      expect(JSON.stringify(body)).not.toContain(PHONE.slice(1));
+    }, undefined, imessage(unenrolled, null, photon(answer)));
+  });
+  it('answers an enrollment that threw as unconfirmed, never as enrolled', async () => {
+    world();
+    await app('0', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      const body = (await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-threw' })).body;
+      expect(appControlResultV1Schema.parse(body).receipt).toEqual(APP_IMESSAGE_ENROLL_RECEIPTS_V1.unknown);
+    }, undefined, imessage(unenrolled, null, async () => { throw new Error('photon unreachable'); }));
+  });
+  it('needs a recent email code, since it sends the number to Photon', async () => {
+    world();
+    enrolls = [];
+    await app('0', async ({ read, act }) => {
+      const projection = appControlProjectionV1Schema.parse((await read()).body);
+      expect(await act({ view: 'phone', action: 'imessage.enroll', revision: projection.revision, request_id: 'phone-request-41' })).toMatchObject({ status: 403, body: { error: 'step_up_required' } });
+      expect(enrolls).toEqual([]);
+    }, new Date(Date.now() - 3 * 60 * 60_000).toISOString(), imessage(unenrolled, null, photon()));
   });
 });

@@ -18,12 +18,20 @@ export type FakeOptions = {
   grantedScope?: string;
   revocation: boolean;
   results: (name: string, args: Record<string, unknown>) => unknown;
-  // Where the MCP server answers; the server path stays /mcp.
+  // Where the MCP server answers.
   origin: string;
   // The authorization server's issuer and origin; it may be the MCP server's own origin.
   issuer: string;
   // Where the authorization server says it revokes: its own path, or its token endpoint as some vendors advertise.
   revokeAt: 'revoke' | 'token';
+  // The MCP endpoint's path, and whether its protected-resource document sits at the origin's root rather than the
+  // path-inserted address.
+  path: string;
+  rootMetadata: boolean;
+  // The scope the 401 challenge names, and the scopes the protected resource and the authorization server list.
+  challengeScope: string;
+  resourceScopes: string[];
+  serverScopes: string[];
   // A pre-registered confidential client: the token endpoint requires this secret (client_secret_post).
   clientSecret?: string;
   // The token endpoint answers inside an ok envelope: HTTP 200, ok:false errors, a "user" token type and comma-separated
@@ -31,6 +39,12 @@ export type FakeOptions = {
   envelope?: boolean;
   // false: the authorization server does not list offline_access.
   offlineAccess?: boolean;
+  // RFC 8628: the authorization server advertises a device authorization endpoint. Each token poll takes the next answer
+  // from deviceAnswers ('ok' issues tokens); an empty queue answers authorization_pending.
+  device?: boolean;
+  deviceAnswers?: ('ok' | 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied')[];
+  // The device endpoint refuses our client, as a server that checks a client's registered grant types does (RFC 8628 §3.2).
+  deviceRefusal?: 'unauthorized_client' | 'unsupported_grant_type' | 'invalid_client' | 'invalid_request';
 };
 
 export const defaultTools: FakeTool[] = [
@@ -47,9 +61,14 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     origin: new URL(MCP_URL).origin,
     issuer: ISSUER,
     revokeAt: 'revoke',
+    path: '/mcp',
+    rootMetadata: false,
+    challengeScope: 'pages:read pages:write',
+    resourceScopes: ['pages:read', 'pages:write'],
+    serverScopes: ['pages:read', 'pages:write', 'offline_access'],
     ...overrides,
   };
-  const mcpUrl = `${options.origin}/mcp`, metadata = `${options.origin}/.well-known/oauth-protected-resource/mcp`;
+  const mcpUrl = `${options.origin}${options.path}`, metadataPath = `/.well-known/oauth-protected-resource${options.rootMetadata ? '' : options.path}`, metadata = `${options.origin}${metadataPath}`;
   let now = Date.parse('2026-10-21T12:00:00Z');
   const codes = new Map<string, { verifier_challenge: string; resource: string; scope: string; client_id: string; redirect_uri: string }>();
   const access = new Map<string, { expires: number; scope: string }>();
@@ -61,6 +80,8 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
   const hits: string[] = [];
   let counter = 0;
   let gone = false;
+  const devices = new Map<string, { client_id: string; scope: string }>();
+  const devicePolls: string[] = [];
   let rateLimited = false;
   const issue = (scope: string, family: string) => {
     counter += 1;
@@ -85,7 +106,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     calls.push({ method: body.method, name: body.params?.name as string | undefined, headers, ...(bearer ? { bearer } : {}), body });
     if (options.auth) {
       const token = bearer ? access.get(bearer) : undefined;
-      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metadata}", scope="pages:read pages:write"` } });
+      if (!token || token.expires <= now) return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${metadata}", scope="${options.challengeScope}"` } });
       const toolName = body.params?.name as string | undefined;
       if (body.method === 'tools/call' && toolName === 'create_page' && !token.scope.split(' ').includes('pages:write')) {
         return new Response('forbidden', { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="pages:write", resource_metadata="${metadata}"` } });
@@ -120,8 +141,8 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     const url = new URL(request.url);
     hits.push(`${request.method} ${url.origin}${url.pathname}`);
     if (url.origin === options.origin) {
-      if (url.pathname === '/.well-known/oauth-protected-resource/mcp') return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: ['pages:read', 'pages:write'] }) : new Response('no', { status: 404 });
-      if (url.pathname === '/mcp') return mcp(request);
+      if (url.pathname === metadataPath) return options.auth ? json({ resource: mcpUrl, authorization_servers: [options.issuer], scopes_supported: options.resourceScopes }) : new Response('no', { status: 404 });
+      if (url.pathname === options.path) return mcp(request);
       if (url.origin !== options.issuer) return new Response('not found', { status: 404 });
     }
     if (url.origin === options.issuer) {
@@ -130,10 +151,11 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
           issuer: options.issuer, authorization_endpoint: `${options.issuer}/authorize`, token_endpoint: `${options.issuer}/token`,
           ...(options.registration === 'dcr' ? { registration_endpoint: `${options.issuer}/register` } : {}),
           ...(options.revocation ? { revocation_endpoint: `${options.issuer}/${options.revokeAt}` } : {}),
+          ...(options.device ? { device_authorization_endpoint: `${options.issuer}/device` } : {}),
           ...(options.pkce ? { code_challenge_methods_supported: ['S256'] } : {}),
           client_id_metadata_document_supported: options.registration === 'cimd',
           authorization_response_iss_parameter_supported: options.issParameter,
-          scopes_supported: ['pages:read', 'pages:write', ...(options.offlineAccess === false ? [] : ['offline_access'])],
+          scopes_supported: options.serverScopes.filter((scope) => options.offlineAccess !== false || scope !== 'offline_access'),
         });
       }
       if (url.pathname === '/register') {
@@ -142,9 +164,27 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
         registered.push(id);
         return json({ client_id: id, token_endpoint_auth_method: 'none', redirect_uris: body.redirect_uris }, 201);
       }
+      if (url.pathname === '/device' && options.device) {
+        const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
+        if (form.get('resource') !== mcpUrl || !form.get('client_id')) return tokenError('invalid_request');
+        if (options.deviceRefusal) return tokenError(options.deviceRefusal, options.deviceRefusal === 'invalid_client' ? 401 : 400);
+        counter += 1;
+        devices.set(`dc_${counter}`, { client_id: form.get('client_id')!, scope: form.get('scope') ?? '' });
+        return json({ device_code: `dc_${counter}`, user_code: 'WDJB-MJHT', verification_uri: `${options.issuer}/activate`, verification_uri_complete: `${options.issuer}/activate?user_code=WDJB-MJHT`, expires_in: 900, interval: 5 });
+      }
       if (url.pathname === '/token') {
         const form = new URLSearchParams([...(await request.formData()).entries()] as [string, string][]);
         if (form.get('resource') !== mcpUrl) return tokenError('invalid_target');
+        if (form.get('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code') {
+          const device = devices.get(form.get('device_code') ?? '');
+          if (!device || device.client_id !== form.get('client_id') || form.get('client_secret') !== null) return tokenError('invalid_grant');
+          const answer = options.deviceAnswers?.shift() ?? 'authorization_pending';
+          devicePolls.push(answer);
+          if (answer !== 'ok') return tokenError(answer);
+          devices.delete(form.get('device_code') ?? '');
+          counter += 1;
+          return json(issue(options.grantedScope ?? device.scope, `fam_${counter}`));
+        }
         if (options.clientSecret !== undefined && form.get('client_secret') !== options.clientSecret) return tokenError('invalid_client', 401);
         if (form.get('grant_type') === 'authorization_code') {
           const code = codes.get(form.get('code') ?? '');
@@ -185,6 +225,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
     calls,
     hits,
     registered,
+    devicePolls,
     // What the owner's browser does at the authorization endpoint: consent, then redirect with code and iss.
     authorize: async (authorizeUrl: string, decision: 'allow' | 'deny' = 'allow', issOverride?: string | null) => {
       const url = new URL(authorizeUrl);

@@ -8,7 +8,7 @@ import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from '
 import type { ConsoleAction, ConsoleView } from './console';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
-import { phoneControlAct, phoneControls } from './dashboard-phone';
+import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-phone';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
 
 export type AppControlsHost = Readonly<{
@@ -26,6 +26,8 @@ export type AppControlsHost = Readonly<{
   phone:PhoneSmsEnv;
   // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
   whatsappUnlinked():Promise<void>;
+  // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
+  imessageProof?:IMessageProof;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
@@ -86,7 +88,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     }
     if(query.data.view==='phone'){
       let controls:Awaited<ReturnType<typeof phoneControls>>;
-      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf);}catch{return reply({error:'projection_unavailable'},503);}
+      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof);}catch{return reply({error:'projection_unavailable'},503);}
       const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
@@ -140,14 +142,14 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     const result=appControlResultV1Schema.safeParse({...body,request_id});
     await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
   }
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','granola.connect','granola.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
   const phone=action.data.view==='phone';
   const response=await controlAction(form,phone
     ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
-      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf):null,
-      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked);}}
+      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof):null,
+      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked,host.imessageProof);}}
     :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
       act:async action=>{await host.assertCurrent();return host.act(action);}});
   const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);

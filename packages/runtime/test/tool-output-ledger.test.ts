@@ -332,6 +332,16 @@ describe('earlier results for the owner\'s turn', () => {
     expect([...storage.data.keys()]).toEqual([]);
   });
 
+  it('never keeps an MCP read whose dictation carries a health reading, and keeps one that carries none', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never);
+    const read = (text: string) => JSON.stringify({ ok: true, data: { output: { content: [{ type: 'text', text }] }, protocol: 'mcp', taint_origin: 'mcp:wisprflow', source_taint: 'external' }, source_taint: 'external' });
+    await ledger.record({ tool: 'read_mcp_tool', ok: true, at: 1000, taint: 'external', origin: 'owner', summary: read('Note to self: my resting heart rate was 52 bpm this morning, ask the doctor.') });
+    expect([...storage.data.keys()]).toEqual([]);
+    await ledger.record({ tool: 'read_mcp_tool', ok: true, at: 2000, taint: 'external', origin: 'owner', summary: read('Note to self: move the design review to Thursday.') });
+    expect([...storage.data.keys()].filter((key) => key.startsWith('toolout:'))).toHaveLength(1);
+  });
+
   it('stages every row as external data whatever its own taint', async () => {
     const ledger = toolOutputLedger(fakeStorage() as never);
     await ledger.record({ tool: 'get_tasks', ok: true, at: 1000, taint: null, origin: 'owner', summary: 'own' });

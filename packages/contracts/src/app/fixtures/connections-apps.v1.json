@@ -1,0 +1,275 @@
+{
+  "none_connected": {
+    "version": 1,
+    "state": "available",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "view": "connections",
+    "data": {
+      "google": {
+        "connectAvailable": true,
+        "accounts": []
+      },
+      "telegram": {
+        "linked": false,
+        "unlinkAvailable": false
+      },
+      "sessions": {
+        "until": "2026-11-25T09:00:00.000Z",
+        "count": 1,
+        "items": [
+          {
+            "signed_in": "2026-10-26T09:00:00.000Z",
+            "until": "2026-11-25T09:00:00.000Z",
+            "current": true
+          }
+        ]
+      },
+      "apps": [
+        {
+          "id": "granola",
+          "label": "Granola",
+          "about": "Read your meeting notes and transcripts. Waldo never changes anything in Granola.",
+          "consent": null,
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "notion",
+          "label": "Notion",
+          "about": "Search and read your pages and databases.",
+          "consent": "Connecting here lets the tools Notion labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "todoist",
+          "label": "Todoist",
+          "about": "Find and read your tasks and projects.",
+          "consent": "Connecting here lets the tools Todoist labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "linear",
+          "label": "Linear",
+          "about": "Find and read issues, projects and comments.",
+          "consent": "Connecting here lets the tools Linear labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "slack",
+          "label": "Slack",
+          "about": "Search messages and read channels and threads.",
+          "consent": "Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol. Connecting here lets the Slack reads Waldo knows run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        }
+      ]
+    }
+  },
+  "one_active": {
+    "version": 1,
+    "state": "available",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "view": "connections",
+    "data": {
+      "google": {
+        "connectAvailable": true,
+        "accounts": []
+      },
+      "telegram": {
+        "linked": false,
+        "unlinkAvailable": false
+      },
+      "sessions": {
+        "until": "2026-11-25T09:00:00.000Z",
+        "count": 1,
+        "items": [
+          {
+            "signed_in": "2026-10-26T09:00:00.000Z",
+            "until": "2026-11-25T09:00:00.000Z",
+            "current": true
+          }
+        ]
+      },
+      "apps": [
+        {
+          "id": "granola",
+          "label": "Granola",
+          "about": "Read your meeting notes and transcripts. Waldo never changes anything in Granola.",
+          "consent": null,
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "notion",
+          "label": "Notion",
+          "about": "Search and read your pages and databases.",
+          "consent": "Connecting here lets the tools Notion labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": {
+            "status": "active",
+            "connected_at": 1761469200000
+          }
+        },
+        {
+          "id": "todoist",
+          "label": "Todoist",
+          "about": "Find and read your tasks and projects.",
+          "consent": "Connecting here lets the tools Todoist labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "linear",
+          "label": "Linear",
+          "about": "Find and read issues, projects and comments.",
+          "consent": "Connecting here lets the tools Linear labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "slack",
+          "label": "Slack",
+          "about": "Search messages and read channels and threads.",
+          "consent": "Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol. Connecting here lets the Slack reads Waldo knows run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        }
+      ]
+    }
+  },
+  "one_reauth_needed": {
+    "version": 1,
+    "state": "available",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "view": "connections",
+    "data": {
+      "google": {
+        "connectAvailable": true,
+        "accounts": []
+      },
+      "telegram": {
+        "linked": false,
+        "unlinkAvailable": false
+      },
+      "sessions": {
+        "until": "2026-11-25T09:00:00.000Z",
+        "count": 1,
+        "items": [
+          {
+            "signed_in": "2026-10-26T09:00:00.000Z",
+            "until": "2026-11-25T09:00:00.000Z",
+            "current": true
+          }
+        ]
+      },
+      "apps": [
+        {
+          "id": "granola",
+          "label": "Granola",
+          "about": "Read your meeting notes and transcripts. Waldo never changes anything in Granola.",
+          "consent": null,
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "notion",
+          "label": "Notion",
+          "about": "Search and read your pages and databases.",
+          "consent": "Connecting here lets the tools Notion labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "todoist",
+          "label": "Todoist",
+          "about": "Find and read your tasks and projects.",
+          "consent": "Connecting here lets the tools Todoist labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "linear",
+          "label": "Linear",
+          "about": "Find and read issues, projects and comments.",
+          "consent": "Connecting here lets the tools Linear labels read-only run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": null
+        },
+        {
+          "id": "slack",
+          "label": "Slack",
+          "about": "Search messages and read channels and threads.",
+          "consent": "Messages Waldo sends go out as you, so sending asks you first unless you allow it in Connections, and even then a message or page from outside never sends one without your card. Every send is listed in Patrol. Connecting here lets the Slack reads Waldo knows run without asking when you ask Waldo yourself; anything else, or anything a message or page from outside prompts, asks you first. You can change this after connecting, and disconnecting then connecting here again allows them again.",
+          "connectAvailable": true,
+          "connection": {
+            "status": "reauth_needed",
+            "connected_at": 1761469200000
+          }
+        }
+      ]
+    }
+  },
+  "actions": [
+    {
+      "view": "connections",
+      "action": "app.connect",
+      "id": "notion",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "request_id": "app-connect-notion-0001"
+    },
+    {
+      "view": "connections",
+      "action": "app.disconnect",
+      "id": "slack",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "request_id": "app-disconnect-slack-0001"
+    }
+  ],
+  "connect_result": {
+    "request_id": "app-connect-notion-0001",
+    "duplicate": false,
+    "receipt": {
+      "state": "recorded",
+      "message": "Notion connect is ready to begin. Access has not been granted or tested.",
+      "navigation": "/c/AbCdEfGhIjKlMnOpQrStUv?handoff=ZyXwVuTsRqPoNmLkJiHgFe"
+    }
+  },
+  "already_connected_result": {
+    "request_id": "app-connect-notion-0002",
+    "duplicate": false,
+    "receipt": {
+      "state": "recorded",
+      "message": "Notion is already connected."
+    }
+  },
+  "disconnect_revoked_result": {
+    "request_id": "app-disconnect-notion-0001",
+    "duplicate": false,
+    "receipt": {
+      "state": "recorded",
+      "message": "Disconnected, and the server revoked Waldo's access.",
+      "revocation": "revoked"
+    }
+  },
+  "disconnect_unsupported_result": {
+    "request_id": "app-disconnect-slack-0001",
+    "duplicate": false,
+    "receipt": {
+      "state": "recorded",
+      "message": "Disconnected and forgotten by Waldo. This service gives Waldo no way to revoke its access, so remove Waldo in that service's settings too (in Slack: Settings, then Manage apps).",
+      "revocation": "unsupported"
+    }
+  },
+  "disconnect_failed_result": {
+    "request_id": "app-disconnect-linear-0001",
+    "duplicate": false,
+    "receipt": {
+      "state": "recorded",
+      "message": "Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service's settings to be sure.",
+      "revocation": "failed"
+    }
+  }
+}

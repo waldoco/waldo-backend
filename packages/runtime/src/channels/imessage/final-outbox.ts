@@ -46,9 +46,9 @@ export type IMessageProactiveTarget = Readonly<{ bridgeDoName: string; ownerDoNa
 export const targetOf = (record: IMessageInboxRecord): IMessageProactiveTarget =>
   ({ bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject, revision: record.revision, bindingDigest: record.bindingDigest });
 
-/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console link, tapback or a progress note. */
+/** Whether a record is one an owner turn sent under its own name: its reply, failure notice, console or connect link, tapback or a progress note. */
 export const sentByTurn = (replyRef: string, turnId: string) =>
-  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef === `react:${turnId}`
+  replyRef === `reply:${turnId}` || replyRef === `failure:${turnId}` || replyRef === `console:${turnId}` || replyRef === `connect:${turnId}` || replyRef === `react:${turnId}`
   || replyRef.startsWith(`${PROGRESS}${turnId}:`);
 
 export class IMessageFinalOutbox {
@@ -57,11 +57,11 @@ export class IMessageFinalOutbox {
   get(replyRef: string): IMessageOutboxRecord | null { return this.storage.kv.get<IMessageOutboxRecord>(PREFIX + replyRef) ?? null; }
 
   /**
-   * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console link sent
-   * for the same inbound message is its own record, under its own commandId, so the reply still sends after it. The reply
+   * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console or connect link
+   * sent for the same inbound message is its own record, under its own commandId, so the reply still sends after it. The reply
    * carries the owner's message it answers as its thread target; nothing the model chose names it.
    */
-  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' = 'reply'): IMessageOutboxRecord {
+  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' | 'connect' = 'reply'): IMessageOutboxRecord {
     const ref = kind === 'reply' ? record.messageRef : undefined;
     return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text,
       ref ? { replyTo: { chatGuid: record.binding.chatGuid, messageGuid: ref.messageGuid, partIndex: ref.partIndex } } : {});
