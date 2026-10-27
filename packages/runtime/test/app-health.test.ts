@@ -549,6 +549,24 @@ describe('app health scores: revision 4', () => {
     expect(error).toHaveBeenCalledWith('app health scores drivers shape');
     expect(error).toHaveBeenCalledWith('app health scores windows shape');
   });
+  // The app's sleep debt and scores are strict objects, so a key the pin lacks would cost an installed build its whole answer.
+  // The trend and the windows' version live on the stored row for the model and the backend only.
+  it('never serves the sleep debt trend or the windows version, at any revision, and the answer still parses strictly', async () => {
+    const debt = { state: 'available', debt_minutes: 95, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    for (const trend of ['building', 'easing', 'steady']) {
+      const stored = withBaseline(personal, { ...extras, windows_version: 'energy-windows.v1', sleep_debt: { ...debt, trend } });
+      for (const header of [{}, contracts('health=2'), contracts('health=3'), contracts('health=4'), contracts('approvals=3,health=4'), contracts('health=5')]) {
+        const [, bytes] = await text(stored, header);
+        expect(bytes, JSON.stringify(header)).not.toMatch(/trend|windows_version|energy-windows/);
+        const body = JSON.parse(bytes) as Record<string, unknown>;
+        if ('sleep_debt' in body) expect(Object.keys(body.sleep_debt as object).sort()).toEqual(['activation', 'algorithm_version', 'debt_minutes', 'need_basis', 'state']);
+        expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      }
+    }
+    const partial = await json(withBaseline(personal, { sleep_debt: { state: 'partial', confidence: 0.4, algorithm_version: 'sleep-debt.v2', activation: 'accepted', trend: 'steady' } }), contracts('health=4'));
+    expect(partial.sleep_debt).toEqual({ state: 'partial', confidence: 0.4, algorithm_version: 'sleep-debt.v2', activation: 'accepted' });
+    expect(healthScoresV1Schema.safeParse(partial).success).toBe(true);
+  });
   // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
   it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {
     const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };

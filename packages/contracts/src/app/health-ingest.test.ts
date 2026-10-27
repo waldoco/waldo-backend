@@ -511,4 +511,11 @@ describe('health revision 4: baseline label, drivers and energy windows', () => 
     expect(healthScoresV1Schema.safeParse({ ...scores, windows: [window, { start: '14:00', end: '15:00', kind: 'dip' }] }).success).toBe(true);
     rejected(healthScoresV1Schema, [{ ...scores, windows: [window, window, window, window, window] }, { ...scores, windows: [{ start: 'noon', end: '13:00', kind: 'peak' }] }, { ...scores, windows: null }]);
   });
+  // The installed build's schema is strict at every level, so what the backend keeps on its own row beside these (the sleep
+  // debt's trend, the windows' version) is never part of the response.
+  it('has no sleep debt trend and no windows version: a strict response refuses both', () => {
+    const debt = { state: 'available', debt_minutes: 95, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    expect(healthScoresV1Schema.safeParse({ ...scores, sleep_debt: debt }).success).toBe(true);
+    rejected(healthScoresV1Schema, [{ ...scores, sleep_debt: { ...debt, trend: 'building' } }, { ...scores, windows: [], windows_version: 'energy-windows.v1' }]);
+  });
 });
