@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -454,5 +454,97 @@ describe('app health route table', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
       'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
     ]);
+  });
+});
+
+// Health revision 4: the baseline label, the drivers and the energy windows. A build that does not name it never sees them,
+// and never sees a score that leans on the all-adults prior without its label.
+describe('app health scores: revision 4', () => {
+  const healthDriverPool = healthDriverPhraseV1Schema.options.slice(0, 5);
+  const personal = { state: 'personal', personal_days: 20, needed: 14, prior: 'adults' };
+  const provisional = { state: 'provisional', personal_days: 5, needed: 14, prior: 'adults' };
+  const drivers = ['wrist temperature far above usual', 'blood oxygen below usual'];
+  const windows = [{ start: '09:30', end: '11:45', kind: 'peak' }, { start: '14:00', end: '15:15', kind: 'dip' }];
+  const extras = { drivers, windows };
+  const withBaseline = (baseline: unknown, over: Record<string, unknown> = {}) => ({
+    ...row, recovery: available({ score: 64, zone: 'moderate', algorithm_version: 'recovery.v5', activation: 'accepted', hrv_method: 'rmssd', baseline }), ...over,
+  });
+  const plain = { ...row, recovery: available({ score: 64, zone: 'moderate', algorithm_version: 'recovery.v5', activation: 'accepted', hrv_method: 'rmssd' }) };
+  const contracts = (revision: string): Record<string, string> => ({ 'x-waldo-app-contract': revision });
+  const text = async (stored: unknown, header: Record<string, string> = {}) => { rpcResult = { scores: stored }; const response = await get('/app/v1/health/scores', header); return [response.status, await response.text()] as const; };
+  const json = async (stored: unknown, header: Record<string, string> = {}) => JSON.parse((await text(stored, header))[1]) as Record<string, any>;
+  const tagsOf = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map(args => JSON.stringify(args)).join('\n');
+
+  it('answers a build below revision 4 with exactly the bytes it had before, whatever the stored row carries', async () => {
+    for (const header of [{}, contracts('health=1'), contracts('health=2'), contracts('health=3'), contracts('approvals=4,health=3')]) {
+      const [status, bare] = await text(plain, header);
+      const [carriedStatus, carried] = await text(withBaseline(personal, extras), header);
+      expect([carriedStatus, carried], JSON.stringify(header)).toEqual([status, bare]);
+      expect(carried).not.toMatch(/baseline|drivers|windows/);
+    }
+    const revisionThree = await json(withBaseline(personal, extras), contracts('health=3'));
+    expect(pinnedScores.safeParse(revisionThree).success).toBe(true);
+    const revisionOne = await json(withBaseline(personal, extras));
+    expect(pinnedBeforeSleepDebt.safeParse(revisionOne).success).toBe(true);
+  });
+  it('shows a build below revision 4 a provisional pillar as not yet learned, never as a score without its label', async () => {
+    for (const header of [{}, contracts('health=2'), contracts('health=3')]) {
+      const body = await json(withBaseline(provisional, extras), header);
+      expect(body.recovery, JSON.stringify(header)).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+      expect(body.form).toMatchObject({ state: 'available', score: 72 });
+      expect(pinnedScores.safeParse(body).success).toBe(true);
+    }
+  });
+  it('hides a provisional pillar from an old build even when its stored label is damaged', async () => {
+    for (const baseline of [{ state: 'provisional' }, { ...provisional, personal_days: -3 }, { ...provisional, prior: 'someone' }]) {
+      expect((await json(withBaseline(baseline), contracts('health=3'))).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+    }
+  });
+  it('does not hide a personal baseline from an old build, and leaves its pillar as it was', async () => {
+    expect((await json(withBaseline(personal), contracts('health=3'))).recovery).toEqual((await json(plain, contracts('health=3'))).recovery);
+  });
+  it('passes the baseline of each pillar, the drivers and the windows through to a build that names revision 4', async () => {
+    const stored = withBaseline(provisional, { ...extras, form: available({ baseline: personal }), sleep_debt: { state: 'unavailable', reason: 'missing_sleep' } });
+    for (const header of [contracts('health=4'), contracts('approvals=3,health=4'), contracts('health=5')]) {
+      const body = await json(stored, header);
+      expect(healthScoresV1Schema.safeParse(body).success, JSON.stringify(header)).toBe(true);
+      expect(body.recovery).toMatchObject({ state: 'available', score: 64, baseline: provisional });
+      expect(body.form).toMatchObject({ state: 'available', baseline: personal });
+      expect([body.drivers, body.windows, body.sleep_debt]).toEqual([drivers, windows, { state: 'unavailable', reason: 'missing_sleep' }]);
+    }
+  });
+  it('leaves the three keys out at revision 4 for a row that has none, never as nulls', async () => {
+    const body = await json(plain, contracts('health=4'));
+    expect(healthScoresV1Schema.safeParse(body).success).toBe(true);
+    expect(JSON.stringify(body)).not.toMatch(/baseline|drivers|windows/);
+    expect(Object.keys(body)).toEqual(['day', 'timezone', 'compiled_at', 'freshness', 'recovery', 'form', 'weight']);
+  });
+  it('drops a stored baseline, drivers or windows it cannot read, tells the log only a tag, and still serves the pillar and the scores', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const damaged = [
+      withBaseline({ state: 'provisional', personal_days: 5 }, extras), withBaseline({ ...provisional, needed: 7 }, extras), withBaseline('provisional', extras), withBaseline({ ...provisional, extra: 1 }, extras),
+    ];
+    for (const stored of damaged) {
+      const body = await json(stored, contracts('health=4'));
+      expect(healthScoresV1Schema.safeParse(body).success).toBe(true);
+      expect(body.recovery).toMatchObject({ state: 'available', score: 64 });
+      expect('baseline' in body.recovery).toBe(false);
+      expect([body.drivers, body.windows]).toEqual([drivers, windows]);
+    }
+    const badDrivers = await json(withBaseline(personal, { drivers: ['feeling tired near 1234'], windows }), contracts('health=4'));
+    const badWindows = await json(withBaseline(personal, { drivers, windows: [{ start: '9:30 secret', end: '11:45', kind: 'peak' }] }), contracts('health=4'));
+    const tooMany = await json(withBaseline(personal, { drivers: [...healthDriverPool, ...healthDriverPool], windows }), contracts('health=4'));
+    expect([badDrivers.drivers, badDrivers.windows, badDrivers.recovery.baseline]).toEqual([undefined, windows, personal]);
+    expect([badWindows.windows, badWindows.drivers]).toEqual([undefined, drivers]);
+    expect(tooMany.drivers).toBeUndefined();
+    expect(tagsOf(error)).not.toMatch(/1234|secret|feeling|provisional|personal/);
+    expect(error).toHaveBeenCalledWith('app health scores baseline shape');
+    expect(error).toHaveBeenCalledWith('app health scores drivers shape');
+    expect(error).toHaveBeenCalledWith('app health scores windows shape');
+  });
+  it('keeps the sleep debt rule: shown from revision 2, and the same at revision 4', async () => {
+    const debt = { state: 'unavailable', reason: 'missing_sleep' };
+    expect((await json({ ...plain, sleep_debt: debt }, contracts('health=4'))).sleep_debt).toEqual(debt);
+    expect('sleep_debt' in await json({ ...plain, sleep_debt: debt }, contracts('health=1'))).toBe(false);
   });
 });

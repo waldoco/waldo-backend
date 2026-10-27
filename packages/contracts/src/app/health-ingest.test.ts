@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
-  healthApiErrorV1Schema, healthChangeRejectionReasonV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, reduceSleepContextV2,
 } from './health-ingest';
@@ -390,5 +390,61 @@ describe('health routes', () => {
     expect(healthApiErrorV1Schema.safeParse({ error: 'consent_required' }).success).toBe(true);
     expect(healthApiErrorV1Schema.safeParse({ error: 'unavailable', message: 'try again later' }).success).toBe(true);
     rejected(healthApiErrorV1Schema, [{ error: 'anything else' }, { error: 'unavailable', message: 'x'.repeat(1001) }, { error: 'unavailable', detail: 'x' }, { error: 'unavailable', message: 7 }]);
+  });
+});
+
+describe('health revision 4: baseline label, drivers and energy windows', () => {
+  const available = { state: 'available', score: 71.5, zone: 'solid', algorithm_version: 'recovery.v5', activation: 'accepted', confidence: 0.6, hrv_method: 'rmssd' };
+  const scores = {
+    day: '2026-10-10', timezone: 'Asia/Kolkata', compiled_at: '2026-10-10T07:00:00Z', freshness: 'fresh',
+    recovery: available, form: { state: 'unavailable', reason: 'baseline_immature' }, weight: { state: 'unavailable', reason: 'calendar_demand_unavailable' },
+  };
+  const baseline = { state: 'provisional', personal_days: 6, needed: 14, prior: 'adults' };
+  const subjects = ['breathing rate', 'wrist temperature', 'blood oxygen', 'awake time in the night', 'walking heart rate'];
+  it('is health revision 4, after per-sample rejection', () => {
+    expect(HEALTH_BASELINE_REVISION_V1).toBe(4);
+    expect(HEALTH_BASELINE_REVISION_V1).toBeGreaterThan(HEALTH_PER_SAMPLE_REVISION_V1);
+  });
+  it('labels a baseline as provisional or personal, with the days it has and the prior it leans on', () => {
+    for (const label of [baseline, { ...baseline, state: 'personal', personal_days: 14 }, { ...baseline, personal_days: 0, prior: 'none' }, { ...baseline, prior: 'age_sex' }, { ...baseline, personal_days: 366 }]) {
+      expect(healthBaselineV1Schema.safeParse(label).success, JSON.stringify(label)).toBe(true);
+    }
+    rejected(healthBaselineV1Schema, [
+      { ...baseline, state: 'learning' }, { ...baseline, personal_days: -1 }, { ...baseline, personal_days: 367 }, { ...baseline, personal_days: 6.5 }, { ...baseline, needed: 7 },
+      { ...baseline, prior: 'population' }, { ...baseline, needed: undefined }, { ...baseline, prior: undefined }, { ...baseline, mean: 52 }, 'provisional', null,
+    ]);
+  });
+  it('lets only an available pillar carry a baseline, and a score without one stays valid', () => {
+    expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+    expect(healthScoresV1Schema.safeParse({ ...scores, recovery: { ...available, baseline } }).success).toBe(true);
+    rejected(healthScoresV1Schema, [
+      { ...scores, recovery: { ...available, baseline: { ...baseline, state: 'learning' } } }, { ...scores, recovery: { ...available, baseline: null } },
+      { ...scores, form: { state: 'unavailable', reason: 'baseline_immature', baseline } },
+    ]);
+  });
+  it('names a driver only from the closed phrase list: five subjects, two directions, near or far', () => {
+    const phrases = subjects.flatMap(subject => ['', ' far'].flatMap(far => ['above', 'below'].map(way => `${subject}${far} ${way} usual`)));
+    expect(phrases).toHaveLength(20);
+    expect([...healthDriverPhraseV1Schema.options].sort()).toEqual([...phrases].sort());
+    for (const phrase of phrases) expect(healthDriverPhraseV1Schema.safeParse(phrase).success, phrase).toBe(true);
+    rejected(healthDriverPhraseV1Schema, ['breathing rate high', 'resting heart rate above usual', 'breathing rate far far above usual', 'Breathing rate above usual', 'breathing rate above usual ', 'breathing rate 14 above usual', '', 7, null]);
+  });
+  it('carries at most eight drivers on the scores, and none is not an empty claim', () => {
+    expect(healthScoresV1Schema.safeParse({ ...scores, drivers: ['wrist temperature far above usual', 'blood oxygen below usual'] }).success).toBe(true);
+    expect(healthScoresV1Schema.safeParse({ ...scores, drivers: [] }).success).toBe(true);
+    const nine = healthDriverPhraseV1Schema.options.slice(0, 9);
+    rejected(healthScoresV1Schema, [{ ...scores, drivers: nine }, { ...scores, drivers: ['feeling tired'] }, { ...scores, drivers: 'blood oxygen below usual' }, { ...scores, drivers: null }]);
+  });
+  it('takes an energy window as two 24-hour clock times and a kind, and nothing else', () => {
+    const window = { start: '09:30', end: '11:45', kind: 'peak' };
+    for (const ok of [window, { start: '00:00', end: '23:59', kind: 'dip' }]) expect(healthEnergyWindowV1Schema.safeParse(ok).success, JSON.stringify(ok)).toBe(true);
+    rejected(healthEnergyWindowV1Schema, [
+      { ...window, start: '9:30' }, { ...window, end: '24:00' }, { ...window, end: '11:60' }, { ...window, start: '09:30:00' }, { ...window, start: '9.30am' }, { ...window, kind: 'low' }, { ...window, kind: undefined }, { ...window, note: 'focus' },
+    ]);
+  });
+  it('carries at most four windows on the scores', () => {
+    const window = { start: '09:30', end: '11:45', kind: 'peak' };
+    expect(healthScoresV1Schema.safeParse({ ...scores, windows: [window, { start: '14:00', end: '15:00', kind: 'dip' }] }).success).toBe(true);
+    rejected(healthScoresV1Schema, [{ ...scores, windows: [window, window, window, window, window] }, { ...scores, windows: [{ start: 'noon', end: '13:00', kind: 'peak' }] }, { ...scores, windows: null }]);
   });
 });
