@@ -429,7 +429,7 @@ describe('health revision 4: baseline label, drivers and energy windows', () => 
     for (const phrase of phrases) expect(healthDriverPhraseV1Schema.safeParse(phrase).success, phrase).toBe(true);
     rejected(healthDriverPhraseV1Schema, ['breathing rate high', 'resting heart rate above usual', 'breathing rate far far above usual', 'Breathing rate above usual', 'breathing rate above usual ', 'breathing rate 14 above usual', '', 7, null]);
   });
-  it('carries at most eight drivers on the scores, and none is not an empty claim', () => {
+  it('carries at most eight drivers on the scores', () => {
     expect(healthScoresV1Schema.safeParse({ ...scores, drivers: ['wrist temperature far above usual', 'blood oxygen below usual'] }).success).toBe(true);
     expect(healthScoresV1Schema.safeParse({ ...scores, drivers: [] }).success).toBe(true);
     const nine = healthDriverPhraseV1Schema.options.slice(0, 9);

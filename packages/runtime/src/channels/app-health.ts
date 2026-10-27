@@ -1,10 +1,10 @@
 import { fromRowZone } from '@waldo/contracts';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import {
-  checkHealthChangeV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
+  checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
-  healthScoresUnavailableV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1,
+  healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
@@ -91,16 +91,34 @@ const readJson = async <T>(request: Request, schema: ZodType<T>, readBody: AppHe
 type Pillar = 'recovery' | 'form' | 'weight';
 // The stored read model holds one zone vocabulary; the contract uses words that carry their own direction. A stored
 // 'unknown' is a score whose algorithm version has no ratified zone bands yet: it is shown without a zone word.
-const pillarView = (pillar: Pillar, stored: unknown): object | null => {
+// A build that does not name the baseline revision has nowhere to show the label, so a provisional score is withheld from it as
+// not yet learned, judged on the stored state alone so a damaged label cannot let the number through. From the baseline
+// revision on, a label that does not read is left out and the score is kept.
+const pillarView = (pillar: Pillar, stored: unknown, revision: number): object | null => {
   const row = asObject(stored);
   if (!row) return null;
   if (typeof row.reason === 'string') return { state: 'unavailable', reason: row.reason };
+  const labelled = revision >= HEALTH_BASELINE_REVISION_V1;
+  if (!labelled && asObject(row.baseline)?.state === 'provisional') return { state: 'unavailable', reason: 'baseline_immature' };
   const zone = row.zone === 'unknown' ? null : fromRowZone(pillar, row.zone);
   if (zone === null && row.zone !== 'unknown') return null;
+  const baseline = labelled && 'baseline' in row ? healthBaselineV1Schema.safeParse(row.baseline) : null;
+  if (baseline && !baseline.success) console.error('app health scores baseline shape');
   return {
     state: 'available', score: row.score, zone, algorithm_version: row.algorithm_version, activation: row.activation,
     confidence: row.confidence ?? null, hrv_method: row.hrv_method ?? null,
+    ...(baseline?.success ? { baseline: baseline.data } : {}),
   };
+};
+
+// A stored extra of the scores row that does not read as the contract's is left out, with a tag that holds no value, so it
+// cannot cost the owner their scores.
+const readExtra = <K extends 'drivers' | 'windows'>(stored: Record<string, unknown> | null, key: K): Record<string, unknown> => {
+  if (!stored || !(key in stored)) return {};
+  const parsed = healthScoresV1Schema.shape[key].safeParse(stored[key]);
+  if (parsed.success) return { [key]: parsed.data };
+  console.error(`app health scores ${key} shape`);
+  return {};
 };
 
 // The one reading of a scores_read answer, for the app and for the owner's console: the contract body, or the closed error.
@@ -128,8 +146,9 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   if (debt && !debt.success) console.error('app health scores sleep debt shape');
   const body = stored && {
     day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
-    recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
+    recovery: pillarView('recovery', stored.recovery, revision), form: pillarView('form', stored.form, revision), weight: pillarView('weight', stored.weight, revision),
     ...(debt?.success ? { sleep_debt: debt.data } : {}),
+    ...(revision >= HEALTH_BASELINE_REVISION_V1 ? { ...readExtra(stored, 'drivers'), ...readExtra(stored, 'windows') } : {}),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
   if (parsed.success) return { body: parsed.data };

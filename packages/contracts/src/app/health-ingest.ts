@@ -323,6 +323,33 @@ export const healthScoreUnavailableReasonV1Schema = z.enum([
 const scoreUnavailable = z.strictObject({ state: z.literal('unavailable'), reason: healthScoreUnavailableReasonV1Schema });
 const algorithmVersion = z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64);
 const activation = z.enum(['candidate_unaccepted', 'accepted']);
+// Health revision 4: what a score leans on. Until the owner has fourteen days of their own readings, a score is anchored
+// partly on a prior and is provisional; the label says so, so a number is never shown as personal when it is not. personal_days
+// counts the owner's own days (up to a year), needed is the fourteen they need, and prior names what the rest leans on. A
+// build that does not name revision 4 is never sent a baseline, and never sees a provisional pillar as a score: it reads
+// it as baseline_immature, since it has nowhere to show the label.
+export const HEALTH_BASELINE_REVISION_V1 = 4;
+export const healthBaselineV1Schema = z.strictObject({
+  state: z.enum(['provisional', 'personal']),
+  personal_days: z.int().min(0).max(366),
+  needed: z.literal(14),
+  // age_sex is named now so a later prior drawn from the owner's age and sex adds no enum value an installed build reads.
+  prior: z.enum(['age_sex', 'adults', 'none']),
+});
+// The phrases the backend writes for a driver: one of the owner's signals is outside their own usual range today, which way,
+// and whether far. Closed, because the derived-row writer admits exactly these and the app maps each one to its own words.
+// The runtime's driver subjects are the source; this list is spelled out because contracts cannot import the runtime, and a
+// runtime test keeps the two equal.
+export const healthDriverPhraseV1Schema = z.enum([
+  'breathing rate above usual', 'breathing rate below usual', 'breathing rate far above usual', 'breathing rate far below usual',
+  'wrist temperature above usual', 'wrist temperature below usual', 'wrist temperature far above usual', 'wrist temperature far below usual',
+  'blood oxygen above usual', 'blood oxygen below usual', 'blood oxygen far above usual', 'blood oxygen far below usual',
+  'awake time in the night above usual', 'awake time in the night below usual', 'awake time in the night far above usual', 'awake time in the night far below usual',
+  'walking heart rate above usual', 'walking heart rate below usual', 'walking heart rate far above usual', 'walking heart rate far below usual',
+]);
+// A stretch of today, on the owner's local 24-hour clock, when energy is expected to peak or dip.
+const clockTime = z.string().regex(/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/);
+export const healthEnergyWindowV1Schema = z.strictObject({ start: clockTime, end: clockTime, kind: z.enum(['peak', 'dip']) });
 const scoreAvailable = <Zone extends z.ZodType>(zone: Zone) => z.strictObject({
   state: z.literal('available'),
   score: z.number().finite().min(0).max(100),
@@ -332,6 +359,8 @@ const scoreAvailable = <Zone extends z.ZodType>(zone: Zone) => z.strictObject({
   activation,
   confidence: z.number().finite().min(0).max(1).nullable(),
   hrv_method: hrvMethodV1.nullable(),
+  // Shown only to a build that names health revision 4.
+  baseline: healthBaselineV1Schema.optional(),
 });
 const pillar = <Zone extends z.ZodType>(zone: Zone) => z.union([scoreUnavailable, scoreAvailable(zone)]);
 // Sleep debt over the last 14 nights. A window with a missing night is partial and gives no figure. debt_minutes weighs
@@ -357,6 +386,9 @@ export const healthScoresV1Schema = z.strictObject({
   weight: pillar(healthWeightZoneV1Schema),
   // Absent when the row was not computed with it, never a stand-in for zero debt.
   sleep_debt: healthSleepDebtV1Schema.optional(),
+  // Revision 4 and later; absent when the row has none.
+  drivers: z.array(healthDriverPhraseV1Schema).max(8).optional(),
+  windows: z.array(healthEnergyWindowV1Schema).max(4).optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it.
