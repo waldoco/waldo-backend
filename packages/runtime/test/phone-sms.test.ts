@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { routerSignature } from '../src/identity/owner-directory';
 import { phoneSms } from '../src/identity/phone-sms';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import config from '../wrangler.jsonc?raw';
 
 const service = `VA${'a'.repeat(32)}`;
 const sid = `VE${'b'.repeat(32)}`;
@@ -227,6 +229,19 @@ describe('reading the state', () => {
     expect(await phoneSms(env, f.fetcher, () => NOW).state('owner-a')).toEqual({ phone, verified: false, sms: true, challenge });
     expect(f.calls[0]!.body).toMatchObject({ p_do_name: 'owner-a' });
     expect(f.calls[0]!.body.p_sig).toBe(await routerSignature(env.WALDO_ROUTER_HMAC_SECRET, NOW / 1000, 'phonestate.owner-a'));
+  });
+
+  // The owner's 27 Oct ruling: on staging, codes go to India, the US and Australia. +1 also reaches Canada and the Caribbean;
+  // Twilio Verify's geo permissions are what keep those off, not this list.
+  it('on the committed staging config, texts Indian, US and Australian numbers and refuses a UK one, at 20 a day', async () => {
+    const staging = (parseJsonc(config) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars;
+    expect([staging.PHONE_SMS_VERIFY, staging.PHONE_SMS_COUNTRIES, staging.PHONE_SMS_DAILY_LIMIT]).toEqual(['1', '+91,+1,+61', '20']);
+    const onStaging = { ...env, PHONE_SMS_VERIFY: staging.PHONE_SMS_VERIFY, PHONE_SMS_COUNTRIES: staging.PHONE_SMS_COUNTRIES, PHONE_SMS_DAILY_LIMIT: staging.PHONE_SMS_DAILY_LIMIT };
+    const offered = async (number: string) => (await phoneSms(onStaging, fake(() => ({ phone: number, verified: false, challenge: null })).fetcher, () => NOW).state('owner-a'))?.sms;
+    expect(await Promise.all(['+919800000001', '+12025550123', '+61412345678', '+447700900001'].map(offered))).toEqual([true, true, true, false]);
+    const f = fake(() => ({ kind: 'unsupported' }));
+    expect(await phoneSms(onStaging, f.fetcher, () => NOW).send('owner-a')).toEqual({ kind: 'unsupported' });
+    expect(JSON.parse(String(f.calls[0]!.body.p_payload))).toMatchObject({ countries: ['+91', '+1', '+61'], daily_limit: 20 });
   });
 
   it('says texting is not offered for a number outside the listed country codes, or no number', async () => {
