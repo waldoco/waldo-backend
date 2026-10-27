@@ -48,9 +48,9 @@ const turnProfile = async (name: string, flag: string | undefined) => runInDurab
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, OWNER_PROFILE: flag });
   const app = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
-    headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+    headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json', 'x-waldo-app-contract': 'onboarding=2' }, body: JSON.stringify(body) }));
   try {
-    expect((await app('/app/v1/onboarding/answers', { request_id: `${name}-answers`, name: 'Asha', wearable: 'samsung' })).status).toBe(200);
+    expect((await app('/app/v1/onboarding/answers', { request_id: `${name}-answers`, name: 'Asha', wearable: 'samsung', rope: 'tell', protect: { picked: ['family'], own_words: '' }, spots: ['mail-chasing'] })).status).toBe(200);
     const sent = await app('/app/v1/chat/main/messages', { client_message_id: `${name}-client-01`, text: 'What should I do first today?' });
     expect(sent.status).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
@@ -63,7 +63,8 @@ const turnProfile = async (name: string, flag: string | undefined) => runInDurab
 it('with OWNER_PROFILE=1 an app turn reads the profile view: setup answers, the owner\'s other words, no health reading', async () => {
   const profile = await turnProfile('owner-profile-app-on', '1');
   expect(profile).toContain('In their own words:');
-  for (const fact of ['Wants to be called Asha', 'Wears a Samsung Galaxy Watch.', 'Likes plans written as a short list']) expect(profile).toContain(fact);
+  for (const fact of ['Wants to be called Asha', 'Wears a Samsung Galaxy Watch.', 'Likes plans written as a short list', 'When Waldo spots something, wants simply to be told.',
+    'Never to be moved or booked over: family time.', 'Where it is hardest for them: chasing others on mail.']) expect(profile).toContain(fact);
   expect(profile).not.toContain('resting HR');
   expect(profile).toContain('1 health readings the owner stated are left out here');
 });
