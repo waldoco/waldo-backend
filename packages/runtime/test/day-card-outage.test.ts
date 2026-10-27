@@ -26,11 +26,11 @@ const withOutage = (work: (o: {
     const outage: Outage = { modelUp: false, generated: [], quarantined: false };
     const executors: ScheduleExecutors = {
       brief: (entry) => runDayCard({
-        entry, book, timezone: tz, now: clock.now, freshness: { closeDue: null, quietFrom: null },
-        generate: async () => {
+        entry, book, timezone: tz, now: clock.now, freshness: { closeDue: null, quietStart: null },
+        generate: async (card, cardDay) => {
           if (!outage.modelUp) throw new ModelUnavailableError('auth_failed');
           outage.generated.push(clock.now);
-          return 'sent';
+          book.sent(cardDay, card.id);
         },
       }),
     };
@@ -58,10 +58,10 @@ describe('a model outage over a day-card slot', () => {
       expect(brief(book)?.state).toBe('waiting_on_model');
 
       outage.modelUp = true;
-      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual(['card:brief']);
+      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual(['card:brief']);
       await scheduler.dispatchDue(executors);
       // A second recovery signal and the rest of the morning add nothing.
-      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual([]);
+      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual([]);
       await tick(local('07:00'));
 
       expect(outage.generated).toEqual([local('05:00')]);
@@ -76,7 +76,7 @@ describe('a model outage over a day-card slot', () => {
       expect(outage.quarantined).toBe(false);
 
       outage.modelUp = true;
-      expect(await resumeWaitingCards(scheduler, book, tz, clock.now)).toEqual([]);
+      expect(await resumeWaitingCards(scheduler, book, clock.now)).toEqual([]);
       await scheduler.dispatchDue(executors);
       await tick(local('15:00'), 5 * MINUTE);
 

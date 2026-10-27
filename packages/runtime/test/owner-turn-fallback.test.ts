@@ -13,6 +13,7 @@ import {
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { MODEL_UNREACHABLE_REPLY, ownerModelGateway, ownerRoutePolicy, type FloorTurn } from '../src/llm/owner-routes';
 import { InMemoryCircuitBreaker, type CircuitBreaker } from '../src/llm/provider';
+import { ModelUnavailableError } from '../src/scheduler/multiplexer';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { getContextHandler } from '../src/tools/live/get-context';
@@ -115,6 +116,22 @@ it('a side job tries Luna with full then reduced context, then Haiku, and never 
   const owner = responder(gateway);
   await expect(owner.chooseReaction(ownerTyped({ traceId: 'fallback-reaction-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }))).rejects.toThrow(/live model failed/);
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_LUNA_MODEL, ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]);
+});
+
+it('a job no provider would answer for a refused key fails as model-unavailable, auth_failed, so its schedule waits instead of quarantining', async () => {
+  const { gateway } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'auth_failed' }], [ANTHROPIC_PROVIDER]: [{ fail: 'auth_failed' }] });
+  const failure = await responder(gateway).chooseReaction(ownerTyped({ traceId: 'dead-key-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(ModelUnavailableError);
+  expect(failure).toMatchObject({ reason: 'auth_failed', message: expect.stringMatching(/^live model failed: auth_failed/) });
+});
+
+it('a job every provider failed transiently is model-unavailable; a request the model refused is not', async () => {
+  const down = await responder(scriptedProviders({}).gateway).chooseReaction(ownerTyped({ traceId: 'down-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(down).toMatchObject({ reason: 'template_unavailable' });
+  expect(down).toBeInstanceOf(ModelUnavailableError);
+  const refused = await responder(scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'invalid_args' }] }).gateway).chooseReaction(ownerTyped({ traceId: 'refused-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' })).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(Error);
+  expect(refused).not.toBeInstanceOf(ModelUnavailableError);
 });
 
 it('a side job answered by Haiku returns its answer', async () => {

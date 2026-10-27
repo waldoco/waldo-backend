@@ -13,6 +13,7 @@ import {
 import type { Deps } from '../seams/deps';
 import { FINAL_OUTBOX_KEY, standingOrderFinalId, type FinalRecord } from '../channels/telegram-final-outbox';
 import { rearmSharedAlarm } from './alarm-slot';
+import type { ModelDownReason } from '../llm/provider';
 
 const MAX_MISSED_CHAIN = 64;
 // Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
@@ -25,6 +26,7 @@ const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
 export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+export const MODEL_PROBE_MS = 15 * 60_000;
 // A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
 // armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
 const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
@@ -59,6 +61,15 @@ export class UnreadableScheduleRowError extends Error {
 }
 
 // One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+// A run that failed because no model could answer: the provider refused the key, its breaker is open, or every route and the
+// floor failed. It says nothing about the job, so it never counts toward quarantine; the row waits and probes again.
+export class ModelUnavailableError extends Error {
+  constructor(readonly reason: ModelDownReason, message = `model unavailable: ${reason}`) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+  }
+}
+
 export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
 
 export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
@@ -267,6 +278,11 @@ export class Scheduler {
             dispatched.push(bumped);
             continue;
           }
+          if (err instanceof ModelUnavailableError) {
+            this.waitForModel(bumped, now);
+            this.settleRun(runId, 'failed', 'run', now);
+            continue;
+          }
           const disposition = this.applyFailurePolicy(bumped, now);
           if (this.runOutcome(runId) === 'running') {
             this.settleRun(runId, disposition === 'quarantined' ? 'quarantined' : 'failed', 'run', now);
@@ -381,6 +397,20 @@ export class Scheduler {
       entry.updated_at,
     );
     return 'retry';
+  }
+
+  private waitForModel(entry: ScheduleEntry, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule
+          SET attempts = 0,
+              due_at = ?,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      now + MODEL_PROBE_MS,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
   }
 
   // C4 run history: one row per fire, inserted before dispatch (recordRunStart) and settled

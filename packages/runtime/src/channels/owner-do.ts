@@ -134,7 +134,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, type PrepGate } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, waitingSection } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
@@ -4824,7 +4824,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId } }, work => storage.transactionSync(() => { work(); commit(); }));
       },
     });
-    const cards = async (entry: ScheduleEntry) => {
+    const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
       if (card === null) return;
       const trace = `${entry.id}:${entry.occurrence_at}`;
@@ -4887,6 +4887,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'day_card' });
         throw error;
       }
+    };
+    const cards = (entry: ScheduleEntry) => {
+      const close = scheduler.lookup('card:close');
+      return runDayCard({ entry, book: plans, timezone: clock.timezone, now: Date.now(), generate: () => writeCard(entry),
+        freshness: { closeDue: close.state === 'entry' ? close.entry.due_at : null, quietStart: loops.proactivity().quiet_start } });
     };
     const settleFinal = async (record: FinalRecord): Promise<void> => {
       // Forget ended the record only when its own status says so: forget that reached a record already sent leaves it to arrive.
