@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
+  APP_PRIVACY_NOTICE_URL_V1, APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_URL_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
@@ -187,5 +187,13 @@ describe('routes', () => {
     const link = appOnboardingRoutesV1.find(route => route.path === ONE_TIME_SECRET);
     expect(link).toMatchObject({ method: 'POST', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema });
     expect(link && 'idempotency_field' in link).toBe(false);
+  });
+});
+
+describe('published copy', () => {
+  it('names the address where each version is published, on the website the notice itself names', () => {
+    expect([APP_TERMS_VERSION_V1, APP_PRIVACY_NOTICE_VERSION_V1]).toEqual([1, 1]);
+    expect(APP_TERMS_URL_V1).toBe('https://www.heywaldo.in/terms');
+    expect(APP_PRIVACY_NOTICE_URL_V1).toBe('https://www.heywaldo.in/privacy');
   });
 });
