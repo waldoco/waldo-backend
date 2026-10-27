@@ -4,7 +4,7 @@ import {
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
-  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
+  appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
   APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1,
 } from './onboarding';
 import { appJsonWireBytes } from './core';
@@ -204,6 +204,14 @@ describe('setup answers, onboarding revision 2', () => {
       { ...more, low: { picked: ['focus', 'focus'], own_words: '' } }, { ...more, low: { picked: ['tired'], own_words: '' } }, { ...more, low: { picked: ['focus'], own_words: 'x'.repeat(281) } },
       { ...more, low: { picked: ['focus'], own_words: '', readings: [] } },
     ]);
+  });
+  it('lets only a build that declares revision 2 send the later answers', () => {
+    const first = { request_id: 'setup-answers-02', name: 'Asha', day: { shape: 'focus' as const, own_words: '' } };
+    for (const revision of [1, 2, 3]) expect(appSetupAnswersFitRevision(first, revision)).toBe(true);
+    for (const answer of ['matters', 'spots', 'protect', 'rope', 'season', 'low'] as const) {
+      const later = appSetupAnswersRequestV1Schema.parse({ ...first, [answer]: more[answer] });
+      expect([answer, appSetupAnswersFitRevision(later, 1), appSetupAnswersFitRevision(later, 2)]).toEqual([answer, false, true]);
+    }
   });
   it('fits the longest answers in any script under the answers route cap', () => {
     // Six answers in the owner's own words at their limit, every choice picked, in characters JSON spells out as \uXXXX: six

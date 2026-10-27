@@ -195,8 +195,8 @@ export const appFindingResultV1Schema = z.strictObject({
 // Onboarding revision 2 (`onboarding=2`) adds the rest of the conversation: matters (what the owner wants a hand with), spots
 // (where each of those is hardest; an empty list is "hard to say"), protect (what is never to be moved or booked over), rope
 // (how Waldo should bring up what it spots: a preference Waldo reads, never a grant), season (what stretch they are in) and low
-// (what goes first when they run low). A server takes these fields from any build; held names them only for a build that
-// declares revision 2.
+// (what goes first when they run low). Only a build that declares revision 2 may send them, and only such a build finds them in
+// held: a build that does not is refused them as invalid_request, exactly as before the revision.
 export const APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 = 2;
 export const APP_SETUP_OWN_WORDS_MAX_V1 = 280;
 export const appSetupDayShapeV1Schema = z.enum(['meetings', 'focus', 'fixed', 'varies']);
@@ -233,6 +233,10 @@ export const appSetupAnswersRequestV1Schema = z.strictObject({
   season: z.strictObject({ choice: appSetupSeasonV1Schema.nullable(), own_words: ownWords }).nullable().optional(),
   low: picks(appSetupLowV1Schema).nullable().optional(),
 }).refine(request => SETUP_ANSWERS.some(answer => request[answer] !== undefined), 'name at least one answer');
+// Whether a build reading `revision` may send this request: below revision 2 it names none of the later answers.
+export const APP_SETUP_ANSWERS_REVISION_TWO_V1 = ['matters', 'spots', 'protect', 'rope', 'season', 'low'] as const;
+export const appSetupAnswersFitRevision = (request: AppSetupAnswersRequestV1, revision: number): boolean =>
+  revision >= APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 || APP_SETUP_ANSWERS_REVISION_TWO_V1.every(answer => request[answer] === undefined);
 // held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write. The revision 2 answers
 // are present exactly for a build that declares it, except in a replay of an answer recorded before them.
 const revisionTwoHeld = { matters: z.boolean(), spots: z.boolean(), protect: z.boolean(), rope: z.boolean(), season: z.boolean(), low: z.boolean() };
