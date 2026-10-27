@@ -104,7 +104,7 @@ const withBriefDue = (name: string, work: (day: Day) => Promise<void>) =>
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 
-it('tells the owner once per incident, through every probe of the outage, and again after the key was replaced and refused anew', async () => {
+it('tells the owner once a day while a card waits on a refused key, through every probe and a second refusal the same day', async () => {
   await withBriefDue('model-auth-alert', async (day) => {
     model.down = true;
     for (let probe = 0; probe < 4; probe += 1) { day.at(AT + probe * 15 * 60_000); await day.alarm(); await day.alarm(); }
@@ -118,6 +118,6 @@ it('tells the owner once per incident, through every probe of the outage, and ag
     await new Scheduler(day.sql, day.storage, productionDeps())
       .schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: Date.now(), dueAt: Date.now(), recurrence: null });
     for (let pass = 0; pass < 4; pass += 1) { day.at(AT + 5 * 15 * 60_000 + pass * 60_000); await day.alarm(); }
-    expect((await day.chatTexts()).filter(text => text.includes(MODEL_AUTH_NOTICE))).toHaveLength(2);
+    expect((await day.chatTexts()).filter(text => text.includes(MODEL_AUTH_NOTICE))).toHaveLength(1);
   });
 });
