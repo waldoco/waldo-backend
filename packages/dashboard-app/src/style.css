@@ -691,7 +691,6 @@ footer .refresh:disabled { opacity:1; }
 @keyframes word-in { from { opacity:0; top:.3em; } }
 .chat-draft-foot { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-top:10px; }
 .chat-draft-foot button.quiet { min-height:28px; padding:4px 10px; margin-left:-10px; font-size:12.5px; }
-@media(prefers-reduced-motion:reduce) { .word-in { animation:none; } }
 
 /* Metadata and hover actions: present, never loud. */
 .chat-meta { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; min-height:26px; margin-top:4px; font-size:12px; color:var(--t3); }
@@ -739,10 +738,11 @@ footer .refresh:disabled { opacity:1; }
 .chat-msg.working .chat-body { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding-top:4px; }
 .chat-msg.working button.quiet { min-height:28px; padding:4px 10px; margin-left:-10px; font-size:12.5px; }
 .chat-working { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:0; color:var(--t2); font-size:14.5px; }
-.typing { display:inline-flex; gap:4px; }
-.typing i { width:6px; height:6px; border-radius:50%; background:var(--t3); animation:typing 1.2s ease-in-out infinite; }
-.typing i:nth-child(2) { animation-delay:.15s; } .typing i:nth-child(3) { animation-delay:.3s; }
-@keyframes typing { 0%,60%,100% { transform:translateY(0); opacity:.35; } 30% { transform:translateY(-3px); opacity:1; } }
+/* The app's setup-chat dots: each rises and brightens over 150 ms and back, 90 ms after the one before. */
+.typing { display:inline-flex; gap:5px; }
+.typing i { width:6px; height:6px; border-radius:50%; background:var(--t2); animation:typing .15s ease-in-out infinite alternate; }
+.typing i:nth-child(2) { animation-delay:.09s; } .typing i:nth-child(3) { animation-delay:.18s; }
+@keyframes typing { from { transform:translateY(0); opacity:.4; } to { transform:translateY(-2px); opacity:1; } }
 .shimmer { background:linear-gradient(90deg,var(--t3) 0%,var(--ink) 45%,var(--t3) 90%) 0 0/200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation:shimmer-text 2.2s linear infinite; }
 @keyframes shimmer-text { from { background-position:100% 0; } to { background-position:-100% 0; } }
 .pulse-ring { position:relative; }
