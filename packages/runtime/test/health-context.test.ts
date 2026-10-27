@@ -201,7 +201,7 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
     expect(material!.view).toMatchObject({
       algorithm_version: 'form.v9', form_zone: 'flagging',
       baseline_state: { recovery: 'provisional', form: 'provisional', load: 'personal' },
-      sleep_debt: 'building',
+      sleep_debt: { amount: 'some' },
       energy_windows: [{ start: '09:30', end: '11:30', kind: 'peak' }, { start: '14:00', end: '15:30', kind: 'dip' }],
     });
   });
@@ -219,13 +219,37 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
     expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
   });
 
-  it('words sleep debt as building, steady, partial or unknown', () => {
-    const word = (sleep_debt: unknown) => (at({ sleep_debt })!.view as { sleep_debt?: string }).sleep_debt;
-    expect(word({ state: 'available', debt_minutes: 640, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('building');
-    expect(word({ state: 'available', debt_minutes: 30, need_basis: 'owner_confirmed', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('steady');
-    expect(word({ state: 'available', debt_minutes: 0, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('steady');
-    expect(word({ state: 'partial', confidence: 0.6, algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toBe('partial');
-    expect(word({ state: 'unavailable', reason: 'missing_sleep' })).toBe('unknown');
+  it('words sleep debt as an amount only: some, little, partial or unknown, with no direction', () => {
+    const word = (sleep_debt: unknown) => (at({ sleep_debt })!.view as { sleep_debt?: unknown }).sleep_debt;
+    const available = (debt_minutes: number, over: Record<string, unknown> = {}) => ({ state: 'available', debt_minutes, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted', ...over });
+    expect(word(available(640))).toEqual({ amount: 'some' });
+    expect(word(available(30, { need_basis: 'owner_confirmed' }))).toEqual({ amount: 'little' });
+    expect(word(available(0))).toEqual({ amount: 'little' });
+    expect(word({ state: 'partial', confidence: 0.6, algorithm_version: 'sleep-debt.v2', activation: 'accepted' })).toEqual({ amount: 'partial' });
+    expect(word({ state: 'unavailable', reason: 'missing_sleep' })).toEqual({ amount: 'unknown' });
+  });
+
+  it('puts the line between a little and some sleep debt at the named boundary', () => {
+    const word = (debt_minutes: number) => (at({ sleep_debt: { state: 'available', debt_minutes, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' } })!.view as { sleep_debt: { amount: string } }).sleep_debt.amount;
+    expect([word(239.99), word(240)]).toEqual(['little', 'some']);
+  });
+
+  it('says nothing of direction for a debt above the line unless the row carries a direction, so a shrinking debt is never building', () => {
+    const debt = (extra: Record<string, unknown>) => ({ state: 'available', debt_minutes: 900, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted', ...extra });
+    const view = (extra: Record<string, unknown>) => at({ sleep_debt: debt(extra) })!.view as { sleep_debt?: { amount: string; trend?: string } };
+    expect(view({}).sleep_debt).toEqual({ amount: 'some' });
+    expect(view({}).sleep_debt).not.toHaveProperty('trend');
+    for (const trend of ['building', 'easing', 'steady']) expect(view({ trend }).sleep_debt, trend).toEqual({ amount: 'some', trend });
+    expect(view({ trend: 'easing' }).sleep_debt).not.toMatchObject({ trend: 'building' });
+  });
+
+  it('ignores a direction outside the three words, and one that sits on a debt with no figure', () => {
+    const view = (sleep_debt: unknown) => at({ sleep_debt })!.view as { sleep_debt?: unknown };
+    for (const trend of ['rising', 'Building', '', 7, null, true, {}, ['building'], 'building ']) {
+      expect(view({ state: 'available', debt_minutes: 900, need_basis: 'own_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted', trend }).sleep_debt, JSON.stringify(trend)).toEqual({ amount: 'some' });
+    }
+    expect(view({ state: 'partial', confidence: 0.6, algorithm_version: 'sleep-debt.v2', activation: 'accepted', trend: 'building' }).sleep_debt).toEqual({ amount: 'partial' });
+    expect(view({ state: 'unavailable', reason: 'missing_sleep', trend: 'building' }).sleep_debt).toEqual({ amount: 'unknown' });
   });
 
   it('drops only the line a malformed field would have made', () => {
@@ -241,11 +265,11 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
     for (const windows of badWindows) {
       const view = at({ windows })!.view;
       expect(view, JSON.stringify(windows)).not.toHaveProperty('energy_windows');
-      expect(view).toMatchObject({ sleep_debt: 'building', baseline_state: { recovery: 'provisional' } });
+      expect(view).toMatchObject({ sleep_debt: { amount: 'some' }, baseline_state: { recovery: 'provisional' } });
     }
     const forming = at({ recovery: { score: 70, zone: 'good', algorithm_version: 'recovery.v5', baseline: { state: 'forming' } } })!.view;
     expect(forming).not.toHaveProperty('baseline_state.recovery');
-    expect(forming).toMatchObject({ baseline_state: { form: 'provisional', load: 'personal' }, sleep_debt: 'building' });
+    expect(forming).toMatchObject({ baseline_state: { form: 'provisional', load: 'personal' }, sleep_debt: { amount: 'some' } });
   });
 
   it('reads a pillar whose version is not a stored version name as unreadable, never as another version', () => {

@@ -343,9 +343,14 @@ describe('derived health view carries the row\'s own version and what the model 
     }
   });
 
-  it('takes sleep debt as a word, never minutes', () => {
-    for (const sleep_debt of ['building', 'steady', 'partial', 'unknown']) expect(parse(form({ sleep_debt })).success, sleep_debt).toBe(true);
-    for (const sleep_debt of [310, '310', 'a lot', { state: 'available', debt_minutes: 310 }, null, '']) expect(parse(form({ sleep_debt })).success, JSON.stringify(sleep_debt)).toBe(false);
+  it('takes sleep debt as an amount word and an optional direction word, never minutes', () => {
+    for (const amount of ['little', 'some', 'partial', 'unknown']) expect(parse(form({ sleep_debt: { amount } })).success, amount).toBe(true);
+    for (const trend of ['building', 'easing', 'steady']) expect(parse(form({ sleep_debt: { amount: 'some', trend } })).success, trend).toBe(true);
+    const refused = [
+      310, '310', 'a lot', 'building', null, '', { amount: 310 }, { amount: 'a lot' }, { amount: 'some', trend: 'sideways' }, { amount: 'some', trend: 'rising' },
+      { amount: 'some', trend: null }, { amount: 'some', debt_minutes: 310 }, { trend: 'building' }, { state: 'available', debt_minutes: 310 },
+    ];
+    for (const sleep_debt of refused) expect(parse(form({ sleep_debt })).success, JSON.stringify(sleep_debt)).toBe(false);
   });
 
   it('takes up to four energy windows as validated clock ranges', () => {
