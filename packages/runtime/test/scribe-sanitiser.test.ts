@@ -1062,7 +1062,7 @@ describe('Scribe sanitiser', () => {
       ...VIEW,
       destination_eligibility: ['trigger_prompt'],
       baseline_state: { recovery: 'provisional', form: 'provisional', load: 'personal' },
-      sleep_debt: 'building',
+      sleep_debt: { amount: 'some', trend: 'building' },
       energy_windows: [{ start: '09:30', end: '11:30', kind: 'peak' }],
     } as const;
     const fieldsOf = (value: object) => Object.keys(value).length;

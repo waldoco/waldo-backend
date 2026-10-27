@@ -27,6 +27,7 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 - Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted when storage consent is withdrawn or the account is deleted. Withdrawing model use alone stops Waldo using health in conversation and deletes nothing (owner ruling, 10 October).
 - Encrypted at rest and in transit; row-level security per owner; writes only from the ingest route with service credentials; agent reads through the signed owner-scoped RPC; raw reads leave count-only receipts.
 - No health values in analytics, traces or error text.
+- **Sleep debt in the model read.** `health_context_read` returns the row's `sleep_debt`, `debt_minutes` included, to the Worker, and only while the owner's model-use consent is live for the row's basis; what reaches the prompt is words alone, one for how much is owed and, when the row names one, one for its direction, never the minutes.
 
 ## Addendum: continuous ingest (owner decisions of 10 October 2026)
 Design: `docs/app/HEALTH_INGEST_DESIGN_2026-10-10.md`. Contract: `packages/contracts/src/app/health-ingest.ts`.
