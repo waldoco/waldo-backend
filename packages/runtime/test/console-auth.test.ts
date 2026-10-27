@@ -8,17 +8,21 @@ const now = () => 1_790_000_000_000;
 const withCookie = (value: string) => new Request('https://w.test/console', { headers: { cookie: `a=b; ${OWNER_COOKIE}=${value}` } });
 
 describe('consoleAuth', () => {
-  it('deleteOwner signs the deletion RPC for exactly this owner DO', async () => {
-    const fetcher = vi.fn().mockResolvedValueOnce(json(true));
+  it('deleteOwner lists the owner\'s Apple grants, then signs the deletion RPC for exactly this owner DO', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json([])).mockResolvedValueOnce(json(true));
     const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
     expect(await auth.deleteOwner('do-owner-1')).toBe(true);
-    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    const [held, heldInit] = fetcher.mock.calls[0] as [string, RequestInit];
+    expect(held).toBe('https://db.test/rest/v1/rpc/apple_grants_held');
+    expect(JSON.parse(String(heldInit.body))).toMatchObject({ p_do_name: 'do-owner-1', p_sig: await routerSignature('router', 1_790_000_000, 'applegrant.held.do-owner-1') });
+    const [url, init] = fetcher.mock.calls[1] as [string, RequestInit];
     expect(url).toBe('https://db.test/rest/v1/rpc/delete_owner');
     expect(JSON.parse(String(init.body))).toMatchObject({
       p_do_name: 'do-owner-1',
       p_sig: await routerSignature('router', 1_790_000_000, 'delown.do-owner-1'),
     });
-    const denied = vi.fn().mockResolvedValueOnce(json(false));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const denied = vi.fn().mockResolvedValueOnce(json([])).mockResolvedValueOnce(json(false));
     expect(await consoleAuth(env, denied as unknown as typeof fetch, now)!.deleteOwner('do-owner-1')).toBe(false);
   });
 

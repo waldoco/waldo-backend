@@ -195,7 +195,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithIdToken']>>>;
-    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? ''); } catch { return fail(503); }
+    const authorizationCode = asked.data.provider === 'apple' ? asked.data.authorization_code ?? '' : '';
+    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? '', authorizationCode); } catch { return fail(503); }
     if (signedIn.state === 'refused') {
       console.error(JSON.stringify({ hop: 'app_id_token', ok: false, code: signedIn.reason === 'token' ? 'id_token_refused' : 'id_token_no_email', provider }));
       return fail(403);
