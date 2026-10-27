@@ -5,6 +5,7 @@ import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ownerCookies, ownerSessionHash } from './session-fence';
+import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 
 // Chat in the console is the app's main chat and its threads, reached with the console sign-in. The console's signed owner cookie
 // is a row in the same revocable session table the app bearer uses, and the owner object's app route accepts any live
@@ -14,7 +15,7 @@ export const CONSOLE_CHAT_PATH = '/console/dashboard/api/v1/chat';
 // request without a CORS preflight, which this route never answers.
 export const CONSOLE_CHAT_HEADER = 'x-waldo-console';
 
-type ChatEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
@@ -107,7 +108,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   const contract = request.headers.get(APP_CONTRACT_HEADER);
   const forwarded = new Request(`https://telegram-owner${chosen.target}`, {
     method: chosen.method,
-    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': url.origin, 'content-type': 'application/json',
+    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': publicOrigin(env, url), 'content-type': 'application/json',
       // The contract revisions the dashboard reads, as the app passes its own.
       ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) },
     ...(body ? { body } : {}),

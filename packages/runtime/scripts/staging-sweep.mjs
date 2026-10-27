@@ -19,6 +19,7 @@
 // Default capture mode (live:false) strips live provider tools and suppresses memory writes, so a
 // prompt that needs those tools is marked requires_live and is skipped without --live.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { STAGING_WORKER_URL } from '../../../scripts/staging-gate.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -27,7 +28,7 @@ const opt = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-const BASE = opt('--url', 'https://waldo-runtime-staging.piyushfulper3210.workers.dev');
+const BASE = opt('--url', STAGING_WORKER_URL);
 const TOKEN = process.env.WALDO_PROBE_TOKEN;
 if (!TOKEN) {
   console.error('FAIL setup: WALDO_PROBE_TOKEN env var is required (value never printed).');
