@@ -458,8 +458,10 @@ const evaluate = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> 
     const args = asking ? { ...decision.args, reason: `${decision.args.reason} ${HEALTH_KEEP_ASKING}` } : decision.args;
     const approvalId = await deps.propose(args, id);
     deps.charge(budgetKey);
+    // Recorded first: nothing the push does, a hang or a restart included, can lose the run and let the next one propose again.
+    const outcome = finish('proposed', { approvalId, asked: asking });
     await deps.notify?.(approvalId).catch(() => undefined);
-    return finish('proposed', { approvalId, asked: asking });
+    return outcome;
   } catch {
     // The mark stays, so the next floor tries again while the change is still news; the TTL drops it after that.
     await deps.reschedule(started + HEALTH_TRIGGER_FLOOR_MS).catch(() => undefined);
@@ -475,7 +477,10 @@ const REARMED_BY_RUN: ReadonlySet<HealthTriggerOutcome> = new Set<HealthTriggerO
 // upload. One entry covers however many landed.
 export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> => {
   const outcome = await evaluate(deps);
-  if (!REARMED_BY_RUN.has(outcome) && deps.book.pending(deps.now()) !== null) await deps.reschedule(healthTriggerDueAt(deps.now(), deps.book.lastRunAt()));
+  // A re-arm that fails is logged, not thrown: the scheduler would retry at once instead of waiting for the next mark.
+  if (!REARMED_BY_RUN.has(outcome) && deps.book.pending(deps.now()) !== null) {
+    await deps.reschedule(healthTriggerDueAt(deps.now(), deps.book.lastRunAt())).catch(() => deps.log({ hop: 'health_trigger', ok: false, code: 'failed' }));
+  }
   return outcome;
 };
 

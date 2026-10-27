@@ -1,3 +1,4 @@
+import { withRequestTimeout } from '../identity/request-timeout';
 import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
@@ -11,6 +12,8 @@ export const PUSHES = {
 export type PushKind = keyof typeof PUSHES;
 export const PUSH_DAILY_LIMIT = 3;
 const BUDGET_KEY = 'app_push_budget_v1';
+// The owner-day the Brief was last pushed, which opens the day's last slot to approval pushes.
+const BRIEF_DAY_KEY = 'app_push_brief_day_v1';
 const MAX_TARGETS = 10;
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
@@ -45,7 +48,8 @@ const unregistered = (ticket: unknown) => {
 
 // Sends one fixed push to the owner's Expo devices, at most PUSH_DAILY_LIMIT a day and never in quiet hours. A push is
 // counted before it is sent, so an unknown outcome never lets a retry pass the limit. Failures are logged as a code and
-// never thrown, so the work that triggered the push is not affected.
+// never thrown, so the work that triggered the push is not affected. The last slot of the day is the Brief's: approval pushes
+// stop one short of the limit until the Brief has been pushed that day. The send and the read of its receipt are bounded.
 export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string): Promise<void> => {
   if (!deps.accessToken) return deps.log('not_configured', 0);
   const { body, data: fixed } = PUSHES[kind];
@@ -54,20 +58,21 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   if (deps.quiet()) return deps.log('quiet', 0);
   const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(BUDGET_KEY);
   const sent = budget?.day === day ? budget.sent : 0;
-  if (sent >= PUSH_DAILY_LIMIT) return deps.log('daily_limit', 0);
+  if (sent >= (kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT)) return deps.log('daily_limit', 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
   if (!devices.length) return deps.log('no_devices', 0);
   deps.kv.put(BUDGET_KEY, { day, sent: sent + 1 });
+  if (kind === 'brief') deps.kv.put(BRIEF_DAY_KEY, day);
   let response: Response;
   try {
-    response = await deps.send(EXPO_PUSH_URL, { method: 'POST',
+    response = await withRequestTimeout(signal => deps.send(EXPO_PUSH_URL, { method: 'POST', signal,
       headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${deps.accessToken}` },
-      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' }))) });
+      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' }))) }));
   } catch { return deps.log('send_failed', 0); }
   if (!response.ok) return deps.log('send_refused', 0);
   let answer: unknown;
-  try { answer = ((await response.json()) as { data?: unknown }).data; } catch { return deps.log('receipt_unreadable', 0); }
+  try { answer = ((await withRequestTimeout(() => response.json())) as { data?: unknown }).data; } catch { return deps.log('receipt_unreadable', 0); }
   if (!Array.isArray(answer) || answer.length !== devices.length) return deps.log('receipt_unreadable', 0);
   const tickets: readonly unknown[] = answer;
   const accepted = tickets.filter(ticket => (ticket as { status?: unknown } | null)?.status === 'ok').length;
