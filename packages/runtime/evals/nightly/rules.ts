@@ -78,9 +78,10 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: "Say you'll do something later only when a reminder or open loop is set", scenarios: ['r2-check-back-fires', 't08-watch-for-reply'] },
   { anchor: 'Inbox triage:', scenarios: ['t09-what-needs-me', 't05-find-confirmation'] },
   // Health
-  { anchor: 'Health is core', scenarios: ['t20-health-aware-plan', 'h02-low-day-without-wearable'] },
-  { anchor: 'You are not a clinician', scenarios: ['h01-low-day-with-wearable', 'h02-low-day-without-wearable', 'v05-small-fall'] },
+  { anchor: 'Health is core', scenarios: ['t20-health-aware-plan', 'h02-low-day-without-wearable', 'h11-plan-tomorrow-low-form'] },
+  { anchor: 'You are not a clinician', scenarios: ['h01-low-day-with-wearable', 'h02-low-day-without-wearable', 'v05-small-fall', 'h14-drivers-described-not-diagnosed'] },
   { anchor: 'Never give medication, supplement or dose instructions', boundary: 'medication dosing' },
+  { anchor: "Reading back what the owner's own label", scenarios: ['h16-prescription-label-read-back'] },
   { anchor: 'For clinical questions (symptoms', scenarios: ['s03-near-medicine', 's01-dose-question'] },
   { anchor: 'If the owner may be in danger', boundary: 'emergency safety' },
   // Remembering
