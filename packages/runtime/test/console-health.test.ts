@@ -74,6 +74,27 @@ describe('owner health read', () => {
     const unreadable = await scoresWith({ state: 'available', debt_minutes: -1 });
     expect(['sleep_debt' in unreadable, unreadable.recovery]).toMatchObject([false, { score: RECOVERY }]);
   });
+  // The console page reads the latest revision, so it gets the baseline label, the drivers and the windows, and a provisional
+  // pillar is shown as the labelled score it is rather than as unavailable.
+  it('shows the baseline label, the drivers and the windows of the latest revision, and withholds a pillar whose label cannot be read', async () => {
+    const baseline = { state: 'provisional', personal_days: 5, needed: 14, prior: 'adults' };
+    const drivers = ['blood oxygen below usual'], windows = [{ start: '09:30', end: '11:45', kind: 'peak' }];
+    const scoresFor = async (extra: Record<string, unknown>, label: unknown = baseline) => {
+      const row = stored(NOW - HOUR).scores;
+      const scores = { ...row, recovery: { ...row.recovery, baseline: label }, ...extra };
+      return ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: { scores } })).response).json()) as { scores: Record<string, any> }).scores;
+    };
+    const shown = await scoresFor({ drivers, windows });
+    expect([shown.recovery, shown.drivers, shown.windows]).toMatchObject([{ score: RECOVERY, baseline }, drivers, windows]);
+    const damaged = await scoresFor({ drivers: ['feeling tired'], windows: [{ start: 'noon', end: '13:00', kind: 'peak' }] }, { state: 'provisional' });
+    expect([damaged.recovery, 'drivers' in damaged, 'windows' in damaged]).toEqual([{ state: 'unavailable', reason: 'baseline_immature' }, false, false]);
+  });
+  it('shows a sleep debt that leans on the prior, which the console reads at the latest revision', async () => {
+    const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };
+    const scores = { ...stored(NOW - HOUR).scores, sleep_debt: blended };
+    const body = (await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: { scores } })).response).json()) as { scores: Record<string, unknown> };
+    expect(body.scores.sleep_debt).toEqual(blended);
+  });
   it('ages the newest row when it is read: fresh, stale after six hours, expired after three days', async () => {
     const freshnessAt = async (compiledAt: number, day?: string) => ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: stored(compiledAt, day) })).response).json()) as { scores: { freshness: string } }).scores.freshness;
     expect(await freshnessAt(NOW - HOUR)).toBe('fresh');

@@ -200,6 +200,56 @@ describe('the health trigger', () => {
     });
   });
 
+  describe('a wake that lands while a run is in progress', () => {
+    // The scheduler holds the entry while the run works, so the arm a wake makes then does nothing: the run itself has to
+    // leave the next one behind.
+    const runWith = async (h: Harness, wakesMidRun: number) => {
+      h.deps().book.mark('2026-10-21', NOW - 60_000);
+      return runHealthTrigger(h.deps({ decide: async (_id, prompt) => { h.prompts.push(prompt); for (let i = 0; i < wakesMidRun; i += 1) h.deps().book.mark('2026-10-21', NOW + 5_000 + i); return noOp; } }));
+    };
+
+    it('is re-armed once when the run ends, and that follow-up run takes it', async () => {
+      await withTrigger(async h => {
+        expect(await runWith(h, 1)).toBe('no_op');
+        expect(h.reschedules).toEqual([NOW + HEALTH_TRIGGER_FLOOR_MS]);
+        const followUp = h.reschedules[0]!;
+        expect(await runHealthTrigger(h.deps({ now: () => followUp, decide: async (_id, prompt) => { h.prompts.push(prompt); return noOp; } }))).toBe('no_op');
+        expect(h.prompts).toHaveLength(2);
+        expect(h.reschedules).toHaveLength(1);
+        expect(await runHealthTrigger(h.deps({ now: () => followUp + HEALTH_TRIGGER_FLOOR_MS }))).toBe('idle');
+      });
+    });
+
+    it('is still one follow-up when several land', async () => {
+      await withTrigger(async h => {
+        expect(await runWith(h, 2)).toBe('no_op');
+        expect(h.reschedules).toHaveLength(1);
+      });
+    });
+
+    it('leaves nothing armed when none landed', async () => {
+      await withTrigger(async h => {
+        expect(await runWith(h, 0)).toBe('no_op');
+        expect(h.reschedules).toEqual([]);
+        expect(h.deps().book.pending(NOW)).toBeNull();
+      });
+    });
+
+    it('does not arm a second time for a run that already put itself back', async () => {
+      await withTrigger(async h => {
+        h.deps().book.mark('2026-10-21', NOW - 60_000);
+        const failed = await runHealthTrigger(h.deps({ decide: async () => { h.deps().book.mark('2026-10-21', NOW + 5_000); throw new Error('model down'); } }));
+        expect([failed, h.reschedules]).toEqual(['failed', [NOW + HEALTH_TRIGGER_FLOOR_MS]]);
+      });
+      await withTrigger(async h => {
+        h.deps().book.mark('2026-10-21', NOW - 60_000);
+        const until = NOW + 20 * 60_000;
+        const held = await runHealthTrigger(h.deps({ admit: () => ({ verdict: 'wait', until }), readHealth: async () => { h.deps().book.mark('2026-10-21', NOW + 5_000); return ROW; } }));
+        expect([held, h.reschedules]).toEqual(['held_cooldown', [until]]);
+      });
+    });
+  });
+
   // The budget is faked to admit every card, so only the skip accounting decides these tests.
   const proposeOn = async (h: Harness, at: number, day: string, over: Partial<HealthTriggerDeps> = {}) => {
     h.deps().book.mark(day, at - 60_000);

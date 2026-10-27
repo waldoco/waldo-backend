@@ -26,6 +26,7 @@ import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type De
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, verifiedHealthSamples, verifiedZoneChange } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
+import type { HealthWakeReason } from '../health/wakes';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
@@ -4509,18 +4510,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The health trigger. A zone change marks the day and arms one evaluation no sooner than an hour after the last; the
     // evaluation reads zone words through the consented derived-row read and proposes at most one calendar change.
     const healthBook = healthTriggerBook(storage.sql);
-    const healthChanged = async (day: string) => {
-      healthBook.mark(day, Date.now());
+    const armHealthTrigger = async () => {
       if (!schedPrefs.enabled('health_proposals') || scheduler.lookup(HEALTH_TRIGGER_ID).state !== 'absent') return;
       const due = healthTriggerDueAt(Date.now(), healthBook.lastRunAt());
       await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: due, dueAt: due, payloadRefs: { id: HEALTH_TRIGGER_ID } });
+    };
+    const healthChanged = async (day: string) => {
+      healthBook.mark(day, Date.now());
+      await armHealthTrigger();
+    };
+    // A wake the recompute found in the stored rows: noted once per reason per day, and armed only when one is new.
+    const healthWoken = async (day: string, reasons: readonly HealthWakeReason[]) => {
+      if (reasons.filter(reason => healthBook.markOnce(day, Date.now(), reason)).length) await armHealthTrigger();
     };
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })),
       compute: computeDailyScores, readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
-    }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()) });
+    }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
+      wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
+        readContext: async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } } });
     const healthSamples = () => recompute.ask();
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
