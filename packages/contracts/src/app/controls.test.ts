@@ -112,6 +112,36 @@ describe('account deletion from the app', () => {
   });
 });
 
+describe('controls revision 3: day-card state and Try again', () => {
+  const card = { id: 'card:brief', name: 'The Brief', defaultTime: '08:00', time: '08:00', reason: 'planned', sent: false, pin: null };
+  const day = (cards: object[]) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-10-27', cards, proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true } },
+  });
+
+  it('names a card being made, one that failed and one that is paused, unfinished, with a short reason and the tries left', () => {
+    for (const state of ['generating', 'failed', 'paused'] as const)
+      expect(appControlProjectionV1Schema.safeParse(day([{ ...card, state, state_reason: "Waldo couldn't reach its model this morning", retries_left: 3 }])).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(day([{ ...card, sent: true, state: 'skipped', state_reason: "Waldo couldn't reach its model this morning", retries_left: 0 }])).success).toBe(true);
+  });
+
+  it('refuses a finished new state, an overlong reason and tries outside 0 to 3', () => {
+    for (const invalid of [
+      { ...card, sent: true, state: 'failed' }, { ...card, state: 'ready' },
+      { ...card, state: 'failed', state_reason: 'x'.repeat(121) }, { ...card, state: 'failed', state_reason: '' },
+      { ...card, retries_left: 4 }, { ...card, retries_left: -1 }, { ...card, retries_left: 1.5 },
+    ]) expect(appControlProjectionV1Schema.safeParse(day([invalid])).success).toBe(false);
+  });
+
+  it('takes card.retry on the day view for one of the three cards, and nothing else', () => {
+    const retry = { view: 'day', action: 'card.retry', id: 'card:brief', revision, request_id: 'request-0009' };
+    for (const id of ['card:brief', 'card:midday', 'card:close']) expect(appControlActionV1Schema.safeParse({ ...retry, id }).success).toBe(true);
+    for (const invalid of [
+      { ...retry, id: 'card:nope' }, { ...retry, id: undefined }, { ...retry, view: 'connections' }, { ...retry, value: '08:00' }, { ...retry, volume: 'low' },
+    ]) expect(appControlActionV1Schema.safeParse(invalid).success).toBe(false);
+  });
+});
+
 describe('day card latest delivery', () => {
   const card = { id: 'brief', name: 'Morning Brief', defaultTime: '07:30', time: '07:30', reason: 'planned', sent: true, pin: null };
   const latest = { message_id: 'entry-1', delivered_at: 1_791_700_000_000, excerpt: 'Good morning. Two meetings before noon.' };

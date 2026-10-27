@@ -2,7 +2,7 @@ import type { AppTile } from './connect-app';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { PROFILE_KINDS } from '../memory/claims';
 import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
-import type { CardLatest, CardState } from './day-cards';
+import type { CardLatest, CardViewState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import { awaitsOwnerConfirm, type Claim, type ConstellationEdge, type ConstellationNode, type profile } from '../memory/claims';
@@ -145,7 +145,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -195,6 +195,11 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
+  'schedule.resume': 'Resumed. It runs now.',
+  'card.retry': "Making it now. It shows here and in your chat when it's ready.",
+  'card.retry.sent': 'That card already went out today.',
+  'card.retry.not_needed': "That card isn't stuck, so there's nothing to try again.",
+  'card.retry.limit': "That's today's three tries. Waldo keeps trying on its own while the card is still useful today.",
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
@@ -209,7 +214,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
 
 // latest is the Main chat row today's card was delivered to; only the app's day view reads it.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null; state?: CardState }>;
+  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number }>;
 
 export type ConsoleView = Readonly<{
   release: string;
@@ -249,7 +254,7 @@ export type ConsoleView = Readonly<{
   proactivity: Proactivity;
   schedules: SchedulePreferences;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
-  pausedJobs: readonly Readonly<{ name: string; until: string }>[];
+  pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
   lastRequest: LastRequest | null;
@@ -450,9 +455,11 @@ const forgetting = (view: ConsoleView) => view.forgettingTopics.length === 0 ? '
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Not scheduled today';
-  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'waiting_on_model' ? chip('Waiting for the model') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'generating' ? chip('Making it now')
+    : card.state === 'failed' ? chip(`Couldn't make it`) : card.state === 'paused' ? chip('Paused') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
+  const retry = (card.retriesLeft ?? 0) > 0 ? form(view.csrf, 'card.retry', 'Try again', { id: card.id }) : '';
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.stateReason ?? card.reason)}</div>${retry}${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
@@ -462,7 +469,7 @@ const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" a
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
-const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div></div>`).join('');
+const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div><div class="act">${form(view.csrf, 'schedule.resume', 'Resume', { id: job.id })}</div></div>`).join('');
 const schedules = (view: ConsoleView) => `${paused(view)}${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;

@@ -10,7 +10,7 @@ const OUTCOME: Readonly<Record<string, Outcome>> = {
   'spot.forget.incomplete': 'incomplete',
   'node.forget.incomplete': 'incomplete',
   'google.connect.failed': 'failed', 'card.unreadable.failed': 'failed', 'file.unavailable': 'failed', invalid: 'failed',
-  'spot.pin.failed': 'failed', 'spot.edit.failed': 'failed',
+  'spot.pin.failed': 'failed', 'spot.edit.failed': 'failed', 'card.retry.sent': 'failed', 'card.retry.not_needed': 'failed', 'card.retry.limit': 'failed',
 };
 
 export const dashboardReceipt = (key: string | null) => {

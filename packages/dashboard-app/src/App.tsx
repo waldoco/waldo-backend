@@ -1,4 +1,5 @@
 import {greeting} from './greeting';
+import { BriefCard } from './BriefCard';
 import {Icon,WaldoMark} from './icons';
 import {clockLabel,DayRail,localMinutes,sameLocalDay,stagger,type RailMark} from './Infographics';
 import {Drawer,Riffle} from '@lucasmarkes/hairline/react';
@@ -123,7 +124,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
       <details name="today" className="disclosure"><summary><Icon name="calendarClock"/><span className="label key">{nextDue ? 'On your plan' : 'Next'}</span><span className="value">{next ? `${next.label} · ${clockLabel(next.scheduled_at, zone)}` : 'Nothing scheduled ahead.'}</span></summary>
         <div className="disclosure-body"><p>{next ? date(next.scheduled_at, zone) : 'No later card is recorded in your plan.'}</p><a className="quiet-link" href="#/settings/day">Adjust timing</a></div></details>
       <details name="today" className="disclosure"><summary><Icon name="brief"/><span className="label key">The Brief</span><span className="value">{brief.title}</span></summary>
-        <div className="disclosure-body"><p>{brief.body}</p>{data.brief.at && <p className="meta">Recorded {date(data.brief.at, zone)}</p>}</div></details>
+        <div className="disclosure-body"><p>{brief.body}</p>{data.brief.at && <p className="meta">Recorded {date(data.brief.at, zone)}</p>}<BriefCard/></div></details>
       <details name="today" className="disclosure"><summary><Icon name="entry"/><span className="label key">Latest</span><span className="value">{activity ? activityLabel(activity.kind) : 'Nothing to report.'}</span></summary>
         <div className="disclosure-body"><p>{activity ? (activity.summary?.trim() ? activity.summary : missingOutcome) : 'No owner-facing activity in the latest record.'}</p>
           {activity && <p className="meta">Recorded status: {activity.status} · {date(activity.at, zone)}</p>}<a className="quiet-link" href="#/patrol">Open Patrol</a></div></details>

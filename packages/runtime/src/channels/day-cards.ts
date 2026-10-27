@@ -2,7 +2,7 @@ import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIAR
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
-import type { Scheduler } from '../scheduler/multiplexer';
+import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
 import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
@@ -192,7 +192,10 @@ export const runDayCard = async (input: Readonly<{
   if (card === null) return;
   const day = localIso(input.entry.occurrence_at, input.timezone).slice(0, 10);
   const waited = input.book.read(day).some((row) => row.card === card.id && row.state === 'waiting_on_model');
-  if (waited && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
+  // A Try again is the owner asking for the card now, so its own run goes ahead whatever the hour. A try that met the outage
+  // was parked to a later probe (due after its occurrence) and is judged like any waiting card.
+  const asked = input.entry.payload_refs.retry_id !== undefined && input.entry.due_at === input.entry.occurrence_at;
+  if (waited && !asked && input.now >= cardFreshUntil(card, input.entry.occurrence_at, input.timezone, input.freshness)) {
     input.book.skipped(day, card.id, MODEL_OUTAGE_SKIP[card.id]);
     return;
   }
@@ -211,6 +214,73 @@ export const resumeWaitingCards = async (scheduler: Scheduler, book: DayPlanBook
   const resumed: CardId[] = [];
   for (const card of book.waitingForModel(localIso(now, timezone).slice(0, 10))) if (await scheduler.pullForward(card, now)) resumed.push(card);
   return resumed;
+};
+
+export const CARD_RETRIES_PER_DAY = 3;
+const RETRIES_KEY = 'day_card_retries_v1';
+export type CardRetry = 'started' | 'running' | 'sent' | 'not_needed' | 'limit' | 'unknown_card' | 'unreadable';
+
+// Try again on one of today's cards, as the owner. The card's own schedule row is armed to run now, so the scheduled card
+// job writes it and an upsert lifts a quarantine on the row. Each try carries its own retry_id, which keys the card's
+// delivery apart from the day's earlier attempt. Only a stuck card is tried (cardStatus gives it tries left); one being made
+// now is left alone, so a double tap makes one card. Three tries a day per owner.
+export const retryDayCard = async (deps: CardDeps, id: string): Promise<CardRetry> => {
+  const card = cardFor(id);
+  if (card === null) return 'unknown_card';
+  if (deps.scheduler.lookup(card.id).state === 'unreadable') return 'unreadable';
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find((planned) => planned.card === card.id);
+  // A finished card whose outcome predates recording one is taken as sent: it may have gone out.
+  if (row?.sent && row.state !== 'skipped') return 'sent';
+  const status = cardStatus(deps, card);
+  if (status.state === 'generating') return 'running';
+  if (status.retriesLeft === undefined) return 'not_needed';
+  if (status.retriesLeft === 0) return 'limit';
+  const count = triesUsed(deps.kv, day);
+  deps.kv.put(RETRIES_KEY, { day, count: count + 1 });
+  await deps.scheduler.schedule({ id: card.id, kind: 'brief', payloadRefs: { id: card.id, retry_id: `${day}.${count + 1}` },
+    occurrenceAt: deps.now, dueAt: deps.now, recurrence: null });
+  return 'started';
+};
+
+// A card is being made when its run is in flight, or a Try again is due now. A try parked to wait for the model is not, so
+// the owner may try again.
+const inFlight = (scheduler: Scheduler, entry: ScheduleEntry, now: number): boolean =>
+  scheduler.runningRunId(entry.id, entry.occurrence_at) !== null
+  || (entry.status === 'armed' && entry.payload_refs.retry_id !== undefined && entry.due_at <= now);
+
+const triesUsed = (kv: Kv, day: string): number => {
+  const tries = kv.get<{ day: string; count: number }>(RETRIES_KEY);
+  return tries?.day === day ? tries.count : 0;
+};
+
+const OUTAGE_REASONS: ReadonlySet<string> = new Set(Object.values(MODEL_OUTAGE_SKIP));
+export type CardViewState = Exclude<CardState, 'waiting_on_model'> | 'generating' | 'failed' | 'paused';
+// `retriesLeft` is present only while the card is stuck, so that is where Try again is offered and accepted.
+export type CardStatus = Readonly<{ state?: CardViewState; reason?: string; retriesLeft?: number }>;
+export type CardDeps = Readonly<{
+  scheduler: Scheduler; book: DayPlanBook; kv: Kv; timezone: string; now: number;
+  // Whether the day's card has a delivery that may still go out, or may already have.
+  queued(day: string, card: CardId): boolean;
+}>;
+
+// Where one of today's cards stands, as the console and the app show it. The plan book says how a card finished or that it
+// waits for the model; its schedule row says whether it is paused or being made now. A state the owner can act on carries a
+// short fixed reason, never error text. A card is stuck, and may be tried again, only while it waits for the model or is
+// paused and nothing for it is on its way: one that went out, is queued, is finished for the day or has not come due is not.
+export const cardStatus = (deps: CardDeps, card: DayCard): CardStatus => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find((planned) => planned.card === card.id);
+  const found = deps.scheduler.lookup(card.id);
+  const entry = found.state === 'entry' ? found.entry : null;
+  if (row?.state === 'skipped') return { state: 'skipped', ...(OUTAGE_REASONS.has(row.reason) ? { reason: row.reason } : {}) };
+  if (row?.sent) return row.state === 'sent' ? { state: 'sent' } : {};
+  if (row?.state === 'held') return { state: 'held' };
+  if (entry !== null && inFlight(deps.scheduler, entry, deps.now)) return { state: 'generating', reason: 'Waldo is making it now' };
+  const tries = deps.queued(day, card.id) ? {} : { retriesLeft: Math.max(0, CARD_RETRIES_PER_DAY - triesUsed(deps.kv, day)) };
+  if (entry?.status === 'quarantined') return { state: 'paused', reason: `Paused after ${QUARANTINE_AFTER_ATTEMPTS} failed tries in a row`, ...tries };
+  if (row?.state === 'waiting_on_model') return { state: 'failed', reason: MODEL_OUTAGE_SKIP[card.id], ...tries };
+  return row === undefined || row.state === 'pending' ? { state: 'pending' } : {};
 };
 
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
