@@ -107,7 +107,7 @@ export const whatsappUnlinkReceipt=(done:boolean):ControlReceipt=>done
  :{state:'rejected',message:'WhatsApp was not unlinked. Refresh the records and try again.'};
 export async function controlRevision(value:unknown):Promise<string>{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}
 function eligible(action:ConsoleAction,view:ConsoleView):boolean {
- if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:!card.sent);}
+ if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:action.action==='card.retry'?(card.retriesLeft??0)>0:!card.sent);}
  if(action.action==='google.connect')return view.google.connectAvailable;
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
  if(action.action==='granola.connect')return view.granola?.connectAvailable===true&&view.granola.connection?.status!=='active';

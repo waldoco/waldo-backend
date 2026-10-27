@@ -198,6 +198,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'schedule.resume': 'Resumed. It runs now.',
   'card.retry': "Making it now. It shows here and in your chat when it's ready.",
   'card.retry.sent': 'That card already went out today.',
+  'card.retry.not_needed': "That card isn't stuck, so there's nothing to try again.",
   'card.retry.limit': "That's today's three tries. Waldo keeps trying on its own while the card is still useful today.",
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
@@ -456,7 +457,7 @@ const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a
   const when = card.time ?? 'Not scheduled today';
   const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'generating' ? chip('Making it now')
     : card.state === 'failed' ? chip(`Couldn't make it`) : card.state === 'paused' ? chip('Paused') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
-  const retry = (card.state === 'failed' || card.state === 'skipped' || card.state === 'paused') && (card.retriesLeft ?? 0) > 0 ? form(view.csrf, 'card.retry', 'Try again', { id: card.id }) : '';
+  const retry = (card.retriesLeft ?? 0) > 0 ? form(view.csrf, 'card.retry', 'Try again', { id: card.id }) : '';
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
   return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.stateReason ?? card.reason)}</div>${retry}${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
