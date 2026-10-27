@@ -19,6 +19,8 @@ export type CommonBrowserConfiguration = Readonly<{
  retainInteractions?:true;
  ownsGrant?(grant:CommonBrowserGrant):boolean;
  allocationClosed?(grant:CommonBrowserGrant,session:BrowserSession):Promise<void>;
+ // A CDP vendor behind `binding` (the escalated browser); absent, the binding is Cloudflare's.
+ provider?:'browserbase_cdp'|'browser_use_cdp';
  binding:BrowserWorker;loadSdk:CloudflareBrowserSdkLoader;
  bindingForOperation?(grant:CommonBrowserGrant,operationId:string):BrowserWorker;
  cleanupBinding?(grant:CommonBrowserGrant,providerSessionId:string):BrowserWorker;
@@ -55,6 +57,7 @@ const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
  stale_observation:'The page changed since it was read. Read it again with browse_act read and use the new refs.',
  outcome_uncertain:'The step may or may not have taken effect, and it cannot be repeated. Read the page with browse_act read to see what changed.',
  native_submit_requires_card:'This submits a form the browser may not send on its own: only a GET form whose target is a page this session may open can be submitted. Open the results page directly with goto if its address is known; otherwise tell the owner what the form would send, because this browser cannot submit it.',
+ owner_login_unavailable:'This browser cannot hand the page to the owner to sign in yet, so nothing was handed off. Tell the owner the site needs their sign-in, or continue with what is readable without it.',
  turn_deadline:'This turn ran out of time before the browser step finished, so nothing from it is claimed. The session stays open: continue it with its session_handle on the next turn.',
 };
 // Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
@@ -89,7 +92,7 @@ export function commonBrowserHost(options:Readonly<{
  };
  const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
  const readableUrl=(grant:CommonBrowserGrant,url:string,method:string)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}};
- const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
+ const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,provider:options.config.provider,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
   authorizeRequest:async(url,method)=>readableUrl(grant,url,method)});
@@ -149,7 +152,7 @@ export function commonBrowserHost(options:Readonly<{
     if(record?.handoff){if(!human)await api.cancel();throw Error('owner login pending');}
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
     if(!record){
-     const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
+     const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:options.config.provider??'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
      await driver.start(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)?'public':grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.keepAliveMs??grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{options.storage.transactionSync(()=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id||retained.session.generation!==record!.session.generation||JSON.stringify(retained.grant)!==JSON.stringify(grant))throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:retained.cleanup?retained.session.state:'active',updatedAt:options.now()}};save(record!,storageKey);});},async()=>{await options.config.allocationClosed?.(grant,record!.session);publishCleanup(options.storage,storageKey,record!,true);});
     }
     // Trusted interaction preparation can retain the guarded connection in a
@@ -235,6 +238,8 @@ export function commonBrowserHost(options:Readonly<{
      try{return await Promise.race([runDownload(),interrupted]);}finally{if(timer!==undefined)clearTimeout(timer);}
     }
     if(command.operation==='owner_login'){
+     // Owner sign-in rides Cloudflare's own live-view handoff; a vendor session has none yet.
+     if(options.config.provider)throw new GeneralBrowserError('owner_login_unavailable');
      if(!options.config.assertHandoffCurrent||!(ctx.runScope?.runId??ctx.turnId))throw Error('owner login unavailable');
      images=[];handoffSession={...record.session};
      save({...record,observation:undefined,tabs:[],handoff:{version:1,state:'starting',targetId:before.targetId,origin:new URL(before.observation.url).origin,reason:command.reason,requestRunId:(ctx.runScope?.runId??ctx.turnId)!}},storageKey);
@@ -328,11 +333,11 @@ resetAttachments(){images=[];},sessionEnded:()=>sessionEnded,sessionHandle:()=>o
 // A failed physical termination stays explicitly unresolved, never an endless I/O retry.
 export async function maintainCommonBrowsers(storage:DurableObjectStorage,config:CommonBrowserConfiguration,now:number){
  for(const [key,row] of [...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})]) {
-  if(config.ownsGrant&&!config.ownsGrant(row.grant)||row.cleanup==='closed'||row.cleanupFailed||row.session.expiresAt>now&&row.cleanup!=='pending')continue;
+  if(config.ownsGrant&&!config.ownsGrant(row.grant)||row.session.provider!==(config.provider??'cloudflare_playwright')||row.cleanup==='closed'||row.cleanupFailed||row.session.expiresAt>now&&row.cleanup!=='pending')continue;
   storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'pending'}));
   try {
    if(row.session.providerSessionId==='pending')throw Error('allocation identity uncertain');
-   const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,binding:config.binding,cleanupBinding:config.cleanupBinding? id=>config.cleanupBinding!(row.grant,id):undefined,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,cleanupTimeoutMs:10000,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
+   const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,provider:config.provider,binding:config.binding,cleanupBinding:config.cleanupBinding? id=>config.cleanupBinding!(row.grant,id):undefined,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,cleanupTimeoutMs:10000,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
    await driver.terminate(row.session);
    await config.allocationClosed?.(row.grant,row.session);
    publishCleanup(storage,key,row,true);
