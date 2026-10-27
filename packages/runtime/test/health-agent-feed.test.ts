@@ -46,7 +46,7 @@ const material = (extra: Record<string, unknown> = {}) => {
 const readNow = async (extra: Record<string, unknown> = {}) => { await new Promise(resolve => setTimeout(resolve, 5)); return material(extra); };
 
 const ABSENT = 'No derived health context is available';
-const healthBlock = (text: string): string => text.split(/\n[ \t]*\n/).find(part => /^\s*(?:Form zone:|Recovery zone:)/.test(part)) ?? '';
+const healthBlock = (text: string): string => text.split(/\n[ \t]*\n/).find(part => /^\s*(?:Form zone:|Recovery zone:|Shared health today)/.test(part)) ?? '';
 const clockTimes = /\d\d:\d\d/g;
 
 describe('renderHealth tells the model what its health context is made of', () => {
@@ -154,6 +154,7 @@ describe('an owner turn asking to plan tomorrow around their energy', () => {
     expect(composed.ok, composed.ok ? undefined : composed.failure.code).toBe(true);
     if (!composed.ok) return;
     const block = healthBlock(composed.prompt);
+    expect(block).not.toBe('');
     expect(block).toContain('Form zone: flagging.');
     expect(block).toContain('Recovery: solid. Load: heavy.');
     expect(block).toContain('Baseline: Recovery and Form provisional');
@@ -175,7 +176,10 @@ describe('an owner turn asking to plan tomorrow around their energy', () => {
     expect(told).toContain('Sleep debt: building up over recent nights.');
     expect(told).not.toContain(ABSENT);
     for (const seeded of SEEDED) expect(told).not.toContain(seeded);
-    expect(healthBlock(told).replace(clockTimes, '')).not.toMatch(/\d/);
+    const block = healthBlock(told);
+    expect(block).toContain('Form zone: flagging.');
+    expect(block).toContain(WINDOW_LINE);
+    expect(block.replace(clockTimes, '')).not.toMatch(/\d/);
   });
 
   it('says there is none and carries no health line when the owner shares no health', async () => {
