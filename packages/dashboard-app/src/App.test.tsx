@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Dashboard, DashboardNavigation, DashboardFeedback, isSettingsRoute, resolveRoute } from './App';
+import { APP_PRIVACY_NOTICE_URL_V1, APP_TERMS_URL_V1 } from '../../contracts/src/app/onboarding';
+import { Dashboard, DashboardNavigation, DashboardFeedback, FooterLinks, isSettingsRoute, resolveRoute } from './App';
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard routing and overview boundaries', () => {
+  it('links the published Terms of Use and Privacy Policy from the footer, at the addresses the app records acceptance against', () => {
+    const html = renderToStaticMarkup(<FooterLinks />);
+    expect(html).toContain(`<a href="${APP_TERMS_URL_V1}">Terms</a>`);
+    expect(html).toContain(`<a href="${APP_PRIVACY_NOTICE_URL_V1}">Privacy</a>`);
+    for (const path of ['#/connections/imessage', '#/connections/devices', '#/connections', '#/vault', '#/files', '#/invites']) expect(html).toContain(`href="${path}"`);
+  });
   it('keeps primary navigation to five destinations and puts everything else under Settings', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
     for (const path of ['today', 'chat', 'waiting', 'memory', 'patrol']) expect(html).toContain(`href="#/${path}"`);

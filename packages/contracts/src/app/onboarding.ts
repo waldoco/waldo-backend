@@ -11,6 +11,10 @@ import { z } from 'zod';
 // record always points at the copy that was on screen. Notice copy 1 says Waldo may look the owner up on the public web.
 export const APP_TERMS_VERSION_V1 = 1;
 export const APP_PRIVACY_NOTICE_VERSION_V1 = 1;
+// Where each version is published. A new version is published at the same address, so a page always shows the newest copy
+// and the version on it says which one an acceptance named.
+export const APP_TERMS_URL_V1 = 'https://www.heywaldo.in/terms';
+export const APP_PRIVACY_NOTICE_URL_V1 = 'https://www.heywaldo.in/privacy';
 export const APP_ONBOARDING_MAX_REQUEST_BYTES_V1 = 4096;
 
 const epoch = z.int().nonnegative();

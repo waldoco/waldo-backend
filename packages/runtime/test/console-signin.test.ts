@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { APP_PRIVACY_NOTICE_URL_V1, APP_TERMS_URL_V1 } from '../../contracts/src/app/onboarding';
 import { handleConsole, downloadReturnTarget, consoleReturnTarget } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 
@@ -586,5 +587,13 @@ describe('confirming it is you before an action that creates lasting access', ()
     expect(html).not.toContain('Join with your invite');
     const plain = await (await handleConsole(new Request('https://w.test/console/signin'), { OWNER_DO: owners().ns }, auth()))!.text();
     expect(plain).toContain('<h1>Sign in to Waldo</h1>');
+  });
+});
+
+describe('the published terms and privacy policy', () => {
+  it('are linked from sign-in, by the addresses the app records acceptance against', async () => {
+    const html = await (await handleConsole(new Request('https://w.test/console/signin'), { OWNER_DO: owners().ns }, auth()))!.text();
+    expect(html).toContain(`<a href="${APP_TERMS_URL_V1}">Terms of Use</a>`);
+    expect(html).toContain(`<a href="${APP_PRIVACY_NOTICE_URL_V1}">Privacy Policy</a>`);
   });
 });

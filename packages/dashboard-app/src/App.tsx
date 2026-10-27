@@ -140,6 +140,12 @@ export function DashboardFeedback({ state, onRetry }: { state: FeedbackState; on
 }
 
 
+// The published Terms of Use and Privacy Policy sit with the console's other destinations. Their addresses are
+// APP_TERMS_URL_V1 and APP_PRIVACY_NOTICE_URL_V1 in the contracts; App.test checks the two agree.
+export function FooterLinks() {
+  return <p><a href="#/connections/imessage">iMessage</a> · <a href="#/connections/devices">Devices</a> · <a href="#/connections">Connections</a> · <a href="#/vault">Vault</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a> · <a href="https://www.heywaldo.in/terms">Terms</a> · <a href="https://www.heywaldo.in/privacy">Privacy</a></p>;
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>(currentRoute);
   const [now,setNow]=useState(()=>new Date());
@@ -226,7 +232,7 @@ export function App() {
     <main id="main" tabIndex={-1} className={route.startsWith('chat') ? 'chat-main' : undefined}>{route.startsWith('chat') ? <ChatWorkspace thread={route === 'chat' ? null : route.slice(5)} zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
-    {!route.startsWith('chat') && <footer><p><a href="#/connections/imessage">iMessage</a> · <a href="#/connections/devices">Devices</a> · <a href="#/connections">Connections</a> · <a href="#/vault">Vault</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
+    {!route.startsWith('chat') && <footer><FooterLinks/>
       {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><span className="live-status" role="status" aria-live="polite">{livePaused ? ' · Live updates paused, retrying' : ' · Live'}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
     </footer>}
