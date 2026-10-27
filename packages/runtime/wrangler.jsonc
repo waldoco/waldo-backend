@@ -87,6 +87,10 @@
     // guard-wrangler-local-bindings.mjs asserts this block mirrors the top level.
     "staging": {
       "name": "waldo-runtime-staging",
+      // staging.heywaldo.in needs the heywaldo.in zone on this Cloudflare account; a deploy fails until the zone is Active.
+      // workers.dev stays on until every callback and installed app build has moved (docs/ops/HEYWALDO_DOMAIN_MOVE.md).
+      "routes": [{ "pattern": "staging.heywaldo.in", "custom_domain": true }],
+      "workers_dev": true,
       "main": "src/staging-browser.ts",
       // A Telegram owner turn is one alarm invocation of up to 14 minutes, and each tool round re-sanitises and serialises
       // the whole request (about 0.1 s of CPU at 60k tokens), so 150 rounds can pass the 30 s default.
