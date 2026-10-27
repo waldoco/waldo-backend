@@ -166,9 +166,26 @@ it('a Brief no model can write waits for the model: the app reads it as pending,
   expect(brief).toEqual({ status: 'armed', attempts: 0 });
 });
 
-it('the console calls a card waiting for the model what it is', () => {
-  const view = { ...SAMPLE_CONSOLE_VIEW, cards: [{ ...SAMPLE_CONSOLE_VIEW.cards[0]!, sent: false, state: 'waiting_on_model' as const }] };
-  expect(renderConsole(view, 'day')).toContain('Waiting for the model');
+it('the console says a card could not be made, why, and offers Try again while tries are left', () => {
+  const failed = { ...SAMPLE_CONSOLE_VIEW.cards[0]!, sent: false, state: 'failed' as const, stateReason: "Waldo couldn't reach its model this morning", retriesLeft: 2 };
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [failed] }, 'day');
+  expect(html).toContain("Couldn&#39;t make it");
+  expect(html).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(html).toContain('value="card.retry"');
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...failed, retriesLeft: 0 }] }, 'day')).not.toContain('value="card.retry"');
+  // A card that is not stuck carries no tries left (cardStatus), so it offers no Try again: one that went out, and one skipped
+  // for an outage, which still says why.
+  const { retriesLeft: _left, ...unstuck } = failed;
+  expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'sent' as const, sent: true }] }, 'day')).not.toContain('value="card.retry"');
+  const skipped = renderConsole({ ...SAMPLE_CONSOLE_VIEW, cards: [{ ...unstuck, state: 'skipped' as const, sent: true }] }, 'day');
+  expect(skipped).toContain('Waldo couldn&#39;t reach its model this morning');
+  expect(skipped).not.toContain('value="card.retry"');
+});
+
+it('the console offers Resume on each paused job, by its schedule id', () => {
+  const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [{ id: 'card:brief', name: 'Your Brief', until: 'Sat 4 Oct, 09:00' }] }, 'day');
+  expect(html).toContain('value="schedule.resume"');
+  expect(html).toContain('value="card:brief"');
 });
 
 it('the console calls a skipped card skipped, a card with no outcome done, and an unplanned card not scheduled', () => {

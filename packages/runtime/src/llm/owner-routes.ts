@@ -11,7 +11,7 @@ import {
 import { AnthropicMessagesAdapter } from './anthropic';
 import { validModelCredential } from './credential-shape';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from './openai';
-import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './provider';
+import { routedGateway, type CircuitBreaker, type LLMAttempt, type LLMGatewayAdapter } from './provider';
 
 // What the owner responder needs to reach the model providers: the OpenAI key alone (callers that predate the second
 // provider), or every provider's key. Credentials stay here and in the adapters; they never reach a prompt, a trace or a store.
@@ -28,7 +28,9 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // schemas where the provider allows them. Off by default until a staging smoke shows both providers take the request.
 // toolLoader 'harness': the reply loads core tools up front and the rest through the harness's own find_tools and use_tool
 // (tools/loader.ts), on any provider. It wins over toolSearch.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness' }>;
+// onAttempts: told every model call's attempts, so a provider that refused the key is noticed whichever call met it.
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
+  onAttempts?: (attempts: readonly LLMAttempt[]) => void }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

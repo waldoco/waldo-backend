@@ -40,7 +40,7 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -49,6 +49,9 @@ export const appControlActionV1Schema = z.strictObject({
   code: z.string().regex(/^\d{6}$/).optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
+  // Try again on one of today's cards: revision 3, the day view, the card's id and nothing else.
+  if (action.action === 'card.retry' && (action.view !== 'day' || !DAY_CARD_IDS.includes(action.id ?? '')
+    || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'card.retry starts from the day view and names one of today\'s cards in id, nothing else' });
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
@@ -106,7 +109,15 @@ export const APP_CARD_EXCERPT_MAX_V1 = 280;
 // Where today's card stands. sent keeps its meaning, finished for today; state says how: sent (handed to the owner's
 // channel), skipped (it came due and nothing went out), held (kept back in quiet hours) or pending (not fired yet).
 // Absent when the Worker cannot tell, as for a card finished before it kept the outcome.
-export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped']);
+// Controls revision 3 (`controls=3`) adds three unfinished states: generating (a run or a Try again is under way), failed
+// (no card was made and none is coming on its own; Try again is offered) and paused (the scheduler paused the card after
+// repeated failures). Revisions 1 and 2 read each of them as pending. Revision 3 may also carry state_reason, a short fixed
+// line saying why, and retries_left, today's remaining Try agains.
+export const APP_CONTROLS_CARD_STATE_REVISION = 3;
+export const APP_CARD_STATE_REASON_MAX_V1 = 120;
+export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
+export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused']);
+const DAY_CARD_IDS: readonly string[] = ['card:brief', 'card:midday', 'card:close'];
 const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(APP_CARD_EXCERPT_MAX_V1) });
 // The first page of open work the Home shows; total counts every open item, so the app can say how many more there are.
 export const APP_OVERVIEW_PAGE_MAX_V1 = 20;
@@ -132,7 +143,8 @@ const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
-    state: appDayCardStateV1Schema.optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
+    state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
+    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),

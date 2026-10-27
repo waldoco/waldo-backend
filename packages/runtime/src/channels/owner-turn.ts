@@ -307,6 +307,7 @@ export const createOwnerResponder = (
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
       ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
+    access.onAttempts?.(result.attempts);
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
