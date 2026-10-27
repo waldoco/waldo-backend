@@ -3,15 +3,15 @@ import {workspaceStore,type WorkspaceState} from '@waldo/workspace';
 import {commonBrowserHost} from '../src/channels/common-browser-host';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 import {generalDigest} from '../src/channels/general-browser-observation';
-const probe=vi.hoisted(()=>({dispatches:0,file:{filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'}}));
+const probe=vi.hoisted(()=>({dispatches:0,consumed:false,file:{filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'}}));
 vi.mock('../src/channels/cloudflare-general-browser',async load=>{
  const actual=await load<typeof import('../src/channels/cloudflare-general-browser')>();
  return {...actual,cloudflareGeneralBrowser:(options:any)=>({...actual.cloudflareGeneralBrowser(options),download:async(_session:any,_snapshot:any,_reference:string,prepare:()=>Promise<void>,consume:any)=>{
-  await prepare();probe.dispatches++;const bytes=new TextEncoder().encode(probe.file.body);await consume({filename:probe.file.filename,mime:probe.file.mime,byte_size:bytes.length,sha256:await generalDigest(bytes)},bytes);
+  await prepare();probe.dispatches++;const bytes=new TextEncoder().encode(probe.file.body);await consume({filename:probe.file.filename,mime:probe.file.mime,byte_size:bytes.length,sha256:await generalDigest(bytes)},bytes);probe.consumed=true;
  }})};
 });
 async function fixture(){
- commonBrowserFixture.reset();probe.dispatches=0;probe.file={filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'};let live=true,now=Date.now(),failReady=false,replaceAt:'prepared'|'importing'|undefined,filesStalled=false,taskDeadline=now+60000;
+ commonBrowserFixture.reset();probe.dispatches=0;probe.consumed=false;probe.file={filename:'report.csv',mime:'text/csv',body:'owner,amount\nfictional,7\n'};let live=true,now=Date.now(),failReady=false,replaceAt:'prepared'|'importing'|undefined,filesStalled=false,taskDeadline=now+60000;
  const rows=new Map<string,any>(),state:WorkspaceState={binding:null,files:[],bodies:[],operations:[]},bodies=new Map<string,Uint8Array>();
  const admitted=async()=>{if(!live)throw Error('owner revoked');};
  const storage={kv:{get:(key:string)=>structuredClone(rows.get(key)),put:(key:string,value:any)=>{if(failReady&&value?.download?.state==='ready')throw Error('runtime interrupted after workspace commit');rows.set(key,structuredClone(value));},list:({prefix}:{prefix:string})=>new Map([...rows].filter(([key])=>key.startsWith(prefix)))},transactionSync:<T>(work:()=>T)=>{const current=rows.get('common-browser:download-task');if(replaceAt&&current?.download?.state===replaceAt){replaceAt=undefined;rows.set('common-browser:download-task',{...current,session:{...current.session,generation:current.session.generation+1}});}return work();}} as unknown as DurableObjectStorage;
@@ -59,4 +59,15 @@ it('a downloaded PDF reaches the model as a document to read; other downloads st
  const g=await fixture();probe.file={filename:'boarding-pass.pdf',mime:'application/pdf',body:pdf};g.host.resetAttachments();
  expect(await g.host.actionHandler.handle(g.args,g.ctx)).toMatchObject({ok:true,data:{download:{filename:'boarding-pass.pdf'}}});
  expect(g.host.attachments()).toContainEqual({kind:'file',mime_type:'application/pdf',filename:'boarding-pass.pdf',data_base64:btoa(pdf)});await g.host.cancel();
+});
+it('a body labelled application/pdf that is not a PDF stays in the workspace and never reaches the model',async()=>{
+ const f=await fixture();probe.file={filename:'boarding-pass.pdf',mime:'application/pdf',body:'<html>fictional, not a pdf</html>'};f.host.resetAttachments();
+ expect(await f.host.actionHandler.handle(f.args,f.ctx)).toMatchObject({ok:true,data:{download:{filename:'boarding-pass.pdf'}}});
+ expect(f.host.attachments().filter(file=>file.kind==='file')).toHaveLength(0);await f.host.cancel();
+});
+it('a PDF whose download fails its last custody check never reaches the model',async()=>{
+ const f=await fixture();probe.file={filename:'boarding-pass.pdf',mime:'application/pdf',body:'%PDF-1.4 fictional boarding pass'};f.host.resetAttachments();
+ const changed={...(f.ctx as any),assertTaskSourceCurrent:async()=>{if(probe.consumed)throw Error('task source changed');}};
+ expect(await f.host.actionHandler.handle(f.args,changed as never)).toMatchObject({ok:false});
+ expect(f.host.attachments().filter(file=>file.kind==='file')).toHaveLength(0);await f.host.cancel();
 });

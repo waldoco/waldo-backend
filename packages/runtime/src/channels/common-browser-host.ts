@@ -218,6 +218,7 @@ export function commonBrowserHost(options:Readonly<{
       return receipt;
      };
      let receipt:BrowserDownloadReceipt|undefined;
+     let pdf:LLMAttachment|undefined;
      if(prior?.digest===downloadDigest){
       if(!prior.metadata)throw Error('download body unavailable; no repeat');
       receipt=await importFile(prior.metadata);
@@ -229,10 +230,12 @@ export function commonBrowserHost(options:Readonly<{
        await assertDownload();options.storage.transactionSync(()=>{const latest=currentDownload();save({...latest,download:{...latest.download!,state:'importing',metadata}},storageKey!);});
        receipt=await importFile(metadata,bytes);
        // A PDF (a boarding pass, a ticket) is read by the model as a document; other files stay in the workspace.
-       if(metadata.mime==='application/pdf'&&bytes&&bytes.byteLength<=MODEL_PDF_BYTES){let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);attach({kind:'file',mime_type:'application/pdf',filename:metadata.filename,data_base64:btoa(binary)});}
+       // The server's Content-Type is not trusted: the bytes must open with the %PDF- signature.
+       if(metadata.mime==='application/pdf'&&bytes&&bytes.byteLength<=MODEL_PDF_BYTES&&String.fromCharCode(...bytes.subarray(0,5))==='%PDF-'){let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);pdf={kind:'file',mime_type:'application/pdf',filename:metadata.filename,data_base64:btoa(binary)};}
       });
      }
      if(!receipt)throw Error('download receipt unavailable');await assertDownload();
+     if(pdf)attach(pdf);
      return {ok:true,data:{session_handle:record.session.id,download:receipt,notice:'Attachment bytes are saved and retrieval verified in your private workspace. This is not verification of the broader browser task.'},source_taint:'external'} as const;
      };
      try{return await Promise.race([runDownload(),interrupted]);}finally{if(timer!==undefined)clearTimeout(timer);}
