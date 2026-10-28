@@ -162,7 +162,7 @@ const dueReminder = (state: DurableObjectState) => reminderBook(state.storage.sq
 const dueOrder = (state: DurableObjectState) => standingOrderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'ord1')
   .set({ scope: 'check the forecast', trigger: 'daily', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(11, 16), gate: 'act_and_report', escalation: 'log_only' });
 const briefPlan = (state: DurableObjectState) => dayPlanBook(state.storage.sql).read(DAY).find(row => row.card === 'card:brief');
-const briefLinked = (state: DurableObjectState) => cardDeliveries(state.storage.kv, DAY).has('card:brief');
+const briefLinked = (state: DurableObjectState) => cardDeliveries(dayPlanBook(state.storage.sql), state.storage.kv, DAY).has('card:brief');
 const orderRuns = (state: DurableObjectState) => state.storage.sql.exec<{ status: string; summary: string | null }>(
   "SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray();
 const dueCheckBack = async (state: DurableObjectState) => {
