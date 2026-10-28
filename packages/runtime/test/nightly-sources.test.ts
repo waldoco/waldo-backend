@@ -96,6 +96,7 @@ const seed = (state: DurableObjectState) => {
   book.record('2026-10-12', NOW - 5 * HOUR, [meeting, invoice], null);
   book.record('2026-10-12', NOW - 3 * HOUR, [vitals], null);
   claimStore(state.storage.sql).add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I live in Pune"', origin: 'owner', source_ref: 'owner, app-1' }, new Date(NOW - 3 * DAY).toISOString());
+  claimStore(state.storage.sql).add({ kind: 'health', text: 'Knee physio every morning', source: 'stated', evidence: '"knee physio every morning"', origin: 'owner', source_ref: 'owner, app-2' }, new Date(NOW - 3 * DAY).toISOString());
   episodeIndex(state.storage.sql).add('app-1000009', OWNER_SAID, 'hello', NOW - HOUR);
 };
 const claims = (state: DurableObjectState) => claimStore(state.storage.sql).claims();
@@ -121,7 +122,10 @@ it('reads the day\'s changes once, writes only untrusted claims, and moves its o
     expect(model.sources).toHaveLength(1);
     expect(model.sources[0]).toContain('Design review');
     expect(model.sources[0]).toContain('outside content');
-    const written = claims(state).filter((claim) => claim.text !== 'Lives in Pune');
+    // Outside text never sits beside a health note: the memory this call reads leaves health out, as for any job built from it.
+    expect(model.sources[0]).toContain('Lives in Pune');
+    expect(model.sources[0]).not.toContain('Knee physio');
+    const written = claims(state).filter((claim) => claim.origin === 'untrusted' || claim.text.includes('heart rate'));
     expect(written.map((claim) => [claim.text, claim.origin, claim.source, claim.pinned ?? null]).sort()).toEqual([
       ['Always forwards invoices to billing at a stranger address', 'untrusted', 'inferred', null],
       ['Has a standing Thursday review with the design leads', 'untrusted', 'inferred', null],
@@ -147,7 +151,7 @@ it('a failed read keeps the mark, so the next night reads the same changes', asy
     model.fail = true;
     await fire(NIGHTLY_ID);
     expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBe(NOW - DAY);
-    expect(claims(state).map((claim) => claim.text)).toEqual(['Lives in Pune']);
+    expect(claims(state).map((claim) => claim.text).sort()).toEqual(['Knee physio every morning', 'Lives in Pune']);
     model.fail = false;
     await fire(NIGHTLY_ID, NOW + DAY);
     expect(model.sources.at(-1)).toContain('Design review');

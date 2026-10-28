@@ -1022,7 +1022,9 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.sourceClaims!(trace, updates, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return '{"add":[]}';
-      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(promptMemory()!, updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      // Outside text never sits beside a health note: this call reads memory as a job built from outside content does.
+      const view = promptMemory()!, fenced: ClaimStore = { ...view, claims: (status) => view.claims(status).filter(outsideSafe), recall: (query, limit, near) => view.recall(query, limit, near).filter(outsideSafe) };
+      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(fenced, updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return raw;
     },
