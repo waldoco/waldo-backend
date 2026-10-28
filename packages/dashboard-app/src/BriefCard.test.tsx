@@ -15,7 +15,7 @@ describe('the console Brief, as Home shows it', () => {
   it('shows the Brief that went out, whole, with when it arrived', () => {
     const html = view({ card: brief({ sent: true, state: 'sent' }), latest: letter() });
     expect(html).toContain('aria-label="Morning. Your day opens with the design review at ten. Lunch with Ana at one."');
-    expect(html).toContain('Arrived 08:02');
+    expect(html).toContain('Arrived 8:02 AM');
     expect(html).not.toContain('brief-word');
     expect(html).not.toContain('Read it all in Chat');
   });
@@ -34,12 +34,12 @@ describe('the console Brief, as Home shows it', () => {
   });
 
   it('says a Brief went out when this Worker cannot read its words, and when it went somewhere other than Chat', () => {
-    expect(view({ card: brief({ sent: true, state: 'sent' }) })).toContain('Your Brief went out. Read it in Chat.');
+    expect(view({ card: brief({ sent: true, state: 'sent' }) })).toContain('Your Brief went out. <a href="#/chat">Read it in Chat.</a>');
     expect(view({ card: brief({ sent: true, state: 'sent' }), latest: null })).toContain('Your Brief went out somewhere other than Chat, so it isn’t shown here.');
   });
 
   it('says when the Brief comes, that it is held for quiet hours, or that Waldo skipped it, before it goes out', () => {
-    expect(view({ card: brief({ state: 'pending', time: '07:30' }), latest: null })).toContain('No Brief yet today. It comes at 07:30.');
+    expect(view({ card: brief({ state: 'pending', time: '07:30' }), latest: null })).toContain('No Brief yet today. It comes at 7:30 AM.');
     expect(view({ card: brief({ state: 'held' }), latest: null })).toContain('Your Brief is held for your quiet hours.');
     expect(view({ card: brief({ sent: true, state: 'skipped' }), latest: null })).toContain('Waldo skipped today’s Brief.');
   });

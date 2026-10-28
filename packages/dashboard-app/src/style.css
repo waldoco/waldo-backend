@@ -858,3 +858,12 @@ footer .refresh:disabled { opacity:1; }
 .access-log-table { width:100%; border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; margin-bottom:8px; }
 .access-log-table th,.access-log-table td { text-align:left; padding:6px 10px 6px 0; border-bottom:.5px solid var(--hair); white-space:nowrap; }
 .access-log-table th { font-weight:500; color:var(--t2); }
+
+/* ── The Brief on Today: its words as the app's Home shows them. A new Brief plays in word by word at the app's pace: each word
+   fades up over 420ms in ink, and 900ms after it began eases to the paragraph's grey over 600ms. The settled grey is the base style,
+   so with reduced motion (every animation off) the Brief is simply there. ── */
+.brief-tile>.label { display:block; margin-bottom:8px; }
+.brief-letter p { margin:0 0 10px; font-size:17px; line-height:1.45; color:var(--t2); }
+.brief-word { display:inline-block; animation:brief-word-in 420ms var(--ease) backwards, brief-word-settle 600ms ease backwards; animation-delay:var(--at,0ms), calc(var(--at,0ms) + 900ms); }
+@keyframes brief-word-in { from { opacity:0; transform:translateY(4px); } }
+@keyframes brief-word-settle { from { color:var(--ink); } }
