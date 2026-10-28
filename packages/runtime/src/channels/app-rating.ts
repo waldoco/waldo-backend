@@ -10,6 +10,10 @@ export const replyRatings = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS reply_ratings (
     message_id TEXT PRIMARY KEY, rating TEXT NOT NULL CHECK (rating IN ('up', 'down')), at INTEGER NOT NULL)`);
   return {
+    // The rating a reply holds, or undefined when it has none.
+    get(messageId: string): 'up' | 'down' | undefined {
+      return sql.exec<{ rating: 'up' | 'down' }>('SELECT rating FROM reply_ratings WHERE message_id = ?', messageId).toArray()[0]?.rating;
+    },
     // Setting the rating a reply already has, or clearing one it lacks, leaves the row as it was.
     set(messageId: string, rating: 'up' | 'down' | null, at: number): void {
       if (rating === null) sql.exec('DELETE FROM reply_ratings WHERE message_id = ?', messageId);

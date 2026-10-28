@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
 import { signedInRecently } from '../identity/console-auth';
@@ -9,7 +9,8 @@ import type { ConsoleAction, ConsoleView } from './console';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import { phoneControlAct, phoneControls, type IMessageProof } from './dashboard-phone';
-import type { PhoneSmsEnv } from '../identity/phone-sms';
+import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
+import { ownerAccountEmail } from '../identity/owner-account-email';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
@@ -24,6 +25,8 @@ export type AppControlsHost = Readonly<{
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
   // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
   welcome?():AppWelcomeBuildV1;
+  // What the owner asked to be called, or null when the memory holds no name to serve.
+  ownerName?():string|null;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
   phone:PhoneSmsEnv;
   // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
@@ -55,6 +58,13 @@ const dayForRevision=(request:Request,shown:Record<string,unknown>)=>{
   if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_STATE_REVISION)return shown;
   const data=shown.data as {cards:readonly Record<string,unknown>[]};
   return {...shown,data:{...data,cards:data.cards.map(({state_reason:_reason,retries_left:_left,...card})=>typeof card.state==='string'&&OLDER_CARD_STATE[card.state]?{...card,state:OLDER_CARD_STATE[card.state]}:card)}};
+};
+// Controls revision 7 names the owner on the day view and gives the account view its identity lines; builds below it never receive either.
+const namesOwner=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_IDENTITY_REVISION;
+// The sign-in email and, once verified, the number on file. Each is left out when the directory cannot say, and neither read can fail the view.
+const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
+  const [email,phone]=await Promise.all([ownerAccountEmail(env,owner),phoneSms(env).state(owner).catch(()=>null)]);
+  return {...(email?{email}:{}),...(phone?.verified&&phone.phone?{phone:phone.phone}:{})};
 };
 const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
 // The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
@@ -112,7 +122,10 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     }
     if(query.data.view==='account'){
       const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
-      const {csrf:_csrf,...shown}=await response.json() as Record<string,unknown>,parsed=appControlProjectionV1Schema.safeParse(shown);
+      // The revision is the console's own and was taken before identity joins: an email change must not make a deletion read stale.
+      const {csrf:_csrf,...shown}=await response.json() as Record<string,unknown>&{data:Record<string,unknown>};
+      const name=namesOwner(request)?host.ownerName?.()??null:null,identity=namesOwner(request)?await accountIdentity(host.phone,host.account.owner):{};
+      const parsed=appControlProjectionV1Schema.safeParse({...shown,data:{...shown.data,...(name?{name}:{}),...identity}});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     const page={...(query.data.trace_before?{traceBefore:Number(query.data.trace_before)}:{}),...(query.data.runs_before?{runsBefore:Number(query.data.runs_before)}:{})};
@@ -120,7 +133,9 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // The revision guards what an action changes, so it is taken before latest is added: an action rebuilds the day without it.
     const revision=await controlRevision(result);
     const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built)},'day'):result;
-    const parsed=appControlProjectionV1Schema.safeParse({...(query.data.view==='day'?dayForRevision(request,shown):shown),revision});
+    const named=query.data.view==='day'&&namesOwner(request)?host.ownerName?.()??null:null;
+    const day=query.data.view==='day'?dayForRevision(request,shown):shown;
+    const parsed=appControlProjectionV1Schema.safeParse({...(named?{...day,data:{...(day.data as object),name:named}}:day),revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
@@ -162,7 +177,9 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   }
   // Try again came with the card states (controls=3): an older build that names it gets what it got before it existed.
   if(action.success&&action.data.action==='card.retry'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_CARD_STATE_REVISION)return reply({error:'invalid_action'},400);
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  // Disconnecting Google came with controls=7: a build below it never named it, so it gets what it got before.
+  if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
   const phone=action.data.view==='phone';

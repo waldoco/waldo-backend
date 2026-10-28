@@ -324,7 +324,7 @@ const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
 // consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
-  consoleLink: (parentId: string) => string | null = () => null): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+  consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
@@ -344,8 +344,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
+    const rated = entry.role === 'assistant' ? rating(entry.id) : undefined;
     return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
-      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
