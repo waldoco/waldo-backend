@@ -1,9 +1,14 @@
 -- Today's measured Form curve and stress trend (ADR-0081's Form-through-the-day amendment, sections 1, 3 and 4), stored on the
 -- owner's derived row for the calendar day view, dark behind HEALTH_FORM_CURVE until an independent privacy review passes.
 -- - public.health_context_daily gains form_curve (jsonb) and stress_trend (text), both nullable: a row written without them
---   holds nothing, and a write that carries neither clears both.
+--   holds nothing.
 -- - waldo.health_context_write is re-created whole from its last definition (20261027170000) and admits both, only on a write for
---   the owner's own today by the row's zone and never on a backfilled row. form_curve is exactly a version name and one to
+--   the owner's own today by the row's zone and never on a backfilled row. A write for today without them clears both. A write
+--   for any other day leaves that day's stored form_curve as it is (the producer rewrites yesterday on every run and sends it
+--   no curve), because later projections read prior days' stored measured curves; the stress word, which is today's alone,
+--   follows the write. A prior day's curve is kept for the derived row's own retention and deletion, and nothing serves it
+--   until a reader of it ships: scores_read returns it for today only, and the model's read and the history read name their
+--   keys. form_curve is exactly a version name and one to
 --   ninety-six points, each exactly an instant, a score of 0 to 100 and a kind of measured or projected (so the projection needs
 --   no further migration), strictly increasing in time with no measured point after a projected one. stress_trend is rising,
 --   steady or easing.
@@ -199,7 +204,7 @@ begin
     end loop;
   end if;
   v_conf := case when jsonb_typeof(v_body->'confidence') = 'number' then (v_body->>'confidence')::numeric else null end;
-  insert into public.health_context_daily(user_id, day, form, recovery, weight, sleep_debt, drivers, confidence, freshness, tags, windows, windows_version, backfilled, form_curve, stress_trend)
+  insert into public.health_context_daily as c(user_id, day, form, recovery, weight, sleep_debt, drivers, confidence, freshness, tags, windows, windows_version, backfilled, form_curve, stress_trend)
     values (v_auth, v_day,
       v_body->'form', v_body->'recovery', v_body->'weight', v_body->'sleep_debt',
       coalesce(v_body->'drivers', '[]'::jsonb), v_conf, v_body->>'freshness',
@@ -208,7 +213,8 @@ begin
     on conflict (user_id, day) do update set form = excluded.form, recovery = excluded.recovery, weight = excluded.weight, sleep_debt = excluded.sleep_debt, drivers = excluded.drivers,
       confidence = excluded.confidence, freshness = excluded.freshness, tags = excluded.tags,
       windows = excluded.windows, windows_version = excluded.windows_version, backfilled = excluded.backfilled,
-      form_curve = excluded.form_curve, stress_trend = excluded.stress_trend;
+      form_curve = case when v_day = (now() at time zone v_tz)::date then excluded.form_curve else c.form_curve end,
+      stress_trend = excluded.stress_trend;
   insert into waldo.health_context_basis(owner_id, day, consent_basis, timezone, read_at) values (v_owner, v_day, v_body->'basis', v_tz, v_read_at)
     on conflict (owner_id, day) do update set consent_basis = excluded.consent_basis, timezone = excluded.timezone, read_at = excluded.read_at;
   return jsonb_build_object('written', true, 'changed', v_changed);
