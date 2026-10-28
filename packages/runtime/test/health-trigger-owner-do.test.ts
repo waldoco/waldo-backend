@@ -3,7 +3,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { updateBook } from '../src/channels/update-cards';
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { notifyOwnerZoneChange } from '../src/health/zone-change-route';
 import { armAlarm } from '../src/scheduler/alarm-slot';
@@ -29,7 +32,7 @@ const ROW = {
 };
 
 const fixture = vi.hoisted(() => ({
-  event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, writes: 0,
+  event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, notice: '' as string, writes: 0,
   pushes: [] as unknown[][], targetsAsked: 0, otlp: [] as string[],
 }));
 vi.mock('../src/connectors/google', async load => {
@@ -41,13 +44,14 @@ vi.mock('../src/connectors/google', async load => {
     updateEvent: async () => { fixture.writes += 1; throw new Error('the trigger must not write to Google'); },
   }) };
 });
-vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => true }));
+vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
+  createTelegramCaller: () => async (method: string) => (method === 'sendMessage' ? { message_id: 91, chat: { id: 7 } } : true) }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     fixture.requests.push(request);
     const format = request.request.response_format?.name;
-    const text = format === 'health_proposal' ? fixture.decision : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : 'SKIP';
+    const text = format === 'health_proposal' ? fixture.decision : format === 'health_notice' ? fixture.notice : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -232,4 +236,76 @@ describe('the health trigger\'s traces', () => {
       }, { ...CONFIG, ...LANGFUSE, LANGFUSE_CAPTURE_TEXT: capture });
     });
   }
+});
+
+// A day with nothing on the owner's plate. With HEALTH_SOLO_NOTICE at "1", the model decides whether a note is worth it,
+// and one goes out as an update card through the final outbox. Off, the day stays as silent as it always was.
+describe('the health-only note on the owner object', () => {
+  const NOTE = 'Update\nRecovery is compromised after a short night. Nothing is booked today, so an easy evening would help.';
+  const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1' };
+  const notices = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_notice');
+  const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
+  beforeEach(() => { fixture.event = null; fixture.notice = JSON.stringify({ kind: 'notice', text: NOTE }); });
+
+  it('sends the note the model writes as one update card, which the next main card reads, with no reading stored anywhere', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect([notices().length, evaluations().length]).toEqual([1, 0]);
+      const sent = JSON.stringify(notices()[0]!.request);
+      expect(sent).toContain('recovery compromised');
+      expect(sent).toContain('Nothing is on the owner');
+      expect(runs(state)).toMatchObject([{ local_day: '2026-10-21', mode: 'live', outcome: 'noticed', approval_id: null }]);
+      const [row] = queued(state);
+      expect(row).toMatchObject({ id: 'health-notice:2026-10-21', payload: { text: NOTE }, update: { recordId: expect.any(Number) } });
+      vi.setSystemTime(NOW + 5_000);
+      await pass();
+      expect(updateBook(state.storage.sql).unfolded('Asia/Kolkata')).toContain('sent as update: Update Recovery is compromised');
+      await notify();
+      vi.setSystemTime(NOW + 2 * 3_600_000);
+      await pass();
+      expect(notices()).toHaveLength(1);
+      expect(queued(state)).toHaveLength(1);
+      for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
+    }, ON);
+  });
+
+  it('stays silent with the switch off: no model call, no run and nothing queued', async () => {
+    for (const config of [CONFIG, { ...CONFIG, HEALTH_SOLO_NOTICE: '0' }]) {
+      fixture.requests = [];
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect([notices().length, evaluations().length, runs(state), queued(state)]).toEqual([0, 0, [], []]);
+        expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
+      }, config);
+    }
+  });
+
+  it('holds the note, before any model call, once the Close has gone out or the owner turned update cards off', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      dayPlanBook(state.storage.sql).sent('2026-10-21', 'card:close');
+      await notify();
+      await pass();
+      expect([notices().length, queued(state)]).toEqual([0, []]);
+      expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
+    }, ON);
+    fixture.requests = [];
+    await withOwner(async ({ state, pass, notify }) => {
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      await notify();
+      await pass();
+      expect([notices().length, queued(state)]).toEqual([0, []]);
+      expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
+    }, ON);
+  });
+
+  it('asks nothing of the model when health sharing is off', async () => {
+    fixture.health = null;
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect([notices().length, runs(state), queued(state)]).toEqual([0, [], []]);
+    }, ON);
+  });
 });
