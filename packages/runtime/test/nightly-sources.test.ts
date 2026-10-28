@@ -177,6 +177,22 @@ it('ships off in every wrangler environment', async () => {
   expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"']);
 });
 
+it('reads no constellation node drawn from health beside the changes, as for any job built from outside content', async () => {
+  await withOwner('nightly-sources-health-nodes', '1', async ({ state, fire }) => {
+    seed(state);
+    const store = claimStore(state.storage.sql);
+    const at = new Date(NOW - 2 * DAY).toISOString();
+    const read = (text: string, ref: string) => { store.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: ref }, at); return store.allClaims().find((claim) => claim.text === text)!.id; };
+    store.saveNode({ id: null, domain: 'routines', label: 'Late weekend sleeper', summary: 'Weekend nights end later.', strength: 0.5, status: 'active', supporting_spots: [read('Weekend nights end later', 'welcome:apple_health:sleep_midpoint')] }, at);
+    store.saveNode({ id: null, domain: 'work', label: 'Monday planning ritual', summary: 'A Monday planning block recurs.', strength: 0.5, status: 'active', supporting_spots: [read('A weekly Monday planning block recurs', 'welcome:setup:c1')] }, at);
+    await fire(NIGHTLY_ID);
+    expect(model.sources).toHaveLength(1);
+    expect(model.sources[0]).toContain('Monday planning ritual');
+    expect(model.sources[0]).not.toContain('Late weekend sleeper');
+    expect(model.sources[0]).not.toContain('Weekend nights end later');
+  });
+});
+
 it('end to end, a claim the pass wrote never puts a node in the every-turn block until the owner confirms it', async () => {
   await withOwner('nightly-sources-nodes', '1', async ({ state, fire }) => {
     seed(state);

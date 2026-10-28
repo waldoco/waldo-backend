@@ -244,6 +244,35 @@ describe('a machine turn', () => {
     });
   });
 
+  it('a job built from outside content gets no constellation node drawn from health; an untainted job does', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-health-nodes-external')), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      const at = '2026-10-25T13:00:00Z';
+      const read = (text: string, ref: string) => { memory.add({ kind: 'observation', text, source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: ref }, at); return memory.allClaims().find((claim) => claim.text === text)!.id; };
+      const node = (label: string, domain: string, spots: number[]) => memory.saveNode({ id: null, domain, label, summary: `${label}, in a sentence.`, strength: 0.5, status: 'active', supporting_spots: spots }, at);
+      node('Late weekend sleeper', 'routines', [read('Weekend nights end later', 'welcome:apple_health:sleep_midpoint')]);
+      node('Slow starter after travel', 'health', [read('Travel weeks start slowly', 'welcome:setup:c1')]);
+      owned(memory, 'Knee physio every morning', 'tg-71', 'health');
+      node('Physio before standup', 'routines', [read('Physio comes before the standup', 'welcome:setup:c2'), memory.allClaims().find((claim) => claim.text === 'Knee physio every morning')!.id]);
+      node('Monday planning ritual', 'work', [read('A weekly Monday planning block recurs', 'welcome:setup:c3')]);
+      const requestFor = async (id: string, taint?: 'external') => {
+        const requests: LLMGatewayRequest[] = [];
+        const gateway: LLMGatewayAdapter = { complete: async (request) => {
+          requests.push(request);
+          return { ok: true, data: { model: request.request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+        } };
+        const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+        await responder.prompt(id, 'owner', 'Summarise this forwarded note for the owner.', async (_hop, work) => work(), 'telegram', [], undefined, undefined, undefined, taint);
+        return JSON.stringify(requests[0]!.request);
+      };
+      const external = await requestFor('job-external-nodes', 'external');
+      expect(external).toContain('Monday planning ritual');
+      for (const health of ['Late weekend sleeper', 'Slow starter after travel', 'Physio before standup', 'Weekend nights end later']) expect(external, health).not.toContain(health);
+      const untainted = await requestFor('job-owner-nodes');
+      for (const shown of ['Late weekend sleeper', 'Slow starter after travel', 'Physio before standup', 'Monday planning ritual']) expect(untainted, shown).toContain(shown);
+    });
+  });
+
   it('never recalls a health claim by the words of an externally tainted job; an untainted job with the same words does; neither searches past messages', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-external-job')), async (_instance, state) => {
       const memory = claimStore(state.storage.sql);

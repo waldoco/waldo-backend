@@ -29,7 +29,7 @@ import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveR
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
-import { numericHealthIn, ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
+import { ownerReadings, readingBeyondOwner } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
@@ -42,8 +42,9 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type Claim, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { sha256Hex } from '../context-composer/canonical';
+import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
@@ -368,11 +369,9 @@ export const createOwnerResponder = (
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
-  // A job built from outside content reads no health note and no stated reading, in any memory block or in recall: outside
-  // words can neither select one nor sit beside one. Every other turn reads the store as it is.
-  const outsideSafe = (claim: Claim): boolean => claim.kind !== 'health' && !numericHealthIn(claim.text);
-  const memoryFor = (store: ClaimStore): ClaimStore => backgroundSourceTaint !== 'external' ? store
-    : { ...store, claims: (status) => store.claims(status).filter(outsideSafe), recall: (query, limit, near) => store.recall(query, limit, near).filter(outsideSafe) };
+  // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
+  // any memory block or in recall. Every other turn reads the store as it is.
+  const memoryFor = (store: ClaimStore): ClaimStore => backgroundSourceTaint !== 'external' ? store : outsideView(store);
   // What recall finds for this text, within room. Past messages and the previous owner message join only the owner's own
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
@@ -1022,9 +1021,9 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.sourceClaims!(trace, updates, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return '{"add":[]}';
-      // Outside text never sits beside a health note: this call reads memory as a job built from outside content does.
-      const view = promptMemory()!, fenced: ClaimStore = { ...view, claims: (status) => view.claims(status).filter(outsideSafe), recall: (query, limit, near) => view.recall(query, limit, near).filter(outsideSafe) };
-      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(fenced, updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      // Outside text never sits beside a health note or a node drawn from health: this call reads memory as a job built from
+      // outside content does.
+      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return raw;
     },
