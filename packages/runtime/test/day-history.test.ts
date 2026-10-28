@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { appControlProjectionV1Schema } from '../../contracts/src/app/controls';
-import { MAX_RUN_ROWS, recordedRun, runBook } from '../src/channels/background-runs';
+import { HEALTH_TRIGGER_RUN, MAX_RUN_ROWS, NIGHTLY_RUN, recordedRun, runBook } from '../src/channels/background-runs';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { DAY_HISTORY_SINCE_KEY, dayHistoryDay, dayHistoryList, historyDays, startDayHistory, type DayHistoryDeps } from '../src/channels/day-history';
 import { localToEpoch } from '../src/channels/reminders';
@@ -117,14 +117,22 @@ describe('runBook.between', () => {
     });
   });
 
-  it('records a scheduled job as one run: completed, or failed with the error passed on', async () => {
+  it('records a scheduled job as one run, settled by its outcome: a pass that did not finish is failed, one that threw is failed and still throws', async () => {
     await inOwner('history-recorded-run', async state => {
-      const runs = runBook(state.storage.sql, clockAt({ now: 5_000 }), () => String((ids += 1)));
-      const summary = { completed: 'memory pass finished', failed: 'memory pass failed' };
-      await recordedRun(runs, 'nightly', summary, async () => {})({ id: 'nightly' });
-      await expect(recordedRun(runs, 'nightly', summary, async () => { throw new Error('boom'); })({ id: 'nightly' })).rejects.toThrow('boom');
-      expect(runs.list(5).map(run => [run.kind, run.status, run.summary, run.parent_id]).sort()).toEqual([
-        ['nightly', 'completed', 'memory pass finished', 'nightly'], ['nightly', 'failed', 'memory pass failed', 'nightly'],
+      const time = { now: 5_000 };
+      const runs = runBook(state.storage.sql, clockAt(time), () => String((ids += 1)));
+      for (const outcome of ['done', 'more', 'capped', 'failed'] as const) { time.now += 1; await recordedRun(runs, 'nightly', NIGHTLY_RUN, async () => outcome)({ id: 'nightly-memory' }); }
+      time.now += 1;
+      await expect(recordedRun(runs, 'nightly', NIGHTLY_RUN, async () => { throw new Error('boom'); })({ id: 'nightly-catch-up' })).rejects.toThrow('boom');
+      time.now += 1;
+      await recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, async () => {})({ id: 'health-trigger' });
+      expect([...runs.list(10)].reverse().map(run => [run.kind, run.status, run.summary, run.parent_id])).toEqual([
+        ['nightly', 'completed', 'memory pass finished', 'nightly-memory'],
+        ['nightly', 'completed', 'memory pass read part of the backlog; a catch-up follows', 'nightly-memory'],
+        ['nightly', 'completed', 'memory pass stopped at the day\'s limit; the rest waits', 'nightly-memory'],
+        ['nightly', 'failed', 'memory pass did not finish; a catch-up follows', 'nightly-memory'],
+        ['nightly', 'failed', 'memory pass failed', 'nightly-catch-up'],
+        ['health_trigger', 'completed', 'health check ran', 'health-trigger'],
       ]);
     });
   });

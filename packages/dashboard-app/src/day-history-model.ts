@@ -66,9 +66,8 @@ export const dayLabel = (date: string) => {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(Date.UTC(year, month - 1, dom)));
 };
 
-/** What "Chat about this" puts in the composer: which card and day, and its opening words, so Waldo can find it in Main chat. Nothing is sent. */
-export const chatSeed = (card: HistoryCard, date: string): string => {
-  const opening = card.latest?.excerpt.split('\n').find(line => line.trim())?.trim();
-  const quoted = opening ? ` ("${opening.length > 80 ? `${opening.slice(0, 79).trimEnd()}…` : opening}")` : '';
-  return `About ${card.name} on ${dayLabel(date)}${quoted}: `;
-};
+/**
+ * What "Chat about this" puts in the composer: which card and which day, so Waldo can find it in Main chat. The card's own words are not
+ * quoted: sent, they would become the owner's words, numbers included. Nothing is sent until the owner sends it.
+ */
+export const chatSeed = (card: HistoryCard, date: string): string => `About ${card.name} on ${dayLabel(date)}: `;

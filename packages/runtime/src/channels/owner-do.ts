@@ -2846,7 +2846,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
         // revoked account runs nothing, and an outage asks again without spending attempts.
-        let executors = { reminder: fire, heartbeat: beat, dreaming: recordedRun(runs, 'nightly', NIGHTLY_RUN, nightly), pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, patrol: recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, healthTrigger) };
+        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, patrol: recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, healthTrigger) };
         // A paused job's notice goes out from the runtime that ran the jobs, so it lands where their messages do.
         let notices = noticeFailures;
         if (consoleAuth(this.env)) {
@@ -4534,7 +4534,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
       await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
     };
-    const nightly = async (entry: ScheduleEntry) => {
+    const nightly = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       if (entry.id === NIGHTLY_CATCH_UP_ID) {
@@ -4544,7 +4544,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const outcome = await consolidateBacklog(trace, entry.occurrence_at);
         if (outcome === 'failed') throw new Error('nightly consolidation incomplete');
         if (outcome === 'more') await armCatchUp();
-        return;
+        return outcome;
       }
       try {
         await migrateCoreFiles(`${trace}:migration`);
@@ -4557,11 +4557,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (schedPrefs.enabled('daily_brief')) await armDayCards(scheduler, plans, clock.timezone, Date.now());
         await planToday(`${trace}:plan`);
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'nightly' });
+        return outcome;
       } catch (error) {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'nightly' });
         throw error;
       }
-    };
+    });
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const calendarGate = new DeliveryGateStore(storage.sql);
     // The health trigger. A zone change marks the day and arms one evaluation no sooner than an hour after the last; the

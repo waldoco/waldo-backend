@@ -58,11 +58,10 @@ describe('a day on the console', () => {
     expect(gone).toContain('2 more went somewhere other than Chat.');
   });
 
-  it('seeds a chat with the card, the day and its opening words, and sends nothing', () => {
+  it('seeds a chat with the card and the day, never the card\'s own words', () => {
     const card = detail.cards[0]!;
-    expect(chatSeed(card, '2026-10-28')).toBe('About The Brief on Wed 28 Oct ("A light morning: the design review at 11 is the one to protect."): ');
-    expect(chatSeed({ ...card, latest: null }, '2026-10-27')).toBe('About The Brief on Tue 27 Oct: ');
-    expect(chatSeed({ ...card, latest: { ...card.latest!, excerpt: `${'word '.repeat(30)}\nmore` } }, '2026-10-28').length).toBeLessThan(140);
+    expect(chatSeed(card, '2026-10-28')).toBe('About The Brief on Wed 28 Oct: ');
+    expect(chatSeed(card, '2026-10-28')).not.toContain('design review');
     expect(dayLabel('2026-11-01')).toBe('Sun 1 Nov');
   });
 });

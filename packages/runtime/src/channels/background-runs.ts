@@ -90,14 +90,27 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
   };
 };
 
-export const NIGHTLY_RUN = { completed: 'memory pass finished', failed: 'memory pass failed' } as const;
-export const HEALTH_TRIGGER_RUN = { completed: 'health check ran', failed: 'health check failed' } as const;
+// How a recorded job's run settles: the line for a job that threw, and the status and line for each outcome it returned.
+export type RunSummary<Outcome> = Readonly<{ threw: string; settled(outcome: Outcome): Readonly<{ status: 'completed' | 'failed'; summary: string }> }>;
+export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
+  threw: 'memory pass failed',
+  settled: outcome => ({
+    done: { status: 'completed', summary: 'memory pass finished' },
+    more: { status: 'completed', summary: 'memory pass read part of the backlog; a catch-up follows' },
+    capped: { status: 'completed', summary: 'memory pass stopped at the day\'s limit; the rest waits' },
+    failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
+  } as const)[outcome],
+};
+// The trigger does not report its outcome to its caller, so its run says only that it ran.
+export const HEALTH_TRIGGER_RUN: RunSummary<void> = { threw: 'health check stopped with an error', settled: () => ({ status: 'completed', summary: 'health check ran' }) };
 
-// A scheduled job recorded as one run: completed when it returns, failed when it throws, which it still does.
-export const recordedRun = <Entry extends { id: string }>(
-  runs: Pick<RunBook, 'start' | 'finish'>, kind: RunKind, summary: Readonly<{ completed: string; failed: string }>, job: (entry: Entry) => Promise<void>,
+// A scheduled job recorded as one run, settled by what it returned; a job that throws is recorded failed and still throws.
+export const recordedRun = <Entry extends { id: string }, Outcome>(
+  runs: Pick<RunBook, 'start' | 'finish'>, kind: RunKind, summary: RunSummary<Outcome>, job: (entry: Entry) => Promise<Outcome>,
 ) => async (entry: Entry): Promise<void> => {
   const run = runs.start(kind, entry.id);
-  try { await job(entry); } catch (error) { runs.finish(run.id, 'failed', summary.failed); throw error; }
-  runs.finish(run.id, 'completed', summary.completed);
+  let outcome: Outcome;
+  try { outcome = await job(entry); } catch (error) { runs.finish(run.id, 'failed', summary.threw); throw error; }
+  const settled = summary.settled(outcome);
+  runs.finish(run.id, settled.status, settled.summary);
 };
