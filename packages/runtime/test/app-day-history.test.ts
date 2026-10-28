@@ -8,6 +8,7 @@ import { redactConversationEntries } from '../src/channels/conversation-store';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { NIGHTLY_ID } from '../src/channels/episodes';
+import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { FORGOTTEN, claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -146,5 +147,16 @@ it('records the nightly memory pass as a run, so the next day\'s night shows it'
     const next = await daysRead(ctx, `view=days&date=${new Date(AT + DAY_MS).toISOString().slice(0, 10)}`);
     const night = (next.body as { data: { night: { runs: { kind: string }[] } } }).data.night;
     expect(night.runs.map(run => run.kind)).toContain('nightly');
+  });
+});
+
+it('records the health trigger as a run that names how it ended, with nothing marked to check', async () => {
+  await appOwner('days-health-run', async ctx => {
+    await new Scheduler(ctx.state.storage.sql, ctx.state.storage, productionDeps())
+      .schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', payloadRefs: { id: HEALTH_TRIGGER_ID }, occurrenceAt: ctx.clock.now - 1000, dueAt: ctx.clock.now - 1000, recurrence: null });
+    ctx.state.storage.kv.put('owner_alarm_last_v1', 1);
+    await ctx.owner.alarm();
+    expect(ctx.state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'health_trigger'").toArray())
+      .toEqual([{ status: 'completed', summary: 'nothing to check; stayed quiet' }]);
   });
 });

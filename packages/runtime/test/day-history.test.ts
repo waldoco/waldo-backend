@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { appControlProjectionV1Schema } from '../../contracts/src/app/controls';
-import { HEALTH_TRIGGER_RUN, MAX_RUN_ROWS, NIGHTLY_RUN, recordedRun, runBook } from '../src/channels/background-runs';
+import { HEALTH_TRIGGER_OUTCOMES, HEALTH_TRIGGER_RUN, MAX_RUN_ROWS, NIGHTLY_RUN, recordedRun, runBook } from '../src/channels/background-runs';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { DAY_HISTORY_SINCE_KEY, dayHistoryDay, dayHistoryList, historyDays, startDayHistory, type DayHistoryDeps } from '../src/channels/day-history';
 import { localToEpoch } from '../src/channels/reminders';
@@ -125,15 +125,27 @@ describe('runBook.between', () => {
       time.now += 1;
       await expect(recordedRun(runs, 'nightly', NIGHTLY_RUN, async () => { throw new Error('boom'); })({ id: 'nightly-catch-up' })).rejects.toThrow('boom');
       time.now += 1;
-      await recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, async () => {})({ id: 'health-trigger' });
+      await recordedRun(runs, 'health_trigger', HEALTH_TRIGGER_RUN, async () => 'nothing_coming' as const)({ id: 'health-trigger' });
       expect([...runs.list(10)].reverse().map(run => [run.kind, run.status, run.summary, run.parent_id])).toEqual([
         ['nightly', 'completed', 'memory pass finished', 'nightly-memory'],
         ['nightly', 'completed', 'memory pass read part of the backlog; a catch-up follows', 'nightly-memory'],
         ['nightly', 'completed', 'memory pass stopped at the day\'s limit; the rest waits', 'nightly-memory'],
         ['nightly', 'failed', 'memory pass did not finish; a catch-up follows', 'nightly-memory'],
         ['nightly', 'failed', 'memory pass failed', 'nightly-catch-up'],
-        ['health_trigger', 'completed', 'health check ran', 'health-trigger'],
+        ['health_trigger', 'completed', 'nothing coming, stayed quiet', 'health-trigger'],
       ]);
+    });
+  });
+});
+
+describe('a health-trigger run names its outcome', () => {
+  it('gives every outcome one fixed line with no number in it, and only a failed check reads failed', () => {
+    const lines = HEALTH_TRIGGER_OUTCOMES.map(outcome => [outcome, HEALTH_TRIGGER_RUN.settled(outcome)] as const);
+    expect(lines.filter(([, settled]) => settled.status === 'failed').map(([outcome]) => outcome)).toEqual(['failed']);
+    for (const [, settled] of lines) expect(settled.summary).toMatch(/^[a-z][a-z ,;:'()]+$/);
+    expect(new Set(lines.map(([, settled]) => settled.summary)).size).toBe(HEALTH_TRIGGER_OUTCOMES.length);
+    expect(Object.fromEntries(lines.filter(([outcome]) => ['proposed', 'held_quiet', 'noticed', 'egress_refused'].includes(outcome)).map(([outcome, settled]) => [outcome, settled.summary]))).toEqual({
+      proposed: 'proposed a change', held_quiet: 'held for quiet hours', noticed: 'queued a note', egress_refused: 'held back: it would have shared health detail',
     });
   });
 });
