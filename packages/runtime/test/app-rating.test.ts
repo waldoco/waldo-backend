@@ -145,3 +145,23 @@ it('writes no reply text into logs or traces', async () => {
     expect(JSON.stringify([lines, traces])).not.toContain('quartz-heron');
   });
 });
+
+// A rating survives a relaunch: from chat=6 the history row of a rated reply carries it, and a build below that sees the page it always did.
+const history = async (owner: Owner, name: string, contract?: string) => {
+  const response = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { ...headers(name), ...(contract ? { 'x-waldo-app-contract': contract } : {}) } }));
+  return await response.json() as { messages: Record<string, unknown>[] };
+};
+it('a rated reply carries its rating in history from chat=6, and an unrated row, a user row and older builds never do', async () => {
+  await withExchange('app-rating-history', async (owner, _state, { mine, reply }) => {
+    const unrated = await history(owner, 'app-rating-history', 'chat=6');
+    expect(unrated.messages.every(message => !('rating' in message))).toBe(true);
+    await rate(owner, 'app-rating-history', reply, { request_id: 'rating-req-0001', rating: 'up' });
+    const rated = appHistoryResultV1Schema.parse(await history(owner, 'app-rating-history', 'chat=6'));
+    expect(rated.messages.map(message => [message.id === reply ? 'reply' : message.id === mine ? 'mine' : 'other', message.rating])).toEqual(expect.arrayContaining([['reply', 'up'], ['mine', undefined]]));
+    for (const contract of [undefined, 'chat=5', 'chat=2']) expect((await history(owner, 'app-rating-history', contract)).messages.every(message => !('rating' in message))).toBe(true);
+    await rate(owner, 'app-rating-history', reply, { request_id: 'rating-req-0002', rating: 'down' });
+    expect((await history(owner, 'app-rating-history', 'chat=6')).messages.find(message => message.id === reply)?.rating).toBe('down');
+    await rate(owner, 'app-rating-history', reply, { request_id: 'rating-req-0003', rating: null });
+    expect((await history(owner, 'app-rating-history', 'chat=6')).messages.every(message => !('rating' in message))).toBe(true);
+  });
+});

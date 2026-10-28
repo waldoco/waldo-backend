@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -107,7 +107,7 @@ describe('account deletion from the app', () => {
   });
 
   it('refuses extra keys in the account projection', () => {
-    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: { deletion_available: true, email: 'a@example.test' } }).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: { deletion_available: true, plan: 'free' } }).success).toBe(false);
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: {} }).success).toBe(false);
   });
 });
@@ -565,5 +565,38 @@ describe('the phone view', () => {
     expect(APP_PHONE_SET_RECEIPTS_V1.set.state).toBe('recorded');
     expect(APP_PHONE_SET_RECEIPTS_V1.taken.state).toBe('rejected');
     expect(receipts.map(receipt => receipt.message).join(' ')).not.toMatch(/\d/);
+  });
+});
+
+describe('controls revision 7: who the owner is, and Google disconnect', () => {
+  const account = (data: object) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data }).success;
+  const day = (extra: object) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'day', data: { timezone: 'UTC', date: '2026-10-28', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' },
+    schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra } }).success;
+  const disconnect = { view: 'connections', action: 'google.disconnect', id: 'conn-1', revision, request_id: 'google-disc-01' };
+
+  it('is revision 7', () => expect(APP_CONTROLS_IDENTITY_REVISION).toBe(7));
+
+  it('names the owner on the day view and on the account view, with the sign-in email and a verified phone', () => {
+    expect(day({ name: 'Priya' })).toBe(true);
+    expect(account({ deletion_available: true, name: 'Priya', email: 'priya@example.test', phone: '+919876543210' })).toBe(true);
+    expect(account({ deletion_available: true, email: 'priya@example.test' })).toBe(true);
+  });
+
+  it('refuses an empty or oversized name, a malformed email or an unformatted phone', () => {
+    expect(day({ name: '' })).toBe(false);
+    expect(day({ name: 'x'.repeat(81) })).toBe(false);
+    expect(account({ deletion_available: true, name: '' })).toBe(false);
+    expect(account({ deletion_available: true, email: 'not-an-email' })).toBe(false);
+    expect(account({ deletion_available: true, phone: '9876543210' })).toBe(false);
+  });
+
+  it('disconnects one Google account from the connections view, naming it in id and nothing else', () => {
+    expect(appControlActionV1Schema.safeParse(disconnect).success).toBe(true);
+  });
+
+  it('refuses a Google disconnect without an id, from another view, or carrying anything else', () => {
+    const { id: _id, ...bare } = disconnect;
+    for (const action of [bare, { ...disconnect, id: '' }, { ...disconnect, id: 'x'.repeat(257) }, { ...disconnect, view: 'day' }, { ...disconnect, value: 'calendar' }, { ...disconnect, volume: 'low' }, { ...disconnect, confirmation: 'DELETE' }, { ...disconnect, code: '123456' }])
+      expect(appControlActionV1Schema.safeParse(action).success).toBe(false);
   });
 });

@@ -43,7 +43,7 @@ const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -59,6 +59,9 @@ export const appControlActionV1Schema = z.strictObject({
   // The receipt's navigation is the first-party /c/<ticket>?handoff=<code> path, opened exactly as given, once, in one
   // browser session: its one-time code binds the first browser that loads the link. The backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  // Disconnecting Google names the account's connections id and nothing else; the receipt is recorded once Waldo has dropped it.
+  if (action.action === 'google.disconnect' && (action.view !== 'connections' || !action.id
+    || (action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'google.disconnect starts from the connections view and names one Google account in id, nothing else' });
   // Granola is one fixed, reviewed server, so its actions name nothing. A connect receipt's navigation is the first-party
   // /c/<ticket>?handoff=<code> path; disconnect revokes at Granola where it can and says when it could not.
   const granola = action.action === 'granola.connect' || action.action === 'granola.disconnect';
@@ -117,6 +120,11 @@ export const APP_CARD_EXCERPT_MAX_V1 = 280;
 // repeated failures). Revisions 1 and 2 read each of them as pending. Revision 3 may also carry state_reason, a short fixed
 // line saying why, and retries_left, today's remaining Try agains.
 export const APP_CONTROLS_CARD_STATE_REVISION = 3;
+// Controls revision 7 (`controls=7`): the day view and the account view name the owner (`name`, as they told Waldo at setup),
+// the account view carries the sign-in `email` and, once verified, the `phone`, and `google.disconnect` is an app action.
+// Each field is absent when Waldo does not hold it, and revisions below 7 never receive any of them.
+export const APP_CONTROLS_IDENTITY_REVISION = 7;
+const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
 export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused']);
@@ -144,7 +152,7 @@ const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW
   .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
-  timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
+  timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(),
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
     state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
     retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
@@ -206,7 +214,7 @@ export const appControlConnectionsDataV1Schema = z.strictObject({
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
     .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });
-export const appControlAccountDataV1Schema = z.strictObject({ deletion_available: z.boolean() });
+export const appControlAccountDataV1Schema = z.strictObject({ deletion_available: z.boolean(), name: ownerName.optional(), email: z.email().max(254).optional(), phone: z.string().regex(APP_PHONE_E164).optional() });
 const hop = z.strictObject({ hop: text, ok: z.boolean(), ms: z.number(), note: text });
 export const appControlActivityDataV1Schema = z.strictObject({
   steps: z.array(z.strictObject({ step: text, state: z.enum(['ok', 'failed', 'unseen']), at: text.nullable(), note: text.nullable() })),
