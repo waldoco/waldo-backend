@@ -378,6 +378,11 @@ export const parseHealthNotice = (raw: string): HealthNotice => {
   return { kind: 'notice', text };
 };
 
+// Whether a queued note may still go out: health proposals still on, and the consented read still answering with a row.
+// Sharing revoked or the row expired since the note was written means it never goes out.
+export const healthNoticeCurrent = async (deps: Readonly<{ enabled(): boolean; readHealth(): Promise<unknown>; now: number; timezone: string }>): Promise<boolean> =>
+  deps.enabled() && healthTriggerView(await deps.readHealth(), deps.now, deps.timezone) !== null;
+
 // A card already up on this owner-local day is never put up again while the owner is still deciding on it, put it off or
 // skipped it. The change is its action, event, times and title; the reason is only the model's wording of it.
 const STILL_OPEN: ReadonlySet<EarlierProposal['answer']> = new Set(['waiting', 'deferred', 'false_alarm']);
